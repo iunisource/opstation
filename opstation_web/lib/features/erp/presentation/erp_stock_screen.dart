@@ -13,10 +13,10 @@ class ErpStockScreen extends ConsumerStatefulWidget {
 class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
   List<Map<String, dynamic>> _stock = [];
   List<Map<String, dynamic>> _filtered = [];
-  List<Map<String, dynamic>> _warehouses = [];
+  List<Map<String, dynamic>> _branches = [];
   bool _loading = true;
   final _searchCtrl = TextEditingController();
-  String? _warehouseFilter;
+  String? _branchFilter;
 
   @override
   void initState() {
@@ -38,11 +38,11 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
       final client = Supabase.instance.client;
       final stock = await client
           .from('inventory_stock')
-          .select('*, products(name, sku), warehouses(name), uoms(abbreviation)')
+          .select('*, products(name, sku), branches(name), uoms(abbreviation)')
           .eq('org_id', orgId)
           .order('quantity', ascending: false);
-      final warehouses = await client
-          .from('warehouses')
+      final branches = await client
+          .from('branches')
           .select()
           .eq('org_id', orgId)
           .eq('is_active', true)
@@ -50,7 +50,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
       setState(() {
         _stock = List<Map<String, dynamic>>.from(stock);
         _filtered = _stock;
-        _warehouses = List<Map<String, dynamic>>.from(warehouses);
+        _branches = List<Map<String, dynamic>>.from(branches);
         _loading = false;
       });
     } catch (_) {
@@ -65,9 +65,9 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
         final productName = (s['products']?['name'] as String? ?? '').toLowerCase();
         final sku = (s['products']?['sku'] as String? ?? '').toLowerCase();
         final matchesSearch = q.isEmpty || productName.contains(q) || sku.contains(q);
-        final matchesWarehouse = _warehouseFilter == null ||
-            s['warehouse_id'] == _warehouseFilter;
-        return matchesSearch && matchesWarehouse;
+        final matchesBranch = _branchFilter == null ||
+            s['branch_id'] == _branchFilter;
+        return matchesSearch && matchesBranch;
       }).toList();
     });
   }
@@ -84,7 +84,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
           width: 400,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text(
-              'Warehouse: ${stock['warehouses']?['name'] ?? ''}',
+              'Branch: ${stock['branches']?['name'] ?? ''}',
               style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
             const SizedBox(height: 16),
@@ -133,7 +133,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
                   'id': 'im_${DateTime.now().millisecondsSinceEpoch}',
                   'org_id': orgId,
                   'product_id': stock['product_id'],
-                  'warehouse_id': stock['warehouse_id'],
+                  'branch_id': stock['branch_id'],
                   'uom_id': stock['uom_id'],
                   'quantity': diff,
                   'movement_type': 'adjustment',
@@ -197,17 +197,17 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
             SizedBox(
               width: 220,
               child: DropdownButtonFormField<String>(
-                value: _warehouseFilter,
-                decoration: const InputDecoration(labelText: 'Warehouse', isDense: true),
-                hint: const Text('All warehouses'),
+                value: _branchFilter,
+                decoration: const InputDecoration(labelText: 'Branch', isDense: true),
+                hint: const Text('All branches'),
                 items: [
-                  const DropdownMenuItem(value: null, child: Text('All warehouses')),
-                  ..._warehouses.map((w) => DropdownMenuItem(
+                  const DropdownMenuItem(value: null, child: Text('All branches')),
+                  ..._branches.map((w) => DropdownMenuItem(
                       value: w['id'] as String,
                       child: Text(w['name'] as String))),
                 ],
                 onChanged: (v) {
-                  setState(() => _warehouseFilter = v);
+                  setState(() => _branchFilter = v);
                   _filter();
                 },
               ),
@@ -235,7 +235,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
                       child: const Row(children: [
                         Expanded(flex: 3, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('Warehouse', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Quantity', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         SizedBox(width: 60),
                       ]),
@@ -274,7 +274,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
                                     Expanded(
                                         flex: 2,
                                         child: Text(
-                                            s['warehouses']?['name'] as String? ?? '-',
+                                            s['branches']?['name'] as String? ?? '-',
                                             style: const TextStyle(
                                                 color: AppTheme.textSecondary,
                                                 fontSize: 13))),

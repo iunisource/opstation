@@ -25,7 +25,7 @@ import '../../features/compliance/presentation/compliance_screen.dart';
 import '../layout/main_layout.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart';
 import '../../features/erp/presentation/erp_products_screen.dart';
-import '../../features/erp/presentation/erp_warehouses_screen.dart';
+import '../../features/erp/presentation/erp_branches_screen.dart';
 import '../../features/erp/presentation/erp_uoms_screen.dart';
 import '../../features/erp/presentation/erp_stock_screen.dart';
 import '../../features/erp/presentation/erp_purchase_screen.dart';
@@ -123,7 +123,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/orgs', builder: (_, __) => const OrgsScreen()),
           GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => const ErpProductClassificationsScreen()),
-          GoRoute(path: '/erp/warehouses', builder: (_, __) => const ErpWarehousesScreen()),
+          GoRoute(path: '/erp/branches', builder: (_, __) => const ErpBranchesScreen()),
           GoRoute(path: '/erp/uoms',      builder: (_, __) => const ErpUomsScreen()),
           GoRoute(path: '/erp/stock',     builder: (_, __) => const ErpStockScreen()),
           GoRoute(path: '/erp/suppliers', builder: (_, __) => const ErpSuppliersScreen()),

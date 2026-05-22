@@ -4,14 +4,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
-class ErpWarehousesScreen extends ConsumerStatefulWidget {
-  const ErpWarehousesScreen({super.key});
+class ErpBranchesScreen extends ConsumerStatefulWidget {
+  const ErpBranchesScreen({super.key});
   @override
-  ConsumerState<ErpWarehousesScreen> createState() => _ErpWarehousesScreenState();
+  ConsumerState<ErpBranchesScreen> createState() => _ErpBranchesScreenState();
 }
 
-class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
-  List<Map<String, dynamic>> _warehouses = [];
+class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
+  List<Map<String, dynamic>> _branches = [];
   bool _loading = true;
 
   @override
@@ -25,12 +25,12 @@ class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
     if (orgId == null) return;
     try {
       final res = await Supabase.instance.client
-          .from('warehouses')
+          .from('branches')
           .select()
           .eq('org_id', orgId)
           .order('name');
       setState(() {
-        _warehouses = List<Map<String, dynamic>>.from(res);
+        _branches = List<Map<String, dynamic>>.from(res);
         _loading = false;
       });
     } catch (_) {
@@ -48,30 +48,30 @@ class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
     final newVal = !(w['is_active'] as bool? ?? true);
     try {
       await Supabase.instance.client
-          .from('warehouses')
+          .from('branches')
           .update({'is_active': newVal})
           .eq('id', w['id']);
-      _showSnack(newVal ? 'Warehouse activated' : 'Warehouse deactivated');
+      _showSnack(newVal ? 'Branch activated' : 'Branch deactivated');
       _load();
     } catch (e) {
       _showSnack('Failed: $e');
     }
   }
 
-  void _showDialog(BuildContext context, Map<String, dynamic>? warehouse) {
-    final nameCtrl = TextEditingController(text: warehouse?['name'] ?? '');
-    final locationCtrl = TextEditingController(text: warehouse?['location'] ?? '');
+  void _showDialog(BuildContext context, Map<String, dynamic>? branch) {
+    final nameCtrl = TextEditingController(text: branch?['name'] ?? '');
+    final locationCtrl = TextEditingController(text: branch?['location'] ?? '');
 
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text(warehouse == null ? 'Add Warehouse' : 'Edit Warehouse'),
+        title: Text(branch == null ? 'Add Branch' : 'Edit Branch'),
         content: SizedBox(
           width: 400,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
                 controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Warehouse Name *')),
+                decoration: const InputDecoration(labelText: 'Branch Name *')),
             const SizedBox(height: 12),
             TextField(
                 controller: locationCtrl,
@@ -87,7 +87,7 @@ class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
             onPressed: () async {
               if (nameCtrl.text.trim().isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Warehouse name is required')));
+                    const SnackBar(content: Text('Branch name is required')));
                 return;
               }
               final orgId = ref.read(currentUserProvider)?.orgId;
@@ -100,19 +100,19 @@ class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
                 'is_active': true,
               };
               try {
-                if (warehouse == null) {
+                if (branch == null) {
                   final id = 'wh_${DateTime.now().millisecondsSinceEpoch}';
                   await Supabase.instance.client
-                      .from('warehouses')
+                      .from('branches')
                       .insert({...data, 'id': id});
                 } else {
                   await Supabase.instance.client
-                      .from('warehouses')
+                      .from('branches')
                       .update(data)
-                      .eq('id', warehouse['id']);
+                      .eq('id', branch['id']);
                 }
                 if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
-                _showSnack(warehouse == null ? 'Warehouse added' : 'Warehouse updated');
+                _showSnack(branch == null ? 'Branch added' : 'Branch updated');
                 _load();
               } catch (e) {
                 if (context.mounted) {
@@ -121,7 +121,7 @@ class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
                 }
               }
             },
-            child: Text(warehouse == null ? 'Add' : 'Save'),
+            child: Text(branch == null ? 'Add' : 'Save'),
           ),
         ],
       ),
@@ -137,17 +137,17 @@ class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Text('Warehouses',
+            const Text('Branches',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const Spacer(),
             ElevatedButton.icon(
               onPressed: () => _showDialog(context, null),
               icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add Warehouse'),
+              label: const Text('Add Branch'),
             ),
           ]),
           const SizedBox(height: 8),
-          Text('${_warehouses.length} warehouses',
+          Text('${_branches.length} branches',
               style: const TextStyle(color: AppTheme.textSecondary)),
           const SizedBox(height: 24),
           if (_loading)
@@ -178,10 +178,10 @@ class _ErpWarehousesScreenState extends ConsumerState<ErpWarehousesScreen> {
                     const Divider(height: 1),
                     Expanded(
                       child: ListView.separated(
-                        itemCount: _warehouses.length,
+                        itemCount: _branches.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (_, i) {
-                          final w = _warehouses[i];
+                          final w = _branches[i];
                           final isActive = w['is_active'] as bool? ?? true;
                           return Opacity(
                             opacity: isActive ? 1.0 : 0.5,

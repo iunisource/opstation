@@ -29,7 +29,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       final res = await Supabase.instance.client
           .from('purchase_orders')
-          .select('*, suppliers(name), warehouses(name)')
+          .select('*, suppliers(name), branches(name)')
           .eq('org_id', orgId)
           .order('created_at', ascending: false);
       setState(() {
@@ -85,15 +85,15 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         .eq('org_id', orgId)
         .eq('is_active', true)
         .order('name');
-    final warehouses = await client
-        .from('warehouses')
+    final branches = await client
+        .from('branches')
         .select()
         .eq('org_id', orgId)
         .eq('is_active', true)
         .order('name');
     if (!mounted) return;
     String? supplierId;
-    String? warehouseId;
+    String? branchId;
     final notesCtrl = TextEditingController();
     showDialog(
       context: context,
@@ -114,13 +114,13 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: warehouseId,
-                decoration: const InputDecoration(labelText: 'Receive Into Warehouse *'),
-                hint: const Text('Select warehouse'),
-                items: (warehouses as List).map((w) => DropdownMenuItem(
+                value: branchId,
+                decoration: const InputDecoration(labelText: 'Receive Into Branch *'),
+                hint: const Text('Select branch'),
+                items: (branches as List).map((w) => DropdownMenuItem(
                     value: w['id'] as String,
                     child: Text(w['name'] as String))).toList(),
-                onChanged: (v) => setS(() => warehouseId = v),
+                onChanged: (v) => setS(() => branchId = v),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -136,9 +136,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 child: const Text('Cancel')),
             ElevatedButton(
               onPressed: () async {
-                if (supplierId == null || warehouseId == null) {
+                if (supplierId == null || branchId == null) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                      const SnackBar(content: Text('Supplier and warehouse are required')));
+                      const SnackBar(content: Text('Supplier and branch are required')));
                   return;
                 }
                 final userId = ref.read(currentUserProvider)?.id;
@@ -148,7 +148,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                     'id': id,
                     'org_id': orgId,
                     'supplier_id': supplierId,
-                    'warehouse_id': warehouseId,
+                    'branch_id': branchId,
                     'status': 'draft',
                     'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
                     'created_by': userId,
@@ -238,7 +238,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                       child: const Row(children: [
                         Expanded(flex: 2, child: Text('PO #', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 3, child: Text('Supplier', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('Warehouse', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Created', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         SizedBox(width: 48),
@@ -280,7 +280,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                                       Expanded(
                                           flex: 2,
                                           child: Text(
-                                              o['warehouses']?['name'] as String? ?? '-',
+                                              o['branches']?['name'] as String? ?? '-',
                                               style: const TextStyle(
                                                   color: AppTheme.textSecondary,
                                                   fontSize: 13))),
@@ -376,7 +376,7 @@ class _PurchaseOrderDetailScreenState
       // Reload order to get latest status
       final orderRes = await client
           .from('purchase_orders')
-          .select('*, suppliers(name), warehouses(name)')
+          .select('*, suppliers(name), branches(name)')
           .eq('id', _order['id'])
           .single();
       setState(() {
@@ -514,63 +514,147 @@ class _PurchaseOrderDetailScreenState
     }
   }
 
-  Future<void> _receiveOrder() async {
-    if (_items.isEmpty) {
-      _showSnack('Add items before receiving');
-      return;
+  Future<void> _receiveGoods() async {
+    if (_items.isEmpty) { _showSnack('Add items before receiving'); return; }
+
+    // Build controllers for each item's receive qty
+    final controllers = <String, TextEditingController>{};
+    for (final item in _items) {
+      final ordered = (item['quantity_ordered'] as num).toDouble();
+      final received = (item['quantity_received'] as num?)?.toDouble() ?? 0;
+      final pending = ordered - received;
+      controllers[item['id'] as String] = TextEditingController(
+          text: pending > 0 ? pending.toStringAsFixed(pending % 1 == 0 ? 0 : 2) : '0');
     }
+
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Receive Purchase Order'),
-        content: const Text(
-            'This will add all ordered quantities to stock and cannot be undone. Proceed?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
-              child: const Text('Cancel')),
-          ElevatedButton(
-              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
-              child: const Text('Receive')),
-        ],
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Receive Goods'),
+          content: SizedBox(
+            width: 560,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.background,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(children: [
+                  Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                  Expanded(flex: 2, child: Text('Ordered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                  Expanded(flex: 2, child: Text('Prev. Received', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                  Expanded(flex: 2, child: Text('Pending', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                  Expanded(flex: 2, child: Text('Receive Now *', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.primary))),
+                ]),
+              ),
+              const SizedBox(height: 8),
+              ..._items.map((item) {
+                final ordered = (item['quantity_ordered'] as num).toDouble();
+                final prevReceived = (item['quantity_received'] as num?)?.toDouble() ?? 0;
+                final pending = ordered - prevReceived;
+                final uomAbbr = item['uoms']?['abbreviation'] as String? ?? '';
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                  child: Row(children: [
+                    Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(item['products']?['name'] as String? ?? '',
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(uomAbbr, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ])),
+                    Expanded(flex: 2, child: Text(ordered % 1 == 0 ? ordered.toInt().toString() : ordered.toString(),
+                        style: const TextStyle(fontSize: 13))),
+                    Expanded(flex: 2, child: Text(prevReceived % 1 == 0 ? prevReceived.toInt().toString() : prevReceived.toString(),
+                        style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text(
+                        pending % 1 == 0 ? pending.toInt().toString() : pending.toString(),
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: pending > 0 ? Colors.orange.shade700 : AppTheme.success))),
+                    Expanded(flex: 2, child: SizedBox(
+                      height: 36,
+                      child: TextField(
+                        controller: controllers[item['id'] as String],
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        enabled: pending > 0,
+                      ),
+                    )),
+                  ]),
+                );
+              }),
+              const SizedBox(height: 8),
+              const Text('Only entered quantities will be added to stock. Balance remains as pending.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false),
+                child: const Text('Cancel')),
+            ElevatedButton(
+                onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true),
+                child: const Text('Confirm Receipt')),
+          ],
+        ),
       ),
     );
+
     if (confirm != true) return;
     try {
       final client = Supabase.instance.client;
       final orgId = ref.read(currentUserProvider)?.orgId;
       final userId = ref.read(currentUserProvider)?.id;
-      final warehouseId = _order['warehouse_id'] as String;
+      final branchId = _order['branch_id'] as String;
+      bool allFullyReceived = true;
+
       for (final item in _items) {
-        final qty = (item['quantity_ordered'] as num).toDouble();
+        final itemId = item['id'] as String;
+        final receiveQty = double.tryParse(controllers[itemId]?.text.trim() ?? '0') ?? 0;
+        if (receiveQty <= 0) continue;
+
         final productId = item['product_id'] as String;
         final uomId = item['uom_id'] as String;
+        final ordered = (item['quantity_ordered'] as num).toDouble();
+        final prevReceived = (item['quantity_received'] as num?)?.toDouble() ?? 0;
+        final newTotalReceived = prevReceived + receiveQty;
+
+        if (newTotalReceived < ordered) allFullyReceived = false;
+
         // Post movement
         await client.from('inventory_movements').insert({
           'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${productId.substring(0, 4)}',
           'org_id': orgId,
           'product_id': productId,
-          'warehouse_id': warehouseId,
+          'branch_id': branchId,
           'uom_id': uomId,
-          'quantity': qty,
+          'quantity': receiveQty,
           'movement_type': 'purchase',
           'reference_id': _order['id'],
           'reference_type': 'purchase_order',
           'moved_at': DateTime.now().toUtc().toIso8601String(),
           'created_by': userId,
         });
+
         // Upsert stock
         final existing = await client
             .from('inventory_stock')
             .select()
             .eq('org_id', orgId!)
             .eq('product_id', productId)
-            .eq('warehouse_id', warehouseId)
+            .eq('branch_id', branchId)
             .maybeSingle();
         if (existing != null) {
-          final newQty = (existing['quantity'] as num).toDouble() + qty;
           await client.from('inventory_stock').update({
-            'quantity': newQty,
+            'quantity': (existing['quantity'] as num).toDouble() + receiveQty,
             'updated_at': DateTime.now().toUtc().toIso8601String(),
           }).eq('id', existing['id']);
         } else {
@@ -578,23 +662,41 @@ class _PurchaseOrderDetailScreenState
             'id': 'is_${DateTime.now().millisecondsSinceEpoch}_${productId.substring(0, 4)}',
             'org_id': orgId,
             'product_id': productId,
-            'warehouse_id': warehouseId,
+            'branch_id': branchId,
             'uom_id': uomId,
-            'quantity': qty,
+            'quantity': receiveQty,
           });
         }
+
         // Update received qty on item
         await client.from('purchase_order_items').update({
-          'quantity_received': qty,
-        }).eq('id', item['id']);
+          'quantity_received': newTotalReceived,
+        }).eq('id', itemId);
       }
-      // Mark order received
-      await client.from('purchase_orders').update({
-        'status': 'received',
-        'received_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _order['id']);
-      _showSnack('Purchase order received — stock updated');
+
+      // Check if any item still has pending qty
+      for (final item in _items) {
+        final ordered = (item['quantity_ordered'] as num).toDouble();
+        final itemId = item['id'] as String;
+        final receiveQty = double.tryParse(controllers[itemId]?.text.trim() ?? '0') ?? 0;
+        final prevReceived = (item['quantity_received'] as num?)?.toDouble() ?? 0;
+        if (prevReceived + receiveQty < ordered) { allFullyReceived = false; break; }
+      }
+
+      if (allFullyReceived) {
+        await client.from('purchase_orders').update({
+          'status': 'received',
+          'received_at': DateTime.now().toUtc().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _order['id']);
+        _showSnack('All goods received — stock updated');
+      } else {
+        await client.from('purchase_orders').update({
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _order['id']);
+        _showSnack('Partial receipt recorded — stock updated. Balance remains pending.');
+      }
+
       widget.onUpdated();
       _loadItems();
     } catch (e) {
@@ -671,8 +773,8 @@ class _PurchaseOrderDetailScreenState
               TextButton(onPressed: _markOrdered, child: const Text('Mark Ordered')),
             if (isOrdered)
               ElevatedButton(
-                  onPressed: _receiveOrder,
-                  child: const Text('Receive All')),
+                  onPressed: _receiveGoods,
+                  child: const Text('Receive Goods')),
             const SizedBox(width: 8),
             TextButton(
               onPressed: _cancelOrder,
@@ -714,8 +816,8 @@ class _PurchaseOrderDetailScreenState
                 children: [
                   // Order info row
                   Row(children: [
-                    _InfoChip(label: 'Warehouse',
-                        value: _order['warehouses']?['name'] as String? ?? '-'),
+                    _InfoChip(label: 'Branch',
+                        value: _order['branches']?['name'] as String? ?? '-'),
                     const SizedBox(width: 16),
                     _InfoChip(label: 'Status',
                         value: status[0].toUpperCase() + status.substring(1)),
@@ -754,9 +856,11 @@ class _PurchaseOrderDetailScreenState
                           ),
                           child: const Row(children: [
                             Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                            Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                            Expanded(flex: 2, child: Text('Qty Ordered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                            Expanded(flex: 2, child: Text('Unit Cost', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                            Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                            Expanded(flex: 2, child: Text('Ordered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                            Expanded(flex: 2, child: Text('Received', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                            Expanded(flex: 2, child: Text('Pending', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                            Expanded(flex: 2, child: Text('Cost/Unit', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                             Expanded(flex: 2, child: Text('Total', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                             SizedBox(width: 48),
                           ]),

@@ -29,7 +29,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     try {
       final res = await Supabase.instance.client
           .from('sales_orders')
-          .select('*, customers(shop_name, code), warehouses(name)')
+          .select('*, customers(shop_name, code), branches(name)')
           .eq('org_id', orgId)
           .order('created_at', ascending: false);
       setState(() {
@@ -81,15 +81,15 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         .eq('org_id', orgId)
         .eq('is_active', true)
         .order('shop_name');
-    final warehouses = await client
-        .from('warehouses')
+    final branches = await client
+        .from('branches')
         .select()
         .eq('org_id', orgId)
         .eq('is_active', true)
         .order('name');
     if (!mounted) return;
     String? customerId;
-    String? warehouseId;
+    String? branchId;
     final notesCtrl = TextEditingController();
     showDialog(
       context: context,
@@ -110,13 +110,13 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: warehouseId,
-                decoration: const InputDecoration(labelText: 'Ship From Warehouse *'),
-                hint: const Text('Select warehouse'),
-                items: (warehouses as List).map((w) => DropdownMenuItem(
+                value: branchId,
+                decoration: const InputDecoration(labelText: 'Ship From Branch *'),
+                hint: const Text('Select branch'),
+                items: (branches as List).map((w) => DropdownMenuItem(
                     value: w['id'] as String,
                     child: Text(w['name'] as String))).toList(),
-                onChanged: (v) => setS(() => warehouseId = v),
+                onChanged: (v) => setS(() => branchId = v),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -132,9 +132,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 child: const Text('Cancel')),
             ElevatedButton(
               onPressed: () async {
-                if (warehouseId == null) {
+                if (branchId == null) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                      const SnackBar(content: Text('Warehouse is required')));
+                      const SnackBar(content: Text('Branch is required')));
                   return;
                 }
                 final userId = ref.read(currentUserProvider)?.id;
@@ -144,7 +144,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                     'id': id,
                     'org_id': orgId,
                     'customer_id': customerId,
-                    'warehouse_id': warehouseId,
+                    'branch_id': branchId,
                     'status': 'draft',
                     'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
                     'created_by': userId,
@@ -230,7 +230,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                     child: const Row(children: [
                       Expanded(flex: 2, child: Text('SO #', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 3, child: Text('Customer', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Warehouse', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Created', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       SizedBox(width: 48),
@@ -258,7 +258,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                         style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary))),
                                     Expanded(flex: 3, child: Text(o['customers']?['shop_name'] as String? ?? 'Walk-in',
                                         style: const TextStyle(fontWeight: FontWeight.w500))),
-                                    Expanded(flex: 2, child: Text(o['warehouses']?['name'] as String? ?? '-',
+                                    Expanded(flex: 2, child: Text(o['branches']?['name'] as String? ?? '-',
                                         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                                     Expanded(flex: 2, child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -326,7 +326,7 @@ class _SalesOrderDetailScreenState extends ConsumerState<_SalesOrderDetailScreen
       final uoms = await client.from('uoms').select().eq('org_id', orgId).order('name');
       final orderRes = await client
           .from('sales_orders')
-          .select('*, customers(shop_name, code), warehouses(name)')
+          .select('*, customers(shop_name, code), branches(name)')
           .eq('id', _order['id'])
           .single();
       setState(() {
@@ -474,7 +474,7 @@ class _SalesOrderDetailScreenState extends ConsumerState<_SalesOrderDetailScreen
       final client = Supabase.instance.client;
       final orgId = ref.read(currentUserProvider)?.orgId;
       final userId = ref.read(currentUserProvider)?.id;
-      final warehouseId = _order['warehouse_id'] as String;
+      final branchId = _order['branch_id'] as String;
       for (final item in _items) {
         final qty = (item['quantity'] as num).toDouble();
         final productId = item['product_id'] as String;
@@ -483,7 +483,7 @@ class _SalesOrderDetailScreenState extends ConsumerState<_SalesOrderDetailScreen
           'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${productId.substring(0, 4)}',
           'org_id': orgId,
           'product_id': productId,
-          'warehouse_id': warehouseId,
+          'branch_id': branchId,
           'uom_id': uomId,
           'quantity': -qty,
           'movement_type': 'sale',
@@ -497,7 +497,7 @@ class _SalesOrderDetailScreenState extends ConsumerState<_SalesOrderDetailScreen
             .select()
             .eq('org_id', orgId!)
             .eq('product_id', productId)
-            .eq('warehouse_id', warehouseId)
+            .eq('branch_id', branchId)
             .maybeSingle();
         if (existing != null) {
           final newQty = (existing['quantity'] as num).toDouble() - qty;
@@ -607,7 +607,7 @@ class _SalesOrderDetailScreenState extends ConsumerState<_SalesOrderDetailScreen
               padding: const EdgeInsets.all(32),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
-                  _InfoChip(label: 'Warehouse', value: _order['warehouses']?['name'] as String? ?? '-'),
+                  _InfoChip(label: 'Branch', value: _order['branches']?['name'] as String? ?? '-'),
                   const SizedBox(width: 16),
                   _InfoChip(label: 'Status', value: status[0].toUpperCase() + status.substring(1)),
                   if (_order['notes'] != null) ...[

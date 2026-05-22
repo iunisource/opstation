@@ -21,6 +21,32 @@ final orgModulesProvider = FutureProvider<Set<String>>((ref) async {
   }
 });
 
+// Currently selected branch (global ERP context)
+final selectedBranchProvider = StateProvider<Map<String, dynamic>?>((ref) => null);
+
+// Branches available to this user
+final userBranchesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null || user.orgId == null) return [];
+  try {
+    final client = Supabase.instance.client;
+    if (user.role == WebUserRole.erpUser) {
+      final res = await client
+          .from('erp_user_branches')
+          .select('branches(*)')
+          .eq('user_id', user.id);
+      return (res as List)
+          .where((r) => r['branches'] != null)
+          .map((r) => Map<String, dynamic>.from(r['branches'] as Map))
+          .toList();
+    } else {
+      final orgId = user.orgId!;
+      return List<Map<String, dynamic>>.from(
+          await client.from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name'));
+    }
+  } catch (_) { return []; }
+});
+
 class MainLayout extends ConsumerWidget {
   final Widget child;
   const MainLayout({super.key, required this.child});
@@ -60,7 +86,7 @@ class _Sidebar extends ConsumerWidget {
     final inventoryChildren = <Object>[
       if (modules.contains('inventory')) ...[
         _NavItem(icon: Icons.inventory_2_outlined, label: 'Products', path: '/erp/products'),
-        _NavItem(icon: Icons.warehouse_outlined, label: 'Warehouses', path: '/erp/warehouses'),
+        _NavItem(icon: Icons.store_outlined, label: 'Branches', path: '/erp/branches'),
         _NavItem(icon: Icons.straighten_outlined, label: 'Units of Measure', path: '/erp/uoms'),
         _NavItem(icon: Icons.stacked_bar_chart_outlined, label: 'Stock Levels', path: '/erp/stock'),
         _NavItem(icon: Icons.label_outline, label: 'Product Classifications', path: '/erp/product-classifications'),
@@ -162,6 +188,51 @@ class _Sidebar extends ConsumerWidget {
                   overflow: TextOverflow.ellipsis)),
             ]),
           ),
+        Builder(builder: (context) {
+          final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
+          final hasErp = modules.any((m) => ['inventory','purchase','sales','pos'].contains(m));
+          if (!hasErp) return const SizedBox.shrink();
+          final branches = ref.watch(userBranchesProvider).valueOrNull ?? [];
+          final selected = ref.watch(selectedBranchProvider);
+          if (branches.isEmpty) return const SizedBox.shrink();
+          if (selected == null && branches.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              ref.read(selectedBranchProvider.notifier).state = branches.first;
+            });
+          }
+          return Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: selected?['id'] as String?,
+                dropdownColor: const Color(0xFF1E293B),
+                icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 16),
+                isExpanded: true,
+                items: branches.map((b) => DropdownMenuItem<String>(
+                  value: b['id'] as String,
+                  child: Row(children: [
+                    const Icon(Icons.store_outlined, color: Colors.white70, size: 14),
+                    const SizedBox(width: 6),
+                    Expanded(child: Text(b['name'] as String,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        overflow: TextOverflow.ellipsis)),
+                  ]),
+                )).toList(),
+                onChanged: (id) {
+                  if (id == null) return;
+                  final branch = branches.firstWhere((b) => b['id'] == id);
+                  ref.read(selectedBranchProvider.notifier).state = branch;
+                },
+              ),
+            ),
+          );
+        }),
         const Divider(color: Colors.white12, height: 1),
         const SizedBox(height: 8),
         Expanded(
