@@ -414,16 +414,33 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'uom_abbr': product['uoms']?['abbreviation'] ?? '',
           'quantity': 1.0,
           'discount': 0.0,
+          'discount_type': 'fixed',
         });
       }
     });
   }
 
+  double _lineTotal(Map<String, dynamic> item) {
+    final qty = item['quantity'] as double;
+    final price = item['unit_price'] as double;
+    final disc = item['discount'] as double;
+    final dtype = item['discount_type'] as String? ?? 'fixed';
+    final discAmt = dtype == 'percent' ? (qty * price * disc / 100) : disc;
+    return (qty * price) - discAmt;
+  }
+
+  double _discountAmount(Map<String, dynamic> item) {
+    final qty = item['quantity'] as double;
+    final price = item['unit_price'] as double;
+    final disc = item['discount'] as double;
+    final dtype = item['discount_type'] as String? ?? 'fixed';
+    return dtype == 'percent' ? (qty * price * disc / 100) : disc;
+  }
+
   double get _cartTotal {
     double total = 0;
     for (final item in _cart) {
-      total += ((item['quantity'] as double) * (item['unit_price'] as double)) -
-          (item['discount'] as double);
+      total += _lineTotal(item);
     }
     return total - _cartDiscount;
   }
@@ -746,7 +763,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
                                     itemCount: _cart.length,
                                     itemBuilder: (_, i) {
                                       final item = _cart[i];
-                                      final lineTotal = (item['quantity'] as double) * (item['unit_price'] as double) - (item['discount'] as double);
+                                      // lineTotal computed via _lineTotal(item)
                                       return Container(
                                         margin: const EdgeInsets.only(bottom: 4),
                                         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
@@ -784,7 +801,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
                                               )),
                                           const SizedBox(width: 6),
                                           SizedBox(width: 60,
-                                              child: Text(lineTotal.toStringAsFixed(2),
+                                              child: Text(_lineTotal(item).toStringAsFixed(2),
                                                   textAlign: TextAlign.end,
                                                   style: const TextStyle(fontWeight: FontWeight.w700))),
                                           IconButton(icon: const Icon(Icons.close, size: 14, color: AppTheme.danger),

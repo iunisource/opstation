@@ -90,7 +90,18 @@ class _Sidebar extends ConsumerWidget {
         _NavItem(icon: Icons.straighten_outlined, label: 'Units of Measure', path: '/erp/uoms'),
         _NavItem(icon: Icons.stacked_bar_chart_outlined, label: 'Stock Levels', path: '/erp/stock'),
         _NavItem(icon: Icons.label_outline, label: 'Product Classifications', path: '/erp/product-classifications'),
+        _NavItem(icon: Icons.open_in_new_outlined, label: 'Opening Stock', path: '/erp/opening-stock'),
+        _NavItem(icon: Icons.swap_horiz_outlined, label: 'Stock Transfers', path: '/erp/stock-transfers'),
       ],
+    ];
+
+    final ledgerChildren = <Object>[
+      if (modules.contains('purchase'))
+        _NavItem(icon: Icons.people_outline, label: 'Supplier Ledger', path: '/erp/supplier-ledger'),
+      if (modules.contains('sales') || modules.contains('pos'))
+        _NavItem(icon: Icons.store_outlined, label: 'Customer Ledger', path: '/erp/customer-ledger'),
+      if (modules.contains('inventory'))
+        _NavItem(icon: Icons.inventory_2_outlined, label: 'Inventory Ledger', path: '/erp/inventory-ledger'),
     ];
 
     // ERP top-level children
@@ -100,11 +111,18 @@ class _Sidebar extends ConsumerWidget {
       if (modules.contains('purchase')) ...[
         _NavItem(icon: Icons.people_outline, label: 'Suppliers', path: '/erp/suppliers'),
         _NavItem(icon: Icons.shopping_cart_outlined, label: 'Purchase', path: '/erp/purchase'),
+        _NavItem(icon: Icons.payment_outlined, label: 'Payments', path: '/erp/payment-vouchers'),
       ],
-      if (modules.contains('sales'))
+      if (modules.contains('sales')) ...[
         _NavItem(icon: Icons.receipt_long_outlined, label: 'Sales', path: '/erp/sales'),
+        _NavItem(icon: Icons.receipt_outlined, label: 'Receipts', path: '/erp/receipt-vouchers'),
+      ],
       if (modules.contains('pos'))
         _NavItem(icon: Icons.storefront_outlined, label: 'POS', path: '/erp/pos'),
+      if (ledgerChildren.isNotEmpty)
+        _NavGroup(icon: Icons.analytics_outlined, label: 'Ledgers', children: ledgerChildren),
+      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+        _NavItem(icon: Icons.manage_accounts_outlined, label: 'ERP Users', path: '/erp/users'),
     ];
 
     final List<Object> items = [

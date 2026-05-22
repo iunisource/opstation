@@ -33,6 +33,14 @@ import '../../features/erp/presentation/erp_sales_screen.dart';
 import '../../features/erp/presentation/erp_pos_screen.dart';
 import '../../features/erp/presentation/erp_suppliers_screen.dart';
 import '../../features/erp/presentation/erp_product_classifications_screen.dart';
+import '../../features/erp/presentation/erp_users_screen.dart';
+import '../../features/erp/presentation/erp_opening_stock_screen.dart';
+import '../../features/erp/presentation/erp_stock_transfers_screen.dart';
+import '../../features/erp/presentation/erp_payment_vouchers_screen.dart';
+import '../../features/erp/presentation/erp_receipt_vouchers_screen.dart';
+import '../../features/erp/presentation/erp_supplier_ledger_screen.dart';
+import '../../features/erp/presentation/erp_customer_ledger_screen.dart';
+import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -123,6 +131,14 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/orgs', builder: (_, __) => const OrgsScreen()),
           GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => const ErpProductClassificationsScreen()),
+          GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
+          GoRoute(path: '/erp/opening-stock', builder: (_, __) => const ErpOpeningStockScreen()),
+          GoRoute(path: '/erp/stock-transfers', builder: (_, __) => const ErpStockTransfersScreen()),
+          GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVouchersScreen()),
+          GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => const ErpReceiptVouchersScreen()),
+          GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => const ErpSupplierLedgerScreen()),
+          GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
+          GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),
           GoRoute(path: '/erp/branches', builder: (_, __) => const ErpBranchesScreen()),
           GoRoute(path: '/erp/uoms',      builder: (_, __) => const ErpUomsScreen()),
           GoRoute(path: '/erp/stock',     builder: (_, __) => const ErpStockScreen()),
