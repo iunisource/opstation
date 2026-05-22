@@ -77,7 +77,18 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  void _showDialog(BuildContext context, Map<String, dynamic>? supplier) {
+  void _showDialog(BuildContext context, Map<String, dynamic>? supplier) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final allBranches = await Supabase.instance.client
+        .from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name');
+    Set<String> selectedBranches = {};
+    if (supplier != null) {
+      final existing = await Supabase.instance.client
+          .from('supplier_branches').select('branch_id').eq('supplier_id', supplier['id']);
+      selectedBranches = (existing as List).map((b) => b['branch_id'] as String).toSet();
+    }
+    if (!mounted) return;
     final nameCtrl = TextEditingController(text: supplier?['name'] ?? '');
     final phoneCtrl = TextEditingController(text: supplier?['phone'] ?? '');
     final emailCtrl = TextEditingController(text: supplier?['email'] ?? '');
@@ -109,6 +120,26 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
               TextField(controller: addressCtrl,
                   decoration: const InputDecoration(labelText: 'Address'),
                   maxLines: 2),
+              const SizedBox(height: 16),
+              StatefulBuilder(builder: (ctx2, setSB) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Branch Assignment', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary)),
+                  const SizedBox(height: 6),
+                  Container(
+                    decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+                    child: Column(children: (allBranches as List).map((b) => CheckboxListTile(
+                      dense: true,
+                      title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
+                      value: selectedBranches.contains(b['id'] as String),
+                      onChanged: (v) => setSB(() {
+                        if (v == true) selectedBranches.add(b['id'] as String);
+                        else selectedBranches.remove(b['id'] as String);
+                      }),
+                    )).toList()),
+                  ),
+                ],
+              )),
               const SizedBox(height: 16),
               const Align(alignment: Alignment.centerLeft,
                   child: Text('Credit Terms', style: TextStyle(

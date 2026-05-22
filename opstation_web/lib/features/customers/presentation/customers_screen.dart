@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
 
@@ -328,7 +329,17 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     }
   }
 
-  void _showDialog(BuildContext context, Map<String, dynamic>? customer) {
+  void _showDialog(BuildContext context, Map<String, dynamic>? customer) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    final allBranches = orgId != null ? await Supabase.instance.client
+        .from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name') : [];
+    Set<String> selectedBranches = {};
+    if (customer != null && orgId != null) {
+      final existing = await Supabase.instance.client
+          .from('customer_branches').select('branch_id').eq('customer_id', customer['id']);
+      selectedBranches = (existing as List).map((b) => b['branch_id'] as String).toSet();
+    }
+    if (!mounted) return;
     final shopCtrl = TextEditingController(text: customer?['shop_name'] ?? '');
     final codeCtrl = TextEditingController(text: customer?['code'] ?? '');
     final contactCtrl = TextEditingController(text: customer?['contact_person'] ?? '');
@@ -404,6 +415,52 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   child: Text('Address', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 8),
                 TextField(controller: addressCtrl, decoration: const InputDecoration(labelText: 'Street Address'), maxLines: 2),
+                const SizedBox(height: 16),
+                // Branch assignment
+                if ((allBranches as List).isNotEmpty)
+                  StatefulBuilder(builder: (ctx2, setSB) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Align(alignment: Alignment.centerLeft,
+                        child: Text('Branch Assignment', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                      const SizedBox(height: 6),
+                      Container(
+                        decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+                        child: Column(children: (allBranches as List).map((b) => CheckboxListTile(
+                          dense: true,
+                          title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
+                          value: selectedBranches.contains(b['id'] as String),
+                          onChanged: (v) => setSB(() {
+                            if (v == true) selectedBranches.add(b['id'] as String);
+                            else selectedBranches.remove(b['id'] as String);
+                          }),
+                        )).toList()),
+                      ),
+                    ],
+                  )),
+                const SizedBox(height: 16),
+                // Branch assignment
+                if ((allBranches as List).isNotEmpty)
+                  StatefulBuilder(builder: (ctx2, setSB) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Align(alignment: Alignment.centerLeft,
+                        child: Text('Branch Assignment', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                      const SizedBox(height: 6),
+                      Container(
+                        decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+                        child: Column(children: (allBranches as List).map((b) => CheckboxListTile(
+                          dense: true,
+                          title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
+                          value: selectedBranches.contains(b['id'] as String),
+                          onChanged: (v) => setSB(() {
+                            if (v == true) selectedBranches.add(b['id'] as String);
+                            else selectedBranches.remove(b['id'] as String);
+                          }),
+                        )).toList()),
+                      ),
+                    ],
+                  )),
                 const SizedBox(height: 16),
                 // Location
                 const Align(alignment: Alignment.centerLeft,
