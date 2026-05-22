@@ -401,7 +401,14 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                             ..._customers.map((c) => DropdownMenuItem(value: c['id'] as String,
                                 child: Text('${c['shop_name']} (${c['code']})'))),
                           ],
-                          onChanged: (v) => setState(() => _detail['customer_id'] = v),
+                          onChanged: (v) async {
+                            setState(() => _detail['customer_id'] = v);
+                            try {
+                              await Supabase.instance.client.from('sales_orders').update({
+                                'customer_id': v, 'updated_at': DateTime.now().toUtc().toIso8601String(),
+                              }).eq('id', _detail['id']);
+                            } catch (_) {}
+                          },
                         )
                       : _InfoRow(label: 'Customer', value: _detail['customers']?['shop_name'] as String? ?? 'Walk-in')),
                   const SizedBox(width: 16),
@@ -434,7 +441,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                     const Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     const Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     const Expanded(flex: 2, child: Text('Qty Ordered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    const Expanded(flex: 2, child: Text('Qty Delivered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     SizedBox(width: _canEdit ? 40 : 0),
                   ]),
                 ),
@@ -442,7 +448,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 // Items
                 ..._items.map((item) {
                   final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
-                  final delivered = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
                   return Column(children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -465,10 +470,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                 },
                               ))
                             : Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), style: const TextStyle(fontWeight: FontWeight.w600))),
-                        Expanded(flex: 2, child: Text(
-                          delivered % 1 == 0 ? delivered.toInt().toString() : delivered.toString(),
-                          style: TextStyle(fontWeight: FontWeight.w600, color: delivered >= qty ? AppTheme.success : AppTheme.textSecondary),
-                        )),
                         if (_canEdit) SizedBox(width: 40, child: IconButton(
                           icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
                           onPressed: () => _deleteItem(item['id'] as String),
@@ -508,6 +509,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                       controller: _addQtyCtrl,
                       decoration: const InputDecoration(hintText: 'Qty', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      onSubmitted: (_) => _addItem(),
                     )),
                     const SizedBox(width: 8),
                     Expanded(flex: 2, child: const SizedBox.shrink()),
@@ -617,7 +619,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
-  bool get _isLocked => _detail['is_locked'] as bool? ?? true;
+  bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isSaved => (_detail['status'] as String? ?? 'saved') == 'saved';
 
   Future<void> _createNew() async {
@@ -659,7 +661,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                     'voucher_number': voucherNum,
                     'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
                     'so_id': soId, 'customer_id': _linkedSo['customer_id'],
-                    'status': 'saved', 'is_locked': true,
+                    'status': 'saved', 'is_locked': false,
                     'created_by': ref.read(currentUserProvider)?.id,
                   });
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
@@ -675,6 +677,33 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         ),
       ),
     );
+  }
+
+  Future<void> _logAudit(String voucherId, String type, String action, String? details) async {
+    final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'org_id': orgId, 'voucher_type': type, 'voucher_id': voucherId,
+        'action': action, 'details': details, 'performed_by': userId,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveDeliveryOrder() async {
+    await _saveDelivery();
+    // Lock the DO after saving
+    try {
+      await Supabase.instance.client.from('delivery_orders').update({
+        'is_locked': true,
+        'locked_by': ref.read(currentUserProvider)?.id,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved');
+    } catch (_) {}
+    // Auto create invoice
+    await _createInvoice();
   }
 
   Future<void> _saveDelivery() async {
@@ -791,13 +820,21 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'voucher_number': voucherNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'so_id': _detail['so_id'], 'do_id': _detail['id'], 'customer_id': _detail['customer_id'],
         'subtotal': subtotal, 'discount_total': 0, 'grand_total': subtotal,
-        'is_locked': true, 'created_by': userId,
+        'is_locked': false, 'created_by': userId,
       });
       for (int i = 0; i < siItems.length; i++) {
         await Supabase.instance.client.from('sales_invoice_items').insert({...siItems[i], 'invoice_id': siId});
       }
+      // Update DO status based on SO fulfillment
+      final soItemsCheck = await Supabase.instance.client.from('sales_order_items')
+          .select('quantity, qty_delivered').eq('sales_order_id', _detail['so_id'] as String);
+      bool allDone = true;
+      for (final si in soItemsCheck as List) {
+        if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) < ((si['quantity'] as num?)?.toDouble() ?? 0)) { allDone = false; break; }
+      }
       await Supabase.instance.client.from('delivery_orders').update({
-        'status': 'invoiced', 'updated_at': DateTime.now().toUtc().toIso8601String(),
+        'status': allDone ? 'invoiced' : 'partially_delivered',
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       _showSnack('Invoice $voucherNum created');
       await _loadList();
@@ -864,6 +901,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   items: const [
                     DropdownMenuItem(value: 'all', child: Text('All', style: TextStyle(fontSize: 12))),
                     DropdownMenuItem(value: 'saved', child: Text('Saved', style: TextStyle(fontSize: 12))),
+                    DropdownMenuItem(value: 'partially_delivered', child: Text('Partial', style: TextStyle(fontSize: 12))),
                     DropdownMenuItem(value: 'invoiced', child: Text('Invoiced', style: TextStyle(fontSize: 12))),
                     DropdownMenuItem(value: 'cancelled', child: Text('Cancelled', style: TextStyle(fontSize: 12))),
                   ],
@@ -954,7 +992,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           const Spacer(),
           if (_isSaved && !_isLocked) ...[
             if (pendingSoItems.isNotEmpty)
-              ElevatedButton(onPressed: _saveDelivery, child: const Text('Save Delivery')),
+              ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Save Delivery Order')),
             const SizedBox(width: 8),
             if (_items.isNotEmpty)
               ElevatedButton(
@@ -1176,7 +1214,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     try {
       final client = Supabase.instance.client;
       final inv = await client.from('sales_invoices')
-          .select('*, customers(shop_name), sales_orders(voucher_number), delivery_orders(voucher_number), branches(name)')
+          .select('*, customers(shop_name, code), sales_orders(voucher_number, customers(shop_name)), delivery_orders(voucher_number), branches(name)')
           .eq('id', id).single();
       final items = await client.from('sales_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', id);
@@ -1213,11 +1251,12 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       for (final item in _items) {
         final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
         final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-        final disc = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
-        final lineTotal = (qty * price) - disc;
+        final discPct = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
+        final discAmt = qty * price * discPct / 100;
+        final lineTotal = (qty * price) - discAmt;
         subtotal += qty * price;
-        discountTotal += disc;
-        await Supabase.instance.client.from('sales_invoice_items').update({'discount': disc, 'line_total': lineTotal}).eq('id', item['id']);
+        discountTotal += discAmt;
+        await Supabase.instance.client.from('sales_invoice_items').update({'discount': discPct, 'line_total': lineTotal}).eq('id', item['id']);
       }
       await Supabase.instance.client.from('sales_invoices').update({
         'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
@@ -1268,7 +1307,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                           itemBuilder: (_, i) {
                             final inv = _filteredInvoices[i];
                             final isSelected = inv['id'] == _selectedId;
-                            final isLocked = inv['is_locked'] as bool? ?? true;
+                            final isLocked = inv['is_locked'] as bool? ?? false;
                             return InkWell(
                               onTap: () => _loadDetail(inv['id'] as String),
                               child: Container(
@@ -1354,7 +1393,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 ]),
                 const SizedBox(height: 10),
                 Row(children: [
-                  Expanded(child: _InfoRow(label: 'Customer', value: _detail['customers']?['shop_name'] as String? ?? 'Walk-in')),
+                  Expanded(child: _InfoRow(label: 'Customer', value: _detail['customers']?['shop_name'] as String? ?? _detail['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in')),
                   const SizedBox(width: 16),
                   Expanded(child: _InfoRow(label: 'SO #', value: _detail['sales_orders']?['voucher_number'] as String? ?? '-')),
                   const SizedBox(width: 16),
