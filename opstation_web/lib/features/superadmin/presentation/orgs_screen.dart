@@ -453,7 +453,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     'module': e.key,
                     'is_enabled': val,
                     'updated_at': DateTime.now().toUtc().toIso8601String(),
-                  });
+                  }, onConflict: 'org_id,module');
                 },
               )).toList(),
             ),

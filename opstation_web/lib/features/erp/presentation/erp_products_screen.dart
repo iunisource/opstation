@@ -13,7 +13,7 @@ class ErpProductsScreen extends ConsumerStatefulWidget {
 class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _filtered = [];
-  List<Map<String, dynamic>> _categories = [];
+  Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   List<Map<String, dynamic>> _uoms = [];
   bool _loading = true;
   final _searchCtrl = TextEditingController();
@@ -38,11 +38,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       final client = Supabase.instance.client;
       final products = await client
           .from('products')
-          .select('*, product_categories(name), uoms(name, abbreviation)')
+          .select('*, uoms(name, abbreviation)')
           .eq('org_id', orgId)
           .order('name');
-      final categories = await client
-          .from('product_categories')
+      final taxonomies = await client
+          .from('product_taxonomies')
           .select()
           .eq('org_id', orgId)
           .order('name');
@@ -51,10 +51,15 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           .select()
           .eq('org_id', orgId)
           .order('name');
+      final Map<String, List<Map<String, dynamic>>> grouped = {};
+      for (final t in taxonomies as List) {
+        final type = t['taxonomy_type'] as String;
+        grouped.putIfAbsent(type, () => []).add(Map<String, dynamic>.from(t));
+      }
       setState(() {
         _products = List<Map<String, dynamic>>.from(products);
         _filtered = _products;
-        _categories = List<Map<String, dynamic>>.from(categories);
+        _taxonomies = grouped;
         _uoms = List<Map<String, dynamic>>.from(uoms);
         _loading = false;
       });
@@ -103,8 +108,26 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         text: product?['selling_price']?.toString() ?? '0');
     final costPriceCtrl = TextEditingController(
         text: product?['cost_price']?.toString() ?? '0');
-    String? categoryId = product?['category_id'] as String?;
     String? uomId = product?['base_uom_id'] as String?;
+    String? productType = product?['product_type'] as String?;
+    String? mainGroup = product?['product_main_group'] as String?;
+    String? group = product?['product_group'] as String?;
+    String? subGroup = product?['product_sub_group'] as String?;
+    String? productClass = product?['product_class'] as String?;
+    String? movementCategory = product?['product_movement_category'] as String?;
+
+    Widget _taxonomyDropdown(String type, String label, String? value, void Function(String?) onChanged) {
+      final items = _taxonomies[type] ?? [];
+      return DropdownButtonFormField<String>(
+        value: value,
+        decoration: InputDecoration(labelText: label),
+        hint: const Text('Select...'),
+        items: items.map((t) => DropdownMenuItem(
+            value: t['name'] as String,
+            child: Text(t['name'] as String))).toList(),
+        onChanged: onChanged,
+      );
+    }
 
     showDialog(
       context: context,
@@ -112,7 +135,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         builder: (ctx, setS) => AlertDialog(
           title: Text(product == null ? 'Add Product' : 'Edit Product'),
           content: SizedBox(
-            width: 560,
+            width: 600,
             child: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 const Align(
@@ -140,35 +163,41 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                           decoration: const InputDecoration(labelText: 'Barcode'))),
                 ]),
                 const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: uomId,
+                  decoration: const InputDecoration(labelText: 'Base UOM *'),
+                  hint: const Text('Select UOM'),
+                  items: _uoms.map((u) => DropdownMenuItem(
+                      value: u['id'] as String,
+                      child: Text('${u['name']} (${u['abbreviation']})'))).toList(),
+                  onChanged: (v) => setS(() => uomId = v),
+                ),
+                const SizedBox(height: 16),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Classification',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                          color: AppTheme.textSecondary)),
+                ),
+                const SizedBox(height: 8),
                 Row(children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: categoryId,
-                      decoration: const InputDecoration(labelText: 'Category'),
-                      hint: const Text('Select category'),
-                      items: _categories
-                          .map((c) => DropdownMenuItem(
-                              value: c['id'] as String,
-                              child: Text(c['name'] as String)))
-                          .toList(),
-                      onChanged: (v) => setS(() => categoryId = v),
-                    ),
-                  ),
+                  Expanded(child: _taxonomyDropdown('product_type', 'Product Type', productType, (v) => setS(() => productType = v))),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: uomId,
-                      decoration: const InputDecoration(labelText: 'Base UOM *'),
-                      hint: const Text('Select UOM'),
-                      items: _uoms
-                          .map((u) => DropdownMenuItem(
-                              value: u['id'] as String,
-                              child: Text(
-                                  '${u['name']} (${u['abbreviation']})')))
-                          .toList(),
-                      onChanged: (v) => setS(() => uomId = v),
-                    ),
-                  ),
+                  Expanded(child: _taxonomyDropdown('main_group', 'Main Group', mainGroup, (v) => setS(() => mainGroup = v))),
+                ]),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(child: _taxonomyDropdown('group', 'Group', group, (v) => setS(() => group = v))),
+                  const SizedBox(width: 12),
+                  Expanded(child: _taxonomyDropdown('sub_group', 'Sub Group', subGroup, (v) => setS(() => subGroup = v))),
+                ]),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(child: _taxonomyDropdown('class', 'Class', productClass, (v) => setS(() => productClass = v))),
+                  const SizedBox(width: 12),
+                  Expanded(child: _taxonomyDropdown('movement_category', 'Movement Category', movementCategory, (v) => setS(() => movementCategory = v))),
                 ]),
                 const SizedBox(height: 16),
                 const Align(
@@ -223,8 +252,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'name': nameCtrl.text.trim(),
                   'sku': skuCtrl.text.trim().isEmpty ? null : skuCtrl.text.trim(),
                   'barcode': barcodeCtrl.text.trim().isEmpty ? null : barcodeCtrl.text.trim(),
-                  'category_id': categoryId,
                   'base_uom_id': uomId,
+                  'product_type': productType,
+                  'product_main_group': mainGroup,
+                  'product_group': group,
+                  'product_sub_group': subGroup,
+                  'product_class': productClass,
+                  'product_movement_category': movementCategory,
                   'selling_price': double.tryParse(sellPriceCtrl.text.trim()) ?? 0,
                   'cost_price': double.tryParse(costPriceCtrl.text.trim()) ?? 0,
                   'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -312,10 +346,10 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                       child: const Row(children: [
                         Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('Category', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        Expanded(flex: 2, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        Expanded(flex: 2, child: Text('Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Sell Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('Cost Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         SizedBox(width: 80),
                       ]),
                     ),
@@ -352,7 +386,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                             fontWeight: FontWeight.w600))),
                                 Expanded(
                                     flex: 2,
-                                    child: Text(catName,
+                                    child: Text(p['product_type'] as String? ?? '-',
+                                        style: const TextStyle(
+                                            color: AppTheme.textSecondary,
+                                            fontSize: 13))),
+                                Expanded(
+                                    flex: 2,
+                                    child: Text(p['product_group'] as String? ?? '-',
                                         style: const TextStyle(
                                             color: AppTheme.textSecondary,
                                             fontSize: 13))),
@@ -364,11 +404,6 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                     flex: 2,
                                     child: Text(
                                         p['selling_price']?.toString() ?? '0',
-                                        style: const TextStyle(fontSize: 13))),
-                                Expanded(
-                                    flex: 2,
-                                    child: Text(
-                                        p['cost_price']?.toString() ?? '0',
                                         style: const TextStyle(fontSize: 13))),
                                 SizedBox(
                                   width: 80,

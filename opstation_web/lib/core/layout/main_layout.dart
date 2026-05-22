@@ -29,18 +29,14 @@ class MainLayout extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     if (auth.isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final user = auth.valueOrNull;
     return Scaffold(
-      body: Row(
-        children: [
-          _Sidebar(user: user),
-          Expanded(child: child),
-        ],
-      ),
+      body: Row(children: [
+        _Sidebar(user: user),
+        Expanded(child: child),
+      ]),
     );
   }
 }
@@ -60,15 +56,25 @@ class _Sidebar extends ConsumerWidget {
     final isAccountant = user?.role == WebUserRole.accountant;
     final isErpUser = user?.role == WebUserRole.erpUser;
 
-    final erpChildren = <_NavItem>[
+    // Inventory sub-group children
+    final inventoryChildren = <Object>[
       if (modules.contains('inventory')) ...[
         _NavItem(icon: Icons.inventory_2_outlined, label: 'Products', path: '/erp/products'),
         _NavItem(icon: Icons.warehouse_outlined, label: 'Warehouses', path: '/erp/warehouses'),
         _NavItem(icon: Icons.straighten_outlined, label: 'Units of Measure', path: '/erp/uoms'),
         _NavItem(icon: Icons.stacked_bar_chart_outlined, label: 'Stock Levels', path: '/erp/stock'),
+        _NavItem(icon: Icons.label_outline, label: 'Product Classifications', path: '/erp/product-classifications'),
       ],
-      if (modules.contains('purchase'))
+    ];
+
+    // ERP top-level children
+    final erpChildren = <Object>[
+      if (inventoryChildren.isNotEmpty)
+        _NavGroup(icon: Icons.inventory_2_outlined, label: 'Inventory', children: inventoryChildren),
+      if (modules.contains('purchase')) ...[
+        _NavItem(icon: Icons.people_outline, label: 'Suppliers', path: '/erp/suppliers'),
         _NavItem(icon: Icons.shopping_cart_outlined, label: 'Purchase', path: '/erp/purchase'),
+      ],
       if (modules.contains('sales'))
         _NavItem(icon: Icons.receipt_long_outlined, label: 'Sales', path: '/erp/sales'),
       if (modules.contains('pos'))
@@ -129,69 +135,66 @@ class _Sidebar extends ConsumerWidget {
     return Container(
       width: 240,
       color: AppTheme.sidebar,
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            child: Row(
-              children: [
-                Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(8)),
-                  alignment: Alignment.center,
-                  child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18)),
-                ),
-                const SizedBox(width: 10),
-                const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
-              ],
-            ),
-          ),
-          if (user?.orgName != null)
+      child: Column(children: [
+        Container(
+          padding: const EdgeInsets.all(24),
+          child: Row(children: [
             Container(
-              margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8)),
-              child: Row(
-                children: [
-                  const Icon(Icons.business, color: AppTheme.sidebarText, size: 14),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(user!.orgName!, style: const TextStyle(color: AppTheme.sidebarText, fontSize: 12), overflow: TextOverflow.ellipsis)),
-                ],
-              ),
+              width: 36, height: 36,
+              decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(8)),
+              alignment: Alignment.center,
+              child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18)),
             ),
-          const Divider(color: Colors.white12, height: 1),
-          const SizedBox(height: 8),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              children: items.map((entry) {
-                if (entry is _NavItem) {
-                  return _buildNavTile(entry, location, context);
-                } else if (entry is _NavGroup) {
-                  return _buildNavGroup(entry, location, context);
-                }
-                return const SizedBox.shrink();
-              }).toList(),
-            ),
+            const SizedBox(width: 10),
+            const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+          ]),
+        ),
+        if (user?.orgName != null)
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8)),
+            child: Row(children: [
+              const Icon(Icons.business, color: AppTheme.sidebarText, size: 14),
+              const SizedBox(width: 8),
+              Expanded(child: Text(user!.orgName!,
+                  style: const TextStyle(color: AppTheme.sidebarText, fontSize: 12),
+                  overflow: TextOverflow.ellipsis)),
+            ]),
           ),
-          const Divider(color: Colors.white12, height: 1),
-          ListTile(
-            leading: CircleAvatar(
-              radius: 16,
-              backgroundColor: AppTheme.primary,
-              child: Text(user?.name.substring(0, 1).toUpperCase() ?? 'U', style: const TextStyle(color: Colors.white, fontSize: 12)),
-            ),
-            title: Text(user?.name ?? '', style: const TextStyle(color: Colors.white, fontSize: 13), overflow: TextOverflow.ellipsis),
-            subtitle: Text(user?.role.name ?? '', style: const TextStyle(color: AppTheme.sidebarText, fontSize: 11)),
-            trailing: IconButton(
-              icon: const Icon(Icons.logout, color: AppTheme.sidebarText, size: 18),
-              onPressed: () => ref.read(authControllerProvider.notifier).signOut(),
-              tooltip: 'Sign out',
-            ),
+        const Divider(color: Colors.white12, height: 1),
+        const SizedBox(height: 8),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            children: items.map((entry) {
+              if (entry is _NavItem) return _buildNavTile(entry, location, context);
+              if (entry is _NavGroup) return _buildNavGroup(entry, location, context);
+              return const SizedBox.shrink();
+            }).toList(),
           ),
-          const SizedBox(height: 8),
-        ],
-      ),
+        ),
+        const Divider(color: Colors.white12, height: 1),
+        ListTile(
+          leading: CircleAvatar(
+            radius: 16,
+            backgroundColor: AppTheme.primary,
+            child: Text(user?.name.substring(0, 1).toUpperCase() ?? 'U',
+                style: const TextStyle(color: Colors.white, fontSize: 12)),
+          ),
+          title: Text(user?.name ?? '',
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              overflow: TextOverflow.ellipsis),
+          subtitle: Text(user?.role.name ?? '',
+              style: const TextStyle(color: AppTheme.sidebarText, fontSize: 11)),
+          trailing: IconButton(
+            icon: const Icon(Icons.logout, color: AppTheme.sidebarText, size: 18),
+            onPressed: () => ref.read(authControllerProvider.notifier).signOut(),
+            tooltip: 'Sign out',
+          ),
+        ),
+        const SizedBox(height: 8),
+      ]),
     );
   }
 }
@@ -206,7 +209,7 @@ class _NavItem {
 class _NavGroup {
   final IconData icon;
   final String label;
-  final List<_NavItem> children;
+  final List<Object> children;
   const _NavGroup({required this.icon, required this.label, required this.children});
 }
 
@@ -214,28 +217,34 @@ Widget _buildNavTile(
   _NavItem item,
   String location,
   BuildContext context, {
-  bool indented = false,
+  int depth = 0,
 }) {
   final isActive = location == item.path;
+  EdgeInsetsGeometry? padding;
+  double fontSize = 14;
+  double iconSize = 20;
+  if (depth == 1) {
+    padding = const EdgeInsets.only(left: 28, right: 16);
+    fontSize = 13;
+    iconSize = 18;
+  } else if (depth >= 2) {
+    padding = const EdgeInsets.only(left: 44, right: 16);
+    fontSize = 13;
+    iconSize = 16;
+  }
   return Container(
     margin: const EdgeInsets.only(bottom: 2),
     child: ListTile(
-      contentPadding: indented
-          ? const EdgeInsets.only(left: 28, right: 16)
-          : null,
-      leading: Icon(
-        item.icon,
-        color: isActive ? Colors.white : AppTheme.sidebarText,
-        size: indented ? 18 : 20,
-      ),
-      title: Text(
-        item.label,
-        style: TextStyle(
+      contentPadding: padding,
+      leading: Icon(item.icon,
           color: isActive ? Colors.white : AppTheme.sidebarText,
-          fontSize: indented ? 13 : 14,
-          fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-        ),
-      ),
+          size: iconSize),
+      title: Text(item.label,
+          style: TextStyle(
+            color: isActive ? Colors.white : AppTheme.sidebarText,
+            fontSize: fontSize,
+            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+          )),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       tileColor: isActive ? AppTheme.sidebarActive : Colors.transparent,
       hoverColor: Colors.white10,
@@ -248,9 +257,21 @@ Widget _buildNavTile(
 Widget _buildNavGroup(
   _NavGroup group,
   String location,
-  BuildContext context,
-) {
-  final hasActiveChild = group.children.any((c) => location == c.path);
+  BuildContext context, {
+  int depth = 0,
+}) {
+  bool hasActive(List<Object> children) {
+    for (final c in children) {
+      if (c is _NavItem && location == c.path) return true;
+      if (c is _NavGroup && hasActive(c.children)) return true;
+    }
+    return false;
+  }
+
+  final double leftPad = depth == 0 ? 16 : 28;
+  final double iconSize = depth == 0 ? 20 : 18;
+  final double fontSize = depth == 0 ? 14 : 13;
+
   return Container(
     margin: const EdgeInsets.only(bottom: 2),
     child: Theme(
@@ -260,24 +281,27 @@ Widget _buildNavGroup(
         highlightColor: Colors.transparent,
       ),
       child: ExpansionTile(
-        key: PageStorageKey<String>('sidebar_group_${group.label}'),
-        initiallyExpanded: hasActiveChild,
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-        leading: Icon(group.icon, color: AppTheme.sidebarText, size: 20),
-        title: Text(
-          group.label,
-          style: const TextStyle(
-            color: AppTheme.sidebarText,
-            fontSize: 14,
-            fontWeight: FontWeight.w400,
-          ),
-        ),
+        key: PageStorageKey<String>('sidebar_group_${group.label}_$depth'),
+        initiallyExpanded: hasActive(group.children),
+        tilePadding: EdgeInsets.symmetric(horizontal: leftPad),
+        leading: Icon(group.icon, color: AppTheme.sidebarText, size: iconSize),
+        title: Text(group.label,
+            style: TextStyle(
+              color: AppTheme.sidebarText,
+              fontSize: fontSize,
+              fontWeight: FontWeight.w400,
+            )),
         iconColor: AppTheme.sidebarText,
         collapsedIconColor: AppTheme.sidebarText,
         childrenPadding: EdgeInsets.zero,
-        children: group.children
-            .map((sub) => _buildNavTile(sub, location, context, indented: true))
-            .toList(),
+        children: group.children.map((child) {
+          if (child is _NavItem) {
+            return _buildNavTile(child, location, context, depth: depth + 1);
+          } else if (child is _NavGroup) {
+            return _buildNavGroup(child, location, context, depth: depth + 1);
+          }
+          return const SizedBox.shrink();
+        }).toList(),
       ),
     ),
   );
