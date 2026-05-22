@@ -92,6 +92,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _canEdit => _isDraft && !_isLocked;
 
+  Future<void> _logAudit(String voucherId, String type, String action, String? details) async {
+    final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'org_id': orgId, 'voucher_type': type, 'voucher_id': voucherId,
+        'action': action, 'details': details, 'performed_by': userId,
+      });
+    } catch (_) {}
+  }
+
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
@@ -106,6 +117,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'status': 'draft', 'is_locked': false,
         'created_by': ref.read(currentUserProvider)?.id,
       });
+      await _logAudit(id, 'SO', 'created', 'Sales Order created');
       _showSnack('SO created');
       await _loadList();
       _loadDetail(id);
