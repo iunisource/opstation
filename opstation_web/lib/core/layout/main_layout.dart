@@ -1,8 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/auth_controller.dart';
 import '../theme/app_theme.dart';
+
+final orgModulesProvider = FutureProvider<Set<String>>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null || user.orgId == null) return {};
+  try {
+    final client = Supabase.instance.client;
+    final res = await client
+        .from('org_modules')
+        .select('module')
+        .eq('org_id', user.orgId!)
+        .eq('is_enabled', true);
+    return {for (final row in res as List) row['module'] as String};
+  } catch (_) {
+    return {};
+  }
+});
 
 class MainLayout extends ConsumerWidget {
   final Widget child;
@@ -11,8 +28,6 @@ class MainLayout extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
-    // Hard refresh on a deep URL: auth is still hydrating.
-    // Show a spinner until it resolves so child screens never mount with a null user.
     if (auth.isLoading) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
@@ -37,11 +52,29 @@ class _Sidebar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).matchedLocation;
+    final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
 
     final isAdminTier = user?.role == WebUserRole.admin ||
         user?.role == WebUserRole.masterAdmin;
     final isDispatch = user?.role == WebUserRole.dispatchManager;
     final isAccountant = user?.role == WebUserRole.accountant;
+    final isErpUser = user?.role == WebUserRole.erpUser;
+
+    final erpChildren = <_NavItem>[
+      if (modules.contains('inventory')) ...[
+        _NavItem(icon: Icons.inventory_2_outlined, label: 'Products', path: '/erp/products'),
+        _NavItem(icon: Icons.warehouse_outlined, label: 'Warehouses', path: '/erp/warehouses'),
+        _NavItem(icon: Icons.straighten_outlined, label: 'Units of Measure', path: '/erp/uoms'),
+        _NavItem(icon: Icons.stacked_bar_chart_outlined, label: 'Stock Levels', path: '/erp/stock'),
+      ],
+      if (modules.contains('purchase'))
+        _NavItem(icon: Icons.shopping_cart_outlined, label: 'Purchase', path: '/erp/purchase'),
+      if (modules.contains('sales'))
+        _NavItem(icon: Icons.receipt_long_outlined, label: 'Sales', path: '/erp/sales'),
+      if (modules.contains('pos'))
+        _NavItem(icon: Icons.storefront_outlined, label: 'POS', path: '/erp/pos'),
+    ];
+
     final List<Object> items = [
       if (user?.role == WebUserRole.superAdmin)
         _NavItem(icon: Icons.business, label: 'Organizations', path: '/orgs'),
@@ -49,17 +82,25 @@ class _Sidebar extends ConsumerWidget {
         _NavItem(icon: Icons.local_shipping_outlined, label: 'Deliveries', path: '/deliveries'),
         _NavItem(icon: Icons.assignment_outlined, label: 'Dispatch Orders', path: '/dispatch-orders'),
       ],
-      if (isAccountant) ...[
+      if (isAccountant)
         _NavItem(icon: Icons.receipt_long, label: 'Orders', path: '/orders'),
-      ],
       if (isAdminTier) ...[
-        _NavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', path: '/dashboard'),
-        _NavItem(icon: Icons.people_outline, label: 'Team', path: '/team'),
-        _NavItem(icon: Icons.store_outlined, label: 'Customers', path: '/customers'),
-        _NavItem(icon: Icons.route_outlined, label: 'Routes', path: '/routes'),
-        _NavItem(icon: Icons.local_shipping_outlined, label: 'Deliveries', path: '/deliveries'),
-        _NavItem(icon: Icons.map_outlined, label: 'Live Map', path: '/live-map'),
-        _NavItem(icon: Icons.bar_chart_outlined, label: 'Reports', path: '/reports'),
+        _NavGroup(
+          icon: Icons.local_shipping_outlined,
+          label: 'Operations',
+          children: [
+            _NavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', path: '/dashboard'),
+            _NavItem(icon: Icons.people_outline, label: 'Team', path: '/team'),
+            _NavItem(icon: Icons.store_outlined, label: 'Customers', path: '/customers'),
+            _NavItem(icon: Icons.route_outlined, label: 'Routes', path: '/routes'),
+            _NavItem(icon: Icons.local_shipping_outlined, label: 'Deliveries', path: '/deliveries'),
+            _NavItem(icon: Icons.map_outlined, label: 'Live Map', path: '/live-map'),
+            _NavItem(icon: Icons.bar_chart_outlined, label: 'Reports', path: '/reports'),
+            _NavItem(icon: Icons.rule, label: 'Compliance', path: '/compliance'),
+            if (user?.role == WebUserRole.masterAdmin)
+              _NavItem(icon: Icons.settings_outlined, label: 'Settings', path: '/settings'),
+          ],
+        ),
         _NavGroup(
           icon: Icons.insights_outlined,
           label: 'Intelligence',
@@ -70,10 +111,19 @@ class _Sidebar extends ConsumerWidget {
             _NavItem(icon: Icons.flag_outlined, label: 'Competitor Spotting', path: '/intelligence/competitors'),
           ],
         ),
-        _NavItem(icon: Icons.rule, label: 'Compliance', path: '/compliance'),
-        if (user?.role == WebUserRole.masterAdmin)
-          _NavItem(icon: Icons.settings_outlined, label: 'Settings', path: '/settings'),
+        if (erpChildren.isNotEmpty)
+          _NavGroup(
+            icon: Icons.account_balance_wallet_outlined,
+            label: 'ERP',
+            children: erpChildren,
+          ),
       ],
+      if (isErpUser && erpChildren.isNotEmpty)
+        _NavGroup(
+          icon: Icons.account_balance_wallet_outlined,
+          label: 'ERP',
+          children: erpChildren,
+        ),
     ];
 
     return Container(
@@ -204,7 +254,6 @@ Widget _buildNavGroup(
   return Container(
     margin: const EdgeInsets.only(bottom: 2),
     child: Theme(
-      // Kill ExpansionTile's default top/bottom dividers and ripple
       data: Theme.of(context).copyWith(
         dividerColor: Colors.transparent,
         splashColor: Colors.transparent,

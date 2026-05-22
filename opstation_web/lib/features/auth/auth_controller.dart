@@ -5,7 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 const _kSessionKey = 'opstation_web_session';
 
-enum WebUserRole { superAdmin, masterAdmin, admin, dispatchManager, accountant }
+enum WebUserRole { superAdmin, masterAdmin, admin, dispatchManager, accountant, erpUser }
 
 class WebUser {
   final String id;
@@ -142,7 +142,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
       // Step 4: role gate. Mobile-only roles get bounced from the web.
       final role = row['role'] as String;
       const allowedWebRoles = [
-        'superAdmin', 'masterAdmin', 'admin', 'dispatchManager', 'accountant'
+        'superAdmin', 'masterAdmin', 'admin', 'dispatchManager', 'accountant', 'erpUser'
       ];
       if (!allowedWebRoles.contains(role)) {
         await client.auth.signOut();
