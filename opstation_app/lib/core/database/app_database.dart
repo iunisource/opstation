@@ -598,6 +598,7 @@ class Products extends Table {
   DateTimeColumn get createdAt => dateTime().named('created_at')();
   DateTimeColumn get updatedAt => dateTime().named('updated_at')();
   @override Set<Column> get primaryKey => {id};
+  @override String get tableName => 'intelligence_products';
 }
 
 @DataClassName('CompetitorSpottingRow')

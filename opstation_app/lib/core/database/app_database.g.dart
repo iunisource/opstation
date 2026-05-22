@@ -7854,7 +7854,7 @@ class $ProductsTable extends Products
   String get aliasedName => _alias ?? actualTableName;
   @override
   String get actualTableName => $name;
-  static const String $name = 'products';
+  static const String $name = 'intelligence_products';
   @override
   VerificationContext validateIntegrity(Insertable<ProductRow> instance,
       {bool isInserting = false}) {

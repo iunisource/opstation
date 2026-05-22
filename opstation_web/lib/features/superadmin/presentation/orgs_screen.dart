@@ -412,6 +412,63 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     );
   }
 
+  static const _moduleLabels = {
+    'inventory': 'Inventory',
+    'purchase': 'Purchase',
+    'sales': 'Sales',
+    'pos': 'POS',
+    'hr': 'HR',
+    'assets': 'Asset Management',
+    'production': 'Production',
+    'financial_reporting': 'Financial Reporting',
+  };
+
+  Future<void> _showModulesDialog(BuildContext ctx, String orgId, String orgName) async {
+    final client = Supabase.instance.client;
+    final res = await client
+        .from('org_modules')
+        .select('module, is_enabled')
+        .eq('org_id', orgId);
+    final Map<String, bool> states = {
+      for (final row in res as List)
+        row['module'] as String: row['is_enabled'] as bool,
+    };
+    if (!ctx.mounted) return;
+    await showDialog(
+      context: ctx,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setS) => AlertDialog(
+          title: Text('Modules — $orgName'),
+          content: SizedBox(
+            width: 340,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: _moduleLabels.entries.map((e) => SwitchListTile(
+                title: Text(e.value),
+                value: states[e.key] ?? false,
+                onChanged: (val) async {
+                  setS(() => states[e.key] = val);
+                  await client.from('org_modules').upsert({
+                    'org_id': orgId,
+                    'module': e.key,
+                    'is_enabled': val,
+                    'updated_at': DateTime.now().toUtc().toIso8601String(),
+                  });
+                },
+              )).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dCtx).pop(),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -532,6 +589,11 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Manage Modules',
+                      icon: const Icon(Icons.extension_outlined, size: 18),
+                      onPressed: () => _showModulesDialog(context, o['id'] as String, o['name'] as String),
+                    ),
                     IconButton(
                       icon: const Icon(Icons.edit_outlined, size: 18),
                       onPressed: () => _showDialog(context, o),

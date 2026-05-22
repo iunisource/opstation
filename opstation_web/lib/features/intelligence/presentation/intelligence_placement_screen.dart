@@ -167,7 +167,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       }
 
       final productRows = await client
-          .from('products')
+          .from('intelligence_products')
           .select('id, name, sku_code, position')
           .eq('org_id', orgId)
           .eq('is_active', true)

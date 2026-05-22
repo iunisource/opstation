@@ -34,7 +34,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
     if (orgId == null) return;
     try {
       final rows = await Supabase.instance.client
-          .from('products')
+          .from('intelligence_products')
           .select()
           .eq('org_id', orgId)
           .order('position')
@@ -74,7 +74,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
   Future<void> _toggleActive(Map<String, dynamic> p) async {
     final newVal = !(p['is_active'] as bool? ?? true);
     try {
-      await Supabase.instance.client.from('products').update({
+      await Supabase.instance.client.from('intelligence_products').update({
         'is_active': newVal,
         'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', p['id']);
@@ -148,9 +148,9 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
               try {
                 if (isNew) {
                   final id = 'prod_${DateTime.now().millisecondsSinceEpoch}';
-                  await Supabase.instance.client.from('products').insert({...data, 'id': id});
+                  await Supabase.instance.client.from('intelligence_products').insert({...data, 'id': id});
                 } else {
-                  await Supabase.instance.client.from('products').update(data).eq('id', product['id']);
+                  await Supabase.instance.client.from('intelligence_products').update(data).eq('id', product['id']);
                 }
                 if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
                 _showSnack(isNew ? 'Product added' : 'Product updated');

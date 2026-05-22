@@ -351,7 +351,7 @@ class SupabasePullService {
     try {
       final results = await Future.wait([
         Supabase.instance.client.from('competitor_categories').select().eq('org_id', orgId),
-        Supabase.instance.client.from('products').select().eq('org_id', orgId),
+        Supabase.instance.client.from('intelligence_products').select().eq('org_id', orgId),
         Supabase.instance.client.from('competitor_spotting').select().eq('org_id', orgId),
         Supabase.instance.client.from('placement_audit').select().eq('org_id', orgId),
       ]);
