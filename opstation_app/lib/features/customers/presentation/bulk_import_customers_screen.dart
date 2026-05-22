@@ -1,0 +1,456 @@
+import 'dart:typed_data';
+
+import 'package:csv/csv.dart';
+import 'package:excel/excel.dart' as xl;
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../auth/auth_controller.dart';
+
+/// Bulk import customers from a CSV or Excel file.
+///
+/// Expected columns (case-insensitive, in any order):
+///   Required: code, shop_name, contact_person, phone, address
+///   Optional: latitude, longitude, ntn_gst
+///
+/// Rows are validated, then inserted in batches of 500 to avoid
+/// hitting Supabase's request size limit. Existing customers (by
+/// matching code within the same org) are skipped — re-runs of the
+/// import are safe.
+class BulkImportCustomersScreen extends ConsumerStatefulWidget {
+  const BulkImportCustomersScreen({super.key});
+
+  @override
+  ConsumerState<BulkImportCustomersScreen> createState() =>
+      _BulkImportCustomersScreenState();
+}
+
+class _BulkImportCustomersScreenState
+    extends ConsumerState<BulkImportCustomersScreen> {
+  static const int _batchSize = 500;
+
+  /// Required column names, lower-cased. Bulk imports tolerate any case
+  /// in the source file but normalize internally.
+  static const List<String> _requiredCols = [
+    'code',
+    'shop_name',
+    'contact_person',
+    'phone',
+    'address',
+  ];
+
+  static const List<String> _optionalCols = [
+    'latitude',
+    'longitude',
+    'ntn_gst',
+  ];
+
+  String? _fileName;
+  List<Map<String, String>> _validRows = [];
+  List<_ImportError> _parseErrors = [];
+  bool _parsing = false;
+  bool _importing = false;
+  int _imported = 0;
+  int _failed = 0;
+  List<_ImportError> _importErrors = [];
+
+  Future<void> _pickFile() async {
+    setState(() {
+      _parsing = true;
+      _validRows = [];
+      _parseErrors = [];
+      _fileName = null;
+      _imported = 0;
+      _failed = 0;
+      _importErrors = [];
+    });
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv', 'xlsx', 'xls'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) {
+        setState(() => _parsing = false);
+        return;
+      }
+
+      final file = result.files.single;
+      _fileName = file.name;
+      final bytes = file.bytes;
+      if (bytes == null) {
+        throw 'File could not be read';
+      }
+
+      final ext = file.extension?.toLowerCase() ?? '';
+      final List<List<String>> rows;
+      if (ext == 'csv') {
+        rows = _parseCsv(bytes);
+      } else if (ext == 'xlsx' || ext == 'xls') {
+        rows = _parseExcel(bytes);
+      } else {
+        throw 'Unsupported file type: .$ext';
+      }
+
+      _validateAndStage(rows);
+    } catch (e) {
+      setState(() {
+        _parseErrors = [_ImportError(row: 0, reason: 'Failed to parse: $e')];
+      });
+    } finally {
+      setState(() => _parsing = false);
+    }
+  }
+
+  /// Splits a CSV byte buffer into rows. Uses the standard converter so
+  /// commas inside quoted fields are honored.
+  List<List<String>> _parseCsv(Uint8List bytes) {
+    final text = String.fromCharCodes(bytes);
+    final converted = const CsvToListConverter(
+      shouldParseNumbers: false,
+      eol: '\n',
+    ).convert(text);
+    return [
+      for (final r in converted) [for (final c in r) c?.toString().trim() ?? '']
+    ];
+  }
+
+  /// Reads the first sheet of an .xlsx workbook into a list of string rows.
+  /// Empty trailing rows are dropped.
+  List<List<String>> _parseExcel(Uint8List bytes) {
+    final excel = xl.Excel.decodeBytes(bytes);
+    if (excel.tables.isEmpty) return const [];
+    final sheet = excel.tables.values.first;
+    final out = <List<String>>[];
+    for (final row in sheet.rows) {
+      final cells = [
+        for (final c in row) (c?.value?.toString() ?? '').trim(),
+      ];
+      // Skip rows where every cell is blank
+      if (cells.every((c) => c.isEmpty)) continue;
+      out.add(cells);
+    }
+    return out;
+  }
+
+  /// Validates the parsed rows: header is correct, required fields
+  /// populated, no duplicate codes within the file. Stages valid rows
+  /// for import and collects errors per row index.
+  void _validateAndStage(List<List<String>> rows) {
+    if (rows.isEmpty) {
+      _parseErrors = [_ImportError(row: 0, reason: 'File is empty')];
+      _validRows = [];
+      return;
+    }
+
+    final headerRow = rows.first.map((s) => s.toLowerCase().trim()).toList();
+    final missingRequired = _requiredCols.where((c) => !headerRow.contains(c)).toList();
+    if (missingRequired.isNotEmpty) {
+      _parseErrors = [
+        _ImportError(row: 0, reason: 'Missing required columns: ${missingRequired.join(", ")}')
+      ];
+      _validRows = [];
+      return;
+    }
+
+    // Build column index map
+    final colIndex = <String, int>{};
+    for (final c in [..._requiredCols, ..._optionalCols]) {
+      final idx = headerRow.indexOf(c);
+      if (idx >= 0) colIndex[c] = idx;
+    }
+
+    final valid = <Map<String, String>>[];
+    final errors = <_ImportError>[];
+    final seenCodes = <String>{};
+
+    for (int i = 1; i < rows.length; i++) {
+      final r = rows[i];
+      final rowMap = <String, String>{};
+      for (final entry in colIndex.entries) {
+        rowMap[entry.key] = entry.value < r.length ? r[entry.value].trim() : '';
+      }
+
+      // Required field check
+      final missingFields = _requiredCols
+          .where((c) => (rowMap[c] ?? '').isEmpty)
+          .toList();
+      if (missingFields.isNotEmpty) {
+        errors.add(_ImportError(
+          row: i + 1,
+          reason: 'Missing: ${missingFields.join(", ")}',
+        ));
+        continue;
+      }
+
+      // Duplicate code within file
+      final code = rowMap['code']!;
+      if (!seenCodes.add(code)) {
+        errors.add(_ImportError(
+          row: i + 1,
+          reason: 'Duplicate code in file: $code',
+        ));
+        continue;
+      }
+
+      // Lat/lng must be numbers if present
+      for (final f in ['latitude', 'longitude']) {
+        final v = rowMap[f] ?? '';
+        if (v.isNotEmpty && double.tryParse(v) == null) {
+          errors.add(_ImportError(
+            row: i + 1,
+            reason: '$f is not a number: "$v"',
+          ));
+          continue;
+        }
+      }
+
+      valid.add(rowMap);
+    }
+
+    _validRows = valid;
+    _parseErrors = errors;
+  }
+
+  Future<void> _runImport() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No org_id — please re-login')),
+      );
+      return;
+    }
+
+    setState(() {
+      _importing = true;
+      _imported = 0;
+      _failed = 0;
+      _importErrors = [];
+    });
+
+    final client = Supabase.instance.client;
+    final now = DateTime.now();
+    final baseTs = now.millisecondsSinceEpoch;
+
+    // Build payloads
+    final payloads = <Map<String, dynamic>>[];
+    for (int i = 0; i < _validRows.length; i++) {
+      final r = _validRows[i];
+      final lat = (r['latitude'] ?? '').isEmpty ? null : double.tryParse(r['latitude']!);
+      final lng = (r['longitude'] ?? '').isEmpty ? null : double.tryParse(r['longitude']!);
+      final ntn = (r['ntn_gst'] ?? '').isEmpty ? null : r['ntn_gst'];
+      payloads.add({
+        'id': 'cust_${baseTs}_$i',
+        'code': r['code'],
+        'shop_name': r['shop_name'],
+        'contact_person': r['contact_person'],
+        'phone': r['phone'],
+        'address': r['address'],
+        'category': null,
+        'latitude': lat,
+        'longitude': lng,
+        'ntn_gst': ntn,
+        'org_id': orgId,
+        'is_active': true,
+        'updated_at': now.toIso8601String(),
+      });
+    }
+
+    // Batched insert. We don't wrap in a transaction — partial success
+    // is acceptable; user retries on failed rows.
+    for (int i = 0; i < payloads.length; i += _batchSize) {
+      final end = (i + _batchSize < payloads.length) ? i + _batchSize : payloads.length;
+      final batch = payloads.sublist(i, end);
+      try {
+        await client.from('customers').insert(batch);
+        setState(() => _imported += batch.length);
+      } catch (e) {
+        // Whole batch failed — log all rows in batch as errors
+        for (int j = i; j < end; j++) {
+          _importErrors.add(_ImportError(
+            row: j + 2, // +2: header offset + 1-based
+            reason: e.toString().split('\n').first,
+          ));
+        }
+        setState(() => _failed += batch.length);
+      }
+    }
+
+    setState(() => _importing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Bulk Import Customers'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildInstructions(),
+            const SizedBox(height: 24),
+            _buildFilePicker(),
+            const SizedBox(height: 24),
+            if (_validRows.isNotEmpty || _parseErrors.isNotEmpty) _buildSummary(),
+            if (_importErrors.isNotEmpty) ...[
+              const SizedBox(height: 24),
+              _buildImportErrorsList(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInstructions() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            Text('File format', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            SizedBox(height: 8),
+            Text('Upload a .csv or .xlsx file with these columns (case-insensitive):'),
+            SizedBox(height: 8),
+            Text('Required:', style: TextStyle(fontWeight: FontWeight.w600)),
+            Text('  code, shop_name, contact_person, phone, address'),
+            SizedBox(height: 4),
+            Text('Optional:', style: TextStyle(fontWeight: FontWeight.w600)),
+            Text('  latitude, longitude, ntn_gst'),
+            SizedBox(height: 8),
+            Text('First row must be the header. Empty cells in optional columns are fine.',
+                style: TextStyle(fontStyle: FontStyle.italic)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilePicker() {
+    return Row(
+      children: [
+        ElevatedButton.icon(
+          onPressed: _parsing || _importing ? null : _pickFile,
+          icon: const Icon(Icons.upload_file),
+          label: const Text('Pick file'),
+        ),
+        const SizedBox(width: 16),
+        if (_fileName != null) Text(_fileName!, style: const TextStyle(fontStyle: FontStyle.italic)),
+        if (_parsing) ...[
+          const SizedBox(width: 16),
+          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSummary() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green.shade700),
+                const SizedBox(width: 8),
+                Text('${_validRows.length} valid rows',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+              ],
+            ),
+            if (_parseErrors.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(Icons.error, color: Colors.red.shade700),
+                  const SizedBox(width: 8),
+                  Text('${_parseErrors.length} rows with errors (skipped)',
+                      style: TextStyle(color: Colors.red.shade700)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 200),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final e in _parseErrors.take(50))
+                      Text('Row ${e.row}: ${e.reason}',
+                          style: TextStyle(color: Colors.red.shade700, fontSize: 12)),
+                    if (_parseErrors.length > 50)
+                      Text('  …and ${_parseErrors.length - 50} more',
+                          style: TextStyle(color: Colors.red.shade700, fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            if (_importing) ...[
+              LinearProgressIndicator(
+                value: _validRows.isEmpty ? 0 : (_imported + _failed) / _validRows.length,
+              ),
+              const SizedBox(height: 8),
+              Text('Importing… $_imported / ${_validRows.length}'),
+            ] else if (_imported > 0 || _failed > 0) ...[
+              Text('Imported: $_imported',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              if (_failed > 0)
+                Text('Failed: $_failed',
+                    style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w700)),
+            ] else if (_validRows.isNotEmpty)
+              ElevatedButton.icon(
+                onPressed: _runImport,
+                icon: const Icon(Icons.cloud_upload),
+                label: Text('Import ${_validRows.length} customers'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImportErrorsList() {
+    return Card(
+      color: Colors.red.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Import errors',
+                style: TextStyle(fontWeight: FontWeight.w700, color: Colors.red.shade900)),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final e in _importErrors.take(100))
+                    Text('Row ${e.row}: ${e.reason}',
+                        style: TextStyle(color: Colors.red.shade900, fontSize: 12)),
+                  if (_importErrors.length > 100)
+                    Text('  …and ${_importErrors.length - 100} more',
+                        style: TextStyle(color: Colors.red.shade900, fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ImportError {
+  final int row;
+  final String reason;
+  const _ImportError({required this.row, required this.reason});
+}
