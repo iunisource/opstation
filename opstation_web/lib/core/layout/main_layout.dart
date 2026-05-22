@@ -110,15 +110,21 @@ class _Sidebar extends ConsumerWidget {
         _NavGroup(icon: Icons.inventory_2_outlined, label: 'Inventory', children: inventoryChildren),
       if (modules.contains('purchase')) ...[
         _NavItem(icon: Icons.people_outline, label: 'Suppliers', path: '/erp/suppliers'),
-        _NavItem(icon: Icons.shopping_cart_outlined, label: 'Purchase', path: '/erp/purchase'),
+        _NavItem(icon: Icons.shopping_cart_outlined, label: 'Purchase Orders', path: '/erp/purchase'),
+        _NavItem(icon: Icons.move_to_inbox_outlined, label: 'GRN', path: '/erp/grn'),
+        _NavItem(icon: Icons.receipt_outlined, label: 'Purchase Invoices', path: '/erp/purchase-invoices'),
         _NavItem(icon: Icons.payment_outlined, label: 'Payments', path: '/erp/payment-vouchers'),
       ],
       if (modules.contains('sales')) ...[
-        _NavItem(icon: Icons.receipt_long_outlined, label: 'Sales', path: '/erp/sales'),
-        _NavItem(icon: Icons.receipt_outlined, label: 'Receipts', path: '/erp/receipt-vouchers'),
+        _NavItem(icon: Icons.receipt_long_outlined, label: 'Sales Orders', path: '/erp/sales'),
+        _NavItem(icon: Icons.local_shipping_outlined, label: 'Delivery Orders', path: '/erp/delivery-orders'),
+        _NavItem(icon: Icons.receipt_outlined, label: 'Sales Invoices', path: '/erp/sales-invoices'),
+        _NavItem(icon: Icons.payments_outlined, label: 'Receipts', path: '/erp/receipt-vouchers'),
       ],
-      if (modules.contains('pos'))
+      if (modules.contains('pos')) ...[
         _NavItem(icon: Icons.storefront_outlined, label: 'POS', path: '/erp/pos'),
+        _NavItem(icon: Icons.list_alt_outlined, label: 'POS Catalog', path: '/erp/pos-catalog'),
+      ],
       if (ledgerChildren.isNotEmpty)
         _NavGroup(icon: Icons.analytics_outlined, label: 'Ledgers', children: ledgerChildren),
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)

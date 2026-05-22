@@ -41,6 +41,7 @@ import '../../features/erp/presentation/erp_receipt_vouchers_screen.dart';
 import '../../features/erp/presentation/erp_supplier_ledger_screen.dart';
 import '../../features/erp/presentation/erp_customer_ledger_screen.dart';
 import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
+import '../../features/erp/presentation/erp_pos_catalog_screen.dart';
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {

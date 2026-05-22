@@ -334,10 +334,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           .select('*, customers(shop_name)')
           .eq('session_id', _session['id'])
           .order('transacted_at', ascending: false);
+      final branchId = _session['branch_id'] as String? ?? '';
       final products = await client
-          .from('products')
-          .select('id, name, sku, selling_price, base_uom_id, uoms(abbreviation)')
+          .from('pos_catalog')
+          .select('id, name, sku, price, is_active')
           .eq('org_id', orgId!)
+          .eq('branch_id', branchId)
           .eq('is_active', true)
           .order('name');
       final uoms = await client.from('uoms').select().eq('org_id', orgId).order('name');
@@ -364,19 +366,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
                 .select('product_id, quantity')
                 .inFilter('transaction_id', allTxnIds));
       }
-      final Map<String, double> salesMap = {};
-      for (final item in topSales) {
-        final pid = item['product_id'] as String;
-        salesMap[pid] = (salesMap[pid] ?? 0) + (item['quantity'] as num).toDouble();
-      }
-      final sortedIds = salesMap.entries.toList()
-        ..sort((a, b) => b.value.compareTo(a.value));
-      final topIds = sortedIds.take(12).map((e) => e.key).toList();
       final allProductsList = List<Map<String, dynamic>>.from(products);
-      final topList = topIds.isNotEmpty
-          ? (allProductsList.where((p) => topIds.contains(p['id'] as String)).toList()
-              ..sort((a, b) => (salesMap[b['id']] ?? 0).compareTo(salesMap[a['id']] ?? 0)))
-          : allProductsList.take(12).toList();
+      final topList = allProductsList.take(12).toList();
       setState(() {
         _transactions = List<Map<String, dynamic>>.from(txns);
         _allProducts = allProductsList;
@@ -406,12 +397,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _cart[existing]['quantity'] = (_cart[existing]['quantity'] as double) + 1;
       } else {
         _cart.add({
-          'product_id': product['id'],
+          'pos_catalog_id': product['id'],
           'name': product['name'],
           'sku': product['sku'],
-          'unit_price': (product['selling_price'] as num?)?.toDouble() ?? 0,
-          'uom_id': product['base_uom_id'],
-          'uom_abbr': product['uoms']?['abbreviation'] ?? '',
+          'unit_price': (product['price'] as num?)?.toDouble() ?? 0,
+          'uom_id': null,
+          'uom_abbr': '',
           'quantity': 1.0,
           'discount': 0.0,
           'discount_type': 'fixed',
