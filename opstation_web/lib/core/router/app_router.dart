@@ -24,6 +24,7 @@ import '../../features/live_map/presentation/live_map_screen.dart';
 import '../../features/compliance/presentation/compliance_screen.dart';
 import '../layout/main_layout.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart';
+import '../../features/erp/presentation/erp_products_screen.dart';
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -112,7 +113,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/compliance', builder: (_, __) => const ComplianceScreen()),
           GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
           GoRoute(path: '/orgs', builder: (_, __) => const OrgsScreen()),
-          GoRoute(path: '/erp/products',  builder: (_, __) => const ErpPlaceholderScreen(title: 'Products')),
+          GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
           GoRoute(path: '/erp/warehouses', builder: (_, __) => const ErpPlaceholderScreen(title: 'Warehouses')),
           GoRoute(path: '/erp/uoms',      builder: (_, __) => const ErpPlaceholderScreen(title: 'Units of Measure')),
           GoRoute(path: '/erp/stock',     builder: (_, __) => const ErpPlaceholderScreen(title: 'Stock Levels')),
