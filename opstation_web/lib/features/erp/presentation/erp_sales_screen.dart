@@ -11,19 +11,32 @@ import '../services/voucher_meta.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-/// Returns null on success; otherwise a human-readable failure reason that the
-/// caller should surface in a snack so the admin can see what went wrong.
+/// Returns null on success OR when there's nothing meaningful to bank (e.g.
+/// legacy numeric-only voucher numbers from before the TYPE-YYYY-NNNN scheme).
+/// Returns a human-readable failure reason only for *actual* DB errors so the
+/// caller can surface it in a snack.
 Future<String?> _bankCancelledVoucherNumber({
   required String? orgId,
   required String? branchId,
   required String voucherNumber,
 }) async {
   if (orgId == null || orgId.isEmpty) return 'org missing';
+  if (voucherNumber.isEmpty) return null; // nothing to bank
   final parts = voucherNumber.split('-');
-  if (parts.length != 3) return 'voucher # malformed';
+  if (parts.length != 3) {
+    // Legacy format (e.g. plain "11") — not tracked in voucher_sequences,
+    // nothing to reuse against. Skip silently.
+    // ignore: avoid_print
+    print('[VoucherBank] $voucherNumber is legacy format, skipping');
+    return null;
+  }
   final year = int.tryParse(parts[1]);
   final number = int.tryParse(parts[2]);
-  if (year == null || number == null) return 'voucher # not numeric';
+  if (year == null || number == null) {
+    // ignore: avoid_print
+    print('[VoucherBank] $voucherNumber not numeric, skipping');
+    return null;
+  }
   try {
     await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
       'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
@@ -33,6 +46,8 @@ Future<String?> _bankCancelledVoucherNumber({
       'year': year,
       'number': number,
     });
+    // ignore: avoid_print
+    print('[VoucherBank] $voucherNumber banked for reuse');
     return null;
   } catch (e) {
     // ignore: avoid_print
@@ -185,10 +200,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         voucherNumber: vNum,
       );
       if (bankErr != null) _showSnack('Bank # failed: $bankErr');
-      if (bankErr == null && vNum.isNotEmpty) {
-        // ignore: avoid_print
-        print('[VoucherBank] $vNum banked for reuse');
-      }
       await _logAudit(_detail['id'] as String, 'SO', 'deleted', 'Voucher $vNum deleted by admin');
       await Supabase.instance.client.from('sales_order_items').delete().eq('sales_order_id', _detail['id']);
       await Supabase.instance.client.from('sales_orders').delete().eq('id', _detail['id']);
@@ -369,10 +380,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         voucherNumber: vNum,
       );
       if (bankErr != null) _showSnack('Bank # failed: $bankErr');
-      if (bankErr == null && vNum.isNotEmpty) {
-        // ignore: avoid_print
-        print('[VoucherBank] $vNum banked for reuse');
-      }
       await Supabase.instance.client.from('sales_orders').update({'status': 'cancelled'}).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'SO', 'cancelled', 'Voucher number $vNum freed for reuse');
       _showSnack('Cancelled');
@@ -922,10 +929,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         voucherNumber: vNum,
       );
       if (bankErr != null) _showSnack('Bank # failed: $bankErr');
-      if (bankErr == null && vNum.isNotEmpty) {
-        // ignore: avoid_print
-        print('[VoucherBank] $vNum banked for reuse');
-      }
 
       await _logAudit(_detail['id'] as String, 'DO', 'deleted', 'Voucher $vNum deleted by admin, stock reversed');
       await Supabase.instance.client.from('delivery_order_items').delete().eq('delivery_order_id', _detail['id']);
@@ -1710,10 +1713,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         voucherNumber: vNum,
       );
       if (bankErr != null) _showSnack('Bank # failed: $bankErr');
-      if (bankErr == null && vNum.isNotEmpty) {
-        // ignore: avoid_print
-        print('[VoucherBank] $vNum banked for reuse');
-      }
 
       _showSnack('Deleted — DO restored to saved');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
