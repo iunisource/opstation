@@ -5,6 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/auth_controller.dart';
 import '../theme/app_theme.dart';
 
+// ─── Providers ────────────────────────────────────────────────────────────────
+
 final orgModulesProvider = FutureProvider<Set<String>>((ref) async {
   final user = ref.watch(currentUserProvider);
   if (user == null || user.orgId == null) return {};
@@ -44,8 +46,12 @@ final userBranchesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
       return List<Map<String, dynamic>>.from(
           await client.from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name'));
     }
-  } catch (_) { return []; }
+  } catch (_) {
+    return [];
+  }
 });
+
+// ─── MainLayout ───────────────────────────────────────────────────────────────
 
 class MainLayout extends ConsumerWidget {
   final Widget child;
@@ -59,162 +65,168 @@ class MainLayout extends ConsumerWidget {
     }
     final user = auth.valueOrNull;
     return Scaffold(
-      body: Row(children: [
-        _Sidebar(user: user),
+      body: Column(children: [
+        _TopNav(user: user),
         Expanded(child: child),
       ]),
     );
   }
 }
 
-class _Sidebar extends ConsumerWidget {
+// ─── Top Navigation Bar ───────────────────────────────────────────────────────
+
+class _TopNav extends ConsumerWidget {
   final WebUser? user;
-  const _Sidebar({this.user});
+  const _TopNav({this.user});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).matchedLocation;
     final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
 
-    final isAdminTier = user?.role == WebUserRole.admin ||
-        user?.role == WebUserRole.masterAdmin;
+    final isAdminTier = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin;
     final isDispatch = user?.role == WebUserRole.dispatchManager;
     final isAccountant = user?.role == WebUserRole.accountant;
     final isErpUser = user?.role == WebUserRole.erpUser;
 
-    // Inventory sub-group children
-    final inventoryChildren = <Object>[
+    // ── ERP Inventory submenu ─────────────────────────────────────────────
+    final inventoryItems = <Widget>[
       if (modules.contains('inventory')) ...[
-        _NavItem(icon: Icons.inventory_2_outlined, label: 'Products', path: '/erp/products'),
-        _NavItem(icon: Icons.store_outlined, label: 'Branches', path: '/erp/branches'),
-        _NavItem(icon: Icons.straighten_outlined, label: 'Units of Measure', path: '/erp/uoms'),
-        _NavItem(icon: Icons.stacked_bar_chart_outlined, label: 'Stock Levels', path: '/erp/stock'),
-        _NavItem(icon: Icons.label_outline, label: 'Product Classifications', path: '/erp/product-classifications'),
-        _NavItem(icon: Icons.open_in_new_outlined, label: 'Opening Stock', path: '/erp/opening-stock'),
-        _NavItem(icon: Icons.swap_horiz_outlined, label: 'Stock Transfers', path: '/erp/stock-transfers'),
+        _menuItem(context, 'Products', Icons.inventory_2_outlined, '/erp/products', location),
+        _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
+        _menuItem(context, 'Units of Measure', Icons.straighten_outlined, '/erp/uoms', location),
+        _menuItem(context, 'Stock Levels', Icons.stacked_bar_chart_outlined, '/erp/stock', location),
+        _menuItem(context, 'Product Classifications', Icons.label_outline, '/erp/product-classifications', location),
+        _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
+        _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location),
       ],
     ];
 
-    final ledgerChildren = <Object>[
+    // ── ERP Ledger submenu ────────────────────────────────────────────────
+    final ledgerItems = <Widget>[
       if (modules.contains('purchase'))
-        _NavItem(icon: Icons.people_outline, label: 'Supplier Ledger', path: '/erp/supplier-ledger'),
+        _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
       if (modules.contains('sales') || modules.contains('pos'))
-        _NavItem(icon: Icons.store_outlined, label: 'Customer Ledger', path: '/erp/customer-ledger'),
+        _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
       if (modules.contains('inventory'))
-        _NavItem(icon: Icons.inventory_2_outlined, label: 'Inventory Ledger', path: '/erp/inventory-ledger'),
+        _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
     ];
 
-    // ERP top-level children
-    final erpChildren = <Object>[
-      if (inventoryChildren.isNotEmpty)
-        _NavGroup(icon: Icons.inventory_2_outlined, label: 'Inventory', children: inventoryChildren),
+    // ── ERP top-level menu items ──────────────────────────────────────────
+    final erpMenuItems = <Widget>[
+      if (inventoryItems.isNotEmpty)
+        _subMenu(context, 'Inventory', Icons.inventory_2_outlined, location, inventoryItems, [
+          '/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock',
+          '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers',
+        ]),
       if (modules.contains('purchase')) ...[
-        _NavItem(icon: Icons.people_outline, label: 'Suppliers', path: '/erp/suppliers'),
-        _NavItem(icon: Icons.shopping_cart_outlined, label: 'Purchase Orders', path: '/erp/purchase'),
-        _NavItem(icon: Icons.move_to_inbox_outlined, label: 'GRN', path: '/erp/grn'),
-        _NavItem(icon: Icons.receipt_outlined, label: 'Purchase Invoices', path: '/erp/purchase-invoices'),
-        _NavItem(icon: Icons.payment_outlined, label: 'Payments', path: '/erp/payment-vouchers'),
+        _menuDivider(),
+        _menuLabel('Purchase'),
+        _menuItem(context, 'Suppliers', Icons.people_outline, '/erp/suppliers', location),
+        _menuItem(context, 'Purchase Orders', Icons.shopping_cart_outlined, '/erp/purchase', location),
+        _menuItem(context, 'GRN', Icons.move_to_inbox_outlined, '/erp/grn', location),
+        _menuItem(context, 'Purchase Invoices', Icons.receipt_outlined, '/erp/purchase-invoices', location),
+        _menuItem(context, 'Payments', Icons.payment_outlined, '/erp/payment-vouchers', location),
       ],
       if (modules.contains('sales')) ...[
-        _NavItem(icon: Icons.receipt_long_outlined, label: 'Sales Orders', path: '/erp/sales'),
-        _NavItem(icon: Icons.local_shipping_outlined, label: 'Delivery Orders', path: '/erp/delivery-orders'),
-        _NavItem(icon: Icons.receipt_outlined, label: 'Sales Invoices', path: '/erp/sales-invoices'),
-        _NavItem(icon: Icons.payments_outlined, label: 'Receipts', path: '/erp/receipt-vouchers'),
+        _menuDivider(),
+        _menuLabel('Sales'),
+        _menuItem(context, 'Sales Orders', Icons.receipt_long_outlined, '/erp/sales', location),
+        _menuItem(context, 'Delivery Orders', Icons.local_shipping_outlined, '/erp/delivery-orders', location),
+        _menuItem(context, 'Sales Invoices', Icons.receipt_outlined, '/erp/sales-invoices', location),
+        _menuItem(context, 'Receipts', Icons.payments_outlined, '/erp/receipt-vouchers', location),
       ],
       if (modules.contains('pos')) ...[
-        _NavItem(icon: Icons.storefront_outlined, label: 'POS', path: '/erp/pos'),
-        _NavItem(icon: Icons.list_alt_outlined, label: 'POS Catalog', path: '/erp/pos-catalog'),
+        _menuDivider(),
+        _menuLabel('Point of Sale'),
+        _menuItem(context, 'POS', Icons.storefront_outlined, '/erp/pos', location),
+        _menuItem(context, 'POS Catalog', Icons.list_alt_outlined, '/erp/pos-catalog', location),
       ],
-      if (ledgerChildren.isNotEmpty)
-        _NavGroup(icon: Icons.analytics_outlined, label: 'Ledgers', children: ledgerChildren),
-      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
-        _NavItem(icon: Icons.manage_accounts_outlined, label: 'ERP Users', path: '/erp/users'),
-    ];
-
-    final List<Object> items = [
-      if (user?.role == WebUserRole.superAdmin)
-        _NavItem(icon: Icons.business, label: 'Organizations', path: '/orgs'),
-      if (isDispatch) ...[
-        _NavItem(icon: Icons.local_shipping_outlined, label: 'Deliveries', path: '/deliveries'),
-        _NavItem(icon: Icons.assignment_outlined, label: 'Dispatch Orders', path: '/dispatch-orders'),
+      if (ledgerItems.isNotEmpty) ...[
+        _menuDivider(),
+        _subMenu(context, 'Ledgers', Icons.analytics_outlined, location, ledgerItems, [
+          '/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
+        ]),
       ],
-      if (isAccountant)
-        _NavItem(icon: Icons.receipt_long, label: 'Orders', path: '/orders'),
-      if (isAdminTier) ...[
-        _NavGroup(
-          icon: Icons.local_shipping_outlined,
-          label: 'Operations',
-          children: [
-            _NavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', path: '/dashboard'),
-            _NavItem(icon: Icons.people_outline, label: 'Team', path: '/team'),
-            _NavItem(icon: Icons.store_outlined, label: 'Customers', path: '/customers'),
-            _NavItem(icon: Icons.route_outlined, label: 'Routes', path: '/routes'),
-            _NavItem(icon: Icons.local_shipping_outlined, label: 'Deliveries', path: '/deliveries'),
-            _NavItem(icon: Icons.map_outlined, label: 'Live Map', path: '/live-map'),
-            _NavItem(icon: Icons.bar_chart_outlined, label: 'Reports', path: '/reports'),
-            _NavItem(icon: Icons.rule, label: 'Compliance', path: '/compliance'),
-            if (user?.role == WebUserRole.masterAdmin)
-              _NavItem(icon: Icons.settings_outlined, label: 'Settings', path: '/settings'),
-          ],
-        ),
-        _NavGroup(
-          icon: Icons.insights_outlined,
-          label: 'Intelligence',
-          children: [
-            _NavItem(icon: Icons.inventory_2_outlined, label: 'Products', path: '/products'),
-            _NavItem(icon: Icons.category_outlined, label: 'Competitor Categories', path: '/competitor-categories'),
-            _NavItem(icon: Icons.checklist_outlined, label: 'Placement Audit', path: '/intelligence/placement'),
-            _NavItem(icon: Icons.flag_outlined, label: 'Competitor Spotting', path: '/intelligence/competitors'),
-          ],
-        ),
-        if (erpChildren.isNotEmpty)
-          _NavGroup(
-            icon: Icons.account_balance_wallet_outlined,
-            label: 'ERP',
-            children: erpChildren,
-          ),
+      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin) ...[
+        _menuDivider(),
+        _menuItem(context, 'ERP Users', Icons.manage_accounts_outlined, '/erp/users', location),
       ],
-      if (isErpUser && erpChildren.isNotEmpty)
-        _NavGroup(
-          icon: Icons.account_balance_wallet_outlined,
-          label: 'ERP',
-          children: erpChildren,
-        ),
     ];
 
     return Container(
-      width: 240,
-      color: AppTheme.sidebar,
-      child: Column(children: [
-        Container(
-          padding: const EdgeInsets.all(24),
+      height: 52,
+      decoration: const BoxDecoration(
+        color: AppTheme.sidebar,
+        border: Border(bottom: BorderSide(color: Colors.white12)),
+      ),
+      child: Row(children: [
+        // ── Logo ────────────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(children: [
             Container(
-              width: 36, height: 36,
-              decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(8)),
+              width: 28, height: 28,
+              decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
               alignment: Alignment.center,
-              child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18)),
+              child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
             ),
-            const SizedBox(width: 10),
-            const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+            const SizedBox(width: 8),
+            const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
           ]),
         ),
-        if (user?.orgName != null)
-          Container(
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8)),
-            child: Row(children: [
-              const Icon(Icons.business, color: AppTheme.sidebarText, size: 14),
-              const SizedBox(width: 8),
-              Expanded(child: Text(user!.orgName!,
-                  style: const TextStyle(color: AppTheme.sidebarText, fontSize: 12),
-                  overflow: TextOverflow.ellipsis)),
-            ]),
+        Container(width: 1, height: 28, color: Colors.white12),
+        const SizedBox(width: 4),
+
+        // ── Navigation items (role-based) ────────────────────────────────────
+        if (user?.role == WebUserRole.superAdmin)
+          _navButton(context, 'Organizations', Icons.business, '/orgs', location),
+
+        if (isDispatch) ...[
+          _navButton(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
+          _navButton(context, 'Dispatch Orders', Icons.assignment_outlined, '/dispatch-orders', location),
+        ],
+
+        if (isAccountant)
+          _navButton(context, 'Orders', Icons.receipt_long, '/orders', location),
+
+        if (isAdminTier) ...[
+          _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
+            ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/live-map', '/reports', '/compliance', '/settings'],
+            [
+              _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
+              _menuItem(context, 'Team', Icons.people_outline, '/team', location),
+              _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location),
+              _menuItem(context, 'Routes', Icons.route_outlined, '/routes', location),
+              _menuItem(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
+              _menuItem(context, 'Live Map', Icons.map_outlined, '/live-map', location),
+              _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
+              _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
+              if (user?.role == WebUserRole.masterAdmin)
+                _menuItem(context, 'Settings', Icons.settings_outlined, '/settings', location),
+            ],
           ),
-        Builder(builder: (context) {
-          final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
-          final hasErp = modules.any((m) => ['inventory','purchase','sales','pos'].contains(m));
+          _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
+            ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors'],
+            [
+              _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
+              _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
+              _menuItem(context, 'Placement Audit', Icons.checklist_outlined, '/intelligence/placement', location),
+              _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
+            ],
+          ),
+          if (erpMenuItems.isNotEmpty)
+            _navMenu(context, 'ERP', Icons.account_balance_wallet_outlined, location, ['/erp/'], erpMenuItems),
+        ],
+
+        if (isErpUser && erpMenuItems.isNotEmpty)
+          _navMenu(context, 'ERP', Icons.account_balance_wallet_outlined, location, ['/erp/'], erpMenuItems),
+
+        const Spacer(),
+
+        // ── Branch selector ──────────────────────────────────────────────────
+        Builder(builder: (ctx) {
+          final hasErp = modules.any((m) => ['inventory', 'purchase', 'sales', 'pos'].contains(m));
           if (!hasErp) return const SizedBox.shrink();
           final branches = ref.watch(userBranchesProvider).valueOrNull ?? [];
           final selected = ref.watch(selectedBranchProvider);
@@ -225,27 +237,25 @@ class _Sidebar extends ConsumerWidget {
             });
           }
           return Container(
-            margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(6),
               border: Border.all(color: Colors.white24),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: selected?['id'] as String?,
                 dropdownColor: const Color(0xFF1E293B),
-                icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 16),
-                isExpanded: true,
+                icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
+                isDense: true,
                 items: branches.map((b) => DropdownMenuItem<String>(
                   value: b['id'] as String,
-                  child: Row(children: [
-                    const Icon(Icons.store_outlined, color: Colors.white70, size: 14),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.store_outlined, color: Colors.white70, size: 13),
                     const SizedBox(width: 6),
-                    Expanded(child: Text(b['name'] as String,
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
-                        overflow: TextOverflow.ellipsis)),
+                    Text(b['name'] as String, style: const TextStyle(color: Colors.white, fontSize: 12)),
                   ]),
                 )).toList(),
                 onChanged: (id) {
@@ -257,147 +267,205 @@ class _Sidebar extends ConsumerWidget {
             ),
           );
         }),
-        const Divider(color: Colors.white12, height: 1),
-        const SizedBox(height: 8),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            children: items.map((entry) {
-              if (entry is _NavItem) return _buildNavTile(entry, location, context);
-              if (entry is _NavGroup) return _buildNavGroup(entry, location, context);
-              return const SizedBox.shrink();
-            }).toList(),
+
+        // ── User / logout menu ───────────────────────────────────────────────
+        Container(width: 1, height: 28, color: Colors.white12),
+        PopupMenuButton<String>(
+          offset: const Offset(0, 52),
+          color: const Color(0xFF1E293B),
+          elevation: 8,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: Colors.white12),
+          ),
+          onSelected: (v) {
+            if (v == 'logout') ref.read(authControllerProvider.notifier).signOut();
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem(
+              enabled: false,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(user?.name ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+                Text(user?.role.name ?? '', style: const TextStyle(color: AppTheme.sidebarText, fontSize: 11)),
+              ]),
+            ),
+            const PopupMenuDivider(),
+            const PopupMenuItem(
+              value: 'logout',
+              child: Row(children: [
+                Icon(Icons.logout, size: 15, color: AppTheme.sidebarText),
+                SizedBox(width: 8),
+                Text('Sign out', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ]),
+            ),
+          ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(children: [
+              CircleAvatar(
+                radius: 13,
+                backgroundColor: AppTheme.primary,
+                child: Text(
+                  user?.name.substring(0, 1).toUpperCase() ?? 'U',
+                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                user?.name.split(' ').first ?? '',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
+            ]),
           ),
         ),
-        const Divider(color: Colors.white12, height: 1),
-        ListTile(
-          leading: CircleAvatar(
-            radius: 16,
-            backgroundColor: AppTheme.primary,
-            child: Text(user?.name.substring(0, 1).toUpperCase() ?? 'U',
-                style: const TextStyle(color: Colors.white, fontSize: 12)),
-          ),
-          title: Text(user?.name ?? '',
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              overflow: TextOverflow.ellipsis),
-          subtitle: Text(user?.role.name ?? '',
-              style: const TextStyle(color: AppTheme.sidebarText, fontSize: 11)),
-          trailing: IconButton(
-            icon: const Icon(Icons.logout, color: AppTheme.sidebarText, size: 18),
-            onPressed: () => ref.read(authControllerProvider.notifier).signOut(),
-            tooltip: 'Sign out',
-          ),
-        ),
-        const SizedBox(height: 8),
       ]),
     );
   }
 }
 
-class _NavItem {
-  final IconData icon;
-  final String label;
-  final String path;
-  const _NavItem({required this.icon, required this.label, required this.path});
-}
+// ─── Nav helpers ──────────────────────────────────────────────────────────────
 
-class _NavGroup {
-  final IconData icon;
-  final String label;
-  final List<Object> children;
-  const _NavGroup({required this.icon, required this.label, required this.children});
-}
-
-Widget _buildNavTile(
-  _NavItem item,
-  String location,
-  BuildContext context, {
-  int depth = 0,
-}) {
-  final isActive = location == item.path;
-  EdgeInsetsGeometry? padding;
-  double fontSize = 14;
-  double iconSize = 20;
-  if (depth == 1) {
-    padding = const EdgeInsets.only(left: 28, right: 16);
-    fontSize = 13;
-    iconSize = 18;
-  } else if (depth >= 2) {
-    padding = const EdgeInsets.only(left: 44, right: 16);
-    fontSize = 13;
-    iconSize = 16;
-  }
-  return Container(
-    margin: const EdgeInsets.only(bottom: 2),
-    child: ListTile(
-      contentPadding: padding,
-      leading: Icon(item.icon,
+Widget _navButton(BuildContext context, String label, IconData icon, String path, String location) {
+  final isActive = location == path || location.startsWith('$path/');
+  return InkWell(
+    onTap: () => GoRouter.of(context).go(path),
+    borderRadius: BorderRadius.circular(6),
+    hoverColor: Colors.white10,
+    child: Container(
+      margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: isActive
+          ? BoxDecoration(color: AppTheme.primary.withOpacity(0.3), borderRadius: BorderRadius.circular(6))
+          : null,
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 14, color: isActive ? Colors.white : AppTheme.sidebarText),
+        const SizedBox(width: 5),
+        Text(label, style: TextStyle(
           color: isActive ? Colors.white : AppTheme.sidebarText,
-          size: iconSize),
-      title: Text(item.label,
-          style: TextStyle(
-            color: isActive ? Colors.white : AppTheme.sidebarText,
-            fontSize: fontSize,
-            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-          )),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      tileColor: isActive ? AppTheme.sidebarActive : Colors.transparent,
-      hoverColor: Colors.white10,
-      onTap: () => context.go(item.path),
-      dense: true,
+          fontSize: 13,
+          fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+        )),
+      ]),
     ),
   );
 }
 
-Widget _buildNavGroup(
-  _NavGroup group,
+Widget _navMenu(
+  BuildContext context,
+  String label,
+  IconData icon,
   String location,
-  BuildContext context, {
-  int depth = 0,
-}) {
-  bool hasActive(List<Object> children) {
-    for (final c in children) {
-      if (c is _NavItem && location == c.path) return true;
-      if (c is _NavGroup && hasActive(c.children)) return true;
-    }
-    return false;
-  }
-
-  final double leftPad = depth == 0 ? 16 : 28;
-  final double iconSize = depth == 0 ? 20 : 18;
-  final double fontSize = depth == 0 ? 14 : 13;
-
-  return Container(
-    margin: const EdgeInsets.only(bottom: 2),
-    child: Theme(
-      data: Theme.of(context).copyWith(
-        dividerColor: Colors.transparent,
-        splashColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-      ),
-      child: ExpansionTile(
-        key: PageStorageKey<String>('sidebar_group_${group.label}_$depth'),
-        initiallyExpanded: hasActive(group.children),
-        tilePadding: EdgeInsets.symmetric(horizontal: leftPad),
-        leading: Icon(group.icon, color: AppTheme.sidebarText, size: iconSize),
-        title: Text(group.label,
-            style: TextStyle(
-              color: AppTheme.sidebarText,
-              fontSize: fontSize,
-              fontWeight: FontWeight.w400,
-            )),
-        iconColor: AppTheme.sidebarText,
-        collapsedIconColor: AppTheme.sidebarText,
-        childrenPadding: EdgeInsets.zero,
-        children: group.children.map((child) {
-          if (child is _NavItem) {
-            return _buildNavTile(child, location, context, depth: depth + 1);
-          } else if (child is _NavGroup) {
-            return _buildNavGroup(child, location, context, depth: depth + 1);
-          }
-          return const SizedBox.shrink();
-        }).toList(),
-      ),
+  List<String> activePaths,
+  List<Widget> items,
+) {
+  final isActive = activePaths.any((p) => location.startsWith(p));
+  return MenuAnchor(
+    style: MenuStyle(
+      backgroundColor: const WidgetStatePropertyAll(Color(0xFF1E293B)),
+      elevation: const WidgetStatePropertyAll(12),
+      shadowColor: WidgetStatePropertyAll(Colors.black54),
+      shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: Colors.white12),
+      )),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
     ),
+    menuChildren: items,
+    builder: (ctx, controller, _) {
+      return InkWell(
+        onTap: () => controller.isOpen ? controller.close() : controller.open(),
+        borderRadius: BorderRadius.circular(6),
+        hoverColor: Colors.white10,
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: isActive
+              ? BoxDecoration(color: AppTheme.primary.withOpacity(0.3), borderRadius: BorderRadius.circular(6))
+              : null,
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 14, color: isActive ? Colors.white : AppTheme.sidebarText),
+            const SizedBox(width: 5),
+            Text(label, style: TextStyle(
+              color: isActive ? Colors.white : AppTheme.sidebarText,
+              fontSize: 13,
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+            )),
+            const SizedBox(width: 3),
+            Icon(
+              controller.isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+              size: 13,
+              color: isActive ? Colors.white70 : AppTheme.sidebarText,
+            ),
+          ]),
+        ),
+      );
+    },
   );
 }
+
+Widget _menuItem(BuildContext context, String label, IconData icon, String path, String location) {
+  final isActive = location == path;
+  return MenuItemButton(
+    style: ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (isActive) return AppTheme.primary.withOpacity(0.2);
+        if (states.contains(WidgetState.hovered)) return Colors.white.withOpacity(0.08);
+        return Colors.transparent;
+      }),
+      foregroundColor: WidgetStatePropertyAll(isActive ? Colors.white : Colors.white70),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+      minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
+    ),
+    leadingIcon: Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white54),
+    onPressed: () => GoRouter.of(context).go(path),
+    child: Text(label, style: TextStyle(fontSize: 13, fontWeight: isActive ? FontWeight.w600 : FontWeight.w400)),
+  );
+}
+
+Widget _subMenu(
+  BuildContext context,
+  String label,
+  IconData icon,
+  String location,
+  List<Widget> items,
+  List<String> paths,
+) {
+  final isActive = paths.any((p) => location == p);
+  return SubmenuButton(
+    style: ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (isActive) return AppTheme.primary.withOpacity(0.2);
+        if (states.contains(WidgetState.hovered)) return Colors.white.withOpacity(0.08);
+        return Colors.transparent;
+      }),
+      foregroundColor: WidgetStatePropertyAll(isActive ? Colors.white : Colors.white70),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+      minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
+    ),
+    menuStyle: MenuStyle(
+      backgroundColor: const WidgetStatePropertyAll(Color(0xFF1E293B)),
+      elevation: const WidgetStatePropertyAll(12),
+      shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: Colors.white12),
+      )),
+    ),
+    leadingIcon: Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white54),
+    menuChildren: items,
+    child: Text(label, style: TextStyle(fontSize: 13, fontWeight: isActive ? FontWeight.w600 : FontWeight.w400)),
+  );
+}
+
+Widget _menuDivider() => const Divider(height: 1, color: Colors.white12, indent: 12, endIndent: 12);
+
+Widget _menuLabel(String text) => Padding(
+  padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+  child: Text(text.toUpperCase(), style: const TextStyle(
+    color: AppTheme.sidebarText,
+    fontSize: 10,
+    fontWeight: FontWeight.w600,
+    letterSpacing: 0.8,
+  )),
+);
