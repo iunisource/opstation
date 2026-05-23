@@ -613,7 +613,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     // Load confirmed SOs
     final sos = await Supabase.instance.client.from('sales_orders')
-        .select('id, voucher_number, customers(shop_name)').eq('org_id', orgId)
+        .select('id, voucher_number, customer_id, customers(shop_name)').eq('org_id', orgId)
         .eq('branch_id', branchId).inFilter('status', ['confirmed', 'partially_delivered']);
     if (!mounted) return;
     if ((sos as List).isEmpty) { _showSnack('No confirmed Sales Orders available'); return; }
@@ -646,7 +646,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                     'id': id, 'org_id': orgId, 'branch_id': branchId,
                     'voucher_number': voucherNum,
                     'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-                    'so_id': soId, 'customer_id': _linkedSo['customer_id'],
+                    'so_id': soId, 'customer_id': so['customer_id'],
                     'status': 'saved', 'is_locked': false,
                     'created_by': ref.read(currentUserProvider)?.id,
                   });
@@ -964,16 +964,16 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
           if (_isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
           const Spacer(),
-          if (_isSaved && !_isLocked) ...[
-            if (pendingSoItems.isNotEmpty)
-              ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Save Delivery Order')),
+          if (!_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
+            ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Save Delivery Order')),
             const SizedBox(width: 8),
-            if (_items.isNotEmpty)
-              ElevatedButton(
-                onPressed: _createInvoice,
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-                child: const Text('Create Invoice'),
-              ),
+          ],
+          if (!isInvoiced && _items.isNotEmpty) ...[
+            ElevatedButton(
+              onPressed: _createInvoice,
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+              child: const Text('Create Invoice'),
+            ),
             const SizedBox(width: 8),
           ],
           if (!isInvoiced)
@@ -1308,9 +1308,15 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   }
 
   Widget _buildDetail() {
-    final subtotal = (_detail['subtotal'] as num?)?.toDouble() ?? 0;
-    final discountTotal = (_detail['discount_total'] as num?)?.toDouble() ?? 0;
-    final grandTotal = (_detail['grand_total'] as num?)?.toDouble() ?? 0;
+    double subtotal = 0, discountTotal = 0;
+    for (final item in _items) {
+      final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
+      final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
+      final discPct = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
+      subtotal += qty * price;
+      discountTotal += qty * price * discPct / 100;
+    }
+    final grandTotal = subtotal - discountTotal;
 
     return Column(children: [
       Container(
@@ -1378,7 +1384,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                     Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Qty', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Unit Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Discount', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text('Discount %', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Line Total', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                   ]),
                 ),
@@ -1386,8 +1392,9 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 ..._items.map((item) {
                   final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
                   final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-                  final disc = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
-                  final lineTotal = (qty * price) - disc;
+                  final discPct = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
+                  final discAmt = qty * price * discPct / 100;
+                  final lineTotal = (qty * price) - discAmt;
                   return Column(children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -1400,10 +1407,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                         Expanded(flex: 2, child: Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
                         Expanded(flex: 2, child: Text(price.toStringAsFixed(2))),
                         Expanded(flex: 2, child: _isLocked
-                            ? Text(disc.toStringAsFixed(2))
+                            ? Text('${discPct.toStringAsFixed(2)} %', style: const TextStyle(color: AppTheme.textSecondary))
                             : SizedBox(height: 32, child: TextField(
                                 controller: _discountCtrl[item['id'] as String],
-                                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+                                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder(), suffixText: '%'),
                                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                 onChanged: (_) => setState(() {}),
                               ))),
