@@ -845,11 +845,13 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           }).eq('id', stock['id']);
         }
 
-        // Inventory movement reversal
+        // Inventory movement reversal — recorded as a positive 'adjustment'
+        // since 'sale_reversal' isn't in the movement_type CHECK constraint.
+        // The semantic context lives on reference_type below.
         await Supabase.instance.client.from('inventory_movements').insert({
           'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${pid.substring(0, 4)}',
           'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': item['uom_id'],
-          'quantity': delivered, 'movement_type': 'sale_reversal',
+          'quantity': delivered, 'movement_type': 'adjustment',
           'reference_id': _detail['id'], 'reference_type': 'delivery_order_deleted',
           'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
         });
