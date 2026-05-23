@@ -108,7 +108,13 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     final year = DateTime.now().year;
     try {
-      final voucherNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_type': 'SO', 'p_year': year});
+      // Check for cancelled voucher to reuse
+      final cancelled = await Supabase.instance.client.from('sales_orders')
+          .select('voucher_number').eq('org_id', orgId).eq('status', 'cancelled')
+          .not('voucher_number', 'is', null).order('voucher_number').limit(1);
+      final voucherNum = (cancelled as List).isNotEmpty
+          ? cancelled.first['voucher_number'] as String
+          : await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_type': 'SO', 'p_year': year});
       final id = 'so_${DateTime.now().millisecondsSinceEpoch}';
       await Supabase.instance.client.from('sales_orders').insert({
         'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -199,7 +205,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     ));
     if (confirm != true) return;
     try {
-      await Supabase.instance.client.from('sales_orders').update({'status': 'cancelled'}).eq('id', _detail['id']);
+      await Supabase.instance.client.from('sales_orders').update({'status': 'cancelled', 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'SO', 'cancelled', 'Sales Order cancelled — voucher ${_detail['voucher_number']} available for reuse');
       _showSnack('Cancelled');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -392,15 +399,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 const SizedBox(height: 12),
                 Row(children: [
                   Expanded(flex: 2, child: _canEdit
-                      ? DropdownButtonFormField<String>(
-                          value: custId,
-                          decoration: const InputDecoration(labelText: 'Customer', isDense: true),
-                          hint: const Text('Walk-in'),
-                          items: [
-                            const DropdownMenuItem(value: null, child: Text('Walk-in')),
-                            ..._customers.map((c) => DropdownMenuItem(value: c['id'] as String,
-                                child: Text('${c['shop_name']} (${c['code']})'))),
-                          ],
+? _SearchableCustomerField(
+                          selectedId: custId,
+                          customers: _customers,
                           onChanged: (v) async {
                             setState(() => _detail['customer_id'] = v);
                             try {
@@ -570,7 +571,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     final orgId = _orgId; final branchId = _branchId; if (orgId == null) return;
     try {
       var q = Supabase.instance.client.from('delivery_orders')
-          .select('*, customers(shop_name), sales_orders(voucher_number)').eq('org_id', orgId);
+          .select('*, customers(shop_name), sales_orders(voucher_number, customers(shop_name))').eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final res = await q.order('created_at', ascending: false);
       setState(() { _orders = List<Map<String,dynamic>>.from(res); _listLoading = false; });
@@ -939,7 +940,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                                     ),
                                   ]),
                                   Text('SO: ${o['sales_orders']?['voucher_number'] ?? '-'}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                                  Text(o['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                                  Text(o['customers']?['shop_name'] as String? ?? o['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                                 ]),
                               ),
                             );
@@ -1201,7 +1202,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     final orgId = _orgId; final branchId = _branchId; if (orgId == null) return;
     try {
       var q = Supabase.instance.client.from('sales_invoices')
-          .select('*, customers(shop_name), sales_orders(voucher_number), delivery_orders(voucher_number)')
+          .select('*, customers(shop_name), sales_orders(voucher_number, customers(shop_name)), delivery_orders(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final res = await q.order('created_at', ascending: false);
@@ -1231,7 +1232,31 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
-  bool get _isLocked => _detail['is_locked'] as bool? ?? true;
+  bool get _isLocked => _detail['is_locked'] as bool? ?? false;
+
+  Future<void> _logAudit(String voucherId, String type, String action, String? details) async {
+    final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'org_id': orgId, 'voucher_type': type, 'voucher_id': voucherId,
+        'action': action, 'details': details, 'performed_by': userId,
+      });
+    } catch (_) {}
+  }
+
+
+  Future<void> _logAudit(String voucherId, String type, String action, String? details) async {
+    final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'org_id': orgId, 'voucher_type': type, 'voucher_id': voucherId,
+        'action': action, 'details': details, 'performed_by': userId,
+      });
+    } catch (_) {}
+  }
+
 
   Future<void> _toggleLock() async {
     final newLocked = !_isLocked;
@@ -1261,7 +1286,14 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       await Supabase.instance.client.from('sales_invoices').update({
         'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
       }).eq('id', _detail['id']);
-      _showSnack('Saved');
+      // Lock invoice after saving
+      await Supabase.instance.client.from('sales_invoices').update({
+        'is_locked': true,
+        'locked_by': ref.read(currentUserProvider)?.id,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'SI', 'saved', 'Invoice saved and locked');
+      _showSnack('Invoice saved and locked');
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -1322,7 +1354,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                   ]),
                                   Text('SO: ${inv['sales_orders']?['voucher_number'] ?? '-'} · DO: ${inv['delivery_orders']?['voucher_number'] ?? '-'}',
                                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                                  Text(inv['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                                  Text(inv['customers']?['shop_name'] as String? ?? inv['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                                   Text('Total: ${(inv['grand_total'] as num?)?.toStringAsFixed(2) ?? '0'}',
                                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.primary)),
                                 ]),
@@ -1559,5 +1591,102 @@ class _AuditTrailRow extends StatelessWidget {
       final res = await Supabase.instance.client.from('users').select('name').eq('id', id).maybeSingle();
       return res?['name'] as String? ?? id;
     } catch (_) { return id; }
+  }
+}
+
+// ─── Searchable Customer Field ────────────────────────────────────────────────
+
+class _SearchableCustomerField extends StatefulWidget {
+  final String? selectedId;
+  final List<Map<String, dynamic>> customers;
+  final ValueChanged<String?> onChanged;
+  const _SearchableCustomerField({required this.customers, required this.onChanged, this.selectedId});
+  @override
+  State<_SearchableCustomerField> createState() => _SearchableCustomerFieldState();
+}
+
+class _SearchableCustomerFieldState extends State<_SearchableCustomerField> {
+  final _ctrl = TextEditingController();
+  final _focus = FocusNode();
+  List<Map<String, dynamic>> _filtered = [];
+  bool _open = false;
+  Map<String, dynamic>? _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.selectedId != null) {
+      _selected = widget.customers.where((c) => c['id'] == widget.selectedId).firstOrNull;
+      _ctrl.text = _selected != null ? '${_selected!['shop_name']} (${_selected!['code']})' : '';
+    }
+    _filtered = widget.customers;
+    _focus.addListener(() { if (!_focus.hasFocus) setState(() => _open = false); });
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); _focus.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      TextField(
+        controller: _ctrl,
+        focusNode: _focus,
+        decoration: InputDecoration(
+          labelText: 'Customer',
+          isDense: true,
+          suffixIcon: _selected != null
+              ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () {
+                  setState(() { _selected = null; _ctrl.clear(); _filtered = widget.customers; });
+                  widget.onChanged(null);
+                })
+              : const Icon(Icons.search, size: 16),
+        ),
+        onChanged: (q) {
+          setState(() {
+            _open = true;
+            _filtered = q.isEmpty ? widget.customers : widget.customers.where((c) =>
+                (c['shop_name'] as String).toLowerCase().contains(q.toLowerCase()) ||
+                (c['code'] as String).toLowerCase().contains(q.toLowerCase())).toList();
+          });
+        },
+        onTap: () => setState(() {
+          _open = true;
+          _filtered = widget.customers;
+        }),
+      ),
+      if (_open && _filtered.isNotEmpty)
+        Container(
+          constraints: const BoxConstraints(maxHeight: 200),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: AppTheme.border),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8)],
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: _filtered.take(8).length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) {
+              final c = _filtered[i];
+              return ListTile(
+                dense: true,
+                title: Text(c['shop_name'] as String, style: const TextStyle(fontSize: 13)),
+                subtitle: Text(c['code'] as String, style: const TextStyle(fontSize: 11)),
+                onTap: () {
+                  setState(() {
+                    _selected = c;
+                    _ctrl.text = '${c['shop_name']} (${c['code']})';
+                    _open = false;
+                  });
+                  _focus.unfocus();
+                  widget.onChanged(c['id'] as String);
+                },
+              );
+            },
+          ),
+        ),
+    ]);
   }
 }
