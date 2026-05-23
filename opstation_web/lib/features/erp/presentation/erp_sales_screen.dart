@@ -109,7 +109,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     final year = DateTime.now().year;
     try {
-      final voucherNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_type': 'SO', 'p_year': year});
+      final voucherNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SO', 'p_year': year});
       final id = 'so_${DateTime.now().millisecondsSinceEpoch}';
       await Supabase.instance.client.from('sales_orders').insert({
         'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -169,6 +169,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'SO', 'confirmed', '${_items.length} items confirmed');
       _showSnack('Order confirmed');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -184,6 +185,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'SO', newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -201,6 +203,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (confirm != true) return;
     try {
       await Supabase.instance.client.from('sales_orders').update({'status': 'cancelled'}).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'SO', 'cancelled', null);
       _showSnack('Cancelled');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -230,6 +233,12 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
+      if (prev?['id'] != next?['id']) {
+        setState(() { _selectedId = null; _detail = {}; _items = []; _listLoading = true; });
+        _loadList();
+      }
+    });
     return CollapsibleListPane(
         listChild: Column(children: [
             Padding(
@@ -378,21 +387,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 const SizedBox(height: 12),
                 Row(children: [
                   Expanded(flex: 2, child: _canEdit
-                      ? DropdownButtonFormField<String>(
-                          value: custId,
-                          decoration: const InputDecoration(labelText: 'Customer', isDense: true),
-                          hint: const Text('Walk-in'),
-                          items: [
-                            const DropdownMenuItem(value: null, child: Text('Walk-in')),
-                            ..._customers.map((c) => DropdownMenuItem(value: c['id'] as String,
-                                child: Text('${c['shop_name']} (${c['code']})'))),
-                          ],
+                      ? _CustomerSelect(
+                          customers: _customers,
+                          selectedId: custId,
                           onChanged: (v) async {
                             setState(() => _detail['customer_id'] = v);
                             try {
                               await Supabase.instance.client.from('sales_orders').update({
                                 'customer_id': v, 'updated_at': DateTime.now().toUtc().toIso8601String(),
                               }).eq('id', _detail['id']);
+                              await _logAudit(_detail['id'] as String, 'SO', 'customer_changed',
+                                  'Customer set to ${_customers.firstWhere((c) => c['id'] == v, orElse: () => {'shop_name': 'Walk-in'})['shop_name']}');
                             } catch (_) {}
                           },
                         )
@@ -510,7 +515,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             ),
 
             const SizedBox(height: 16),
-            _AuditTrailRow(createdBy: _detail['created_by'] as String?, createdAt: _detail['created_at'] as String?),
+            _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'SO'),
           ]),
         ),
       ),
@@ -640,7 +645,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                 try {
                   final so = sos.firstWhere((s) => s['id'] == soId);
                   final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
-                      params: {'p_org_id': orgId, 'p_type': 'DO', 'p_year': year});
+                      params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'DO', 'p_year': year});
                   final id = 'do_${DateTime.now().millisecondsSinceEpoch}';
                   await Supabase.instance.client.from('delivery_orders').insert({
                     'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -783,7 +788,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     final year = DateTime.now().year;
     try {
       final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
-          params: {'p_org_id': orgId, 'p_type': 'SI', 'p_year': year});
+          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SI', 'p_year': year});
       final siId = 'si_${DateTime.now().millisecondsSinceEpoch}';
       double subtotal = 0;
       final Map<String, double> priceMap = {};
@@ -822,6 +827,15 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'status': allDone ? 'invoiced' : 'partially_delivered',
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'DO', 'invoiced', 'Invoice $voucherNum created');
+      // Log creation on the SI itself
+      try {
+        await Supabase.instance.client.from('voucher_audit_log').insert({
+          'org_id': orgId, 'voucher_type': 'SI', 'voucher_id': siId,
+          'action': 'created', 'details': 'Created from DO ${_detail['voucher_number']}',
+          'performed_by': userId,
+        });
+      } catch (_) {}
       _showSnack('Invoice $voucherNum created');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -837,6 +851,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'DO', newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -859,6 +874,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
+      if (prev?['id'] != next?['id']) {
+        setState(() { _selectedId = null; _detail = {}; _items = []; _soItems = []; _linkedSo = {}; _listLoading = true; });
+        _loadList();
+      }
+    });
     return CollapsibleListPane(
         listChild: Column(children: [
             Padding(
@@ -1133,7 +1154,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             ],
 
             const SizedBox(height: 16),
-            _AuditTrailRow(createdBy: _detail['created_by'] as String?, createdAt: _detail['created_at'] as String?),
+            _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'DO'),
           ]),
         ),
       ),
@@ -1215,8 +1236,20 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         'locked_by': newLocked ? ref.read(currentUserProvider)?.id : null,
         'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
       }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _logAudit(String voucherId, String action, String? details) async {
+    final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'org_id': orgId, 'voucher_type': 'SI', 'voucher_id': voucherId,
+        'action': action, 'details': details, 'performed_by': userId,
+      });
+    } catch (_) {}
   }
 
   Future<void> _saveDiscounts() async {
@@ -1225,7 +1258,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       for (final item in _items) {
         final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
         final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-        final discPct = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
+        final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
         final discAmt = qty * price * discPct / 100;
         final lineTotal = (qty * price) - discAmt;
         subtotal += qty * price;
@@ -1234,8 +1267,14 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       }
       await Supabase.instance.client.from('sales_invoices').update({
         'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
+        'is_locked': true,
+        'locked_by': ref.read(currentUserProvider)?.id,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      _showSnack('Saved');
+      await _logAudit(_detail['id'] as String, 'saved',
+          'Discount: ${discountTotal.toStringAsFixed(2)} · Total: ${(subtotal - discountTotal).toStringAsFixed(2)}');
+      _showSnack('Saved & locked');
+      await _loadList();
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -1250,6 +1289,12 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
+      if (prev?['id'] != next?['id']) {
+        setState(() { _selectedId = null; _detail = {}; _items = []; _listLoading = true; });
+        _loadList();
+      }
+    });
     return CollapsibleListPane(
         listChild: Column(children: [
             Padding(
@@ -1286,7 +1331,23 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                     Text(inv['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
-                                    if (isLocked) const Icon(Icons.lock_outline, size: 12, color: Colors.orange),
+                                    isLocked
+                                        ? Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                                              Icon(Icons.check_circle, size: 10, color: AppTheme.success),
+                                              SizedBox(width: 3),
+                                              Text('Processed', style: TextStyle(color: AppTheme.success, fontSize: 9, fontWeight: FontWeight.w700)),
+                                            ]))
+                                        : Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                                              Icon(Icons.pending_outlined, size: 10, color: Colors.orange),
+                                              SizedBox(width: 3),
+                                              Text('Pending', style: TextStyle(color: Colors.orange, fontSize: 9, fontWeight: FontWeight.w700)),
+                                            ])),
                                   ]),
                                   Text('SO: ${inv['sales_orders']?['voucher_number'] ?? '-'} · DO: ${inv['delivery_orders']?['voucher_number'] ?? '-'}',
                                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
@@ -1312,7 +1373,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     for (final item in _items) {
       final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
       final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-      final discPct = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
+      final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
       subtotal += qty * price;
       discountTotal += qty * price * discPct / 100;
     }
@@ -1392,7 +1453,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 ..._items.map((item) {
                   final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
                   final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-                  final discPct = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
+                  final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
                   final discAmt = qty * price * discPct / 100;
                   final lineTotal = (qty * price) - discAmt;
                   return Column(children: [
@@ -1412,7 +1473,19 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                 controller: _discountCtrl[item['id'] as String],
                                 decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder(), suffixText: '%'),
                                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                onChanged: (_) => setState(() {}),
+                                onChanged: (v) {
+                                  final val = double.tryParse(v) ?? 0;
+                                  if (val > 100) {
+                                    final ctrl = _discountCtrl[item['id'] as String]!;
+                                    ctrl.text = '100';
+                                    ctrl.selection = TextSelection.fromPosition(const TextPosition(offset: 3));
+                                  } else if (val < 0) {
+                                    final ctrl = _discountCtrl[item['id'] as String]!;
+                                    ctrl.text = '0';
+                                    ctrl.selection = TextSelection.fromPosition(const TextPosition(offset: 1));
+                                  }
+                                  setState(() {});
+                                },
                               ))),
                         Expanded(flex: 2, child: Text(lineTotal.toStringAsFixed(2), style: const TextStyle(fontWeight: FontWeight.w700))),
                       ]),
@@ -1434,7 +1507,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             ),
 
             const SizedBox(height: 16),
-            _AuditTrailRow(createdBy: _detail['created_by'] as String?, createdAt: _detail['created_at'] as String?),
+            _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'SI'),
           ]),
         ),
       ),
@@ -1443,6 +1516,208 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 }
 
 // ─── Shared Widgets ───────────────────────────────────────────────────────────
+
+class _CustomerSelect extends StatelessWidget {
+  final List<Map<String, dynamic>> customers;
+  final String? selectedId;
+  final ValueChanged<String?> onChanged;
+  const _CustomerSelect({required this.customers, required this.selectedId, required this.onChanged});
+
+  String _displayName() {
+    if (selectedId == null) return 'Walk-in';
+    final c = customers.firstWhere((c) => c['id'] == selectedId, orElse: () => {});
+    if (c.isEmpty) return 'Walk-in';
+    return '${c['shop_name']} (${c['code']})';
+  }
+
+  Future<void> _showPicker(BuildContext context) async {
+    String search = '';
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          final filtered = customers.where((c) =>
+            search.isEmpty ||
+            (c['shop_name'] as String? ?? '').toLowerCase().contains(search.toLowerCase()) ||
+            (c['code'] as String? ?? '').toLowerCase().contains(search.toLowerCase())
+          ).toList();
+          return AlertDialog(
+            title: const Text('Select Customer'),
+            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            content: SizedBox(
+              width: 480,
+              height: 460,
+              child: Column(children: [
+                TextField(
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Search by name or code...',
+                    prefixIcon: Icon(Icons.search, size: 18),
+                    isDense: true,
+                  ),
+                  onChanged: (v) => setS(() => search = v),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView(children: [
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.person_off_outlined, size: 18, color: AppTheme.textSecondary),
+                      title: const Text('Walk-in', style: TextStyle(fontStyle: FontStyle.italic, color: AppTheme.textSecondary)),
+                      selected: selectedId == null,
+                      onTap: () => Navigator.of(ctx, rootNavigator: true).pop('__WALKIN__'),
+                    ),
+                    const Divider(height: 1),
+                    if (filtered.isEmpty)
+                      const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No customers match', style: TextStyle(color: AppTheme.textSecondary))))
+                    else
+                      ...filtered.map((c) => ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.store_outlined, size: 18, color: AppTheme.primary),
+                        title: Text(c['shop_name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text(c['code'] as String? ?? '', style: const TextStyle(fontSize: 11)),
+                        selected: c['id'] == selectedId,
+                        onTap: () => Navigator.of(ctx, rootNavigator: true).pop(c['id'] as String),
+                      )),
+                  ]),
+                ),
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+            ],
+          );
+        },
+      ),
+    );
+    if (result != null) onChanged(result == '__WALKIN__' ? null : result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => _showPicker(context),
+      borderRadius: BorderRadius.circular(8),
+      child: InputDecorator(
+        decoration: const InputDecoration(
+          labelText: 'Customer',
+          isDense: true,
+          suffixIcon: Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
+        ),
+        child: Text(_displayName(), style: const TextStyle(fontSize: 13)),
+      ),
+    );
+  }
+}
+
+class _AuditTrailList extends StatelessWidget {
+  final String voucherId;
+  final String voucherType;
+  const _AuditTrailList({required this.voucherId, required this.voucherType});
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    try {
+      final res = await Supabase.instance.client.from('voucher_audit_log')
+          .select('*')
+          .eq('voucher_id', voucherId)
+          .eq('voucher_type', voucherType)
+          .order('performed_at', ascending: true);
+      // Resolve names
+      final events = List<Map<String, dynamic>>.from(res);
+      final userIds = events.map((e) => e['performed_by'] as String?).where((id) => id != null).toSet().toList();
+      final users = userIds.isEmpty ? <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(
+        await Supabase.instance.client.from('users').select('id, name').inFilter('id', userIds.cast<Object>()),
+      );
+      final nameById = {for (final u in users) u['id'] as String: u['name'] as String? ?? '-'};
+      for (final e in events) {
+        e['_userName'] = nameById[e['performed_by'] as String?] ?? '-';
+      }
+      return events;
+    } catch (_) { return []; }
+  }
+
+  Color _actionColor(String action) {
+    switch (action) {
+      case 'created': return AppTheme.primary;
+      case 'saved': return AppTheme.primary;
+      case 'confirmed': return Colors.blue;
+      case 'invoiced': return AppTheme.success;
+      case 'locked': return Colors.orange;
+      case 'unlocked': return AppTheme.textSecondary;
+      case 'cancelled': return AppTheme.danger;
+      default: return AppTheme.textSecondary;
+    }
+  }
+
+  IconData _actionIcon(String action) {
+    switch (action) {
+      case 'created': return Icons.add_circle_outline;
+      case 'saved': return Icons.save_outlined;
+      case 'confirmed': return Icons.check_circle_outline;
+      case 'invoiced': return Icons.receipt_long_outlined;
+      case 'locked': return Icons.lock_outline;
+      case 'unlocked': return Icons.lock_open_outlined;
+      case 'cancelled': return Icons.cancel_outlined;
+      default: return Icons.circle_outlined;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _load(),
+      builder: (_, snap) {
+        final events = snap.data ?? [];
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const SizedBox(height: 60, child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))));
+        }
+        if (events.isEmpty) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Row(children: [
+              Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
+              SizedBox(width: 6),
+              Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary)),
+            ]),
+            const SizedBox(height: 8),
+            ...events.map((e) {
+              final action = e['action'] as String? ?? '-';
+              final user = e['_userName'] as String? ?? '-';
+              final at = e['performed_at'] as String?;
+              final dt = at != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(at).toLocal()) : '-';
+              final details = e['details'] as String?;
+              final color = _actionColor(action);
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(_actionIcon(action), size: 14, color: color),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Text(action[0].toUpperCase() + action.substring(1),
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+                        const SizedBox(width: 6),
+                        Flexible(child: Text('by $user',
+                            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+                      ]),
+                      if (details != null && details.isNotEmpty)
+                        Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ]),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(dt, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                ]),
+              );
+            }),
+          ]),
+        );
+      },
+    );
+  }
+}
 
 class _StatusChip extends StatelessWidget {
   final String status;
@@ -1496,37 +1771,4 @@ class _TotalsRow extends StatelessWidget {
       Text(value, style: TextStyle(fontSize: bold ? 15 : 13, fontWeight: bold ? FontWeight.w800 : FontWeight.w600, color: color)),
     ]),
   );
-}
-
-class _AuditTrailRow extends StatelessWidget {
-  final String? createdBy;
-  final String? createdAt;
-  const _AuditTrailRow({this.createdBy, this.createdAt});
-  @override
-  Widget build(BuildContext context) {
-    if (createdBy == null && createdAt == null) return const SizedBox.shrink();
-    return FutureBuilder<String>(
-      future: _resolveName(createdBy),
-      builder: (_, snap) {
-        final name = snap.data ?? createdBy ?? '-';
-        final date = createdAt != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(createdAt!).toLocal()) : '-';
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-          child: Row(children: [
-            const Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
-            const SizedBox(width: 8),
-            Text('Created by $name on $date', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          ]),
-        );
-      },
-    );
-  }
-  static Future<String> _resolveName(String? id) async {
-    if (id == null) return '-';
-    try {
-      final res = await Supabase.instance.client.from('users').select('name').eq('id', id).maybeSingle();
-      return res?['name'] as String? ?? id;
-    } catch (_) { return id; }
-  }
 }
