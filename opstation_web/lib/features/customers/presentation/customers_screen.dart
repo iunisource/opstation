@@ -347,6 +347,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     final addressCtrl = TextEditingController(text: customer?['address'] ?? '');
     final latCtrl = TextEditingController(text: customer?['latitude']?.toString() ?? '');
     final lngCtrl = TextEditingController(text: customer?['longitude']?.toString() ?? '');
+    final creditLimitCtrl = TextEditingController(text: customer?['credit_limit']?.toString() ?? '');
+    final ntnCtrl = TextEditingController(text: customer?['ntn'] ?? '');
     String? category = customer?['category'] as String?;
        String? group = customer?['group_name'] as String?;
        // Build dropdown lists that include any orphan values from the
@@ -408,6 +410,19 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                       onChanged: (v) => setS(() => group = v),
                     ),
                   ),
+                ]),
+                const SizedBox(height: 16),
+                // Credit & Tax
+                const Align(alignment: Alignment.centerLeft,
+                  child: Text('Credit & Tax', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(child: TextField(controller: creditLimitCtrl,
+                      decoration: const InputDecoration(labelText: 'Credit Limit (optional)', hintText: 'Leave blank for no limit'),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true))),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(controller: ntnCtrl,
+                      decoration: const InputDecoration(labelText: 'NTN'))),
                 ]),
                 const SizedBox(height: 16),
                 // Address
@@ -521,6 +536,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   'group_name': group,
                   'latitude': lat,
                   'longitude': lng,
+                  'credit_limit': creditLimitCtrl.text.trim().isEmpty ? null : double.tryParse(creditLimitCtrl.text.trim()),
+                  'ntn': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
                   'org_id': orgId,
                   'is_active': true,
                 };

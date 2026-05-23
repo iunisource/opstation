@@ -93,6 +93,9 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     final phoneCtrl = TextEditingController(text: supplier?['phone'] ?? '');
     final emailCtrl = TextEditingController(text: supplier?['email'] ?? '');
     final addressCtrl = TextEditingController(text: supplier?['address'] ?? '');
+    final contactPersonCtrl = TextEditingController(text: supplier?['contact_person'] ?? '');
+    final contactNumberCtrl = TextEditingController(text: supplier?['contact_number'] ?? '');
+    final ntnCtrl = TextEditingController(text: supplier?['ntn'] ?? '');
     final termsCtrl = TextEditingController(text: supplier?['payment_terms_days']?.toString() ?? '30');
     final creditCtrl = TextEditingController(text: supplier?['credit_limit']?.toString() ?? '');
 
@@ -116,6 +119,18 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                     decoration: const InputDecoration(labelText: 'Email'),
                     keyboardType: TextInputType.emailAddress)),
               ]),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(child: TextField(controller: contactPersonCtrl,
+                    decoration: const InputDecoration(labelText: 'Contact Person'))),
+                const SizedBox(width: 12),
+                Expanded(child: TextField(controller: contactNumberCtrl,
+                    decoration: const InputDecoration(labelText: 'Contact Number'),
+                    keyboardType: TextInputType.phone)),
+              ]),
+              const SizedBox(height: 12),
+              TextField(controller: ntnCtrl,
+                  decoration: const InputDecoration(labelText: 'NTN')),
               const SizedBox(height: 12),
               TextField(controller: addressCtrl,
                   decoration: const InputDecoration(labelText: 'Address'),
@@ -176,6 +191,9 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                 'phone': phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
                 'email': emailCtrl.text.trim().isEmpty ? null : emailCtrl.text.trim(),
                 'address': addressCtrl.text.trim().isEmpty ? null : addressCtrl.text.trim(),
+                'contact_person': contactPersonCtrl.text.trim().isEmpty ? null : contactPersonCtrl.text.trim(),
+                'contact_number': contactNumberCtrl.text.trim().isEmpty ? null : contactNumberCtrl.text.trim(),
+                'ntn': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
                 'payment_terms_days': int.tryParse(termsCtrl.text.trim()) ?? 30,
                 'credit_limit': creditCtrl.text.trim().isEmpty ? null : double.tryParse(creditCtrl.text.trim()),
                 'is_active': true,
