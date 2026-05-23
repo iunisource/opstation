@@ -110,6 +110,10 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
       if (modules.contains('inventory'))
         _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
+      if (modules.contains('sales') || modules.contains('pos'))
+        _menuItem(context, 'Customer Aging', Icons.hourglass_bottom_outlined, '/erp/customer-aging', location),
+      if (modules.contains('purchase'))
+        _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
     ];
 
     // ── ERP top-level menu items ──────────────────────────────────────────
@@ -126,6 +130,7 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Purchase Orders', Icons.shopping_cart_outlined, '/erp/purchase', location),
         _menuItem(context, 'GRN', Icons.move_to_inbox_outlined, '/erp/grn', location),
         _menuItem(context, 'Purchase Invoices', Icons.receipt_outlined, '/erp/purchase-invoices', location),
+        _menuItem(context, 'Purchase Returns', Icons.assignment_return_outlined, '/erp/purchase-returns', location),
         _menuItem(context, 'Payments', Icons.payment_outlined, '/erp/payment-vouchers', location),
       ],
       if (modules.contains('sales')) ...[
@@ -134,6 +139,7 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Sales Orders', Icons.receipt_long_outlined, '/erp/sales', location),
         _menuItem(context, 'Delivery Orders', Icons.local_shipping_outlined, '/erp/delivery-orders', location),
         _menuItem(context, 'Sales Invoices', Icons.receipt_outlined, '/erp/sales-invoices', location),
+        _menuItem(context, 'Sales Returns', Icons.assignment_return_outlined, '/erp/sales-returns', location),
         _menuItem(context, 'Receipts', Icons.payments_outlined, '/erp/receipt-vouchers', location),
       ],
       if (modules.contains('pos')) ...[
@@ -146,6 +152,7 @@ class _TopNav extends ConsumerWidget {
         _menuDivider(),
         _subMenu(context, 'Ledgers', Icons.analytics_outlined, location, ledgerItems, [
           '/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
+          '/erp/customer-aging', '/erp/supplier-aging',
         ]),
       ],
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin) ...[
