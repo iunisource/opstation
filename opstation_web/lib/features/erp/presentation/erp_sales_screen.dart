@@ -9,6 +9,38 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 
+// ─── Shared helpers ──────────────────────────────────────────────────────────
+
+/// Returns null on success; otherwise a human-readable failure reason that the
+/// caller should surface in a snack so the admin can see what went wrong.
+Future<String?> _bankCancelledVoucherNumber({
+  required String? orgId,
+  required String? branchId,
+  required String voucherNumber,
+}) async {
+  if (orgId == null || orgId.isEmpty) return 'org missing';
+  final parts = voucherNumber.split('-');
+  if (parts.length != 3) return 'voucher # malformed';
+  final year = int.tryParse(parts[1]);
+  final number = int.tryParse(parts[2]);
+  if (year == null || number == null) return 'voucher # not numeric';
+  try {
+    await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
+      'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
+      'org_id': orgId,
+      'branch_id': branchId,
+      'voucher_type': parts[0],
+      'year': year,
+      'number': number,
+    });
+    return null;
+  } catch (e) {
+    // ignore: avoid_print
+    print('[VoucherBank] failed to bank $voucherNumber: $e');
+    return e.toString().split('\n').first;
+  }
+}
+
 // ─── Sales Orders (Master-Detail) ────────────────────────────────────────────
 
 class ErpSalesScreen extends ConsumerStatefulWidget {
@@ -57,8 +89,21 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final client = Supabase.instance.client;
       final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
-      final c = await client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name').limit(10000);
-      setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _customers = List<Map<String,dynamic>>.from(c); });
+      // Paginate customers past PostgREST's 1000-row default and any later cap.
+      final List<Map<String, dynamic>> c = [];
+      const pageSize = 1000;
+      var offset = 0;
+      while (true) {
+        final page = await client.from('customers').select('id, shop_name, code')
+            .eq('org_id', orgId).eq('is_active', true).order('shop_name')
+            .range(offset, offset + pageSize - 1);
+        c.addAll(List<Map<String, dynamic>>.from(page));
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
+      // ignore: avoid_print
+      print('[ErpSales] customers loaded: ${c.length}');
+      setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _customers = c; });
     } catch (_) {}
   }
 
@@ -132,24 +177,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (confirm != true) return;
 
     try {
-      // Bank voucher number for reuse
+      // Bank voucher number for reuse — surface any failure so it's visible.
       final vNum = _detail['voucher_number'] as String? ?? '';
-      final parts = vNum.split('-');
-      if (parts.length == 3) {
-        final year = int.tryParse(parts[1]);
-        final number = int.tryParse(parts[2]);
-        if (year != null && number != null) {
-          try {
-            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
-              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
-              'org_id': _orgId,
-              'branch_id': _detail['branch_id'],
-              'voucher_type': parts[0],
-              'year': year,
-              'number': number,
-            });
-          } catch (_) {}
-        }
+      final bankErr = await _bankCancelledVoucherNumber(
+        orgId: _orgId,
+        branchId: _detail['branch_id'] as String?,
+        voucherNumber: vNum,
+      );
+      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
+      if (bankErr == null && vNum.isNotEmpty) {
+        // ignore: avoid_print
+        print('[VoucherBank] $vNum banked for reuse');
       }
       await _logAudit(_detail['id'] as String, 'SO', 'deleted', 'Voucher $vNum deleted by admin');
       await Supabase.instance.client.from('sales_order_items').delete().eq('sales_order_id', _detail['id']);
@@ -323,25 +361,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     ));
     if (confirm != true) return;
     try {
-      // Bank the cancelled voucher number for reuse
+      // Bank the cancelled voucher number for reuse — surface failures.
       final vNum = _detail['voucher_number'] as String? ?? '';
-      final parts = vNum.split('-');
-      if (parts.length == 3) {
-        final type = parts[0];
-        final year = int.tryParse(parts[1]);
-        final number = int.tryParse(parts[2]);
-        if (year != null && number != null) {
-          try {
-            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
-              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
-              'org_id': _orgId,
-              'branch_id': _detail['branch_id'],
-              'voucher_type': type,
-              'year': year,
-              'number': number,
-            });
-          } catch (_) {}
-        }
+      final bankErr = await _bankCancelledVoucherNumber(
+        orgId: _orgId,
+        branchId: _detail['branch_id'] as String?,
+        voucherNumber: vNum,
+      );
+      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
+      if (bankErr == null && vNum.isNotEmpty) {
+        // ignore: avoid_print
+        print('[VoucherBank] $vNum banked for reuse');
       }
       await Supabase.instance.client.from('sales_orders').update({'status': 'cancelled'}).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'SO', 'cancelled', 'Voucher number $vNum freed for reuse');
@@ -669,6 +699,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             const SizedBox(height: 16),
             _VoucherInfoStrip(
               salesperson: _meta.salespersonName,
+              salespersonDiagnostic: _meta.diagnostic,
               customerAddress: _detail['customers']?['address'] as String?,
               customerContact: _detail['customers']?['contact_person'] as String?,
               customerPhone: _detail['customers']?['phone'] as String?,
@@ -883,21 +914,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         }).eq('id', soId);
       }
 
-      // Bank voucher number
+      // Bank voucher number — surface failures.
       final vNum = _detail['voucher_number'] as String? ?? '';
-      final parts = vNum.split('-');
-      if (parts.length == 3) {
-        final year = int.tryParse(parts[1]);
-        final number = int.tryParse(parts[2]);
-        if (year != null && number != null) {
-          try {
-            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
-              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
-              'org_id': orgId, 'branch_id': branchId,
-              'voucher_type': parts[0], 'year': year, 'number': number,
-            });
-          } catch (_) {}
-        }
+      final bankErr = await _bankCancelledVoucherNumber(
+        orgId: orgId,
+        branchId: branchId,
+        voucherNumber: vNum,
+      );
+      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
+      if (bankErr == null && vNum.isNotEmpty) {
+        // ignore: avoid_print
+        print('[VoucherBank] $vNum banked for reuse');
       }
 
       await _logAudit(_detail['id'] as String, 'DO', 'deleted', 'Voucher $vNum deleted by admin, stock reversed');
@@ -1547,6 +1574,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             const SizedBox(height: 16),
             _VoucherInfoStrip(
               salesperson: _meta.salespersonName,
+              salespersonDiagnostic: _meta.diagnostic,
               customerAddress: _linkedSo['customers']?['address'] as String?,
               customerContact: _linkedSo['customers']?['contact_person'] as String?,
               customerPhone: _linkedSo['customers']?['phone'] as String?,
@@ -1675,23 +1703,16 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         }).eq('id', doId);
       }
 
-      // Bank voucher number
-      final parts = vNum.split('-');
-      if (parts.length == 3) {
-        final year = int.tryParse(parts[1]);
-        final number = int.tryParse(parts[2]);
-        if (year != null && number != null) {
-          try {
-            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
-              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
-              'org_id': _orgId,
-              'branch_id': _detail['branch_id'],
-              'voucher_type': parts[0],
-              'year': year,
-              'number': number,
-            });
-          } catch (_) {}
-        }
+      // Bank voucher number — surface failures.
+      final bankErr = await _bankCancelledVoucherNumber(
+        orgId: _orgId,
+        branchId: _detail['branch_id'] as String?,
+        voucherNumber: vNum,
+      );
+      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
+      if (bankErr == null && vNum.isNotEmpty) {
+        // ignore: avoid_print
+        print('[VoucherBank] $vNum banked for reuse');
       }
 
       _showSnack('Deleted — DO restored to saved');
@@ -2050,6 +2071,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             const SizedBox(height: 16),
             _VoucherInfoStrip(
               salesperson: _meta.salespersonName,
+              salespersonDiagnostic: _meta.diagnostic,
               customerAddress: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['address'] as String?,
               customerContact: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['contact_person'] as String?,
               customerPhone: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['phone'] as String?,
@@ -2073,6 +2095,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 /// customer contact details, and the user who prepared the voucher.
 class _VoucherInfoStrip extends StatelessWidget {
   final String? salesperson;
+  final String? salespersonDiagnostic;
   final String? customerAddress;
   final String? customerContact;
   final String? customerPhone;
@@ -2081,6 +2104,7 @@ class _VoucherInfoStrip extends StatelessWidget {
 
   const _VoucherInfoStrip({
     this.salesperson,
+    this.salespersonDiagnostic,
     this.customerAddress,
     this.customerContact,
     this.customerPhone,
@@ -2091,9 +2115,17 @@ class _VoucherInfoStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tiles = <Widget>[];
-    if (salesperson != null && salesperson!.isNotEmpty) {
-      tiles.add(_tile(Icons.person_pin_outlined, 'Salesperson', salesperson!));
-    }
+
+    // Always render salesperson — visible failure mode beats invisible bug
+    tiles.add(_tile(
+      Icons.person_pin_outlined,
+      'Salesperson',
+      (salesperson != null && salesperson!.isNotEmpty)
+          ? salesperson!
+          : (salespersonDiagnostic ?? 'Not assigned'),
+      muted: salesperson == null || salesperson!.isEmpty,
+    ));
+
     final addrLine = customerAddress;
     if (addrLine != null && addrLine.trim().isNotEmpty) {
       tiles.add(_tile(Icons.location_on_outlined, 'Address', addrLine));
@@ -2104,9 +2136,6 @@ class _VoucherInfoStrip extends StatelessWidget {
     if (customerPhone != null && customerPhone!.isNotEmpty) {
       tiles.add(_tile(Icons.phone_outlined, 'Phone', customerPhone!));
     }
-    if (tiles.isEmpty && (preparedBy == null || preparedBy!.isEmpty)) {
-      return const SizedBox.shrink();
-    }
     return Container(
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.all(12),
@@ -2116,10 +2145,9 @@ class _VoucherInfoStrip extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (tiles.isNotEmpty)
-          Wrap(spacing: 24, runSpacing: 8, children: tiles),
+        Wrap(spacing: 24, runSpacing: 8, children: tiles),
         if (preparedBy != null && preparedBy!.isNotEmpty) ...[
-          if (tiles.isNotEmpty) const SizedBox(height: 10),
+          const SizedBox(height: 10),
           Row(children: [
             const Icon(Icons.draw_outlined, size: 14, color: AppTheme.textSecondary),
             const SizedBox(width: 6),
@@ -2133,7 +2161,7 @@ class _VoucherInfoStrip extends StatelessWidget {
     );
   }
 
-  Widget _tile(IconData icon, String label, String value) {
+  Widget _tile(IconData icon, String label, String value, {bool muted = false}) {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 320),
       child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2141,7 +2169,13 @@ class _VoucherInfoStrip extends StatelessWidget {
         const SizedBox(width: 6),
         Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, letterSpacing: 0.5)),
-          Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+          Text(value,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w500,
+                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+                color: muted ? AppTheme.textSecondary : null,
+              )),
         ]),
       ]),
     );
@@ -2173,7 +2207,7 @@ class _CustomerSelect extends StatelessWidget {
             (c['code'] as String? ?? '').toLowerCase().contains(search.toLowerCase())
           ).toList();
           return AlertDialog(
-            title: const Text('Select Customer'),
+            title: Text('Select Customer  ·  ${customers.length} total'),
             contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             content: SizedBox(
               width: 480,
