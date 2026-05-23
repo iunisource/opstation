@@ -142,22 +142,43 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _showSnack('Enter valid qty'); return; }
+    if (_items.any((i) => i['product_id'] == _addProductId)) {
+      _showSnack('Product already added — edit its quantity instead');
+      return;
+    }
+    final itemId = 'soi_${DateTime.now().millisecondsSinceEpoch}';
+    final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
+    final uom = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
     try {
       await Supabase.instance.client.from('sales_order_items').insert({
-        'id': 'soi_${DateTime.now().millisecondsSinceEpoch}',
+        'id': itemId,
         'sales_order_id': _detail['id'],
         'product_id': _addProductId, 'uom_id': _addUomId,
         'quantity': qty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
       });
-      setState(() { _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; });
-      _loadDetail(_detail['id'] as String);
+      _qtyControllers[itemId] = TextEditingController(text: qty.toStringAsFixed(0));
+      setState(() {
+        _items.add({
+          'id': itemId,
+          'sales_order_id': _detail['id'],
+          'product_id': _addProductId,
+          'uom_id': _addUomId,
+          'quantity': qty,
+          'products': {'name': prod['name'], 'sku': prod['sku']},
+          'uoms': {'name': uom['name'], 'abbreviation': uom['abbreviation']},
+        });
+        _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
+      });
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void> _deleteItem(String itemId) async {
     try {
       await Supabase.instance.client.from('sales_order_items').delete().eq('id', itemId);
-      _loadDetail(_detail['id'] as String);
+      setState(() {
+        _items.removeWhere((i) => i['id'] == itemId);
+        _qtyControllers.remove(itemId)?.dispose();
+      });
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -202,8 +223,28 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     ));
     if (confirm != true) return;
     try {
+      // Bank the cancelled voucher number for reuse
+      final vNum = _detail['voucher_number'] as String? ?? '';
+      final parts = vNum.split('-');
+      if (parts.length == 3) {
+        final type = parts[0];
+        final year = int.tryParse(parts[1]);
+        final number = int.tryParse(parts[2]);
+        if (year != null && number != null) {
+          try {
+            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
+              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
+              'org_id': _orgId,
+              'branch_id': _detail['branch_id'],
+              'voucher_type': type,
+              'year': year,
+              'number': number,
+            });
+          } catch (_) {}
+        }
+      }
       await Supabase.instance.client.from('sales_orders').update({'status': 'cancelled'}).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'SO', 'cancelled', null);
+      await _logAudit(_detail['id'] as String, 'SO', 'cancelled', 'Voucher number $vNum freed for reuse');
       _showSnack('Cancelled');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -536,6 +577,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   Map<String, dynamic> _linkedSo = {};
+  Map<String, double> _stockByProduct = {};
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _soItems = [];
   bool _listLoading = true;
@@ -583,10 +625,23 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       final so = await client.from('sales_orders')
           .select('*, customers(shop_name, code), branches(name)').eq('id', do_['so_id'] as String).single();
 
+      // Fetch current branch stock for all SO products
+      final productIds = (soItems as List).map((i) => i['product_id'] as String).toSet().toList();
+      final stockMap = <String, double>{};
+      if (productIds.isNotEmpty) {
+        final stocks = await client.from('inventory_stock')
+            .select('product_id, quantity')
+            .eq('branch_id', do_['branch_id'] as String)
+            .inFilter('product_id', productIds.cast<Object>());
+        for (final s in stocks as List) {
+          stockMap[s['product_id'] as String] = (s['quantity'] as num?)?.toDouble() ?? 0;
+        }
+      }
+
       // Build delivery qty controllers for available SO items
       final existingSoItemIds = (items as List).map((i) => i['so_item_id'] as String).toSet();
       _deliverQtyCtrl.clear();
-      for (final soItem in soItems as List) {
+      for (final soItem in soItems) {
         final ordered = (soItem['quantity'] as num?)?.toDouble() ?? 0;
         final delivered = (soItem['qty_delivered'] as num?)?.toDouble() ?? 0;
         final pending = ordered - delivered;
@@ -600,6 +655,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _items = List<Map<String,dynamic>>.from(items);
         _soItems = List<Map<String,dynamic>>.from(soItems);
         _linkedSo = Map<String,dynamic>.from(so);
+        _stockByProduct = stockMap;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -623,40 +679,90 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     if (!mounted) return;
     if ((sos as List).isEmpty) { _showSnack('No confirmed Sales Orders available'); return; }
     String? soId;
+    String soSearch = '';
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('New Delivery Order'),
-          content: SizedBox(width: 400, child: DropdownButtonFormField<String>(
-            value: soId,
-            decoration: const InputDecoration(labelText: 'Sales Order *'),
-            hint: const Text('Select SO'),
-            items: sos.map((s) => DropdownMenuItem(value: s['id'] as String,
-                child: Text('${s['voucher_number']} — ${s['customers']?['shop_name'] ?? 'Walk-in'}'))).toList(),
-            onChanged: (v) => setS(() => soId = v),
-          )),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                if (soId == null) return;
-                final year = DateTime.now().year;
-                try {
-                  final so = sos.firstWhere((s) => s['id'] == soId);
-                  final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
-                      params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'DO', 'p_year': year});
-                  final id = 'do_${DateTime.now().millisecondsSinceEpoch}';
-                  await Supabase.instance.client.from('delivery_orders').insert({
-                    'id': id, 'org_id': orgId, 'branch_id': branchId,
-                    'voucher_number': voucherNum,
-                    'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-                    'so_id': soId, 'customer_id': so['customer_id'],
-                    'status': 'saved', 'is_locked': false,
-                    'created_by': ref.read(currentUserProvider)?.id,
-                  });
-                  if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
-                  await _loadList();
+        builder: (ctx, setS) {
+          final filteredSos = (sos as List).where((s) {
+            if (soSearch.isEmpty) return true;
+            final q = soSearch.toLowerCase();
+            return (s['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
+                (s['customers']?['shop_name'] as String? ?? '').toLowerCase().contains(q);
+          }).toList();
+          return AlertDialog(
+            title: const Text('New Delivery Order'),
+            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            content: SizedBox(
+              width: 520,
+              height: 420,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Sales Order *', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                TextField(
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Search by SO number or customer...',
+                    prefixIcon: Icon(Icons.search, size: 18),
+                    isDense: true,
+                  ),
+                  onChanged: (v) => setS(() => soSearch = v),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: filteredSos.isEmpty
+                      ? const Center(child: Text('No matching Sales Orders', style: TextStyle(color: AppTheme.textSecondary)))
+                      : ListView.separated(
+                          itemCount: filteredSos.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (_, i) {
+                            final s = filteredSos[i];
+                            final selected = s['id'] == soId;
+                            return InkWell(
+                              onTap: () => setS(() => soId = s['id'] as String),
+                              child: Container(
+                                color: selected ? AppTheme.primary.withOpacity(0.08) : null,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                child: Row(children: [
+                                  Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                                      size: 16, color: selected ? AppTheme.primary : AppTheme.textSecondary),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                      Text(s['voucher_number'] as String? ?? '-',
+                                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: selected ? AppTheme.primary : Colors.black87)),
+                                      Text(s['customers']?['shop_name'] as String? ?? 'Walk-in',
+                                          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
+                                    ]),
+                                  ),
+                                ]),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: soId == null ? null : () async {
+                  final year = DateTime.now().year;
+                  try {
+                    final so = sos.firstWhere((s) => s['id'] == soId);
+                    final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
+                        params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'DO', 'p_year': year});
+                    final id = 'do_${DateTime.now().millisecondsSinceEpoch}';
+                    await Supabase.instance.client.from('delivery_orders').insert({
+                      'id': id, 'org_id': orgId, 'branch_id': branchId,
+                      'voucher_number': voucherNum,
+                      'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+                      'so_id': soId, 'customer_id': so['customer_id'],
+                      'status': 'saved', 'is_locked': false,
+                      'created_by': ref.read(currentUserProvider)?.id,
+                    });
+                    if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+                    await _loadList();
                   _loadDetail(id);
                 } catch (e) {
                   if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -665,7 +771,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               child: const Text('Create'),
             ),
           ],
-        ),
+        );
+        },
       ),
     );
   }
@@ -817,14 +924,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         await Supabase.instance.client.from('sales_invoice_items').insert({...siItems[i], 'invoice_id': siId});
       }
       // Update DO status based on SO fulfillment
-      final soItemsCheck = await Supabase.instance.client.from('sales_order_items')
-          .select('quantity, qty_delivered').eq('sales_order_id', _detail['so_id'] as String);
-      bool allDone = true;
-      for (final si in soItemsCheck as List) {
-        if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) < ((si['quantity'] as num?)?.toDouble() ?? 0)) { allDone = false; break; }
-      }
       await Supabase.instance.client.from('delivery_orders').update({
-        'status': allDone ? 'invoiced' : 'partially_delivered',
+        'status': 'invoiced',
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', 'invoiced', 'Invoice $voucherNum created');
@@ -1120,6 +1221,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                       Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Pending', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                      Expanded(flex: 2, child: Text('Available', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Deliver Qty *', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.primary))),
                     ]),
                   ),
@@ -1128,6 +1230,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                     final ordered = (item['quantity'] as num?)?.toDouble() ?? 0;
                     final delivered = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
                     final pending = ordered - delivered;
+                    final available = _stockByProduct[item['product_id'] as String] ?? 0;
                     final ctrl = _deliverQtyCtrl[item['id'] as String];
                     return Column(children: [
                       Padding(
@@ -1139,6 +1242,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                           ])),
                           Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                           Expanded(flex: 2, child: Text(pending.toStringAsFixed(0), style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600))),
+                          Expanded(flex: 2, child: Text(available.toStringAsFixed(0),
+                              style: TextStyle(color: available >= pending ? AppTheme.success : AppTheme.danger, fontWeight: FontWeight.w600))),
                           Expanded(flex: 2, child: ctrl != null ? SizedBox(height: 32, child: TextField(
                             controller: ctrl,
                             decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
