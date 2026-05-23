@@ -18,6 +18,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _cutoffCtrl = TextEditingController();
   final _categoryCtrl = TextEditingController();
   final _groupCtrl = TextEditingController();
+  final _voucherFooterCtrl = TextEditingController();
   List<String> _categories = [];
   List<String> _groups = [];
 
@@ -52,6 +53,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _cutoffCtrl.dispose();
     _categoryCtrl.dispose();
     _groupCtrl.dispose();
+    _voucherFooterCtrl.dispose();
     _smsUrlCtrl.dispose();
     _smsHeadersCtrl.dispose();
     _smsBodyCtrl.dispose();
@@ -95,6 +97,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             cfg['org.sms_delivery_template'] ?? _defaultDeliveryTpl;
         _smsMethod = cfg['org.sms_api_method'] ?? 'GET';
         _smsEnabled = cfg['org.sms_enabled'] == 'true';
+        _voucherFooterCtrl.text = cfg['org.voucher_footer_note'] ?? '';
         _loading = false;
       });
     } catch (_) {
@@ -185,6 +188,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     child: const Text('Save')),
               ])),
           const SizedBox(height: 24),
+          if (isMaster) ...[
+            _Section(
+              title: 'Voucher Footer Note',
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text(
+                  'This text appears at the bottom of every voucher PDF (SO, DO, SI, etc). Use it for terms, return policy, or contact info.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _voucherFooterCtrl,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. Goods once sold will not be taken back. Subject to Lahore jurisdiction.',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: ElevatedButton(
+                    onPressed: () => _save('org.voucher_footer_note', _voucherFooterCtrl.text.trim()),
+                    child: const Text('Save'),
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 24),
+          ],
           _Section(
               title: 'Categories',
               child: Column(

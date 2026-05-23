@@ -7,6 +7,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
+import '../services/voucher_meta.dart';
 
 // ─── Sales Orders (Master-Detail) ────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _uoms = [];
   List<Map<String, dynamic>> _customers = [];
+  VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
@@ -75,13 +77,23 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
       final client = Supabase.instance.client;
-      final order = await client.from('sales_orders').select('*, customers(shop_name, code), branches(name)').eq('id', id).single();
+      final order = await client.from('sales_orders').select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', id).single();
       final items = await client.from('sales_order_items').select('*, products(name, sku), uoms(name, abbreviation)').eq('sales_order_id', id);
       _qtyControllers.clear();
       for (final item in items as List) {
         _qtyControllers[item['id'] as String] = TextEditingController(text: (item['quantity'] as num?)?.toStringAsFixed(0) ?? '1');
       }
-      setState(() { _detail = Map<String,dynamic>.from(order); _items = List<Map<String,dynamic>>.from(items); _detailLoading = false; });
+      final meta = await VoucherMeta.fetch(
+        orgId: _orgId ?? '',
+        customerId: order['customer_id'] as String?,
+        createdById: order['created_by'] as String?,
+      );
+      setState(() {
+        _detail = Map<String,dynamic>.from(order);
+        _items = List<Map<String,dynamic>>.from(items);
+        _meta = meta;
+        _detailLoading = false;
+      });
     } catch (_) { setState(() => _detailLoading = false); }
   }
 
@@ -158,16 +170,26 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     )).toList();
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    final cust = _detail['customers'] as Map?;
+    final createdAt = _detail['created_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Order',
       orgName: user?.orgName ?? 'Opstation',
       branchName: _detail['branches']?['name'] as String?,
       date: date,
-      customerOrSupplier: _detail['customers']?['shop_name'] as String? ?? 'Walk-in',
+      customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
+      customerAddress: cust?['address'] as String?,
+      customerContact: cust?['contact_person'] as String?,
+      customerPhone: cust?['phone'] as String?,
+      salespersonName: _meta.salespersonName,
       status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
       remarks: _detail['remarks'] as String?,
       lines: lines,
+      preparedBy: _meta.preparedBy,
+      createdAt: createdAt,
+      footerNote: _meta.footerNote,
     );
   }
 
@@ -645,6 +667,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             ),
 
             const SizedBox(height: 16),
+            _VoucherInfoStrip(
+              salesperson: _meta.salespersonName,
+              customerAddress: _detail['customers']?['address'] as String?,
+              customerContact: _detail['customers']?['contact_person'] as String?,
+              customerPhone: _detail['customers']?['phone'] as String?,
+              preparedBy: _meta.preparedBy,
+              createdAt: _detail['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+                  : null,
+            ),
+            const SizedBox(height: 16),
             _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'SO'),
           ]),
         ),
@@ -669,6 +702,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   Map<String, double> _stockByProduct = {};
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _soItems = [];
+  VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
@@ -712,7 +746,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           .select('*, products(name, sku), uoms(abbreviation)').eq('sales_order_id', do_['so_id'] as String);
       // Load SO details
       final so = await client.from('sales_orders')
-          .select('*, customers(shop_name, code), branches(name)').eq('id', do_['so_id'] as String).single();
+          .select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', do_['so_id'] as String).single();
 
       // Fetch current branch stock for all SO products
       final productIds = (soItems as List).map((i) => i['product_id'] as String).toSet().toList();
@@ -739,12 +773,19 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         }
       }
 
+      final meta = await VoucherMeta.fetch(
+        orgId: _orgId ?? '',
+        customerId: so['customer_id'] as String?,
+        createdById: do_['created_by'] as String?,
+      );
+
       setState(() {
         _detail = Map<String,dynamic>.from(do_);
         _items = List<Map<String,dynamic>>.from(items);
         _soItems = List<Map<String,dynamic>>.from(soItems);
         _linkedSo = Map<String,dynamic>.from(so);
         _stockByProduct = stockMap;
+        _meta = meta;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -877,15 +918,27 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     )).toList();
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    final cust = _linkedSo['customers'] as Map?;
+    final createdAt = _detail['created_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
+    final soVoucher = _linkedSo['voucher_number'] as String?;
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Delivery Order',
       orgName: user?.orgName ?? 'Opstation',
       branchName: _detail['branches']?['name'] as String?,
       date: date,
-      customerOrSupplier: _linkedSo['customers']?['shop_name'] as String? ?? 'Walk-in',
+      customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
+      customerAddress: cust?['address'] as String?,
+      customerContact: cust?['contact_person'] as String?,
+      customerPhone: cust?['phone'] as String?,
+      salespersonName: _meta.salespersonName,
       status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
       lines: lines,
+      preparedBy: _meta.preparedBy,
+      createdAt: createdAt,
+      footerNote: _meta.footerNote,
+      relatedRefs: soVoucher != null ? {'SO #': soVoucher} : null,
     );
   }
 
@@ -1490,6 +1543,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             ],
 
             const SizedBox(height: 16),
+            _VoucherInfoStrip(
+              salesperson: _meta.salespersonName,
+              customerAddress: _linkedSo['customers']?['address'] as String?,
+              customerContact: _linkedSo['customers']?['contact_person'] as String?,
+              customerPhone: _linkedSo['customers']?['phone'] as String?,
+              preparedBy: _meta.preparedBy,
+              createdAt: _detail['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+                  : null,
+            ),
+            const SizedBox(height: 16),
             _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'DO'),
           ]),
         ),
@@ -1511,6 +1575,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
+  VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
@@ -1545,7 +1610,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     try {
       final client = Supabase.instance.client;
       final inv = await client.from('sales_invoices')
-          .select('*, customers(shop_name, code), sales_orders(voucher_number, customers(shop_name)), delivery_orders(voucher_number), branches(name)')
+          .select('*, customers(shop_name, code, address, contact_person, phone), sales_orders(voucher_number, customer_id, customers(shop_name, code, address, contact_person, phone)), delivery_orders(voucher_number), branches(name)')
           .eq('id', id).single();
       final items = await client.from('sales_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', id);
@@ -1553,7 +1618,19 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       for (final item in items as List) {
         _discountCtrl[item['id'] as String] = TextEditingController(text: (item['discount'] as num?)?.toStringAsFixed(2) ?? '0');
       }
-      setState(() { _detail = Map<String,dynamic>.from(inv); _items = List<Map<String,dynamic>>.from(items); _detailLoading = false; });
+      // Resolve customer id (direct on SI or via SO)
+      final custId = (inv['customer_id'] as String?) ?? (inv['sales_orders']?['customer_id'] as String?);
+      final meta = await VoucherMeta.fetch(
+        orgId: _orgId ?? '',
+        customerId: custId,
+        createdById: inv['created_by'] as String?,
+      );
+      setState(() {
+        _detail = Map<String,dynamic>.from(inv);
+        _items = List<Map<String,dynamic>>.from(items);
+        _meta = meta;
+        _detailLoading = false;
+      });
     } catch (_) { setState(() => _detailLoading = false); }
   }
 
@@ -1647,18 +1724,35 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    // Customer details may be direct on the invoice or nested via the SO.
+    final cust = (_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?);
+    final createdAt = _detail['created_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
+    final soVoucher = _detail['sales_orders']?['voucher_number'] as String?;
+    final doVoucher = _detail['delivery_orders']?['voucher_number'] as String?;
+    final refs = <String, String>{};
+    if (soVoucher != null) refs['SO #'] = soVoucher;
+    if (doVoucher != null) refs['DO #'] = doVoucher;
+
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Invoice',
       orgName: user?.orgName ?? 'Opstation',
       branchName: _detail['branches']?['name'] as String?,
       date: date,
-      customerOrSupplier: _detail['customers']?['shop_name'] as String?
-          ?? _detail['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in',
+      customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
+      customerAddress: cust?['address'] as String?,
+      customerContact: cust?['contact_person'] as String?,
+      customerPhone: cust?['phone'] as String?,
+      salespersonName: _meta.salespersonName,
       lines: lines,
       subtotal: subtotal,
       discountTotal: discountTotal,
       grandTotal: subtotal - discountTotal,
+      preparedBy: _meta.preparedBy,
+      createdAt: createdAt,
+      footerNote: _meta.footerNote,
+      relatedRefs: refs.isNotEmpty ? refs : null,
     );
   }
 
@@ -1952,6 +2046,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             ),
 
             const SizedBox(height: 16),
+            _VoucherInfoStrip(
+              salesperson: _meta.salespersonName,
+              customerAddress: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['address'] as String?,
+              customerContact: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['contact_person'] as String?,
+              customerPhone: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['phone'] as String?,
+              preparedBy: _meta.preparedBy,
+              createdAt: _detail['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+                  : null,
+            ),
+            const SizedBox(height: 16),
             _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'SI'),
           ]),
         ),
@@ -1961,6 +2066,85 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 }
 
 // ─── Shared Widgets ───────────────────────────────────────────────────────────
+
+/// Compact info strip shown on every voucher detail page with salesperson,
+/// customer contact details, and the user who prepared the voucher.
+class _VoucherInfoStrip extends StatelessWidget {
+  final String? salesperson;
+  final String? customerAddress;
+  final String? customerContact;
+  final String? customerPhone;
+  final String? preparedBy;
+  final String? createdAt;
+
+  const _VoucherInfoStrip({
+    this.salesperson,
+    this.customerAddress,
+    this.customerContact,
+    this.customerPhone,
+    this.preparedBy,
+    this.createdAt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = <Widget>[];
+    if (salesperson != null && salesperson!.isNotEmpty) {
+      tiles.add(_tile(Icons.person_pin_outlined, 'Salesperson', salesperson!));
+    }
+    final addrLine = customerAddress;
+    if (addrLine != null && addrLine.trim().isNotEmpty) {
+      tiles.add(_tile(Icons.location_on_outlined, 'Address', addrLine));
+    }
+    if (customerContact != null && customerContact!.isNotEmpty) {
+      tiles.add(_tile(Icons.account_circle_outlined, 'Contact Person', customerContact!));
+    }
+    if (customerPhone != null && customerPhone!.isNotEmpty) {
+      tiles.add(_tile(Icons.phone_outlined, 'Phone', customerPhone!));
+    }
+    if (tiles.isEmpty && (preparedBy == null || preparedBy!.isEmpty)) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.background,
+        border: Border.all(color: AppTheme.border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (tiles.isNotEmpty)
+          Wrap(spacing: 24, runSpacing: 8, children: tiles),
+        if (preparedBy != null && preparedBy!.isNotEmpty) ...[
+          if (tiles.isNotEmpty) const SizedBox(height: 10),
+          Row(children: [
+            const Icon(Icons.draw_outlined, size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text(
+              'Prepared by: ${preparedBy!}${createdAt != null ? "  ·  $createdAt" : ""}',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontStyle: FontStyle.italic),
+            ),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  Widget _tile(IconData icon, String label, String value) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, size: 16, color: AppTheme.textSecondary),
+        const SizedBox(width: 6),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, letterSpacing: 0.5)),
+          Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+        ]),
+      ]),
+    );
+  }
+}
 
 class _CustomerSelect extends StatelessWidget {
   final List<Map<String, dynamic>> customers;

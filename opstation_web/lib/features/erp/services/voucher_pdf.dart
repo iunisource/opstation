@@ -1,5 +1,4 @@
 import 'dart:typed_data';
-// 
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -12,7 +11,6 @@ class VoucherPdf {
   static const _border = PdfColor.fromInt(0xFFE2E8F0);
   static const _bg = PdfColor.fromInt(0xFFF8FAFC);
 
-  /// Show the system print dialog with the generated PDF.
   static Future<void> printVoucher({
     required String voucherNumber,
     required String voucherTypeLabel,
@@ -20,30 +18,31 @@ class VoucherPdf {
     String? branchName,
     String? date,
     String? customerOrSupplier,
+    String? customerAddress,
+    String? customerContact,
+    String? customerPhone,
+    String? salespersonName,
     String? status,
     String? remarks,
     required List<VoucherLine> lines,
     double? subtotal,
     double? discountTotal,
     double? grandTotal,
-    String? createdBy,
+    String? preparedBy,
     String? createdAt,
+    String? footerNote,
+    Map<String, String>? relatedRefs, // e.g. {'SO #': 'SO-2026-0001', 'DO #': 'DO-...'}
   }) async {
     final doc = await _buildDoc(
-      voucherNumber: voucherNumber,
-      voucherTypeLabel: voucherTypeLabel,
-      orgName: orgName,
-      branchName: branchName,
-      date: date,
+      voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
+      orgName: orgName, branchName: branchName, date: date,
       customerOrSupplier: customerOrSupplier,
-      status: status,
-      remarks: remarks,
-      lines: lines,
-      subtotal: subtotal,
-      discountTotal: discountTotal,
-      grandTotal: grandTotal,
-      createdBy: createdBy,
-      createdAt: createdAt,
+      customerAddress: customerAddress, customerContact: customerContact, customerPhone: customerPhone,
+      salespersonName: salespersonName,
+      status: status, remarks: remarks, lines: lines,
+      subtotal: subtotal, discountTotal: discountTotal, grandTotal: grandTotal,
+      preparedBy: preparedBy, createdAt: createdAt,
+      footerNote: footerNote, relatedRefs: relatedRefs,
     );
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => doc.save(),
@@ -51,7 +50,6 @@ class VoucherPdf {
     );
   }
 
-  /// Save / share the PDF (download in web).
   static Future<Uint8List> generateBytes({
     required String voucherNumber,
     required String voucherTypeLabel,
@@ -59,30 +57,31 @@ class VoucherPdf {
     String? branchName,
     String? date,
     String? customerOrSupplier,
+    String? customerAddress,
+    String? customerContact,
+    String? customerPhone,
+    String? salespersonName,
     String? status,
     String? remarks,
     required List<VoucherLine> lines,
     double? subtotal,
     double? discountTotal,
     double? grandTotal,
-    String? createdBy,
+    String? preparedBy,
     String? createdAt,
+    String? footerNote,
+    Map<String, String>? relatedRefs,
   }) async {
     final doc = await _buildDoc(
-      voucherNumber: voucherNumber,
-      voucherTypeLabel: voucherTypeLabel,
-      orgName: orgName,
-      branchName: branchName,
-      date: date,
+      voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
+      orgName: orgName, branchName: branchName, date: date,
       customerOrSupplier: customerOrSupplier,
-      status: status,
-      remarks: remarks,
-      lines: lines,
-      subtotal: subtotal,
-      discountTotal: discountTotal,
-      grandTotal: grandTotal,
-      createdBy: createdBy,
-      createdAt: createdAt,
+      customerAddress: customerAddress, customerContact: customerContact, customerPhone: customerPhone,
+      salespersonName: salespersonName,
+      status: status, remarks: remarks, lines: lines,
+      subtotal: subtotal, discountTotal: discountTotal, grandTotal: grandTotal,
+      preparedBy: preparedBy, createdAt: createdAt,
+      footerNote: footerNote, relatedRefs: relatedRefs,
     );
     return doc.save();
   }
@@ -94,22 +93,29 @@ class VoucherPdf {
     String? branchName,
     String? date,
     String? customerOrSupplier,
+    String? customerAddress,
+    String? customerContact,
+    String? customerPhone,
+    String? salespersonName,
     String? status,
     String? remarks,
     required List<VoucherLine> lines,
     double? subtotal,
     double? discountTotal,
     double? grandTotal,
-    String? createdBy,
+    String? preparedBy,
     String? createdAt,
+    String? footerNote,
+    Map<String, String>? relatedRefs,
   }) async {
     final doc = pw.Document();
     final showTotals = subtotal != null || discountTotal != null || grandTotal != null;
     final hasMoney = lines.any((l) => l.unitPrice != null || l.lineTotal != null);
+    final isPurchase = voucherTypeLabel.toLowerCase().contains('purchase') || voucherTypeLabel.toLowerCase().contains('grn');
 
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.all(28),
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
       header: (ctx) => ctx.pageNumber == 1
           ? pw.SizedBox.shrink()
           : pw.Padding(
@@ -133,10 +139,7 @@ class VoucherPdf {
         // ── Header band ────────────────────────────────────────────────
         pw.Container(
           padding: const pw.EdgeInsets.all(16),
-          decoration: pw.BoxDecoration(
-            color: _bg,
-            borderRadius: pw.BorderRadius.circular(8),
-          ),
+          decoration: pw.BoxDecoration(color: _bg, borderRadius: pw.BorderRadius.circular(8)),
           child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
             pw.Expanded(
               child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
@@ -160,7 +163,7 @@ class VoucherPdf {
           ]),
         ),
 
-        pw.SizedBox(height: 16),
+        pw.SizedBox(height: 14),
 
         // ── Meta grid ──────────────────────────────────────────────────
         pw.Container(
@@ -169,33 +172,74 @@ class VoucherPdf {
           child: pw.Row(children: [
             if (date != null) _metaCell('Date', date),
             if (customerOrSupplier != null)
-              _metaCell(voucherTypeLabel.toLowerCase().contains('purchase') || voucherTypeLabel.toLowerCase().contains('grn')
-                  ? 'Supplier' : 'Customer', customerOrSupplier),
+              _metaCell(isPurchase ? 'Supplier' : 'Customer', customerOrSupplier),
             if (branchName != null) _metaCell('Branch', branchName),
+            if (salespersonName != null) _metaCell('Salesperson', salespersonName),
           ]),
         ),
 
-        if (remarks != null && remarks.isNotEmpty) ...[
-          pw.SizedBox(height: 10),
+        // ── Related references (SO # in DO, SO+DO in SI) ────────────────
+        if (relatedRefs != null && relatedRefs.isNotEmpty) ...[
+          pw.SizedBox(height: 8),
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
+            child: pw.Row(children: [
+              for (final e in relatedRefs.entries) _metaCell(e.key, e.value),
+            ]),
+          ),
+        ],
+
+        // ── Customer details (address / contact / phone) ────────────────
+        if (customerAddress != null || customerContact != null || customerPhone != null) ...[
+          pw.SizedBox(height: 8),
           pw.Container(
             padding: const pw.EdgeInsets.all(10),
             decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text('Remarks', style: pw.TextStyle(fontSize: 9, color: _muted, fontWeight: pw.FontWeight.bold)),
+              pw.Text(isPurchase ? 'SUPPLIER DETAILS' : 'BILL TO',
+                  style: pw.TextStyle(fontSize: 8, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 0.8)),
+              pw.SizedBox(height: 4),
+              if (customerAddress != null && customerAddress.isNotEmpty)
+                pw.Text(customerAddress, style: pw.TextStyle(fontSize: 11)),
+              if ((customerContact != null && customerContact.isNotEmpty) ||
+                  (customerPhone != null && customerPhone.isNotEmpty)) ...[
+                pw.SizedBox(height: 3),
+                pw.Row(children: [
+                  if (customerContact != null && customerContact.isNotEmpty)
+                    pw.Text('Attn: $customerContact', style: pw.TextStyle(fontSize: 10, color: _muted)),
+                  if (customerContact != null && customerContact.isNotEmpty &&
+                      customerPhone != null && customerPhone.isNotEmpty)
+                    pw.Text('  ·  ', style: pw.TextStyle(fontSize: 10, color: _muted)),
+                  if (customerPhone != null && customerPhone.isNotEmpty)
+                    pw.Text('Ph: $customerPhone', style: pw.TextStyle(fontSize: 10, color: _muted)),
+                ]),
+              ],
+            ]),
+          ),
+        ],
+
+        if (remarks != null && remarks.isNotEmpty) ...[
+          pw.SizedBox(height: 8),
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              pw.Text('REMARKS', style: pw.TextStyle(fontSize: 8, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 0.8)),
               pw.SizedBox(height: 4),
               pw.Text(remarks, style: pw.TextStyle(fontSize: 11)),
             ]),
           ),
         ],
 
-        pw.SizedBox(height: 16),
+        pw.SizedBox(height: 14),
 
         // ── Line items ─────────────────────────────────────────────────
         _itemsTable(lines, hasMoney),
 
         // ── Totals ─────────────────────────────────────────────────────
         if (showTotals) ...[
-          pw.SizedBox(height: 14),
+          pw.SizedBox(height: 12),
           pw.Align(
             alignment: pw.Alignment.centerRight,
             child: pw.Container(
@@ -215,17 +259,55 @@ class VoucherPdf {
           ),
         ],
 
-        if (createdBy != null || createdAt != null) ...[
+        // ── Signature blocks ───────────────────────────────────────────
+        pw.SizedBox(height: 36),
+        pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          _signatureBlock('Prepared By', preparedBy),
+          _signatureBlock('Checked By', null),
+          _signatureBlock('Approved By', null),
+        ]),
+
+        // ── Footer note + audit ─────────────────────────────────────────
+        if (footerNote != null && footerNote.isNotEmpty) ...[
           pw.SizedBox(height: 18),
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(border: pw.Border(top: pw.BorderSide(color: _border))),
+            child: pw.Text(footerNote, style: pw.TextStyle(fontSize: 9, color: _muted, fontStyle: pw.FontStyle.italic)),
+          ),
+        ],
+        if (createdAt != null) ...[
+          pw.SizedBox(height: 6),
           pw.Text(
-            'Created by ${createdBy ?? '-'}${createdAt != null ? ' on $createdAt' : ''}',
-            style: pw.TextStyle(fontSize: 9, color: _muted, fontStyle: pw.FontStyle.italic),
+            'Created ${preparedBy != null ? "by $preparedBy " : ""}on $createdAt',
+            style: pw.TextStyle(fontSize: 8, color: _muted),
           ),
         ],
       ],
     ));
 
     return doc;
+  }
+
+  static pw.Widget _signatureBlock(String label, String? name) {
+    return pw.Expanded(
+      child: pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8),
+        child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+          pw.Container(
+            width: double.infinity,
+            decoration: pw.BoxDecoration(border: pw.Border(top: pw.BorderSide(color: _muted))),
+            padding: const pw.EdgeInsets.only(top: 4),
+            child: pw.Column(children: [
+              pw.Text(label,
+                  style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, decoration: pw.TextDecoration.underline)),
+              pw.SizedBox(height: 4),
+              pw.Text(name ?? ' ', style: pw.TextStyle(fontSize: 11, color: _muted)),
+            ]),
+          ),
+        ]),
+      ),
+    );
   }
 
   static pw.Widget _metaCell(String label, String value) {
@@ -265,7 +347,6 @@ class VoucherPdf {
         for (var i = 0; i < flex.length; i++) i: pw.FlexColumnWidth(flex[i].toDouble()),
       },
       children: [
-        // Header
         pw.TableRow(
           decoration: const pw.BoxDecoration(color: _bg),
           children: headers.map((h) => pw.Padding(
@@ -273,7 +354,6 @@ class VoucherPdf {
             child: pw.Text(h, style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: _muted)),
           )).toList(),
         ),
-        // Rows
         ...lines.asMap().entries.map((entry) {
           final i = entry.key; final l = entry.value;
           final cells = hasMoney
