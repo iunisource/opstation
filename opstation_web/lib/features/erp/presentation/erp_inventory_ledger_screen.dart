@@ -52,7 +52,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     try {
       final products = await Supabase.instance.client
           .from('products').select('id, name, sku, uoms(abbreviation)')
-          .eq('org_id', orgId).eq('is_active', true).order('name');
+          .eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       setState(() {
         _products = List<Map<String, dynamic>>.from(products);
         _filteredProducts = _products;

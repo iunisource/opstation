@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
+import '../services/voucher_pdf.dart';
 
 // ─── Sales Orders (Master-Detail) ────────────────────────────────────────────
 
@@ -52,9 +53,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     final orgId = _orgId; if (orgId == null) return;
     try {
       final client = Supabase.instance.client;
-      final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name');
+      final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
-      final c = await client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name');
+      final c = await client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name').limit(10000);
       setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _customers = List<Map<String,dynamic>>.from(c); });
     } catch (_) {}
   }
@@ -92,6 +93,83 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   bool get _isDraft => (_detail['status'] as String? ?? 'draft') == 'draft';
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _canEdit => _isDraft && !_isLocked;
+  bool get _canDelete {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+  }
+
+  Future<void> _deleteSO() async {
+    // Cascade check: no DO should exist for this SO
+    try {
+      final dos = await Supabase.instance.client.from('delivery_orders').select('id, voucher_number').eq('so_id', _detail['id']);
+      if ((dos as List).isNotEmpty) {
+        _showSnack('Cannot delete: ${dos.length} Delivery Order(s) exist. Delete them first.');
+        return;
+      }
+    } catch (e) { _showSnack('Failed to check: $e'); return; }
+
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Delete Sales Order?'),
+      content: Text('Permanently delete ${_detail['voucher_number']}? This cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    try {
+      // Bank voucher number for reuse
+      final vNum = _detail['voucher_number'] as String? ?? '';
+      final parts = vNum.split('-');
+      if (parts.length == 3) {
+        final year = int.tryParse(parts[1]);
+        final number = int.tryParse(parts[2]);
+        if (year != null && number != null) {
+          try {
+            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
+              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
+              'org_id': _orgId,
+              'branch_id': _detail['branch_id'],
+              'voucher_type': parts[0],
+              'year': year,
+              'number': number,
+            });
+          } catch (_) {}
+        }
+      }
+      await _logAudit(_detail['id'] as String, 'SO', 'deleted', 'Voucher $vNum deleted by admin');
+      await Supabase.instance.client.from('sales_order_items').delete().eq('sales_order_id', _detail['id']);
+      await Supabase.instance.client.from('sales_orders').delete().eq('id', _detail['id']);
+      _showSnack('Deleted');
+      setState(() { _selectedId = null; _detail = {}; _items = []; });
+      await _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _printSO() async {
+    final user = ref.read(currentUserProvider);
+    final lines = _items.map((it) => VoucherLine(
+      product: it['products']?['name'] as String? ?? '-',
+      sku: it['products']?['sku'] as String?,
+      uom: it['uoms']?['abbreviation'] as String?,
+      qty: (it['quantity'] as num?)?.toDouble() ?? 0,
+    )).toList();
+    final date = _detail['voucher_date'] != null
+        ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    await VoucherPdf.printVoucher(
+      voucherNumber: _detail['voucher_number'] as String? ?? '-',
+      voucherTypeLabel: 'Sales Order',
+      orgName: user?.orgName ?? 'Opstation',
+      branchName: _detail['branches']?['name'] as String?,
+      date: date,
+      customerOrSupplier: _detail['customers']?['shop_name'] as String? ?? 'Walk-in',
+      status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
+      remarks: _detail['remarks'] as String?,
+      lines: lines,
+    );
+  }
 
   Future<void> _logAudit(String voucherId, String type, String action, String? details) async {
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
@@ -405,6 +483,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               tooltip: isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
             ),
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print / PDF',
+            onPressed: _printSO,
+          ),
+          if (_canDelete)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
+              tooltip: 'Delete',
+              onPressed: _deleteSO,
+            ),
         ]),
       ),
 
@@ -668,6 +757,137 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isSaved => (_detail['status'] as String? ?? 'saved') == 'saved';
+  bool get _canDelete {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+  }
+
+  Future<void> _deleteDO() async {
+    // Cascade check: no SI for this DO
+    try {
+      final sis = await Supabase.instance.client.from('sales_invoices').select('id, voucher_number').eq('do_id', _detail['id']);
+      if ((sis as List).isNotEmpty) {
+        _showSnack('Cannot delete: Sales Invoice ${sis.first['voucher_number']} exists. Delete the invoice first.');
+        return;
+      }
+    } catch (e) { _showSnack('Failed to check: $e'); return; }
+
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Delete Delivery Order?'),
+      content: Text('Permanently delete ${_detail['voucher_number']}? Stock will be added back. This cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    final orgId = _orgId;
+    final branchId = _detail['branch_id'] as String;
+    final userId = ref.read(currentUserProvider)?.id;
+
+    try {
+      // Reverse stock + restore SO qty_delivered for each line
+      for (final item in _items) {
+        final pid = item['product_id'] as String;
+        final delivered = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
+        if (delivered <= 0) continue;
+
+        // Add stock back
+        final stock = await Supabase.instance.client.from('inventory_stock').select()
+            .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+        if (stock != null) {
+          await Supabase.instance.client.from('inventory_stock').update({
+            'quantity': ((stock['quantity'] as num).toDouble()) + delivered,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }).eq('id', stock['id']);
+        }
+
+        // Inventory movement reversal
+        await Supabase.instance.client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': item['uom_id'],
+          'quantity': delivered, 'movement_type': 'sale_reversal',
+          'reference_id': _detail['id'], 'reference_type': 'delivery_order_deleted',
+          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
+        });
+
+        // Restore SO item qty_delivered
+        final soItemId = item['so_item_id'] as String?;
+        if (soItemId != null) {
+          final soItem = await Supabase.instance.client.from('sales_order_items')
+              .select('qty_delivered').eq('id', soItemId).single();
+          await Supabase.instance.client.from('sales_order_items').update({
+            'qty_delivered': ((soItem['qty_delivered'] as num?)?.toDouble() ?? 0) - delivered,
+          }).eq('id', soItemId);
+        }
+      }
+
+      // Re-evaluate SO status
+      final soId = _detail['so_id'] as String?;
+      if (soId != null) {
+        final soItemsRecheck = await Supabase.instance.client.from('sales_order_items')
+            .select('quantity, qty_delivered').eq('sales_order_id', soId);
+        bool allDel = true; bool anyDel = false;
+        for (final si in soItemsRecheck as List) {
+          if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) > 0) anyDel = true;
+          if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) < ((si['quantity'] as num?)?.toDouble() ?? 0)) allDel = false;
+        }
+        await Supabase.instance.client.from('sales_orders').update({
+          'status': allDel ? 'delivered' : (anyDel ? 'partially_delivered' : 'confirmed'),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', soId);
+      }
+
+      // Bank voucher number
+      final vNum = _detail['voucher_number'] as String? ?? '';
+      final parts = vNum.split('-');
+      if (parts.length == 3) {
+        final year = int.tryParse(parts[1]);
+        final number = int.tryParse(parts[2]);
+        if (year != null && number != null) {
+          try {
+            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
+              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
+              'org_id': orgId, 'branch_id': branchId,
+              'voucher_type': parts[0], 'year': year, 'number': number,
+            });
+          } catch (_) {}
+        }
+      }
+
+      await _logAudit(_detail['id'] as String, 'DO', 'deleted', 'Voucher $vNum deleted by admin, stock reversed');
+      await Supabase.instance.client.from('delivery_order_items').delete().eq('delivery_order_id', _detail['id']);
+      await Supabase.instance.client.from('delivery_orders').delete().eq('id', _detail['id']);
+
+      _showSnack('Deleted — stock restored');
+      setState(() { _selectedId = null; _detail = {}; _items = []; _soItems = []; _linkedSo = {}; });
+      await _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _printDO() async {
+    final user = ref.read(currentUserProvider);
+    final lines = _items.map((it) => VoucherLine(
+      product: it['products']?['name'] as String? ?? '-',
+      sku: it['products']?['sku'] as String?,
+      uom: it['uoms']?['abbreviation'] as String?,
+      qty: (it['qty_delivered'] as num?)?.toDouble() ?? 0,
+    )).toList();
+    final date = _detail['voucher_date'] != null
+        ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    await VoucherPdf.printVoucher(
+      voucherNumber: _detail['voucher_number'] as String? ?? '-',
+      voucherTypeLabel: 'Delivery Order',
+      orgName: user?.orgName ?? 'Opstation',
+      branchName: _detail['branches']?['name'] as String?,
+      date: date,
+      customerOrSupplier: _linkedSo['customers']?['shop_name'] as String? ?? 'Walk-in',
+      status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
+      lines: lines,
+    );
+  }
 
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
@@ -1104,6 +1324,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               tooltip: _isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
             ),
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print / PDF',
+            onPressed: _printDO,
+          ),
+          if (_canDelete)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
+              tooltip: 'Delete',
+              onPressed: _deleteDO,
+            ),
         ]),
       ),
 
@@ -1332,6 +1563,104 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   }
 
   bool get _isLocked => _detail['is_locked'] as bool? ?? true;
+  bool get _canDelete {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+  }
+
+  Future<void> _deleteSI() async {
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Delete Sales Invoice?'),
+      content: Text('Permanently delete ${_detail['voucher_number']}? The DO will be available for re-invoicing. This cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    try {
+      final vNum = _detail['voucher_number'] as String? ?? '';
+      final doId = _detail['do_id'] as String?;
+
+      await _logAudit(_detail['id'] as String, 'deleted', 'Voucher $vNum deleted by admin');
+      await Supabase.instance.client.from('sales_invoice_items').delete().eq('invoice_id', _detail['id']);
+      await Supabase.instance.client.from('sales_invoices').delete().eq('id', _detail['id']);
+
+      // Revert DO status so a new invoice can be created
+      if (doId != null) {
+        await Supabase.instance.client.from('delivery_orders').update({
+          'status': 'saved',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', doId);
+      }
+
+      // Bank voucher number
+      final parts = vNum.split('-');
+      if (parts.length == 3) {
+        final year = int.tryParse(parts[1]);
+        final number = int.tryParse(parts[2]);
+        if (year != null && number != null) {
+          try {
+            await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
+              'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
+              'org_id': _orgId,
+              'branch_id': _detail['branch_id'],
+              'voucher_type': parts[0],
+              'year': year,
+              'number': number,
+            });
+          } catch (_) {}
+        }
+      }
+
+      _showSnack('Deleted — DO restored to saved');
+      setState(() { _selectedId = null; _detail = {}; _items = []; });
+      await _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _printSI() async {
+    final user = ref.read(currentUserProvider);
+    final lines = _items.map((it) {
+      final qty = (it['qty_delivered'] as num?)?.toDouble() ?? 0;
+      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+      final discPct = (double.tryParse(_discountCtrl[it['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
+      final lineTotal = (qty * price) * (1 - discPct / 100);
+      return VoucherLine(
+        product: it['products']?['name'] as String? ?? '-',
+        sku: it['products']?['sku'] as String?,
+        uom: it['uoms']?['abbreviation'] as String?,
+        qty: qty,
+        unitPrice: price,
+        discountPct: discPct,
+        lineTotal: lineTotal,
+      );
+    }).toList();
+
+    double subtotal = 0, discountTotal = 0;
+    for (final l in lines) {
+      subtotal += l.qty * (l.unitPrice ?? 0);
+      discountTotal += l.qty * (l.unitPrice ?? 0) * ((l.discountPct ?? 0) / 100);
+    }
+
+    final date = _detail['voucher_date'] != null
+        ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    await VoucherPdf.printVoucher(
+      voucherNumber: _detail['voucher_number'] as String? ?? '-',
+      voucherTypeLabel: 'Sales Invoice',
+      orgName: user?.orgName ?? 'Opstation',
+      branchName: _detail['branches']?['name'] as String?,
+      date: date,
+      customerOrSupplier: _detail['customers']?['shop_name'] as String?
+          ?? _detail['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in',
+      lines: lines,
+      subtotal: subtotal,
+      discountTotal: discountTotal,
+      grandTotal: subtotal - discountTotal,
+    );
+  }
 
   Future<void> _toggleLock() async {
     final newLocked = !_isLocked;
@@ -1505,6 +1834,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             tooltip: _isLocked ? 'Unlock' : 'Lock',
             onPressed: _toggleLock,
           ),
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print / PDF',
+            onPressed: _printSI,
+          ),
+          if (_canDelete)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
+              tooltip: 'Delete',
+              onPressed: _deleteSI,
+            ),
         ]),
       ),
 

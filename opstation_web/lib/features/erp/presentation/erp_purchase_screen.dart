@@ -75,7 +75,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final branchId = ref.read(selectedBranchProvider)?['id'] as String?;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     final suppliers = await Supabase.instance.client
-        .from('suppliers').select().eq('org_id', orgId).eq('is_active', true).order('name');
+        .from('suppliers').select().eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
     if (!mounted) return;
     String? supplierId;
     final remarksCtrl = TextEditingController();

@@ -262,7 +262,7 @@ class _StockTransferDetailScreenState extends ConsumerState<_StockTransferDetail
           .select('*, products(name, sku), uoms(name, abbreviation)')
           .eq('transfer_id', _transfer['id']);
       final products = await client.from('products').select('id, name, sku, base_uom_id')
-          .eq('org_id', orgId!).eq('is_active', true).order('name');
+          .eq('org_id', orgId!).eq('is_active', true).order('name').limit(10000);
       final uoms = await client.from('uoms').select().eq('org_id', orgId).order('name');
       final transferRes = await client.from('stock_transfers')
           .select('*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')

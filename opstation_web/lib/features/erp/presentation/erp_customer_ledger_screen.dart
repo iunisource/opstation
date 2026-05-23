@@ -52,7 +52,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     try {
       final customers = await Supabase.instance.client
           .from('customers').select('id, shop_name, code')
-          .eq('org_id', orgId).eq('is_active', true).order('shop_name');
+          .eq('org_id', orgId).eq('is_active', true).order('shop_name').limit(10000);
       setState(() {
         _customers = List<Map<String, dynamic>>.from(customers);
         _filteredCustomers = _customers;

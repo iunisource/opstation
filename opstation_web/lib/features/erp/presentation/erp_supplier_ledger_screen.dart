@@ -32,7 +32,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     if (orgId == null) { setState(() => _loadingSuppliers = false); return; }
     try {
       final suppliers = await Supabase.instance.client
-          .from('suppliers').select().eq('org_id', orgId).eq('is_active', true).order('name');
+          .from('suppliers').select().eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       setState(() {
         _suppliers = List<Map<String, dynamic>>.from(suppliers);
         _loadingSuppliers = false;

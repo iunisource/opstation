@@ -37,7 +37,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
           .eq('org_id', orgId).eq('branch_id', branchId)
           .order('voucher_date', ascending: false);
       final customers = await client.from('customers').select('id, shop_name, code')
-          .eq('org_id', orgId).eq('is_active', true).order('shop_name');
+          .eq('org_id', orgId).eq('is_active', true).order('shop_name').limit(10000);
       setState(() {
         _vouchers = List<Map<String, dynamic>>.from(vouchers);
         _customers = List<Map<String, dynamic>>.from(customers);

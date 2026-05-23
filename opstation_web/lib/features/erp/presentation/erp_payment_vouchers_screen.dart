@@ -36,7 +36,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
           .select('*, suppliers(name)')
           .eq('org_id', orgId).eq('branch_id', branchId)
           .order('voucher_date', ascending: false);
-      final suppliers = await client.from('suppliers').select().eq('org_id', orgId).eq('is_active', true).order('name');
+      final suppliers = await client.from('suppliers').select().eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       setState(() {
         _vouchers = List<Map<String, dynamic>>.from(vouchers);
         _suppliers = List<Map<String, dynamic>>.from(suppliers);
