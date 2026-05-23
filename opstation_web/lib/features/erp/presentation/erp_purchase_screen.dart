@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../services/voucher_pdf.dart';
+import '../services/voucher_meta.dart';
 
 // ─── Purchase Orders List ─────────────────────────────────────────────────────
 
@@ -229,30 +231,131 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _uoms = [];
+  VoucherMeta _meta = VoucherMeta();
   bool _loading = true;
 
   @override
   void initState() { super.initState(); _load(); }
 
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _canDelete {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+  }
+
   Future<void> _load() async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
+    final orgId = _orgId;
     try {
       final client = Supabase.instance.client;
       final order = await client.from('purchase_orders')
-          .select('*, suppliers(name), branches(name)').eq('id', widget.orderId).single();
+          .select('*, suppliers(name, address, contact_person, contact_number, phone, ntn), branches(name)').eq('id', widget.orderId).single();
       final items = await client.from('purchase_order_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('purchase_order_id', widget.orderId);
       final products = await client.from('products')
-          .select('id, name, sku, base_uom_id, cost_price').eq('org_id', orgId!).eq('is_active', true).order('name');
+          .select('id, name, sku, base_uom_id, cost_price').eq('org_id', orgId!).eq('is_active', true).order('name').limit(10000);
       final uoms = await client.from('uoms').select().eq('org_id', orgId).order('name');
+      final meta = await VoucherMeta.fetch(
+        orgId: orgId,
+        customerId: null,  // PO has no customer; salesperson lookup will be null
+        createdById: order['created_by'] as String?,
+      );
       setState(() {
         _order = Map<String, dynamic>.from(order);
         _items = List<Map<String, dynamic>>.from(items);
         _products = List<Map<String, dynamic>>.from(products);
         _uoms = List<Map<String, dynamic>>.from(uoms);
+        _meta = meta;
         _loading = false;
       });
     } catch (_) { setState(() => _loading = false); }
+  }
+
+  Future<void> _logAudit(String action, String? details) async {
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': widget.orderId, 'voucher_type': 'PO',
+        'action': action, 'details': details,
+        'user_id': ref.read(currentUserProvider)?.id,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _deletePO() async {
+    // Cascade check: no GRN should exist for this PO
+    try {
+      final grns = await Supabase.instance.client.from('purchase_grns')
+          .select('id, voucher_number').eq('po_id', widget.orderId);
+      if ((grns as List).isNotEmpty) {
+        _showSnack('Cannot delete: ${grns.length} GRN(s) exist. Delete them first.');
+        return;
+      }
+    } catch (e) { _showSnack('Failed to check: $e'); return; }
+
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Delete Purchase Order?'),
+      content: Text('Permanently delete ${_order['voucher_number']}? This cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    try {
+      final vNum = _order['voucher_number'] as String? ?? '';
+      final bankErr = await _bankCancelledVoucherNumber(
+        orgId: _orgId, branchId: _order['branch_id'] as String?, voucherNumber: vNum);
+      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
+
+      await _logAudit('deleted', 'Voucher $vNum deleted by admin');
+      await Supabase.instance.client.from('purchase_order_items').delete().eq('purchase_order_id', widget.orderId);
+      await Supabase.instance.client.from('purchase_orders').delete().eq('id', widget.orderId);
+
+      _showSnack('Deleted');
+      widget.onUpdated();
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _printPO() async {
+    final user = ref.read(currentUserProvider);
+    final lines = _items.map((it) {
+      final qty = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
+      final cost = (it['unit_cost'] as num?)?.toDouble() ?? 0;
+      return VoucherLine(
+        product: it['products']?['name'] as String? ?? '-',
+        sku: it['products']?['sku'] as String?,
+        uom: it['uoms']?['abbreviation'] as String?,
+        qty: qty, unitPrice: cost, lineTotal: qty * cost,
+      );
+    }).toList();
+    double subtotal = 0;
+    for (final l in lines) { subtotal += l.qty * (l.unitPrice ?? 0); }
+    final sup = _order['suppliers'] as Map?;
+    final date = _order['voucher_date'] != null
+        ? DateFormat('d MMM yyyy').format(DateTime.parse(_order['voucher_date'] as String)) : null;
+    final createdAt = _order['created_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_order['created_at'] as String).toLocal()) : null;
+    await VoucherPdf.printVoucher(
+      voucherNumber: _order['voucher_number'] as String? ?? '-',
+      voucherTypeLabel: 'Purchase Order',
+      orgName: user?.orgName ?? 'Opstation',
+      branchName: _order['branches']?['name'] as String?,
+      date: date,
+      customerOrSupplier: sup?['name'] as String?,
+      customerAddress: sup?['address'] as String?,
+      customerContact: sup?['contact_person'] as String?,
+      customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
+      status: (_order['status'] as String? ?? '').replaceAll('_', ' '),
+      remarks: _order['remarks'] as String?,
+      lines: lines,
+      subtotal: subtotal, grandTotal: subtotal,
+      preparedBy: _meta.preparedBy,
+      createdAt: createdAt,
+      footerNote: _meta.footerNote,
+    );
   }
 
   void _showSnack(String msg) {
@@ -431,6 +534,17 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
               label: Text(_isLocked ? 'Unlock' : 'Lock'),
               style: TextButton.styleFrom(foregroundColor: _isLocked ? Colors.orange : AppTheme.textSecondary),
             ),
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print / PDF',
+            onPressed: _printPO,
+          ),
+          if (_canDelete)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
+              tooltip: 'Delete',
+              onPressed: _deletePO,
+            ),
           const SizedBox(width: 8),
         ],
       ),
@@ -446,6 +560,16 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
                   if (_order['remarks'] != null) _InfoChip(label: 'Remarks', value: _order['remarks'] as String),
                   if (_isLocked) const _LockedChip(),
                 ]),
+                _VoucherInfoStrip(
+                  supplierAddress: _order['suppliers']?['address'] as String?,
+                  supplierContact: _order['suppliers']?['contact_person'] as String?,
+                  supplierPhone: (_order['suppliers']?['contact_number'] ?? _order['suppliers']?['phone']) as String?,
+                  ntn: _order['suppliers']?['ntn'] as String?,
+                  preparedBy: _meta.preparedBy,
+                  createdAt: _order['created_at'] != null
+                      ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_order['created_at'] as String).toLocal())
+                      : null,
+                ),
                 const SizedBox(height: 24),
                 Row(children: [
                   const Text('Items', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
@@ -733,16 +857,23 @@ class _GrnDetailScreenState extends ConsumerState<GrnDetailScreen> {
   Map<String, dynamic> _grn = {};
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _poItems = [];
+  VoucherMeta _meta = VoucherMeta();
   bool _loading = true;
 
   @override
   void initState() { super.initState(); _load(); }
 
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _canDelete {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+  }
+
   Future<void> _load() async {
     try {
       final client = Supabase.instance.client;
       final grn = await client.from('purchase_grns')
-          .select('*, suppliers(name), purchase_orders(voucher_number), branches(name)')
+          .select('*, suppliers(name, address, contact_person, contact_number, phone, ntn), purchase_orders(voucher_number), branches(name)')
           .eq('id', widget.grnId).single();
       final items = await client.from('purchase_grn_items')
           .select('*, products(name, sku), uoms(abbreviation)')
@@ -750,13 +881,159 @@ class _GrnDetailScreenState extends ConsumerState<GrnDetailScreen> {
       final poItems = await client.from('purchase_order_items')
           .select('*, products(name, sku), uoms(abbreviation)')
           .eq('purchase_order_id', grn['po_id'] as String);
+      final meta = await VoucherMeta.fetch(
+        orgId: _orgId ?? '',
+        customerId: null,
+        createdById: grn['created_by'] as String?,
+      );
       setState(() {
         _grn = Map<String, dynamic>.from(grn);
         _items = List<Map<String, dynamic>>.from(items);
         _poItems = List<Map<String, dynamic>>.from(poItems);
+        _meta = meta;
         _loading = false;
       });
     } catch (_) { setState(() => _loading = false); }
+  }
+
+  Future<void> _logAudit(String action, String? details) async {
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': widget.grnId, 'voucher_type': 'GRN',
+        'action': action, 'details': details,
+        'user_id': ref.read(currentUserProvider)?.id,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _deleteGRN() async {
+    // Cascade: no PI exists
+    try {
+      final pis = await Supabase.instance.client.from('purchase_invoices')
+          .select('id, voucher_number').eq('grn_id', widget.grnId);
+      if ((pis as List).isNotEmpty) {
+        _showSnack('Cannot delete: PI ${pis.first['voucher_number']} exists. Delete the invoice first.');
+        return;
+      }
+    } catch (e) { _showSnack('Failed to check: $e'); return; }
+
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Delete GRN?'),
+      content: Text('Permanently delete ${_grn['voucher_number']}? Stock will be removed (reversal of received goods). This cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    final orgId = _orgId;
+    final branchId = _grn['branch_id'] as String;
+    final userId = ref.read(currentUserProvider)?.id;
+    try {
+      for (final item in _items) {
+        final pid = item['product_id'] as String;
+        final received = (item['qty_received'] as num?)?.toDouble() ?? 0;
+        if (received <= 0) continue;
+
+        // Stock: subtract what was received
+        final stock = await Supabase.instance.client.from('inventory_stock').select()
+            .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+        if (stock != null) {
+          await Supabase.instance.client.from('inventory_stock').update({
+            'quantity': ((stock['quantity'] as num).toDouble()) - received,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }).eq('id', stock['id']);
+        }
+        // Movement: negative adjustment with reference
+        await Supabase.instance.client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': item['uom_id'],
+          'quantity': -received, 'movement_type': 'adjustment',
+          'reference_id': widget.grnId, 'reference_type': 'grn_deleted',
+          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
+        });
+
+        // Restore PO item qty_received
+        final poItemId = item['po_item_id'] as String?;
+        if (poItemId != null) {
+          final poItem = await Supabase.instance.client.from('purchase_order_items')
+              .select('qty_received').eq('id', poItemId).single();
+          await Supabase.instance.client.from('purchase_order_items').update({
+            'qty_received': ((poItem['qty_received'] as num?)?.toDouble() ?? 0) - received,
+          }).eq('id', poItemId);
+        }
+      }
+
+      // Re-evaluate PO status
+      final poId = _grn['po_id'] as String?;
+      if (poId != null) {
+        final remaining = await Supabase.instance.client.from('purchase_order_items')
+            .select('quantity_ordered, qty_received').eq('purchase_order_id', poId);
+        bool allRcvd = true; bool anyRcvd = false;
+        for (final pi in remaining as List) {
+          final ord = ((pi['quantity_ordered'] as num?)?.toDouble() ?? 0);
+          final rcv = ((pi['qty_received'] as num?)?.toDouble() ?? 0);
+          if (rcv > 0) anyRcvd = true;
+          if (rcv < ord) allRcvd = false;
+        }
+        await Supabase.instance.client.from('purchase_orders').update({
+          'status': allRcvd ? 'received' : (anyRcvd ? 'partially_received' : 'ordered'),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', poId);
+      }
+
+      final vNum = _grn['voucher_number'] as String? ?? '';
+      final bankErr = await _bankCancelledVoucherNumber(
+        orgId: orgId, branchId: branchId, voucherNumber: vNum);
+      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
+
+      await _logAudit('deleted', 'Voucher $vNum deleted by admin, stock reversed');
+      await Supabase.instance.client.from('purchase_grn_items').delete().eq('grn_id', widget.grnId);
+      await Supabase.instance.client.from('purchase_grns').delete().eq('id', widget.grnId);
+
+      _showSnack('Deleted — stock reversed');
+      widget.onUpdated();
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _printGRN() async {
+    final user = ref.read(currentUserProvider);
+    final lines = _items.map((it) {
+      final qty = (it['qty_received'] as num?)?.toDouble() ?? 0;
+      return VoucherLine(
+        product: it['products']?['name'] as String? ?? '-',
+        sku: it['products']?['sku'] as String?,
+        uom: it['uoms']?['abbreviation'] as String?,
+        qty: qty,
+      );
+    }).toList();
+    final sup = _grn['suppliers'] as Map?;
+    final date = _grn['voucher_date'] != null
+        ? DateFormat('d MMM yyyy').format(DateTime.parse(_grn['voucher_date'] as String)) : null;
+    final createdAt = _grn['created_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_grn['created_at'] as String).toLocal()) : null;
+    final poVoucher = _grn['purchase_orders']?['voucher_number'] as String?;
+    await VoucherPdf.printVoucher(
+      voucherNumber: _grn['voucher_number'] as String? ?? '-',
+      voucherTypeLabel: 'Goods Receipt Note',
+      orgName: user?.orgName ?? 'Opstation',
+      branchName: _grn['branches']?['name'] as String?,
+      date: date,
+      customerOrSupplier: sup?['name'] as String?,
+      customerAddress: sup?['address'] as String?,
+      customerContact: sup?['contact_person'] as String?,
+      customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
+      status: (_grn['status'] as String? ?? '').replaceAll('_', ' '),
+      lines: lines,
+      preparedBy: _meta.preparedBy,
+      createdAt: createdAt,
+      footerNote: _meta.footerNote,
+      relatedRefs: poVoucher != null ? {'PO #': poVoucher} : null,
+    );
   }
 
   void _showSnack(String msg) {
@@ -996,6 +1273,17 @@ class _GrnDetailScreenState extends ConsumerState<GrnDetailScreen> {
               decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
               child: const Text('Invoiced', style: TextStyle(color: AppTheme.success, fontWeight: FontWeight.w600)),
             ),
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print / PDF',
+            onPressed: _printGRN,
+          ),
+          if (_canDelete)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
+              tooltip: 'Delete',
+              onPressed: _deleteGRN,
+            ),
           const SizedBox(width: 8),
         ],
       ),
@@ -1011,6 +1299,16 @@ class _GrnDetailScreenState extends ConsumerState<GrnDetailScreen> {
                   if (_grn['remarks'] != null) _InfoChip(label: 'Remarks', value: _grn['remarks'] as String),
                   if (_isLocked) const _LockedChip(),
                 ]),
+                _VoucherInfoStrip(
+                  supplierAddress: _grn['suppliers']?['address'] as String?,
+                  supplierContact: _grn['suppliers']?['contact_person'] as String?,
+                  supplierPhone: (_grn['suppliers']?['contact_number'] ?? _grn['suppliers']?['phone']) as String?,
+                  ntn: _grn['suppliers']?['ntn'] as String?,
+                  preparedBy: _meta.preparedBy,
+                  createdAt: _grn['created_at'] != null
+                      ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_grn['created_at'] as String).toLocal())
+                      : null,
+                ),
                 const SizedBox(height: 24),
                 const Text('Received Items', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 12),
@@ -1183,26 +1481,133 @@ class PurchaseInvoiceDetailScreen extends ConsumerStatefulWidget {
 class _PurchaseInvoiceDetailScreenState extends ConsumerState<PurchaseInvoiceDetailScreen> {
   Map<String, dynamic> _invoice = {};
   List<Map<String, dynamic>> _items = [];
+  VoucherMeta _meta = VoucherMeta();
   bool _loading = true;
 
   @override
   void initState() { super.initState(); _load(); }
 
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _canDelete {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+  }
+
   Future<void> _load() async {
     try {
       final client = Supabase.instance.client;
       final invoice = await client.from('purchase_invoices')
-          .select('*, suppliers(name), purchase_orders(voucher_number), purchase_grns(voucher_number), branches(name)')
+          .select('*, suppliers(name, address, contact_person, contact_number, phone, ntn), purchase_orders(voucher_number), purchase_grns(voucher_number), branches(name)')
           .eq('id', widget.invoiceId).single();
       final items = await client.from('purchase_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)')
           .eq('invoice_id', widget.invoiceId);
+      final meta = await VoucherMeta.fetch(
+        orgId: _orgId ?? '',
+        customerId: null,
+        createdById: invoice['created_by'] as String?,
+      );
       setState(() {
         _invoice = Map<String, dynamic>.from(invoice);
         _items = List<Map<String, dynamic>>.from(items);
+        _meta = meta;
         _loading = false;
       });
     } catch (_) { setState(() => _loading = false); }
+  }
+
+  Future<void> _logAudit(String action, String? details) async {
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': widget.invoiceId, 'voucher_type': 'PI',
+        'action': action, 'details': details,
+        'user_id': ref.read(currentUserProvider)?.id,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _deletePI() async {
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Delete Purchase Invoice?'),
+      content: Text('Permanently delete ${_invoice['voucher_number']}? The GRN will be available for re-invoicing. This cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    try {
+      final vNum = _invoice['voucher_number'] as String? ?? '';
+      final grnId = _invoice['grn_id'] as String?;
+
+      await _logAudit('deleted', 'Voucher $vNum deleted by admin');
+      await Supabase.instance.client.from('purchase_invoice_items').delete().eq('invoice_id', widget.invoiceId);
+      await Supabase.instance.client.from('purchase_invoices').delete().eq('id', widget.invoiceId);
+
+      // Revert GRN status from 'invoiced' to 'saved' so a new invoice can be created
+      if (grnId != null) {
+        await Supabase.instance.client.from('purchase_grns').update({
+          'status': 'saved',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', grnId);
+      }
+
+      final bankErr = await _bankCancelledVoucherNumber(
+        orgId: _orgId, branchId: _invoice['branch_id'] as String?, voucherNumber: vNum);
+      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
+
+      _showSnack('Deleted — GRN restored to saved');
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _printPI() async {
+    final user = ref.read(currentUserProvider);
+    final lines = _items.map((it) {
+      final qty = (it['qty_received'] as num?)?.toDouble() ?? 0;
+      final cost = (it['unit_cost'] as num?)?.toDouble() ?? 0;
+      final disc = (it['discount'] as num?)?.toDouble() ?? 0;
+      final lt = (it['line_total'] as num?)?.toDouble() ?? qty * cost - disc;
+      return VoucherLine(
+        product: it['products']?['name'] as String? ?? '-',
+        sku: it['products']?['sku'] as String?,
+        uom: it['uoms']?['abbreviation'] as String?,
+        qty: qty, unitPrice: cost, lineTotal: lt,
+      );
+    }).toList();
+    final sup = _invoice['suppliers'] as Map?;
+    final date = _invoice['voucher_date'] != null
+        ? DateFormat('d MMM yyyy').format(DateTime.parse(_invoice['voucher_date'] as String)) : null;
+    final createdAt = _invoice['created_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_invoice['created_at'] as String).toLocal()) : null;
+    final poVoucher = _invoice['purchase_orders']?['voucher_number'] as String?;
+    final grnVoucher = _invoice['purchase_grns']?['voucher_number'] as String?;
+    final refs = <String, String>{};
+    if (poVoucher != null) refs['PO #'] = poVoucher;
+    if (grnVoucher != null) refs['GRN #'] = grnVoucher;
+
+    await VoucherPdf.printVoucher(
+      voucherNumber: _invoice['voucher_number'] as String? ?? '-',
+      voucherTypeLabel: 'Purchase Invoice',
+      orgName: user?.orgName ?? 'Opstation',
+      branchName: _invoice['branches']?['name'] as String?,
+      date: date,
+      customerOrSupplier: sup?['name'] as String?,
+      customerAddress: sup?['address'] as String?,
+      customerContact: sup?['contact_person'] as String?,
+      customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
+      lines: lines,
+      subtotal: (_invoice['subtotal'] as num?)?.toDouble() ?? 0,
+      discountTotal: (_invoice['discount_total'] as num?)?.toDouble() ?? 0,
+      grandTotal: (_invoice['grand_total'] as num?)?.toDouble() ?? 0,
+      preparedBy: _meta.preparedBy,
+      createdAt: createdAt,
+      footerNote: _meta.footerNote,
+      relatedRefs: refs.isNotEmpty ? refs : null,
+    );
   }
 
   void _showSnack(String msg) {
@@ -1286,6 +1691,17 @@ class _PurchaseInvoiceDetailScreenState extends ConsumerState<PurchaseInvoiceDet
             label: Text(_isLocked ? 'Unlock' : 'Lock'),
             style: TextButton.styleFrom(foregroundColor: _isLocked ? Colors.orange : AppTheme.textSecondary),
           ),
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print / PDF',
+            onPressed: _printPI,
+          ),
+          if (_canDelete)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
+              tooltip: 'Delete',
+              onPressed: _deletePI,
+            ),
           const SizedBox(width: 8),
         ],
       ),
@@ -1301,6 +1717,16 @@ class _PurchaseInvoiceDetailScreenState extends ConsumerState<PurchaseInvoiceDet
                   _InfoChip(label: 'GRN #', value: _invoice['purchase_grns']?['voucher_number'] as String? ?? '-'),
                   if (_isLocked) const _LockedChip(),
                 ]),
+                _VoucherInfoStrip(
+                  supplierAddress: _invoice['suppliers']?['address'] as String?,
+                  supplierContact: _invoice['suppliers']?['contact_person'] as String?,
+                  supplierPhone: (_invoice['suppliers']?['contact_number'] ?? _invoice['suppliers']?['phone']) as String?,
+                  ntn: _invoice['suppliers']?['ntn'] as String?,
+                  preparedBy: _meta.preparedBy,
+                  createdAt: _invoice['created_at'] != null
+                      ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_invoice['created_at'] as String).toLocal())
+                      : null,
+                ),
                 const SizedBox(height: 24),
                 Expanded(child: Container(
                   decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
@@ -1455,4 +1881,196 @@ class _TotalRow extends StatelessWidget {
       Text(value, style: TextStyle(fontSize: bold ? 16 : 13, fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
     ]),
   );
+}
+
+// ─── Shared helpers (mirrored from erp_sales_screen.dart) ─────────────────────
+
+/// Returns null on success OR when there's nothing meaningful to bank (e.g.
+/// legacy numeric-only voucher numbers from before the TYPE-YYYY-NNNN scheme).
+/// Returns a human-readable failure reason for actual DB errors so the caller
+/// can surface it in a snack.
+Future<String?> _bankCancelledVoucherNumber({
+  required String? orgId,
+  required String? branchId,
+  required String voucherNumber,
+}) async {
+  if (orgId == null || orgId.isEmpty) return 'org missing';
+  if (voucherNumber.isEmpty) return null;
+  final parts = voucherNumber.split('-');
+  if (parts.length != 3) {
+    // ignore: avoid_print
+    print('[VoucherBank] $voucherNumber is legacy format, skipping');
+    return null;
+  }
+  final year = int.tryParse(parts[1]);
+  final number = int.tryParse(parts[2]);
+  if (year == null || number == null) {
+    // ignore: avoid_print
+    print('[VoucherBank] $voucherNumber not numeric, skipping');
+    return null;
+  }
+  try {
+    await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
+      'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
+      'org_id': orgId,
+      'branch_id': branchId,
+      'voucher_type': parts[0],
+      'year': year,
+      'number': number,
+    });
+    // ignore: avoid_print
+    print('[VoucherBank] $voucherNumber banked for reuse');
+    return null;
+  } catch (e) {
+    // ignore: avoid_print
+    print('[VoucherBank] failed to bank $voucherNumber: $e');
+    return e.toString().split('\n').first;
+  }
+}
+
+/// Compact info strip showing supplier details + prepared-by on detail screens.
+class _VoucherInfoStrip extends StatelessWidget {
+  final String? supplierAddress;
+  final String? supplierContact;
+  final String? supplierPhone;
+  final String? ntn;
+  final String? preparedBy;
+  final String? createdAt;
+
+  const _VoucherInfoStrip({
+    this.supplierAddress,
+    this.supplierContact,
+    this.supplierPhone,
+    this.ntn,
+    this.preparedBy,
+    this.createdAt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = <Widget>[];
+    if (supplierAddress != null && supplierAddress!.trim().isNotEmpty) {
+      tiles.add(_tile(Icons.location_on_outlined, 'Address', supplierAddress!));
+    }
+    if (supplierContact != null && supplierContact!.isNotEmpty) {
+      tiles.add(_tile(Icons.account_circle_outlined, 'Contact Person', supplierContact!));
+    }
+    if (supplierPhone != null && supplierPhone!.isNotEmpty) {
+      tiles.add(_tile(Icons.phone_outlined, 'Phone', supplierPhone!));
+    }
+    if (ntn != null && ntn!.isNotEmpty) {
+      tiles.add(_tile(Icons.badge_outlined, 'NTN', ntn!));
+    }
+    if (tiles.isEmpty && (preparedBy == null || preparedBy!.isEmpty)) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.background,
+        border: Border.all(color: AppTheme.border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (tiles.isNotEmpty) Wrap(spacing: 24, runSpacing: 8, children: tiles),
+        if (preparedBy != null && preparedBy!.isNotEmpty) ...[
+          if (tiles.isNotEmpty) const SizedBox(height: 10),
+          Row(children: [
+            const Icon(Icons.draw_outlined, size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text(
+              'Prepared by: ${preparedBy!}${createdAt != null ? "  ·  $createdAt" : ""}',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontStyle: FontStyle.italic),
+            ),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  Widget _tile(IconData icon, String label, String value) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, size: 16, color: AppTheme.textSecondary),
+        const SizedBox(width: 6),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, letterSpacing: 0.5)),
+          Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// Audit trail viewer (mirrors sales).
+class _AuditTrailList extends StatelessWidget {
+  final String voucherId;
+  final String voucherType;
+  const _AuditTrailList({required this.voucherId, required this.voucherType});
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<dynamic>>(
+      future: Supabase.instance.client.from('voucher_audit_log')
+          .select('*, users(name)').eq('voucher_id', voucherId).eq('voucher_type', voucherType)
+          .order('created_at', ascending: false).limit(50),
+      builder: (ctx, snap) {
+        if (!snap.hasData) return const SizedBox.shrink();
+        final entries = List<Map<String, dynamic>>.from(snap.data!);
+        if (entries.isEmpty) return const SizedBox.shrink();
+        return Container(
+          margin: const EdgeInsets.only(top: 16),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: AppTheme.border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Audit Trail',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+            const SizedBox(height: 8),
+            ...entries.map((e) {
+              final action = e['action'] as String? ?? '-';
+              final details = e['details'] as String? ?? '';
+              final userName = e['users']?['name'] as String? ?? '—';
+              final ts = e['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+              IconData icon;
+              Color color;
+              switch (action) {
+                case 'created':   icon = Icons.add_circle_outline;   color = AppTheme.success; break;
+                case 'saved':     icon = Icons.save_outlined;        color = AppTheme.primary; break;
+                case 'confirmed': icon = Icons.check_circle_outline; color = AppTheme.success; break;
+                case 'locked':    icon = Icons.lock_outline;         color = Colors.orange; break;
+                case 'unlocked':  icon = Icons.lock_open;            color = AppTheme.textSecondary; break;
+                case 'invoiced':  icon = Icons.receipt_long_outlined; color = AppTheme.primary; break;
+                case 'cancelled': icon = Icons.cancel_outlined;      color = AppTheme.danger; break;
+                case 'deleted':   icon = Icons.delete_outline;       color = AppTheme.danger; break;
+                default:          icon = Icons.history;              color = AppTheme.textSecondary;
+              }
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(icon, size: 14, color: color),
+                  const SizedBox(width: 8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)),
+                      const SizedBox(width: 8),
+                      Text('by $userName', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      const Spacer(),
+                      Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ]),
+                    if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ])),
+                ]),
+              );
+            }),
+          ]),
+        );
+      },
+    );
+  }
 }
