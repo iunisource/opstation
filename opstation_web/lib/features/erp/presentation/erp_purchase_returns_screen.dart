@@ -127,7 +127,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     try {
       final client = Supabase.instance.client;
       final ret = await client.from('purchase_returns')
-          .select('*, suppliers(name, address, contact_person, contact_number, phone), branches(name)')
+          .select('*, suppliers(*), branches(name)')
           .eq('id', id).single();
       final items = await client.from('purchase_return_items')
           .select('*, products(name, sku), uoms(abbreviation)')
