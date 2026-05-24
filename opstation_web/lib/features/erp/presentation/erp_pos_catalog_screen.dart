@@ -16,6 +16,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
   List<Map<String, dynamic>> _filtered = [];
   List<Map<String, dynamic>> _allBranches = [];
   bool _loading = true;
+  Map<String, double> _stockMap = {};
   final _searchCtrl = TextEditingController();
 
   @override
@@ -49,10 +50,12 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
           .select().eq('org_id', orgId).eq('branch_id', branchId).order('name');
       final branches = await client.from('branches')
           .select().eq('org_id', orgId).eq('is_active', true).order('name');
+      final stockRows = await client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId);
       setState(() {
         _items = List<Map<String, dynamic>>.from(items);
         _filtered = _items;
         _allBranches = List<Map<String, dynamic>>.from(branches);
+        _stockMap = {for (final s in stockRows as List) s['product_id'] as String: (s['quantity'] as num?)?.toDouble() ?? 0.0};
         _loading = false;
       });
     } catch (_) { setState(() => _loading = false); }
@@ -257,6 +260,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                 Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                 Expanded(flex: 2, child: Text('Category', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                 Expanded(flex: 2, child: Text('Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                Expanded(flex: 1, child: Text('Stock', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                 Expanded(flex: 1, child: Text('Active', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                 SizedBox(width: 80),
               ]),
@@ -283,6 +287,12 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                                   style: const TextStyle(color: AppTheme.textSecondary))),
                               Expanded(flex: 2, child: Text((item['price'] as num?)?.toStringAsFixed(2) ?? '0',
                                   style: const TextStyle(fontWeight: FontWeight.w700))),
+                              Expanded(flex: 1, child: Builder(builder: (_) {
+                                final pid = item['product_id'] as String?;
+                                final stock = pid != null ? (_stockMap[pid] ?? 0.0) : 0.0;
+                                Color col = stock > 10 ? AppTheme.success : (stock > 0 ? Colors.orange : AppTheme.danger);
+                                return Text(stock.toStringAsFixed(0), style: TextStyle(fontWeight: FontWeight.w700, color: col));
+                              })),
                               Expanded(flex: 1, child: Icon(isActive ? Icons.check_circle : Icons.cancel_outlined,
                                   color: isActive ? AppTheme.success : AppTheme.textSecondary, size: 18)),
                               SizedBox(width: 80, child: Row(children: [

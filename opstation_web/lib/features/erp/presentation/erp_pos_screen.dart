@@ -18,6 +18,9 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
   List<Map<String, dynamic>> _sessions = [];
   List<Map<String, dynamic>> _branches = [];
   bool _loading = true;
+  DateTime? _filterFrom;
+  DateTime? _filterTo;
+  String _sessionSearch = '';
 
   @override
   void initState() {
@@ -36,7 +39,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
           .select('*, branches(name)')
           .eq('org_id', orgId)
           .order('opened_at', ascending: false)
-          .limit(20);
+          .limit(200);
       final branches = await client
           .from('branches')
           .select()
@@ -188,8 +191,15 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
               ]),
             ),
           const SizedBox(height: 8),
-          const Text('Recent Sessions',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          Row(children: [
+            const Expanded(child: Text('Recent Sessions', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+            OutlinedButton.icon(icon: const Icon(Icons.date_range, size: 15), label: Text(_filterFrom != null ? DateFormat('d MMM').format(_filterFrom!) : 'From', style: const TextStyle(fontSize: 12)), onPressed: () async { final d = await showDatePicker(context: context, initialDate: _filterFrom ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) setState(() => _filterFrom = d); }),
+            const SizedBox(width: 6),
+            OutlinedButton.icon(icon: const Icon(Icons.date_range, size: 15), label: Text(_filterTo != null ? DateFormat('d MMM').format(_filterTo!) : 'To', style: const TextStyle(fontSize: 12)), onPressed: () async { final d = await showDatePicker(context: context, initialDate: _filterTo ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) setState(() => _filterTo = d); }),
+            if (_filterFrom != null || _filterTo != null) ...[const SizedBox(width: 4), IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _filterFrom = null; _filterTo = null; }), tooltip: 'Clear dates')],
+          ]),
+          const SizedBox(height: 8),
+          TextField(decoration: const InputDecoration(hintText: 'Search by branch name…', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (v) => setState(() => _sessionSearch = v)),
           const SizedBox(height: 12),
           if (_loading)
             const Center(child: CircularProgressIndicator())
@@ -218,13 +228,23 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                   ),
                   const Divider(height: 1),
                   Expanded(
-                    child: _sessions.isEmpty
-                        ? const Center(child: Text('No sessions yet.', style: TextStyle(color: AppTheme.textSecondary)))
+                    child: Builder(builder: (ctx) {
+                      final q = _sessionSearch.toLowerCase();
+                      final filtered = _sessions.where((s) {
+                        final branch = (s['branches']?['name'] as String? ?? '').toLowerCase();
+                        final matchSearch = q.isEmpty || branch.contains(q);
+                        final opened = s['opened_at'] != null ? DateTime.parse(s['opened_at'] as String).toLocal() : null;
+                        final matchFrom = _filterFrom == null || (opened != null && !opened.isBefore(_filterFrom!));
+                        final matchTo = _filterTo == null || (opened != null && !opened.isAfter(_filterTo!.add(const Duration(days: 1))));
+                        return matchSearch && matchFrom && matchTo;
+                      }).toList();
+                      return filtered.isEmpty
+                        ? const Center(child: Text('No sessions match.', style: TextStyle(color: AppTheme.textSecondary)))
                         : ListView.separated(
-                            itemCount: _sessions.length,
+                            itemCount: filtered.length,
                             separatorBuilder: (_, __) => const Divider(height: 1),
                             itemBuilder: (_, i) {
-                              final s = _sessions[i];
+                              final s = filtered[i];
                               final isOpen = s['status'] == 'open';
                               final openedAt = s['opened_at'] != null
                                   ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(s['opened_at'] as String).toLocal())
@@ -258,7 +278,8 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                                   ]),
                                 ),
                               );
-                            }),
+                            });
+                    }),
                   ),
                 ]),
               ),
