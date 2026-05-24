@@ -37,7 +37,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
     setState(() => _loadingCustomers = true);
     try {
       final rows = await Supabase.instance.client.from('pos_customers')
-          .select('id, name, phone, cnic, branch_id, branches(name)')
+          .select('id, name, phone, cnic, branch_id')
           .eq('org_id', orgId).order('name');
       setState(() { _customers = List<Map<String, dynamic>>.from(rows); _loadingCustomers = false; });
     } catch (e) { _showSnack('Error: $e'); setState(() => _loadingCustomers = false); }
