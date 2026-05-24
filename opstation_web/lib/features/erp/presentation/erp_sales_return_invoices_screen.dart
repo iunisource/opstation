@@ -170,6 +170,10 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   Future<void> _issueInvoice() async {
     if (_items.isEmpty) { _showSnack('No items'); return; }
     for (final it in _items) await _saveItemPrice(it['id'] as String);
+    for (final it in _items) {
+      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+      if (price <= 0) { _showSnack('Unit price for "${it['products']?['name'] ?? 'item'}" must be greater than 0'); return; }
+    }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Issue Sales Return Invoice?'),
       content: const Text('Stock will be added back to inventory and the SRN will be locked. This cannot be undone.'),
