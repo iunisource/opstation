@@ -116,51 +116,79 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
     ];
 
-    // ── ERP top-level menu items ──────────────────────────────────────────
-    final erpMenuItems = <Widget>[
-      if (inventoryItems.isNotEmpty)
-        _subMenu(context, 'Inventory', Icons.inventory_2_outlined, location, inventoryItems, [
-          '/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock',
-          '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers',
-        ]),
+    // ── Per-section item lists ───────────────────────────────────────────
+    final purchaseItems = <Widget>[
       if (modules.contains('purchase')) ...[
+        _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
+        _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location),
+        _menuItem(context, 'GRN',                      Icons.move_to_inbox_outlined,     '/erp/grn',                      location),
+        _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location),
         _menuDivider(),
-        _menuLabel('Purchase'),
-        _menuItem(context, 'Suppliers', Icons.people_outline, '/erp/suppliers', location),
-        _menuItem(context, 'Purchase Orders', Icons.shopping_cart_outlined, '/erp/purchase', location),
-        _menuItem(context, 'GRN', Icons.move_to_inbox_outlined, '/erp/grn', location),
-        _menuItem(context, 'Purchase Invoices', Icons.receipt_outlined, '/erp/purchase-invoices', location),
-        _menuItem(context, 'Purchase Return Notes', Icons.assignment_return_outlined, '/erp/purchase-returns', location),
-        _menuItem(context, 'Purchase Return Vouchers', Icons.description_outlined, '/erp/purchase-return-vouchers', location),
-        _menuItem(context, 'Payments', Icons.payment_outlined, '/erp/payment-vouchers', location),
+        _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
+        _menuItem(context, 'Purchase Return Vouchers', Icons.description_outlined,       '/erp/purchase-return-vouchers', location),
+        _menuDivider(),
+        _menuItem(context, 'Payments',                 Icons.payment_outlined,           '/erp/payment-vouchers',         location),
       ],
+    ];
+
+    final salesItems = <Widget>[
       if (modules.contains('sales')) ...[
+        _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
+        _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
+        _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location),
         _menuDivider(),
-        _menuLabel('Sales'),
-        _menuItem(context, 'Sales Orders', Icons.receipt_long_outlined, '/erp/sales', location),
-        _menuItem(context, 'Delivery Orders', Icons.local_shipping_outlined, '/erp/delivery-orders', location),
-        _menuItem(context, 'Sales Invoices', Icons.receipt_outlined, '/erp/sales-invoices', location),
-        _menuItem(context, 'Sales Return Notes', Icons.assignment_return_outlined, '/erp/sales-returns', location),
-        _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined, '/erp/sales-return-invoices', location),
-        _menuItem(context, 'Receipts', Icons.payments_outlined, '/erp/receipt-vouchers', location),
+        _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
+        _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location),
+        _menuDivider(),
+        _menuItem(context, 'Receipts',              Icons.payments_outlined,          '/erp/receipt-vouchers',      location),
       ],
+    ];
+
+    final posItems = <Widget>[
       if (modules.contains('pos')) ...[
-        _menuDivider(),
-        _menuLabel('Point of Sale'),
-        _menuItem(context, 'POS', Icons.storefront_outlined, '/erp/pos', location),
-        _menuItem(context, 'POS Catalog', Icons.list_alt_outlined, '/erp/pos-catalog', location),
+        _menuItem(context, 'POS',         Icons.storefront_outlined, '/erp/pos',         location),
+        _menuItem(context, 'POS Catalog', Icons.list_alt_outlined,   '/erp/pos-catalog', location),
       ],
-      if (ledgerItems.isNotEmpty) ...[
-        _menuDivider(),
-        _subMenu(context, 'Ledgers', Icons.analytics_outlined, location, ledgerItems, [
-          '/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
-          '/erp/customer-aging', '/erp/supplier-aging',
-        ]),
-      ],
-      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin) ...[
-        _menuDivider(),
+    ];
+
+    final erpAdminItems = <Widget>[
+      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
         _menuItem(context, 'ERP Users', Icons.manage_accounts_outlined, '/erp/users', location),
-      ],
+    ];
+
+    // Legacy combined list (still used for isNotEmpty guards)
+    final erpMenuItems = <Widget>[
+      ...inventoryItems, ...purchaseItems, ...salesItems, ...posItems,
+      ...ledgerItems, ...erpAdminItems,
+    ];
+
+    List<Widget> splitErpMenus() => [
+      if (inventoryItems.isNotEmpty)
+        _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
+          ['/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock',
+           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers'],
+          inventoryItems),
+      if (purchaseItems.isNotEmpty)
+        _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
+          ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
+           '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers'],
+          purchaseItems),
+      if (salesItems.isNotEmpty)
+        _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
+          ['/erp/sales', '/erp/delivery-orders', '/erp/sales-invoices',
+           '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/receipt-vouchers'],
+          salesItems),
+      if (posItems.isNotEmpty)
+        _navMenu(context, 'POS', Icons.storefront_outlined, location,
+          ['/erp/pos', '/erp/pos-catalog'], posItems),
+      if (ledgerItems.isNotEmpty)
+        _navMenu(context, 'Ledgers', Icons.analytics_outlined, location,
+          ['/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
+           '/erp/customer-aging', '/erp/supplier-aging'],
+          ledgerItems),
+      if (erpAdminItems.isNotEmpty)
+        _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
+          ['/erp/users'], erpAdminItems),
     ];
 
     return Container(
@@ -224,12 +252,11 @@ class _TopNav extends ConsumerWidget {
               _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
             ],
           ),
-          if (erpMenuItems.isNotEmpty)
-            _navMenu(context, 'ERP', Icons.account_balance_wallet_outlined, location, ['/erp/'], erpMenuItems),
+          ...splitErpMenus(),
         ],
 
         if (isErpUser && erpMenuItems.isNotEmpty)
-          _navMenu(context, 'ERP', Icons.account_balance_wallet_outlined, location, ['/erp/'], erpMenuItems),
+          ...splitErpMenus(),
 
         const Spacer(),
 
