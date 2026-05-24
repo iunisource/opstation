@@ -294,6 +294,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   final _customerSearchCtrl = TextEditingController();
   bool _showCustomerDropdown = false;
   List<Map<String, dynamic>> _filteredCustomers = [];
+  List<Map<String, dynamic>> _posCustomers = [];
+  Map<String, dynamic>? _selectedPosCustomer;  // quick POS customer
+  Map<String, double> _stockMap = {};  // product_id → qty in stock
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
   @override void dispose() { _searchCtrl.dispose(); _customerSearchCtrl.dispose(); super.dispose(); }
@@ -310,17 +313,25 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final client = Supabase.instance.client;
       final branchId = _session['branch_id'] as String? ?? '';
       final results = await Future.wait([
-        client.from('pos_transactions').select('*, customers(shop_name)').eq('session_id', _session['id']).order('transacted_at', ascending: false),
+        client.from('pos_transactions').select('*, customers(shop_name), pos_customers(name)').eq('session_id', _session['id']).order('transacted_at', ascending: false),
         client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name'),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name'),
         client.from('pos_sessions').select('*, branches(name)').eq('id', _session['id']).single(),
+        client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId),
+        client.from('pos_customers').select('id, name, phone, cnic').eq('org_id', orgId).eq('branch_id', branchId).order('name'),
       ]);
       final prods = List<Map<String, dynamic>>.from(results[1] as List);
+      final stockRows = List<Map<String, dynamic>>.from(results[4] as List);
+      final stockMap = <String, double>{for (final s in stockRows) s['product_id'] as String: (s['quantity'] as num?)?.toDouble() ?? 0.0};
+      // Embed stock qty into each catalog product
+      for (final p in prods) { p['stock_qty'] = stockMap[p['product_id'] as String? ?? ''] ?? 0.0; }
       setState(() {
         _transactions = List<Map<String, dynamic>>.from(results[0] as List);
         _allProducts = prods; _displayProducts = prods;
         _customers = List<Map<String, dynamic>>.from(results[2] as List);
         _session = Map<String, dynamic>.from(results[3] as Map);
+        _stockMap = stockMap;
+        _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
         _loading = false;
       });
     } catch (e) { _showSnack('Load error: $e'); setState(() => _loading = false); }
@@ -351,6 +362,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'quantity': 1.0,
           'discount': 0.0,
           'discount_type': 'fixed',
+          'stock_qty': (product['stock_qty'] as num?)?.toDouble() ?? 0.0,
         });
       }
     });
@@ -377,6 +389,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Future<void> _checkout() async {
     if (_cart.isEmpty) { _showSnack('Cart is empty'); return; }
     if (_cart.any((i) => i['product_id'] == null)) { _showSnack('Some items have no product link — remove and re-add'); return; }
+    // Stock check
+    for (final item in _cart) {
+      final qty = item['quantity'] as double;
+      final stock = (item['stock_qty'] as num?)?.toDouble() ?? 0;
+      if (qty > stock) { _showSnack('Insufficient stock for "${item['name']}": ${stock.toStringAsFixed(0)} available'); return; }
+    }
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final branchId = _session['branch_id'] as String;
     try {
@@ -389,6 +407,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       await client.from('pos_transactions').insert({
         'id': txnId, 'org_id': orgId, 'session_id': _session['id'],
         'customer_id': _selectedCustomer?['id'],
+        'pos_customer_id': _selectedPosCustomer?['id'],
         'total': totalAmt, 'discount': discountAmt,
         'payment_method': _paymentMethod, 'transaction_type': 'sale',
         'created_by': userId, 'transacted_at': now,
@@ -418,11 +437,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'moved_at': now, 'created_by': userId,
         });
       }
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; });
+      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; });
       await _loadData();
       // Show receipt
       if (mounted) {
-        final txn = _transactions.firstWhere((t) => t['id'] == txnId, orElse: () => {'id': txnId, 'total': totalAmt, 'discount': discountAmt, 'payment_method': _paymentMethod, 'transacted_at': now, 'customers': _selectedCustomer != null ? {'shop_name': _selectedCustomer!['shop_name']} : null});
+        final txn = _transactions.firstWhere((t) => t['id'] == txnId, orElse: () => {'id': txnId, 'total': totalAmt, 'discount': discountAmt, 'payment_method': _paymentMethod, 'transacted_at': now, 'customers': _selectedCustomer != null ? {'shop_name': _selectedCustomer!['shop_name']} : (_selectedPosCustomer != null ? {'shop_name': _selectedPosCustomer!['name']} : null)});
         await showDialog(context: context, barrierDismissible: false, builder: (_) => _ReceiptDialog(
           transaction: txn, items: cartSnapshot,
           orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
@@ -478,6 +497,39 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       }
       _showSnack('Return processed — Rs. ${returnTotal.toStringAsFixed(2)} refunded');
       await _loadData();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _showQuickAddCustomer() async {
+    final nameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final cnicCtrl = TextEditingController();
+    final orgId = _orgId; final branchId = _session['branch_id'] as String?;
+    if (orgId == null || branchId == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Quick Add Customer'),
+      content: SizedBox(width: 360, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name *', hintText: 'Customer name'), autofocus: true, textCapitalization: TextCapitalization.words),
+        const SizedBox(height: 10),
+        TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'Phone', hintText: '03XX-XXXXXXX'), keyboardType: TextInputType.phone),
+        const SizedBox(height: 10),
+        TextField(controller: cnicCtrl, decoration: const InputDecoration(labelText: 'CNIC (optional)', hintText: 'XXXXX-XXXXXXX-X'), keyboardType: TextInputType.number),
+      ])),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Add Customer'))],
+    ));
+    if (ok != true || nameCtrl.text.trim().isEmpty) return;
+    try {
+      final id = 'posc_${DateTime.now().millisecondsSinceEpoch}';
+      await Supabase.instance.client.from('pos_customers').insert({
+        'id': id, 'org_id': orgId, 'branch_id': branchId,
+        'name': nameCtrl.text.trim(),
+        'phone': phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+        'cnic': cnicCtrl.text.trim().isEmpty ? null : cnicCtrl.text.trim(),
+      });
+      final newCust = {'id': id, 'name': nameCtrl.text.trim(), 'phone': phoneCtrl.text.trim(), 'cnic': cnicCtrl.text.trim(), '_type': 'pos'};
+      setState(() { _posCustomers.add(newCust); _selectedPosCustomer = newCust; _selectedCustomer = null; _customerSearchCtrl.clear(); });
+      _showSnack('Customer "${nameCtrl.text.trim()}" added');
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -673,20 +725,40 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 controller: _customerSearchCtrl,
                 enabled: _isOpen,
                 decoration: InputDecoration(
-                  hintText: _selectedCustomer != null ? _selectedCustomer!['shop_name'] as String : 'Walk-in (optional)',
-                  hintStyle: TextStyle(color: _selectedCustomer != null ? AppTheme.primary : AppTheme.textSecondary, fontWeight: _selectedCustomer != null ? FontWeight.w600 : FontWeight.normal),
-                  prefixIcon: Icon(Icons.person_outline, size: 18, color: _selectedCustomer != null ? AppTheme.primary : AppTheme.textSecondary),
-                  suffixIcon: _selectedCustomer != null ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _selectedCustomer = null; _customerSearchCtrl.clear(); })) : null,
+                  hintText: _selectedPosCustomer != null ? _selectedPosCustomer!['name'] as String : (_selectedCustomer != null ? _selectedCustomer!['shop_name'] as String : 'Walk-in (optional)'),
+                  hintStyle: TextStyle(color: (_selectedPosCustomer ?? _selectedCustomer) != null ? AppTheme.primary : AppTheme.textSecondary, fontWeight: (_selectedPosCustomer ?? _selectedCustomer) != null ? FontWeight.w600 : FontWeight.normal),
+                  prefixIcon: Icon(_selectedPosCustomer != null ? Icons.person_pin : Icons.person_outline, size: 18, color: (_selectedPosCustomer ?? _selectedCustomer) != null ? AppTheme.primary : AppTheme.textSecondary),
+                  suffixIcon: (_selectedPosCustomer ?? _selectedCustomer) != null ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); })) : null,
                   isDense: true, contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.border)),
                 ),
                 onChanged: (q) {
-                  setState(() { _showCustomerDropdown = q.isNotEmpty; _filteredCustomers = q.isEmpty ? [] : _customers.where((c) => (c['shop_name'] as String? ?? '').toLowerCase().contains(q.toLowerCase())).take(6).toList(); });
+                  final ql = q.toLowerCase();
+                  final erpMatches = q.isEmpty ? <Map<String, dynamic>>[] : _customers.where((c) => (c['shop_name'] as String? ?? '').toLowerCase().contains(ql)).take(4).map((c) => {...c, '_type': 'erp'}).toList();
+                  final posMatches = q.isEmpty ? <Map<String, dynamic>>[] : _posCustomers.where((c) => (c['name'] as String? ?? '').toLowerCase().contains(ql) || (c['phone'] as String? ?? '').contains(ql)).take(4).map((c) => {...c, '_type': 'pos'}).toList();
+                  setState(() { _showCustomerDropdown = q.isNotEmpty; _filteredCustomers = [...posMatches, ...erpMatches]; });
                 },
               ),
-              if (_showCustomerDropdown && _filteredCustomers.isNotEmpty)
+              if (_showCustomerDropdown)
                 Container(margin: const EdgeInsets.only(top: 2), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)]),
-                  child: Column(children: _filteredCustomers.map((c) => ListTile(dense: true, title: Text(c['shop_name'] as String? ?? '-', style: const TextStyle(fontSize: 13)), onTap: () => setState(() { _selectedCustomer = c; _customerSearchCtrl.clear(); _showCustomerDropdown = false; }))).toList())),
+                  child: Column(children: [
+                    ListTile(dense: true, leading: const Icon(Icons.add_circle, color: AppTheme.primary, size: 20), title: const Text('Quick-add new customer', style: TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w600)), onTap: () { setState(() => _showCustomerDropdown = false); _showQuickAddCustomer(); }),
+                    if (_filteredCustomers.isNotEmpty) const Divider(height: 1),
+                    ..._filteredCustomers.map((cx) {
+                      final isPos = cx['_type'] == 'pos';
+                      final name = isPos ? cx['name'] as String? ?? '-' : cx['shop_name'] as String? ?? '-';
+                      final sub = isPos ? cx['phone'] as String? : cx['code'] as String?;
+                      return ListTile(dense: true,
+                        leading: Icon(isPos ? Icons.person_pin : Icons.business, size: 18, color: isPos ? Colors.purple : AppTheme.textSecondary),
+                        title: Text(name, style: const TextStyle(fontSize: 13)),
+                        subtitle: sub != null && sub.isNotEmpty ? Text(sub, style: const TextStyle(fontSize: 11)) : null,
+                        trailing: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: isPos ? Colors.purple.withOpacity(0.1) : AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text(isPos ? 'POS' : 'ERP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: isPos ? Colors.purple : AppTheme.primary))),
+                        onTap: () => setState(() {
+                          if (isPos) { _selectedPosCustomer = cx; _selectedCustomer = null; } else { _selectedCustomer = cx; _selectedPosCustomer = null; }
+                          _customerSearchCtrl.clear(); _showCustomerDropdown = false;
+                        }));
+                    }),
+                  ])),
             ])),
             // Cart items
             Expanded(child: _cart.isEmpty
@@ -1035,12 +1107,14 @@ class _ProductCard extends StatelessWidget {
   const _ProductCard({required this.product, required this.inCart, required this.isOpen, this.onTap});
   @override Widget build(BuildContext context) {
     final price = (product['price'] as num?)?.toDouble() ?? 0;
-    return GestureDetector(onTap: onTap, child: AnimatedContainer(
+    final stockQty = (product['stock_qty'] as num?)?.toDouble() ?? 0;
+    final blocked = isOpen && stockQty <= 0;
+    return GestureDetector(onTap: blocked ? null : onTap, child: AnimatedContainer(
       duration: const Duration(milliseconds: 150),
       decoration: BoxDecoration(
-        color: inCart ? AppTheme.primary.withOpacity(0.06) : Colors.white,
+        color: blocked ? const Color(0xFFF5F5F5) : (inCart ? AppTheme.primary.withOpacity(0.06) : Colors.white),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: inCart ? AppTheme.primary.withOpacity(0.4) : AppTheme.border, width: inCart ? 1.5 : 1),
+        border: Border.all(color: blocked ? Colors.grey.withOpacity(0.3) : (inCart ? AppTheme.primary.withOpacity(0.4) : AppTheme.border), width: inCart ? 1.5 : 1),
         boxShadow: isOpen && !inCart ? [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 4, offset: const Offset(0, 2))] : null,
       ),
       padding: const EdgeInsets.all(10),
@@ -1051,7 +1125,10 @@ class _ProductCard extends StatelessWidget {
         ]),
         if (product['sku'] != null) Text(product['sku'] as String, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
         const Spacer(),
-        Text('Rs. ${price.toStringAsFixed(2)}', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: inCart ? AppTheme.primary : AppTheme.textPrimary)),
+        Row(children: [
+          Expanded(child: Text('Rs. ${price.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: inCart ? AppTheme.primary : AppTheme.textPrimary))),
+          _StockBadge(stockQty: (product['stock_qty'] as num?)?.toDouble() ?? 0),
+        ]),
         if (!isOpen) const Text('Session closed', style: TextStyle(fontSize: 9, color: AppTheme.textSecondary)),
       ]),
     ));
@@ -1119,4 +1196,14 @@ class _SessionStat extends StatelessWidget {
       const SizedBox(height: 2),
       Text(value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: color ?? AppTheme.textPrimary)),
     ]));
+}
+
+class _StockBadge extends StatelessWidget {
+  final double stockQty;
+  const _StockBadge({required this.stockQty});
+  @override Widget build(BuildContext context) {
+    if (stockQty > 10) return const SizedBox.shrink();
+    if (stockQty <= 0) return Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2), decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: const Text('OUT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppTheme.danger)));
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text('${stockQty.toStringAsFixed(0)} left', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.orange)));
+  }
 }

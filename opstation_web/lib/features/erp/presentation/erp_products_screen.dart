@@ -16,6 +16,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   List<Map<String, dynamic>> _uoms = [];
   bool _loading = true;
+  List<Map<String, dynamic>> _branches = [];
   final _searchCtrl = TextEditingController();
 
   @override
@@ -51,12 +52,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           .select()
           .eq('org_id', orgId)
           .order('name');
+      final branches = await client.from('branches').select('id, name').eq('org_id', orgId!).eq('is_active', true).order('name');
       final Map<String, List<Map<String, dynamic>>> grouped = {};
       for (final t in taxonomies as List) {
         final type = t['taxonomy_type'] as String;
         grouped.putIfAbsent(type, () => []).add(Map<String, dynamic>.from(t));
       }
       setState(() {
+        _branches = List<Map<String, dynamic>>.from(branches);
         _products = List<Map<String, dynamic>>.from(products);
         _filtered = _products;
         _taxonomies = grouped;
@@ -98,6 +101,28 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     } catch (e) {
       _showSnack('Failed: $e');
     }
+  }
+
+  Future<void> _pushToPOS(BuildContext context, Map<String, dynamic> product) async {
+    if (_branches.isEmpty) { _showSnack('No branches found'); return; }
+    final picked = await showDialog<Map<String, dynamic>?>(context: context, builder: (_) => _BranchPickerDialog(branches: _branches, productName: product['name'] as String? ?? '-'));
+    if (picked == null) return;
+    final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
+    try {
+      final catalogId = 'posc_${DateTime.now().millisecondsSinceEpoch}';
+      await Supabase.instance.client.from('pos_catalog').upsert({
+        'id': catalogId,
+        'org_id': orgId,
+        'branch_id': picked['id'],
+        'product_id': product['id'],
+        'name': product['name'],
+        'sku': product['sku'],
+        'price': (product['selling_price'] as num?)?.toDouble() ?? 0,
+        'uom_id': product['base_uom_id'],
+        'is_active': true,
+      }, onConflict: 'org_id,branch_id,product_id');
+      _showSnack('"${product['name']}" pushed to POS catalog for ${picked['name']}');
+    } catch (e) { _showSnack('Failed: $e'); }
   }
 
   void _showDialog(BuildContext context, Map<String, dynamic>? product) {
@@ -406,8 +431,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                         p['selling_price']?.toString() ?? '0',
                                         style: const TextStyle(fontSize: 13))),
                                 SizedBox(
-                                  width: 80,
+                                  width: 120,
                                   child: Row(children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.point_of_sale,
+                                          size: 18, color: Colors.purple),
+                                      tooltip: 'Push to POS Catalog',
+                                      onPressed: () => _pushToPOS(context, p),
+                                    ),
                                     IconButton(
                                       icon: const Icon(Icons.edit_outlined,
                                           size: 18),
@@ -445,4 +476,19 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       ),
     );
   }
+}
+
+class _BranchPickerDialog extends StatelessWidget {
+  final List<Map<String, dynamic>> branches;
+  final String productName;
+  const _BranchPickerDialog({required this.branches, required this.productName});
+  @override Widget build(BuildContext context) => AlertDialog(
+    title: Text('Push "$productName" to POS'),
+    content: SizedBox(width: 360, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Select which branch POS catalog to add this product to:', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+      const SizedBox(height: 12),
+      ...branches.map((b) => ListTile(dense: true, leading: const Icon(Icons.storefront_outlined, size: 18, color: Colors.purple), title: Text(b['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600)), onTap: () => Navigator.pop(context, b))),
+    ])),
+    actions: [TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel'))],
+  );
 }
