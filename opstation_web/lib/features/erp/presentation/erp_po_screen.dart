@@ -157,7 +157,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final userId = ref.read(currentUserProvider)?.id;
     try {
       await Supabase.instance.client.from('purchase_orders').update({
-        'status': 'confirmed', 'is_locked': true,
+        'is_locked': true,
         'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
