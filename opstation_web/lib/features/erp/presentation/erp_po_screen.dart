@@ -27,6 +27,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
+  String _filter = 'all';
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl = TextEditingController(text: '1');
@@ -70,7 +71,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_orders')
-          .select('id,voucher_number,voucher_date,status,supplier_id,suppliers(name),branches(name)')
+          .select('id,voucher_number,voucher_date,status,is_locked,supplier_id,suppliers(name),branches(name)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -95,7 +96,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         'org_id': _orgId, 'voucher_id': id, 'voucher_type': 'PO',
         'action': action, 'details': details, 'user_id': ref.read(currentUserProvider)?.id,
       });
-    } catch (_) {}
+    } catch (e) { print('[Audit PO] $e'); }
   }
 
   Future<void> _createNew() async {
@@ -209,7 +210,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
 
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) => VoucherLine(
+    final lines = _isDraft ? <VoucherLine>[] : _items.map((it) => VoucherLine(
       product: it['products']?['name'] as String? ?? '-',
       sku: it['products']?['sku'] as String?,
       uom: it['uoms']?['abbreviation'] as String?,
@@ -228,7 +229,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
       lines: lines,
       preparedBy: _meta.preparedBy,
-      footerNote: _meta.footerNote,
+      footerNote: _meta.purchaseFooterNote ?? _meta.footerNote,
     );
   }
 
@@ -246,7 +247,16 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
 
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
-    final filtered = _pos.where((r) => q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q)).toList();
+    final filtered = _pos.where((r) {
+      final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q);
+      final status = r['status'] as String? ?? 'ordered';
+      final locked = r['is_locked'] as bool? ?? false;
+      final matchFilter = _filter == 'all'
+          || (_filter == 'open' && !locked && status != 'received' && status != 'invoiced')
+          || (_filter == 'received' && (status == 'received' || status == 'partially_received'))
+          || (_filter == 'invoiced' && status == 'invoiced');
+      return matchSearch && matchFilter;
+    }).toList();
     return Container(
       decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))),
       child: Column(children: [
@@ -258,6 +268,16 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           decoration: const InputDecoration(hintText: 'Search PO / supplier…', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
           onChanged: (v) => setState(() => _search = v),
         )),
+        const SizedBox(height: 8),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
+            _PoFilterTab(label: 'All',      value: 'all',      current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 5),
+            _PoFilterTab(label: 'Open',     value: 'open',     current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 5),
+            _PoFilterTab(label: 'Received', value: 'received', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 5),
+            _PoFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          ])),
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
             : filtered.isEmpty ? const Center(child: Text('No POs yet.', style: TextStyle(color: AppTheme.textSecondary)))
@@ -519,5 +539,20 @@ class _PoAuditTrail extends StatelessWidget {
             }),
           ]));
       });
+  }
+}
+
+class _PoFilterTab extends StatelessWidget {
+  final String label, value, current;
+  final ValueChanged<String> onTap;
+  const _PoFilterTab({required this.label, required this.value, required this.current, required this.onTap});
+  @override Widget build(BuildContext context) {
+    final active = value == current;
+    return GestureDetector(onTap: () => onTap(value), child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background,
+        borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)),
+      child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+          color: active ? Colors.white : AppTheme.textSecondary))));
   }
 }

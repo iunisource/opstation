@@ -90,7 +90,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         'org_id': _orgId, 'voucher_id': id, 'voucher_type': 'GRN',
         'action': action, 'details': details, 'user_id': ref.read(currentUserProvider)?.id,
       });
-    } catch (_) {}
+    } catch (e) { print('[Audit GRN] $e'); }
   }
 
   Future<void> _createNew() async {
@@ -134,12 +134,15 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       });
       for (final item in poItems) {
         final pid = item['id'] as String;
-        final ordered = (item['quantity_ordered'] as num?)?.toDouble() ?? 0;
+        final ordered  = (item['quantity_ordered'] as num?)?.toDouble() ?? 0;
+        final alreadyReceived = (item['quantity_received'] as num?)?.toDouble() ?? 0;
+        final remaining = ordered - alreadyReceived;
+        if (remaining <= 0) continue;  // already fully received — skip
         await Supabase.instance.client.from('purchase_grn_items').insert({
           'id': 'grni_${DateTime.now().microsecondsSinceEpoch}_${(item['product_id'] as String).substring(0, 4)}',
           'grn_id': grnId, 'po_item_id': pid,
           'product_id': item['product_id'], 'uom_id': item['uom_id'],
-          'qty_ordered': ordered, 'qty_received': ordered,  // default = full ordered qty
+          'qty_ordered': ordered, 'qty_received': remaining,  // default = remaining qty
         });
       }
       await _logAudit(grnId, 'created', 'GRN $vNum from PO ${po['voucher_number']}');
@@ -324,12 +327,12 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       customerAddress: sup?['address'] as String?,
       customerContact: sup?['contact_person'] as String?,
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
-      lines: _items.map((it) => VoucherLine(
+      lines: _isDraft ? [] : _items.map((it) => VoucherLine(
         product: it['products']?['name'] as String? ?? '-',
         sku: it['products']?['sku'] as String?, uom: it['uoms']?['abbreviation'] as String?,
         qty: (it['qty_received'] as num?)?.toDouble() ?? 0,
       )).toList(),
-      preparedBy: _meta.preparedBy, footerNote: _meta.footerNote,
+      preparedBy: _meta.preparedBy, footerNote: _meta.purchaseFooterNote ?? _meta.footerNote,
       relatedRefs: _detail['purchase_orders']?['voucher_number'] != null ? {'PO #': _detail['purchase_orders']['voucher_number'] as String} : null,
     );
   }

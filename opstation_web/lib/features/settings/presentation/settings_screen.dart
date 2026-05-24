@@ -19,6 +19,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _categoryCtrl = TextEditingController();
   final _groupCtrl = TextEditingController();
   final _voucherFooterCtrl = TextEditingController();
+  final _purchaseFooterCtrl = TextEditingController();
   List<String> _categories = [];
   List<String> _groups = [];
 
@@ -54,6 +55,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _categoryCtrl.dispose();
     _groupCtrl.dispose();
     _voucherFooterCtrl.dispose();
+    _purchaseFooterCtrl.dispose();
     _smsUrlCtrl.dispose();
     _smsHeadersCtrl.dispose();
     _smsBodyCtrl.dispose();
@@ -98,6 +100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _smsMethod = cfg['org.sms_api_method'] ?? 'GET';
         _smsEnabled = cfg['org.sms_enabled'] == 'true';
         _voucherFooterCtrl.text = cfg['org.voucher_footer_note'] ?? '';
+        _purchaseFooterCtrl.text = cfg['org.purchase_footer_note'] ?? '';
         _loading = false;
       });
     } catch (_) {
@@ -217,6 +220,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             const SizedBox(height: 24),
           ],
+          _Section(
+            title: 'Purchase Voucher Footer Note',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text(
+                'Appears at the bottom of PO, GRN, and PI PDFs. Leave blank to use the Sales footer note.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _purchaseFooterCtrl,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  hintText: 'e.g. Payment terms: Net 30 days. Subject to Lahore jurisdiction.',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton(
+                  onPressed: () => _save('org.purchase_footer_note', _purchaseFooterCtrl.text.trim()),
+                  child: const Text('Save'),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 24),
           _Section(
               title: 'Categories',
               child: Column(

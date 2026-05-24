@@ -9,9 +9,10 @@ class VoucherMeta {
   final String? salespersonName;
   final String? preparedBy;
   final String? footerNote;
+  final String? purchaseFooterNote;
   final String? diagnostic;
 
-  VoucherMeta({this.salespersonName, this.preparedBy, this.footerNote, this.diagnostic});
+  VoucherMeta({this.salespersonName, this.preparedBy, this.footerNote, this.purchaseFooterNote, this.diagnostic});
 
   // Plain print() rather than developer.log so messages show in browser console
   // even in release builds.
@@ -31,12 +32,14 @@ class VoucherMeta {
     final results = await Future.wait<dynamic>([
       _userNameFor(client, createdById),
       _footerNoteFor(client, orgId),
+      _purchaseFooterNoteFor(client, orgId),
     ]);
     final m = VoucherMeta(
       salespersonName: spResult.name,
       diagnostic: spResult.diagnostic,
       preparedBy: results[0] as String?,
       footerNote: results[1] as String?,
+      purchaseFooterNote: results[2] as String?,
     );
     _log('result sp=${m.salespersonName} diag=${m.diagnostic} prep=${m.preparedBy} hasFooter=${m.footerNote != null}');
     return m;
@@ -105,6 +108,14 @@ class VoucherMeta {
       _log('preparedBy error $e');
       return null;
     }
+  }
+
+  static Future<String?> _purchaseFooterNoteFor(SupabaseClient c, String orgId) async {
+    try {
+      final row = await c.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', 'org.purchase_footer_note').maybeSingle();
+      return row?['value'] as String?;
+    } catch (_) { return null; }
   }
 
   static Future<String?> _footerNoteFor(SupabaseClient c, String orgId) async {

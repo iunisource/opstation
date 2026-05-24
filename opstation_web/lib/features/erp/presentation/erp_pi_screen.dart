@@ -183,8 +183,12 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
 
   Future<void> _saveInvoice() async {
     if (_items.isEmpty) { _showSnack('No items'); return; }
-    // Save all pending edits
     for (final it in _items) await _saveItemCost(it['id'] as String);
+    // Validate costs > 0
+    for (final it in _items) {
+      final cost = (it['unit_cost'] as num?)?.toDouble() ?? 0;
+      if (cost <= 0) { _showSnack('Unit cost for "${it['products']?['name'] ?? 'item'}" must be > 0'); return; }
+    }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Save & Lock Invoice?'),
       content: const Text('The GRN will be marked as invoiced and this invoice will be locked. Only admins can unlock.'),
@@ -262,11 +266,11 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       customerAddress: sup?['address'] as String?,
       customerContact: sup?['contact_person'] as String?,
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
-      lines: _items.map((it) { final qty = (it['qty_received'] as num?)?.toDouble() ?? 0; final cost = (it['unit_cost'] as num?)?.toDouble() ?? 0; final disc = (it['discount'] as num?)?.toDouble() ?? 0; final lt = (it['line_total'] as num?)?.toDouble() ?? qty * cost * (1 - disc / 100); return VoucherLine(product: it['products']?['name'] as String? ?? '-', sku: it['products']?['sku'] as String?, uom: it['uoms']?['abbreviation'] as String?, qty: qty, unitPrice: cost, discountPct: disc, lineTotal: lt); }).toList(),
+      lines: _isDraft ? [] : _items.map((it) { final qty = (it['qty_received'] as num?)?.toDouble() ?? 0; final cost = (it['unit_cost'] as num?)?.toDouble() ?? 0; final disc = (it['discount'] as num?)?.toDouble() ?? 0; final lt = (it['line_total'] as num?)?.toDouble() ?? qty * cost * (1 - disc / 100); return VoucherLine(product: it['products']?['name'] as String? ?? '-', sku: it['products']?['sku'] as String?, uom: it['uoms']?['abbreviation'] as String?, qty: qty, unitPrice: cost, discountPct: disc, lineTotal: lt); }).toList(),
       subtotal: (_detail['subtotal'] as num?)?.toDouble() ?? 0,
       discountTotal: (_detail['discount_total'] as num?)?.toDouble() ?? 0,
       grandTotal: (_detail['grand_total'] as num?)?.toDouble() ?? 0,
-      preparedBy: _meta.preparedBy, footerNote: _meta.footerNote,
+      preparedBy: _meta.preparedBy, footerNote: _meta.purchaseFooterNote ?? _meta.footerNote,
       relatedRefs: refs.isNotEmpty ? refs : null,
     );
   }
