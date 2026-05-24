@@ -4,10 +4,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 
+/// Sales Return Notes (SRN) — open-ended return documents.
+///
+/// Acts like an SO for returns: pick a customer (or walk-in), then add ANY
+/// products at ANY qty/price/discount. No stock movement at this stage —
+/// that happens on the future "Sales Return Invoice" which consumes an SRN.
 class ErpSalesReturnsScreen extends ConsumerStatefulWidget {
   const ErpSalesReturnsScreen({super.key});
   @override
@@ -16,16 +22,36 @@ class ErpSalesReturnsScreen extends ConsumerStatefulWidget {
 
 class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   List<Map<String, dynamic>> _returns = [];
+  List<Map<String, dynamic>> _products = [];
+  List<Map<String, dynamic>> _uoms = [];
+  List<Map<String, dynamic>> _customers = [];
+
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
   VoucherMeta _meta = VoucherMeta();
+
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
 
+  // inline add row state
+  String? _addProductId;
+  String? _addUomId;
+  final _addQtyCtrl  = TextEditingController(text: '1');
+  final _addPriceCtrl = TextEditingController(text: '0');
+  final _addDiscCtrl = TextEditingController(text: '0');
+
   @override
-  void initState() { super.initState(); _loadList(); }
+  void initState() { super.initState(); _loadList(); _loadLookups(); }
+
+  @override
+  void dispose() {
+    _addQtyCtrl.dispose();
+    _addPriceCtrl.dispose();
+    _addDiscCtrl.dispose();
+    super.dispose();
+  }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -34,23 +60,64 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
   }
 
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _loadLookups() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final client = Supabase.instance.client;
+      final p = await client.from('products')
+          .select('id, name, sku, base_uom_id, selling_price')
+          .eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
+      final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
+      // Paginated customer fetch
+      final List<Map<String, dynamic>> c = [];
+      const pageSize = 1000;
+      var offset = 0;
+      while (true) {
+        final page = await client.from('customers').select('id, shop_name, code')
+            .eq('org_id', orgId).eq('is_active', true).order('shop_name')
+            .range(offset, offset + pageSize - 1);
+        c.addAll(List<Map<String, dynamic>>.from(page));
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
+      setState(() {
+        _products = List<Map<String, dynamic>>.from(p);
+        _uoms = List<Map<String, dynamic>>.from(u);
+        _customers = c;
+      });
+    } catch (e) {
+      // ignore: avoid_print
+      print('[SRN] loadLookups error: $e');
+    }
+  }
+
   Future<void> _loadList() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null) return;
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('sales_returns')
-          .select('id, voucher_number, voucher_date, grand_total, status, customers(shop_name), sales_invoices(voucher_number)')
+          .select('id, voucher_number, voucher_date, grand_total, status, customer_id, customers(shop_name, code)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
-      final returns = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false);
+      final returns = await q
+          .order('voucher_date', ascending: false)
+          .order('voucher_number', ascending: false)
+          .limit(2000);
       setState(() {
         _returns = List<Map<String, dynamic>>.from(returns);
         _listLoading = false;
       });
     } catch (e) {
       // ignore: avoid_print
-      print('[SalesReturns] load list error: $e');
+      print('[SRN] loadList error: $e');
+      _showSnack('Failed to load list: $e');
       setState(() => _listLoading = false);
     }
   }
@@ -60,7 +127,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     try {
       final client = Supabase.instance.client;
       final ret = await client.from('sales_returns')
-          .select('*, customers(shop_name, code, address, contact_person, phone), sales_invoices(voucher_number), branches(name)')
+          .select('*, customers(shop_name, code, address, contact_person, phone), branches(name)')
           .eq('id', id).single();
       final items = await client.from('sales_return_items')
           .select('*, products(name, sku), uoms(abbreviation)')
@@ -78,131 +145,62 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       });
     } catch (e) {
       // ignore: avoid_print
-      print('[SalesReturns] load detail error: $e');
+      print('[SRN] loadDetail error: $e');
+      _showSnack('Failed to load detail: $e');
       setState(() => _detailLoading = false);
     }
   }
 
-  Future<void> _showSnack(String msg) async {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  Future<void> _logAudit(String id, String action, String? details) async {
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': id, 'voucher_type': 'SRN',
+        'action': action, 'details': details,
+        'user_id': ref.read(currentUserProvider)?.id,
+      });
+    } catch (_) {}
   }
 
-  // ── Create new return ─────────────────────────────────────────────────────
+  bool get _isLocked => _detail['is_locked'] as bool? ?? false;
+  bool get _canEdit => !_isLocked;
+
+  // ── Create new SRN (open-ended) ────────────────────────────────────────────
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
 
-    // Pick a source SI from the same branch.
-    final invs = await Supabase.instance.client.from('sales_invoices')
-        .select('id, voucher_number, voucher_date, grand_total, customer_id, customers(shop_name)')
-        .eq('org_id', orgId).eq('branch_id', branchId)
-        .order('voucher_date', ascending: false).limit(500);
-    if (!mounted) return;
-    final List<Map<String, dynamic>> invList = List<Map<String, dynamic>>.from(invs);
-    if (invList.isEmpty) { _showSnack('No sales invoices to return against'); return; }
-
-    final si = await showDialog<Map<String, dynamic>>(
+    // Pick customer (or walk-in)
+    final picked = await showDialog<Map<String, dynamic>?>(
       context: context,
-      builder: (ctx) => _SiPicker(invoices: invList),
+      builder: (_) => _CustomerSelectDialog(customers: _customers),
     );
-    if (si == null) return;
+    if (picked == null) return;  // cancelled
 
     setState(() => _detailLoading = true);
     try {
-      final siItems = await Supabase.instance.client.from('sales_invoice_items')
-          .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', si['id']);
-      if (!mounted) return;
-      setState(() => _detailLoading = false);
-
-      // Show items selector for return quantities
-      final returnLines = await showDialog<List<Map<String, dynamic>>>(
-        context: context,
-        builder: (_) => _ReturnItemsDialog(sourceItems: List<Map<String, dynamic>>.from(siItems), title: 'Items to Return'),
-      );
-      if (returnLines == null || returnLines.isEmpty) return;
-
-      // Generate voucher number
       final year = DateTime.now().year;
       final nextNum = await Supabase.instance.client.rpc('next_voucher_number',
-          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SRV', 'p_year': year});
-      final voucherNum = 'SRV-$year-${nextNum.toString().padLeft(4, '0')}';
-
-      // Totals
-      double subtotal = 0, discountTotal = 0;
-      for (final l in returnLines) {
-        final q = (l['quantity'] as num).toDouble();
-        final p = (l['unit_price'] as num).toDouble();
-        final d = (l['discount'] as num).toDouble();
-        subtotal += q * p;
-        discountTotal += q * p * (d / 100);
-      }
-      final grand = subtotal - discountTotal;
-
+          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SRN', 'p_year': year});
+      final voucherNum = 'SRN-$year-${nextNum.toString().padLeft(4, '0')}';
       final retId = 'sr_${DateTime.now().millisecondsSinceEpoch}';
       final userId = ref.read(currentUserProvider)?.id;
+
       await Supabase.instance.client.from('sales_returns').insert({
         'id': retId,
         'org_id': orgId,
         'branch_id': branchId,
         'voucher_number': voucherNum,
         'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-        'si_id': si['id'],
-        'customer_id': si['customer_id'],
-        'subtotal': subtotal,
-        'discount_total': discountTotal,
-        'grand_total': grand,
-        'status': 'returned',
+        'customer_id': picked['id'],   // null for walk-in
+        'subtotal': 0, 'discount_total': 0, 'grand_total': 0,
+        'status': 'draft',
+        'is_locked': false,
         'created_by': userId,
       });
+      await _logAudit(retId, 'created', 'Voucher $voucherNum created');
 
-      // Items + stock movements (positive = returned to stock)
-      for (final l in returnLines) {
-        final qty = (l['quantity'] as num).toDouble();
-        final pid = l['product_id'] as String;
-        final uomId = l['uom_id'] as String?;
-        final price = (l['unit_price'] as num).toDouble();
-        final discPct = (l['discount'] as num).toDouble();
-        final lineTotal = (qty * price) * (1 - discPct / 100);
-
-        await Supabase.instance.client.from('sales_return_items').insert({
-          'id': 'sri_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'return_id': retId,
-          'si_item_id': l['si_item_id'],
-          'product_id': pid,
-          'uom_id': uomId,
-          'quantity': qty,
-          'unit_price': price,
-          'discount': discPct,
-          'line_total': lineTotal,
-        });
-
-        // Stock: add qty back to inventory_stock for this branch
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock != null) {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((stock['quantity'] as num).toDouble()) + qty,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
-        } else {
-          await Supabase.instance.client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().millisecondsSinceEpoch}_${pid.substring(0, 4)}',
-            'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-            'quantity': qty,
-          });
-        }
-
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': uomId,
-          'quantity': qty, 'movement_type': 'adjustment',
-          'reference_id': retId, 'reference_type': 'sales_return',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-      }
-
-      _showSnack('$voucherNum created');
+      _showSnack('$voucherNum created — add items below');
       await _loadList();
       _loadDetail(retId);
     } catch (e) {
@@ -211,11 +209,105 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     }
   }
 
+  // ── Inline item add ────────────────────────────────────────────────────────
+  Future<void> _addItem() async {
+    if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
+    final qty   = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
+    final price = double.tryParse(_addPriceCtrl.text.trim()) ?? 0;
+    final disc  = (double.tryParse(_addDiscCtrl.text.trim()) ?? 0).clamp(0.0, 100.0);
+    if (qty <= 0) { _showSnack('Qty must be > 0'); return; }
+
+    final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
+    final uom  = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
+    final lineTotal = (qty * price) * (1 - disc / 100);
+    final itemId = 'sri_${DateTime.now().microsecondsSinceEpoch}';
+
+    try {
+      await Supabase.instance.client.from('sales_return_items').insert({
+        'id': itemId,
+        'return_id': _detail['id'],
+        'product_id': _addProductId,
+        'uom_id': _addUomId,
+        'quantity': qty,
+        'unit_price': price,
+        'discount': disc,
+        'line_total': lineTotal,
+      });
+      // Optimistic append
+      setState(() {
+        _items.add({
+          'id': itemId,
+          'return_id': _detail['id'],
+          'product_id': _addProductId,
+          'uom_id': _addUomId,
+          'quantity': qty,
+          'unit_price': price,
+          'discount': disc,
+          'line_total': lineTotal,
+          'products': {'name': prod['name'], 'sku': prod['sku']},
+          'uoms': {'abbreviation': uom['abbreviation']},
+        });
+        _addProductId = null; _addUomId = null;
+        _addQtyCtrl.text = '1'; _addPriceCtrl.text = '0'; _addDiscCtrl.text = '0';
+      });
+      await _recalcTotals();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _deleteItem(String itemId) async {
+    try {
+      await Supabase.instance.client.from('sales_return_items').delete().eq('id', itemId);
+      setState(() => _items.removeWhere((i) => i['id'] == itemId));
+      await _recalcTotals();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _recalcTotals() async {
+    double subtotal = 0, discount = 0;
+    for (final it in _items) {
+      final qty   = (it['quantity'] as num?)?.toDouble() ?? 0;
+      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+      final disc  = (it['discount'] as num?)?.toDouble() ?? 0;
+      subtotal += qty * price;
+      discount += qty * price * (disc / 100);
+    }
+    final grand = subtotal - discount;
+    try {
+      await Supabase.instance.client.from('sales_returns').update({
+        'subtotal': subtotal, 'discount_total': discount, 'grand_total': grand,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      setState(() {
+        _detail['subtotal'] = subtotal;
+        _detail['discount_total'] = discount;
+        _detail['grand_total'] = grand;
+      });
+      // Refresh the list-side total quickly without a full reload
+      final idx = _returns.indexWhere((r) => r['id'] == _detail['id']);
+      if (idx >= 0) setState(() => _returns[idx]['grand_total'] = grand);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleLock() async {
+    final newLocked = !_isLocked;
+    try {
+      await Supabase.instance.client.from('sales_returns').update({
+        'is_locked': newLocked,
+        'locked_by': newLocked ? ref.read(currentUserProvider)?.id : null,
+        'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
+      _showSnack(newLocked ? 'Locked' : 'Unlocked');
+      _loadDetail(_detail['id'] as String);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   Future<void> _delete() async {
     if (!_canDelete) return;
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Sales Return?'),
-      content: Text('Permanently delete ${_detail['voucher_number']}? Stock will be reversed.'),
+      title: const Text('Delete Sales Return Note?'),
+      content: Text('Permanently delete ${_detail['voucher_number']}? This cannot be undone.'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
@@ -223,38 +315,11 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       ],
     ));
     if (confirm != true) return;
-
-    final orgId = _orgId;
-    final branchId = _detail['branch_id'] as String;
-    final userId = ref.read(currentUserProvider)?.id;
-
     try {
-      // Reverse stock: remove what was returned
-      for (final item in _items) {
-        final pid = item['product_id'] as String;
-        final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
-        if (qty <= 0) continue;
-
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock != null) {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((stock['quantity'] as num).toDouble()) - qty,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
-        }
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': item['uom_id'],
-          'quantity': -qty, 'movement_type': 'adjustment',
-          'reference_id': _detail['id'], 'reference_type': 'sales_return_deleted',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-      }
-
+      final vNum = _detail['voucher_number'] as String? ?? '';
+      await _logAudit(_detail['id'] as String, 'deleted', 'Voucher $vNum deleted by admin');
       await Supabase.instance.client.from('sales_return_items').delete().eq('return_id', _detail['id']);
       await Supabase.instance.client.from('sales_returns').delete().eq('id', _detail['id']);
-
       _showSnack('Deleted');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       await _loadList();
@@ -264,10 +329,10 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
     final lines = _items.map((it) {
-      final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+      final qty   = (it['quantity'] as num?)?.toDouble() ?? 0;
       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-      final disc = (it['discount'] as num?)?.toDouble() ?? 0;
-      final lt = (it['line_total'] as num?)?.toDouble() ?? 0;
+      final disc  = (it['discount'] as num?)?.toDouble() ?? 0;
+      final lt    = (it['line_total'] as num?)?.toDouble() ?? qty * price * (1 - disc / 100);
       return VoucherLine(
         product: it['products']?['name'] as String? ?? '-',
         sku: it['products']?['sku'] as String?,
@@ -275,32 +340,29 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         qty: qty, unitPrice: price, discountPct: disc, lineTotal: lt,
       );
     }).toList();
-    final subtotal = (_detail['subtotal'] as num?)?.toDouble() ?? 0;
-    final discountTotal = (_detail['discount_total'] as num?)?.toDouble() ?? 0;
-    final grand = (_detail['grand_total'] as num?)?.toDouble() ?? 0;
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final createdAt = _detail['created_at'] != null
         ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     final cust = _detail['customers'] as Map?;
-    final siVoucher = _detail['sales_invoices']?['voucher_number'] as String?;
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
-      voucherTypeLabel: 'Sales Return',
+      voucherTypeLabel: 'Sales Return Note',
       orgName: user?.orgName ?? 'Opstation',
       branchName: _detail['branches']?['name'] as String?,
       date: date,
-      customerOrSupplier: cust?['shop_name'] as String?,
+      customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
       customerAddress: cust?['address'] as String?,
       customerContact: cust?['contact_person'] as String?,
       customerPhone: cust?['phone'] as String?,
       salespersonName: _meta.salespersonName,
       lines: lines,
-      subtotal: subtotal, discountTotal: discountTotal, grandTotal: grand,
+      subtotal: (_detail['subtotal'] as num?)?.toDouble() ?? 0,
+      discountTotal: (_detail['discount_total'] as num?)?.toDouble() ?? 0,
+      grandTotal: (_detail['grand_total'] as num?)?.toDouble() ?? 0,
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
       footerNote: _meta.footerNote,
-      relatedRefs: siVoucher != null ? {'Original SI #': siVoucher} : null,
     );
   }
 
@@ -309,12 +371,17 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     ref.listen(selectedBranchProvider, (_, __) {
       _selectedId = null; _detail = {}; _items = []; _loadList();
     });
-    return Container(color: AppTheme.background, child: Row(children: [
-      _buildList(),
-      Expanded(child: _selectedId == null
-          ? const Center(child: Text('Select a Sales Return', style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))
-          : _buildDetail()),
-    ]));
+    return Container(
+      color: AppTheme.background,
+      child: CollapsibleListPane(
+        paneWidth: 360,
+        listChild: _buildList(),
+        detailChild: _selectedId == null
+            ? const Center(child: Text('Select or create a Sales Return Note',
+                style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))
+            : _buildDetail(),
+      ),
+    );
   }
 
   Widget _buildList() {
@@ -322,20 +389,19 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     final filtered = _returns.where((r) {
       if (q.isEmpty) return true;
       return (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             ((r['customers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q) ||
-             ((r['sales_invoices']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+             ((r['customers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q);
     }).toList();
-    return SizedBox(width: 360, child: Container(
+    return Container(
       decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))),
       child: Column(children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
           child: Row(children: [
-            const Expanded(child: Text('Sales Returns', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700))),
+            const Expanded(child: Text('Sales Return Notes', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700))),
             IconButton(
               icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 32),
               onPressed: _createNew,
-              tooltip: 'New Return',
+              tooltip: 'New SRN',
             ),
           ]),
         ),
@@ -343,7 +409,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: TextField(
             decoration: const InputDecoration(
-              hintText: 'Search return / SI / customer…',
+              hintText: 'Search SRN / customer…',
               prefixIcon: Icon(Icons.search, size: 18),
               isDense: true,
             ),
@@ -355,7 +421,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           child: _listLoading
               ? const Center(child: CircularProgressIndicator())
               : filtered.isEmpty
-                  ? const Center(child: Text('No returns yet.', style: TextStyle(color: AppTheme.textSecondary)))
+                  ? const Center(child: Text('No SRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
                   : ListView.separated(
                       itemCount: filtered.length,
                       separatorBuilder: (_, __) => const Divider(height: 1),
@@ -368,10 +434,8 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                           selectedTileColor: AppTheme.primary.withOpacity(0.06),
                           title: Text(r['voucher_number'] as String? ?? '-',
                               style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null)),
-                          subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text('SI: ${r['sales_invoices']?['voucher_number'] ?? '-'}', style: const TextStyle(fontSize: 11)),
-                            Text(r['customers']?['shop_name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
-                          ]),
+                          subtitle: Text(r['customers']?['shop_name'] as String? ?? 'Walk-in',
+                              style: const TextStyle(fontSize: 11)),
                           trailing: Text(
                             ((r['grand_total'] as num?)?.toStringAsFixed(2)) ?? '0',
                             style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary),
@@ -382,22 +446,31 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                     ),
         ),
       ]),
-    ));
+    );
   }
 
   Widget _buildDetail() {
     if (_detailLoading) return const Center(child: CircularProgressIndicator());
-    final si = _detail['sales_invoices']?['voucher_number'] as String?;
     final cust = _detail['customers'] as Map?;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Header
       Container(
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
         decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
         child: Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const Text('Sales Return', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
+            Text(_detail['voucher_number'] as String? ?? '-',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            const Text('Sales Return Note',
+                style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
+          if (_canEdit)
+            IconButton(
+              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
+                  color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+              tooltip: _isLocked ? 'Unlock' : 'Lock',
+              onPressed: _toggleLock,
+            ),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print),
           if (_canDelete)
             IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), tooltip: 'Delete', onPressed: _delete),
@@ -407,21 +480,27 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (si != null)
-              Container(
-                padding: const EdgeInsets.all(12),
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-                child: Row(children: [
-                  const Icon(Icons.link, size: 16, color: AppTheme.textSecondary),
-                  const SizedBox(width: 6),
-                  const Text('Original SI:', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                  const SizedBox(width: 6),
-                  Text(si, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary)),
-                  const SizedBox(width: 16),
-                  Text(cust?['shop_name'] as String? ?? '-', style: const TextStyle(fontSize: 12)),
-                ]),
-              ),
+            // Customer chip + dates
+            Wrap(spacing: 12, runSpacing: 8, children: [
+              _Chip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
+              _Chip(label: 'Date', value: _detail['voucher_date'] != null
+                  ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
+              _Chip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
+              _Chip(label: 'Status', value: (_detail['status'] as String? ?? 'draft')),
+            ]),
+            if (cust != null) _SupplierStrip(
+              address: cust['address'] as String?,
+              contact: cust['contact_person'] as String?,
+              phone: cust['phone'] as String?,
+              preparedBy: _meta.preparedBy,
+              createdAt: _detail['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+                  : null,
+            ),
+
+            const SizedBox(height: 20),
+
+            // Items table
             Container(
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
               child: Column(children: [
@@ -435,26 +514,114 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                     Expanded(flex: 2, child: Text('Price', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('Disc%', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
                     Expanded(flex: 2, child: Text('Total', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+                    SizedBox(width: 44),
                   ]),
                 ),
                 const Divider(height: 1),
+
+                // Existing rows
+                if (_items.isEmpty)
+                  const Padding(padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Text('No items yet — add below.', style: TextStyle(color: AppTheme.textSecondary))),
                 ..._items.map((it) {
+                  final qty   = (it['quantity'] as num?)?.toDouble() ?? 0;
+                  final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+                  final disc  = (it['discount'] as num?)?.toDouble() ?? 0;
+                  final total = (it['line_total'] as num?)?.toDouble() ?? qty * price * (1 - disc / 100);
                   return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(children: [
                       Expanded(flex: 4, child: Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
                       Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 1, child: Text('${(it['quantity'] as num?)?.toStringAsFixed(0) ?? '0'}', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
-                      Expanded(flex: 2, child: Text((it['unit_price'] as num?)?.toStringAsFixed(2) ?? '0', textAlign: TextAlign.right)),
-                      Expanded(flex: 1, child: Text('${(it['discount'] as num?)?.toStringAsFixed(0) ?? '0'}%', textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text((it['line_total'] as num?)?.toStringAsFixed(2) ?? '0',
-                          textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                      Expanded(flex: 1, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
+                      Expanded(flex: 2, child: Text(price.toStringAsFixed(2), textAlign: TextAlign.right)),
+                      Expanded(flex: 1, child: Text('${disc.toStringAsFixed(disc % 1 == 0 ? 0 : 2)}%', textAlign: TextAlign.right)),
+                      Expanded(flex: 2, child: Text(total.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                      SizedBox(width: 44, child: _canEdit
+                          ? IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                              tooltip: 'Remove',
+                              onPressed: () => _deleteItem(it['id'] as String),
+                            )
+                          : null),
                     ]),
                   );
                 }),
+
+                // Inline add row
+                if (_canEdit) ...[
+                  const Divider(height: 1),
+                  Container(
+                    color: AppTheme.background,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(children: [
+                      Expanded(flex: 4, child: DropdownButtonFormField<String>(
+                        value: _addProductId,
+                        isDense: true,
+                        isExpanded: true,
+                        decoration: const InputDecoration(hintText: 'Pick product', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
+                        items: _products.map((p) => DropdownMenuItem<String>(
+                          value: p['id'] as String,
+                          child: Text('${p['name']}${p['sku'] != null ? " · ${p['sku']}" : ""}',
+                              overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                        )).toList(),
+                        onChanged: (v) => setState(() {
+                          _addProductId = v;
+                          final p = _products.firstWhere((x) => x['id'] == v, orElse: () => {});
+                          _addUomId = p['base_uom_id'] as String?;
+                          _addPriceCtrl.text = (p['selling_price'] as num?)?.toStringAsFixed(2) ?? '0';
+                        }),
+                      )),
+                      Expanded(flex: 1, child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: DropdownButtonFormField<String>(
+                          value: _addUomId,
+                          isDense: true,
+                          isExpanded: true,
+                          decoration: const InputDecoration(hintText: 'UOM', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 6)),
+                          items: _uoms.map((u) => DropdownMenuItem<String>(
+                            value: u['id'] as String,
+                            child: Text(u['abbreviation'] as String? ?? '', style: const TextStyle(fontSize: 12)),
+                          )).toList(),
+                          onChanged: (v) => setState(() => _addUomId = v),
+                        ),
+                      )),
+                      Expanded(flex: 1, child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextField(controller: _addQtyCtrl,
+                            decoration: const InputDecoration(hintText: 'Qty', isDense: true),
+                            textAlign: TextAlign.right,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                      )),
+                      Expanded(flex: 2, child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextField(controller: _addPriceCtrl,
+                            decoration: const InputDecoration(hintText: 'Price', isDense: true),
+                            textAlign: TextAlign.right,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                      )),
+                      Expanded(flex: 1, child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: TextField(controller: _addDiscCtrl,
+                            decoration: const InputDecoration(hintText: '%', isDense: true),
+                            textAlign: TextAlign.right,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                      )),
+                      const Expanded(flex: 2, child: SizedBox()),
+                      SizedBox(width: 44, child: IconButton(
+                        icon: const Icon(Icons.add_circle, color: AppTheme.primary),
+                        tooltip: 'Add item',
+                        onPressed: _addItem,
+                      )),
+                    ]),
+                  ),
+                ],
               ]),
             ),
-            const SizedBox(height: 12),
+
+            const SizedBox(height: 16),
+
+            // Totals
             Align(alignment: Alignment.centerRight, child: Container(
               padding: const EdgeInsets.all(12),
               width: 280,
@@ -483,145 +650,128 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   }
 }
 
-// ─── SI Picker (source invoice for return) ────────────────────────────────────
-class _SiPicker extends StatefulWidget {
-  final List<Map<String, dynamic>> invoices;
-  const _SiPicker({required this.invoices});
+// ─── Customer Select Dialog ───────────────────────────────────────────────────
+class _CustomerSelectDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> customers;
+  const _CustomerSelectDialog({required this.customers});
   @override
-  State<_SiPicker> createState() => _SiPickerState();
+  State<_CustomerSelectDialog> createState() => _CustomerSelectDialogState();
 }
 
-class _SiPickerState extends State<_SiPicker> {
+class _CustomerSelectDialogState extends State<_CustomerSelectDialog> {
   String _q = '';
-  Map<String, dynamic>? _selected;
   @override
   Widget build(BuildContext context) {
     final q = _q.toLowerCase().trim();
-    final filtered = widget.invoices.where((inv) {
+    final filtered = widget.customers.where((c) {
       if (q.isEmpty) return true;
-      return (inv['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             (inv['customers']?['shop_name'] as String? ?? '').toLowerCase().contains(q);
+      return (c['shop_name'] as String? ?? '').toLowerCase().contains(q) ||
+             (c['code'] as String? ?? '').toLowerCase().contains(q);
     }).toList();
     return AlertDialog(
-      title: const Text('Pick Source Sales Invoice'),
-      content: SizedBox(width: 520, height: 460, child: Column(children: [
+      title: Text('Select Customer  ·  ${widget.customers.length} total'),
+      content: SizedBox(width: 480, height: 460, child: Column(children: [
         TextField(
-          decoration: const InputDecoration(hintText: 'Search SI / customer', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
+          decoration: const InputDecoration(hintText: 'Search name / code', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
           onChanged: (v) => setState(() => _q = v),
+          autofocus: true,
         ),
         const SizedBox(height: 12),
+        // Walk-in option pinned at top
+        Container(
+          decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.primary.withOpacity(0.3))),
+          child: ListTile(
+            dense: true,
+            leading: const Icon(Icons.person_outline, color: AppTheme.primary),
+            title: const Text('Walk-in', style: TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: const Text('No customer linked', style: TextStyle(fontSize: 11)),
+            onTap: () => Navigator.pop(context, {'id': null, 'shop_name': 'Walk-in'}),
+          ),
+        ),
+        const SizedBox(height: 6),
         Expanded(
           child: filtered.isEmpty
-              ? const Center(child: Text('No invoices.', style: TextStyle(color: AppTheme.textSecondary)))
+              ? const Center(child: Text('No customers match.', style: TextStyle(color: AppTheme.textSecondary)))
               : ListView.separated(
                   itemCount: filtered.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (_, i) {
-                    final inv = filtered[i];
-                    final selected = _selected == inv;
-                    return RadioListTile<Map<String, dynamic>>(
+                    final c = filtered[i];
+                    return ListTile(
                       dense: true,
-                      value: inv,
-                      groupValue: _selected,
-                      selected: selected,
-                      title: Text(inv['voucher_number'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        '${inv['customers']?['shop_name'] ?? '-'} · ${(inv['grand_total'] as num?)?.toStringAsFixed(2) ?? '0'} · ${inv['voucher_date']}',
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                      onChanged: (v) => setState(() => _selected = v),
+                      title: Text(c['shop_name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600)),
+                      subtitle: c['code'] != null ? Text(c['code'] as String, style: const TextStyle(fontSize: 11)) : null,
+                      onTap: () => Navigator.pop(context, c),
                     );
                   },
                 ),
         ),
       ])),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        ElevatedButton(onPressed: _selected == null ? null : () => Navigator.pop(context, _selected), child: const Text('Next')),
-      ],
+      actions: [TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel'))],
     );
   }
 }
 
-// ─── Items Dialog (enter return qty per source item) ──────────────────────────
-class _ReturnItemsDialog extends StatefulWidget {
-  final List<Map<String, dynamic>> sourceItems;
-  final String title;
-  const _ReturnItemsDialog({required this.sourceItems, required this.title});
-  @override
-  State<_ReturnItemsDialog> createState() => _ReturnItemsDialogState();
-}
-
-class _ReturnItemsDialogState extends State<_ReturnItemsDialog> {
-  late final Map<String, TextEditingController> _qtyCtrl;
-  @override
-  void initState() {
-    super.initState();
-    _qtyCtrl = {for (final it in widget.sourceItems) (it['id'] as String): TextEditingController(text: '0')};
-  }
-  @override
-  void dispose() {
-    for (final c in _qtyCtrl.values) c.dispose();
-    super.dispose();
-  }
+// ─── Supplier/Customer Info Strip ────────────────────────────────────────────
+class _SupplierStrip extends StatelessWidget {
+  final String? address;
+  final String? contact;
+  final String? phone;
+  final String? preparedBy;
+  final String? createdAt;
+  const _SupplierStrip({this.address, this.contact, this.phone, this.preparedBy, this.createdAt});
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: SizedBox(width: 640, height: 480, child: ListView.separated(
-        itemCount: widget.sourceItems.length,
-        separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (_, i) {
-          final it = widget.sourceItems[i];
-          final qty = (it['qty_delivered'] as num?)?.toDouble() ?? (it['quantity'] as num?)?.toDouble() ?? 0;
-          final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            child: Row(children: [
-              Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                Text('Invoiced: ${qty.toStringAsFixed(0)}  ·  @ ${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-              ])),
-              const SizedBox(width: 12),
-              SizedBox(width: 120, child: TextField(
-                controller: _qtyCtrl[it['id'] as String],
-                decoration: const InputDecoration(labelText: 'Return Qty', isDense: true),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              )),
-            ]),
-          );
-        },
-      )),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () {
-          final lines = <Map<String, dynamic>>[];
-          for (final it in widget.sourceItems) {
-            final txt = _qtyCtrl[it['id'] as String]?.text ?? '0';
-            final q = double.tryParse(txt) ?? 0;
-            if (q <= 0) continue;
-            final originalQty = (it['qty_delivered'] as num?)?.toDouble() ?? (it['quantity'] as num?)?.toDouble() ?? 0;
-            if (q > originalQty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('${it['products']?['name']}: cannot return more than $originalQty')));
-              return;
-            }
-            lines.add({
-              'si_item_id': it['id'],
-              'product_id': it['product_id'],
-              'uom_id': it['uom_id'],
-              'quantity': q,
-              'unit_price': it['unit_price'],
-              'discount': it['discount'] ?? 0,
-            });
-          }
-          if (lines.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a return qty for at least one line')));
-            return;
-          }
-          Navigator.pop(context, lines);
-        }, child: const Text('Create Return')),
-      ],
+    final tiles = <Widget>[];
+    if (address != null && address!.trim().isNotEmpty) tiles.add(_tile(Icons.location_on_outlined, 'Address', address!));
+    if (contact != null && contact!.isNotEmpty)        tiles.add(_tile(Icons.account_circle_outlined, 'Contact Person', contact!));
+    if (phone != null && phone!.isNotEmpty)            tiles.add(_tile(Icons.phone_outlined, 'Phone', phone!));
+    if (tiles.isEmpty && (preparedBy == null || preparedBy!.isEmpty)) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: AppTheme.background, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (tiles.isNotEmpty) Wrap(spacing: 24, runSpacing: 8, children: tiles),
+        if (preparedBy != null && preparedBy!.isNotEmpty) ...[
+          if (tiles.isNotEmpty) const SizedBox(height: 10),
+          Row(children: [
+            const Icon(Icons.draw_outlined, size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text('Prepared by: ${preparedBy!}${createdAt != null ? "  ·  $createdAt" : ""}',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
+          ]),
+        ],
+      ]),
+    );
+  }
+  Widget _tile(IconData icon, String label, String value) {
+    return ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320),
+      child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, size: 16, color: AppTheme.textSecondary),
+        const SizedBox(width: 6),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, letterSpacing: 0.5)),
+          Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+        ]),
+      ]),
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String label;
+  final String value;
+  const _Chip({required this.label, required this.value});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+      ]),
     );
   }
 }
