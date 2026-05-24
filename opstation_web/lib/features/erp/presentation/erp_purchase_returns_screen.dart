@@ -209,6 +209,10 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   // ── Inline item add ────────────────────────────────────────────────────────
   Future<void> _addItem() async {
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
+    if (_items.any((i) => i['product_id'] == _addProductId)) {
+      _showSnack('Already added — delete the existing row to change qty');
+      return;
+    }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _showSnack('Qty must be > 0'); return; }
 
@@ -854,7 +858,7 @@ class _AuditTrailWidget extends StatelessWidget {
     if (voucherId.isEmpty) return const SizedBox.shrink();
     return FutureBuilder<List<dynamic>>(
       future: Supabase.instance.client.from('voucher_audit_log')
-          .select('action, details, user_id, created_at, users(name)')
+          .select('action, details, user_id, created_at')
           .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
           .order('created_at', ascending: false).limit(20),
       builder: (ctx, snap) {
@@ -870,7 +874,8 @@ class _AuditTrailWidget extends StatelessWidget {
             ...entries.map((e) {
               final action  = e['action'] as String? ?? '-';
               final details = e['details'] as String? ?? '';
-              final by      = e['users']?['name'] as String? ?? '—';
+              final uid = e['user_id'] as String? ?? '';
+              final by = uid.length > 8 ? uid.substring(0, 8) : (uid.isEmpty ? '—' : uid);
               final ts      = e['created_at'] != null
                   ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
               Color color;
