@@ -163,7 +163,8 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   }
 
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
-  bool get _canEdit => !_isLocked;
+  bool get _isDraft  => (_detail['status'] as String? ?? 'draft') == 'draft';
+  bool get _canEdit  => !_isLocked;
 
   // ── Create new SRN (open-ended) ────────────────────────────────────────────
   Future<void> _createNew() async {
@@ -300,6 +301,20 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _showSnack(newLocked ? 'Locked' : 'Unlocked');
       _loadDetail(_detail['id'] as String);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _saveNote() async {
+    if (_items.isEmpty) { _showSnack('Add at least one item before saving'); return; }
+    try {
+      await Supabase.instance.client.from('sales_returns').update({
+        'status': 'saved',
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'saved', null);
+      _showSnack('Saved');
+      _loadDetail(_detail['id'] as String);
+      _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -464,13 +479,20 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
             const Text('Sales Return Note',
                 style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
-          if (_canEdit)
-            IconButton(
-              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
-                  color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-              tooltip: _isLocked ? 'Unlock' : 'Lock',
-              onPressed: _toggleLock,
+          if (_isDraft && !_isLocked) ...[
+            ElevatedButton.icon(
+              icon: const Icon(Icons.check, size: 16),
+              label: const Text('Save'),
+              onPressed: _saveNote,
             ),
+            const SizedBox(width: 8),
+          ],
+          IconButton(
+            icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
+                color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+            tooltip: _isLocked ? 'Unlock' : 'Lock',
+            onPressed: _toggleLock,
+          ),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print),
           if (_canDelete)
             IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), tooltip: 'Delete', onPressed: _delete),
@@ -591,21 +613,27 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                         child: TextField(controller: _addQtyCtrl,
                             decoration: const InputDecoration(hintText: 'Qty', isDense: true),
                             textAlign: TextAlign.right,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            textInputAction: TextInputAction.next,
+                            onSubmitted: (_) => _addItem()),
                       )),
                       Expanded(flex: 2, child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: TextField(controller: _addPriceCtrl,
                             decoration: const InputDecoration(hintText: 'Price', isDense: true),
                             textAlign: TextAlign.right,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            textInputAction: TextInputAction.next,
+                            onSubmitted: (_) => _addItem()),
                       )),
                       Expanded(flex: 1, child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: TextField(controller: _addDiscCtrl,
                             decoration: const InputDecoration(hintText: '%', isDense: true),
                             textAlign: TextAlign.right,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => _addItem()),
                       )),
                       const Expanded(flex: 2, child: SizedBox()),
                       SizedBox(width: 44, child: IconButton(
