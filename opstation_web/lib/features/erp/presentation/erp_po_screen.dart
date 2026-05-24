@@ -39,7 +39,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
-  bool get _isDraft  => (_detail['status'] as String? ?? 'draft') == 'draft';
+  bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
 
@@ -112,7 +112,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await Supabase.instance.client.from('purchase_orders').insert({
         'id': poId, 'org_id': orgId, 'branch_id': branchId,
         'voucher_number': vNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-        'supplier_id': picked['id'], 'status': 'draft', 'is_locked': false,
+        'supplier_id': picked['id'], 'status': 'ordered', 'is_locked': false,
         'created_by': ref.read(currentUserProvider)?.id,
       });
       await _logAudit(poId, 'created', 'PO $vNum created');

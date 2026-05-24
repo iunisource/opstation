@@ -38,7 +38,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
-  bool get _isDraft  => (_detail['status'] as String? ?? 'draft') == 'draft';
+  bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
 
@@ -101,7 +101,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       final pos = await Supabase.instance.client.from('purchase_orders')
           .select('id,voucher_number,voucher_date,supplier_id,suppliers(name)')
           .eq('org_id', orgId).eq('branch_id', branchId)
-          .inFilter('status', ['confirmed', 'partially_received'])
+          .inFilter('status', ['ordered', 'partially_received'])
           .order('voucher_date', ascending: false);
       if ((pos as List).isEmpty) { _showSnack('No confirmed POs available. Confirm a PO first.'); return; }
       final picked = await showDialog<Map<String, dynamic>?>(context: context,
