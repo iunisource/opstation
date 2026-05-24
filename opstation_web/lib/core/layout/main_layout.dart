@@ -130,7 +130,8 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Purchase Orders', Icons.shopping_cart_outlined, '/erp/purchase', location),
         _menuItem(context, 'GRN', Icons.move_to_inbox_outlined, '/erp/grn', location),
         _menuItem(context, 'Purchase Invoices', Icons.receipt_outlined, '/erp/purchase-invoices', location),
-        _menuItem(context, 'Purchase Returns', Icons.assignment_return_outlined, '/erp/purchase-returns', location),
+        _menuItem(context, 'Purchase Return Notes', Icons.assignment_return_outlined, '/erp/purchase-returns', location),
+        _menuItem(context, 'Purchase Return Vouchers', Icons.description_outlined, '/erp/purchase-return-vouchers', location),
         _menuItem(context, 'Payments', Icons.payment_outlined, '/erp/payment-vouchers', location),
       ],
       if (modules.contains('sales')) ...[
@@ -139,7 +140,8 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Sales Orders', Icons.receipt_long_outlined, '/erp/sales', location),
         _menuItem(context, 'Delivery Orders', Icons.local_shipping_outlined, '/erp/delivery-orders', location),
         _menuItem(context, 'Sales Invoices', Icons.receipt_outlined, '/erp/sales-invoices', location),
-        _menuItem(context, 'Sales Returns', Icons.assignment_return_outlined, '/erp/sales-returns', location),
+        _menuItem(context, 'Sales Return Notes', Icons.assignment_return_outlined, '/erp/sales-returns', location),
+        _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined, '/erp/sales-return-invoices', location),
         _menuItem(context, 'Receipts', Icons.payments_outlined, '/erp/receipt-vouchers', location),
       ],
       if (modules.contains('pos')) ...[

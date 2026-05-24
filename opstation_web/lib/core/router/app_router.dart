@@ -46,6 +46,8 @@ import '../../features/erp/presentation/erp_customer_aging_screen.dart';
 import '../../features/erp/presentation/erp_supplier_aging_screen.dart';
 import '../../features/erp/presentation/erp_sales_returns_screen.dart';
 import '../../features/erp/presentation/erp_purchase_returns_screen.dart';
+import '../../features/erp/presentation/erp_sales_return_invoices_screen.dart';
+import '../../features/erp/presentation/erp_purchase_return_vouchers_screen.dart';
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -157,6 +159,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/sales',     builder: (_, __) => const ErpSalesScreen()),
           GoRoute(path: '/erp/sales-returns', builder: (_, __) => const ErpSalesReturnsScreen()),
           GoRoute(path: '/erp/purchase-returns', builder: (_, __) => const ErpPurchaseReturnsScreen()),
+          GoRoute(path: '/erp/sales-return-invoices', builder: (_, __) => const ErpSalesReturnInvoicesScreen()),
+          GoRoute(path: '/erp/purchase-return-vouchers', builder: (_, __) => const ErpPurchaseReturnVouchersScreen()),
           GoRoute(path: '/erp/customer-aging', builder: (_, __) => const ErpCustomerAgingScreen()),
           GoRoute(path: '/erp/supplier-aging', builder: (_, __) => const ErpSupplierAgingScreen()),
           GoRoute(path: '/erp/pos',       builder: (_, __) => const ErpPosScreen()),

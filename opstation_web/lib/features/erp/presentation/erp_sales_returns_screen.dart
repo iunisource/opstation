@@ -318,8 +318,122 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  Future<void> _generateInvoice() async {
+    final orgId = _orgId; final branchId = _branchId;
+    if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
+    if (_items.isEmpty) { _showSnack('No items to invoice'); return; }
+
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Generate Sales Return Invoice?'),
+      content: const Text('This will create a Sales Return Invoice (SRI), add stock back to inventory, and lock this SRN. Continue?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Generate')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    final srnId = _detail['id'] as String;
+    final userId = ref.read(currentUserProvider)?.id;
+    try {
+      final year = DateTime.now().year;
+      final nextNum = await Supabase.instance.client.rpc('next_voucher_number',
+          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SRI', 'p_year': year});
+      final voucherNum = 'SRI-$year-${nextNum.toString().padLeft(4, '0')}';
+      final invId = 'sri_${DateTime.now().millisecondsSinceEpoch}';
+
+      await Supabase.instance.client.from('sales_return_invoices').insert({
+        'id': invId,
+        'org_id': orgId,
+        'branch_id': branchId,
+        'voucher_number': voucherNum,
+        'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        'srn_id': srnId,
+        'customer_id': _detail['customer_id'],
+        'subtotal': _detail['subtotal'] ?? 0,
+        'discount_total': _detail['discount_total'] ?? 0,
+        'grand_total': _detail['grand_total'] ?? 0,
+        'status': 'issued',
+        'is_locked': true,
+        'locked_by': userId,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'created_by': userId,
+      });
+
+      for (final si in _items) {
+        final pid = si['product_id'] as String;
+        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
+        await Supabase.instance.client.from('sales_return_invoice_items').insert({
+          'id': 'srii_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'invoice_id': invId,
+          'srn_item_id': si['id'],
+          'product_id': pid,
+          'uom_id': si['uom_id'],
+          'quantity': qty,
+          'unit_price': si['unit_price'],
+          'discount': si['discount'],
+          'line_total': si['line_total'],
+        });
+        if (qty <= 0) continue;
+        final stock = await Supabase.instance.client.from('inventory_stock').select()
+            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+        if (stock == null) {
+          await Supabase.instance.client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+            'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': qty,
+          });
+        } else {
+          await Supabase.instance.client.from('inventory_stock').update({
+            'quantity': ((stock['quantity'] as num).toDouble()) + qty,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }).eq('id', stock['id']);
+        }
+        await Supabase.instance.client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+          'uom_id': si['uom_id'], 'quantity': qty,
+          'movement_type': 'adjustment',
+          'reference_id': invId, 'reference_type': 'sales_return_invoice',
+          'moved_at': DateTime.now().toUtc().toIso8601String(),
+          'created_by': userId,
+        });
+      }
+
+      // Flip SRN status + auto-lock
+      await Supabase.instance.client.from('sales_returns').update({
+        'status': 'invoiced',
+        'is_locked': true,
+        'locked_by': userId,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', srnId);
+
+      await _logAudit(srnId, 'invoiced', 'Converted to invoice $voucherNum');
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': invId, 'voucher_type': 'SRI',
+        'action': 'created', 'details': 'Generated from SRN ${_detail['voucher_number']}',
+        'user_id': userId,
+      });
+
+      _showSnack('$voucherNum created — stock returned. See "Sales Return Invoices" tab.');
+      _loadDetail(srnId);
+      _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   Future<void> _delete() async {
     if (!_canDelete) return;
+    // Cascade check: no SRI should reference this SRN
+    try {
+      final invs = await Supabase.instance.client.from('sales_return_invoices')
+          .select('id, voucher_number').eq('srn_id', _detail['id']);
+      if ((invs as List).isNotEmpty) {
+        _showSnack('Cannot delete: invoice ${invs.first['voucher_number']} exists. Delete the invoice first.');
+        return;
+      }
+    } catch (e) { _showSnack('Failed to check: $e'); return; }
+
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete Sales Return Note?'),
       content: Text('Permanently delete ${_detail['voucher_number']}? This cannot be undone.'),
@@ -484,6 +598,15 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
               icon: const Icon(Icons.check, size: 16),
               label: const Text('Save'),
               onPressed: _saveNote,
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (!_isDraft && (_detail['status'] as String? ?? '') == 'saved') ...[
+            ElevatedButton.icon(
+              icon: const Icon(Icons.receipt_long, size: 16),
+              label: const Text('Generate Invoice'),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+              onPressed: _generateInvoice,
             ),
             const SizedBox(width: 8),
           ],

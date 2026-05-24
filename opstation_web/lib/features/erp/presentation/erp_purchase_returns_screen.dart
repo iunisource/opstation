@@ -318,8 +318,122 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  Future<void> _generateVoucher() async {
+    final orgId = _orgId; final branchId = _branchId;
+    if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
+    if (_items.isEmpty) { _showSnack('No items to invoice'); return; }
+
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Generate Purchase Return Voucher?'),
+      content: const Text('This will create a Purchase Return Voucher (PRV), remove stock from inventory (returned to supplier), and lock this PRN. Continue?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Generate')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    final prnId = _detail['id'] as String;
+    final userId = ref.read(currentUserProvider)?.id;
+    try {
+      final year = DateTime.now().year;
+      final nextNum = await Supabase.instance.client.rpc('next_voucher_number',
+          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PRV', 'p_year': year});
+      final voucherNum = 'PRV-$year-${nextNum.toString().padLeft(4, '0')}';
+      final invId = 'prv_${DateTime.now().millisecondsSinceEpoch}';
+
+      await Supabase.instance.client.from('purchase_return_vouchers').insert({
+        'id': invId,
+        'org_id': orgId,
+        'branch_id': branchId,
+        'voucher_number': voucherNum,
+        'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        'prn_id': prnId,
+        'supplier_id': _detail['supplier_id'],
+        'subtotal': _detail['subtotal'] ?? 0,
+        'discount_total': _detail['discount_total'] ?? 0,
+        'grand_total': _detail['grand_total'] ?? 0,
+        'status': 'issued',
+        'is_locked': true,
+        'locked_by': userId,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'created_by': userId,
+      });
+
+      for (final si in _items) {
+        final pid = si['product_id'] as String;
+        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
+        await Supabase.instance.client.from('purchase_return_voucher_items').insert({
+          'id': 'prvi_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'voucher_id': invId,
+          'prn_item_id': si['id'],
+          'product_id': pid,
+          'uom_id': si['uom_id'],
+          'quantity': qty,
+          'unit_price': si['unit_price'],
+          'discount': si['discount'],
+          'line_total': si['line_total'],
+        });
+        if (qty <= 0) continue;
+        final stock = await Supabase.instance.client.from('inventory_stock').select()
+            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+        if (stock == null) {
+          await Supabase.instance.client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+            'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': -qty,
+          });
+        } else {
+          await Supabase.instance.client.from('inventory_stock').update({
+            'quantity': ((stock['quantity'] as num).toDouble()) - qty,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }).eq('id', stock['id']);
+        }
+        await Supabase.instance.client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+          'uom_id': si['uom_id'], 'quantity': -qty,
+          'movement_type': 'adjustment',
+          'reference_id': invId, 'reference_type': 'purchase_return_voucher',
+          'moved_at': DateTime.now().toUtc().toIso8601String(),
+          'created_by': userId,
+        });
+      }
+
+      // Flip PRN status + auto-lock
+      await Supabase.instance.client.from('purchase_returns').update({
+        'status': 'invoiced',
+        'is_locked': true,
+        'locked_by': userId,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', prnId);
+
+      await _logAudit(prnId, 'invoiced', 'Converted to voucher $voucherNum');
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': invId, 'voucher_type': 'PRV',
+        'action': 'created', 'details': 'Generated from PRN ${_detail['voucher_number']}',
+        'user_id': userId,
+      });
+
+      _showSnack('$voucherNum created — stock removed. See "Purchase Return Vouchers" tab.');
+      _loadDetail(prnId);
+      _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   Future<void> _delete() async {
     if (!_canDelete) return;
+    // Cascade check: no PRV should reference this PRN
+    try {
+      final vchs = await Supabase.instance.client.from('purchase_return_vouchers')
+          .select('id, voucher_number').eq('prn_id', _detail['id']);
+      if ((vchs as List).isNotEmpty) {
+        _showSnack('Cannot delete: voucher ${vchs.first['voucher_number']} exists. Delete the voucher first.');
+        return;
+      }
+    } catch (e) { _showSnack('Failed to check: $e'); return; }
+
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete Purchase Return Note?'),
       content: Text('Permanently delete ${_detail['voucher_number']}? This cannot be undone.'),
@@ -484,6 +598,15 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
               icon: const Icon(Icons.check, size: 16),
               label: const Text('Save'),
               onPressed: _saveNote,
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (!_isDraft && (_detail['status'] as String? ?? '') == 'saved') ...[
+            ElevatedButton.icon(
+              icon: const Icon(Icons.description, size: 16),
+              label: const Text('Generate Voucher'),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+              onPressed: _generateVoucher,
             ),
             const SizedBox(width: 8),
           ],
