@@ -809,7 +809,8 @@ class _AuditTrailWidget extends StatelessWidget {
           .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
           .order('created_at', ascending: false).limit(30),
       builder: (ctx, snap) {
-        if (!snap.hasData || (snap.data as List).isEmpty) return const SizedBox.shrink();
+        if (snap.hasError) return const SizedBox.shrink();
+        if (!snap.hasData || (snap.data as List).isEmpty) return Padding(padding: const EdgeInsets.only(top: 4), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Color(0xFFE5E7EB))), child: const Row(children: [Icon(Icons.history, size: 14, color: Color(0xFF9CA3AF)), SizedBox(width: 8), Text('No activity logged yet', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))])));
         final entries = List<Map<String, dynamic>>.from(snap.data!);
         return Container(
           margin: const EdgeInsets.only(top: 4),

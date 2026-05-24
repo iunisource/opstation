@@ -28,6 +28,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
+  String _filter = 'all'; // 'all' | 'draft' | 'issued'
 
   @override
   void initState() { super.initState(); _loadList(); }
@@ -385,10 +386,13 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _invoices.where((r) {
-      if (q.isEmpty) return true;
-      return (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             ((r['customers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q) ||
-             ((r['sales_returns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = q.isEmpty ||
+          (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
+          ((r['customers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q) ||
+          ((r['sales_returns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final status = r['status'] as String? ?? 'issued';
+      final matchFilter = _filter == 'all' || status == _filter;
+      return matchSearch && matchFilter;
     }).toList();
     return Container(
       decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))),
@@ -396,7 +400,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
           child: Row(children: [
-            const Expanded(child: Text('Sales Return Invoices', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700))),
+            const Expanded(child: Text('Sales Return Invoices', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
             IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 32),
                 onPressed: _createNew, tooltip: 'New SRI from SRN'),
           ]),
@@ -408,6 +412,17 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
                 prefixIcon: Icon(Icons.search, size: 18), isDense: true),
             onChanged: (v) => setState(() => _search = v),
           ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(children: [
+            _FilterChip(label: 'All',    value: 'all',    current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 6),
+            _FilterChip(label: 'Draft',  value: 'draft',  current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 6),
+            _FilterChip(label: 'Issued', value: 'issued', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          ]),
         ),
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
@@ -423,8 +438,11 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
                         dense: true,
                         selected: selected,
                         selectedTileColor: AppTheme.primary.withOpacity(0.06),
-                        title: Text(r['voucher_number'] as String? ?? '-',
-                            style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null)),
+                        title: Row(children: [
+                          Expanded(child: Text(r['voucher_number'] as String? ?? '-',
+                              style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null))),
+                          _StatusBadge(status: r['status'] as String? ?? 'issued'),
+                        ]),
                         subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                           Text(r['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 11)),
                           if (r['sales_returns']?['voucher_number'] != null)
@@ -615,6 +633,50 @@ class _Chip extends StatelessWidget {
         Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
         Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
       ]),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label, value, current;
+  final ValueChanged<String> onTap;
+  const _FilterChip({required this.label, required this.value, required this.current, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final active = value == current;
+    return GestureDetector(
+      onTap: () => onTap(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primary : AppTheme.background,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: active ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Text(label, style: TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w600,
+          color: active ? Colors.white : AppTheme.textSecondary,
+        )),
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  final String status;
+  const _StatusBadge({required this.status});
+  @override
+  Widget build(BuildContext context) {
+    Color bg; Color fg; String label;
+    switch (status) {
+      case 'issued':  bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success;  label = 'issued';  break;
+      case 'draft':   bg = Colors.orange.withOpacity(0.12);    fg = Colors.orange;      label = 'draft';   break;
+      default:        bg = AppTheme.border;                    fg = AppTheme.textSecondary; label = status;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }

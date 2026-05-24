@@ -418,18 +418,14 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
 
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) {
-      final qty   = (it['quantity'] as num?)?.toDouble() ?? 0;
-      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-      final disc  = (it['discount'] as num?)?.toDouble() ?? 0;
-      final lt    = (it['line_total'] as num?)?.toDouble() ?? qty * price * (1 - disc / 100);
-      return VoucherLine(
-        product: it['products']?['name'] as String? ?? '-',
-        sku: it['products']?['sku'] as String?,
-        uom: it['uoms']?['abbreviation'] as String?,
-        qty: qty, unitPrice: price, discountPct: disc, lineTotal: lt,
-      );
-    }).toList();
+    // PRN is a qty-only note — prices/totals are set at the PRI stage.
+    final lines = _items.map((it) => VoucherLine(
+      product: it['products']?['name'] as String? ?? '-',
+      sku: it['products']?['sku'] as String?,
+      uom: it['uoms']?['abbreviation'] as String?,
+      qty: (it['quantity'] as num?)?.toDouble() ?? 0,
+      // unitPrice / lineTotal intentionally null → PDF hides price columns & totals
+    )).toList();
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final createdAt = _detail['created_at'] != null
@@ -447,9 +443,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
       salespersonName: _meta.salespersonName,
       lines: lines,
-      subtotal: (_detail['subtotal'] as num?)?.toDouble() ?? 0,
-      discountTotal: (_detail['discount_total'] as num?)?.toDouble() ?? 0,
-      grandTotal: (_detail['grand_total'] as num?)?.toDouble() ?? 0,
+      // No financial totals for PRN (qty-only note)
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
       footerNote: _meta.footerNote,
@@ -862,7 +856,8 @@ class _AuditTrailWidget extends StatelessWidget {
           .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
           .order('created_at', ascending: false).limit(20),
       builder: (ctx, snap) {
-        if (!snap.hasData || (snap.data as List).isEmpty) return const SizedBox.shrink();
+        if (snap.hasError) return const SizedBox.shrink();
+        if (!snap.hasData || (snap.data as List).isEmpty) return Padding(padding: const EdgeInsets.only(top: 4), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Color(0xFFE5E7EB))), child: const Row(children: [Icon(Icons.history, size: 14, color: Color(0xFF9CA3AF)), SizedBox(width: 8), Text('No activity logged yet', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))])));
         final entries = List<Map<String, dynamic>>.from(snap.data!);
         return Container(
           margin: const EdgeInsets.only(top: 4),
