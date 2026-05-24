@@ -100,7 +100,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   Future<void> _logAudit(String id, String action, String? details) async {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': _orgId,
         'voucher_id': id, 'voucher_type': 'SRI',
         'action': action, 'details': details,
         'user_id': ref.read(currentUserProvider)?.id,
@@ -230,7 +230,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       // Audit on both
       await _logAudit(invId, 'created', 'Generated from SRN ${srn['voucher_number']}, stock moved back');
       await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': orgId,
         'voucher_id': srnId, 'voucher_type': 'SRN',
         'action': 'invoiced', 'details': 'Converted to invoice $voucherNum',
         'user_id': userId,

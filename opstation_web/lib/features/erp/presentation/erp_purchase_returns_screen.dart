@@ -150,7 +150,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   Future<void> _logAudit(String id, String action, String? details) async {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': _orgId,
         'voucher_id': id, 'voucher_type': 'PRN',
         'action': action, 'details': details,
         'user_id': ref.read(currentUserProvider)?.id,

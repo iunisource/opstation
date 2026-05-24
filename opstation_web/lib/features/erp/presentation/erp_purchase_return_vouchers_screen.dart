@@ -31,6 +31,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
+  String _filter = 'all';
 
   @override
   void initState() { super.initState(); _loadList(); }
@@ -124,7 +125,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   Future<void> _logAudit(String id, String action, String? details) async {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': _orgId,
         'voucher_id': id, 'voucher_type': 'PRI',
         'action': action, 'details': details,
         'user_id': ref.read(currentUserProvider)?.id,
@@ -473,10 +474,12 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _invoices.where((r) {
-      if (q.isEmpty) return true;
-      return (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) ||
-             ((r['purchase_returns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = q.isEmpty ||
+          (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
+          ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) ||
+          ((r['purchase_returns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final matchFilter = _filter == 'all' || (r['status'] as String? ?? 'draft') == _filter;
+      return matchSearch && matchFilter;
     }).toList();
     return Container(
       decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))),
@@ -495,6 +498,17 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                 prefixIcon: Icon(Icons.search, size: 18), isDense: true),
             onChanged: (v) => setState(() => _search = v),
           ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(children: [
+            _FilterTab(label: 'All',    value: 'all',    current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 6),
+            _FilterTab(label: 'Draft',  value: 'draft',  current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 6),
+            _FilterTab(label: 'Issued', value: 'issued', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          ]),
         ),
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
@@ -856,6 +870,29 @@ class _AuditTrailWidget extends StatelessWidget {
           ]),
         );
       },
+    );
+  }
+}
+
+class _FilterTab extends StatelessWidget {
+  final String label, value, current;
+  final ValueChanged<String> onTap;
+  const _FilterTab({required this.label, required this.value, required this.current, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final active = value == current;
+    return GestureDetector(
+      onTap: () => onTap(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primary : AppTheme.background,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: active ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+            color: active ? Colors.white : AppTheme.textSecondary)),
+      ),
     );
   }
 }
