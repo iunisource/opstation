@@ -142,7 +142,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           'id': 'grni_${DateTime.now().microsecondsSinceEpoch}_${(item['product_id'] as String).substring(0, 4)}',
           'grn_id': grnId, 'po_item_id': pid,
           'product_id': item['product_id'], 'uom_id': item['uom_id'],
-          'qty_ordered': ordered, 'qty_received': remaining,  // default = remaining qty
+          'qty_ordered': remaining, 'qty_received': remaining,  // both = remaining unfulfilled qty
         });
       }
       await _logAudit(grnId, 'created', 'GRN $vNum from PO ${po['voucher_number']}');
