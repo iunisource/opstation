@@ -1065,7 +1065,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
       // Load ALL sale transactions for this org that haven't been returned
       final txns = await Supabase.instance.client
           .from('pos_transactions')
-          .select('*, customers(shop_name), pos_customers(name), pos_sessions(session_number, pos_sessions_branch_id:branches(name))')
+          .select('*, customers(shop_name), pos_customers(name)')
           .eq('org_id', widget.orgId)
           .or('transaction_type.eq.sale,transaction_type.is.null')
           .order('transacted_at', ascending: false)
