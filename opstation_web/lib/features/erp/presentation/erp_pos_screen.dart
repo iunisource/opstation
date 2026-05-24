@@ -640,7 +640,7 @@ tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;
   <div class="stat"><div class="sl">Net Sales</div><div class="sv">${(totalSales - totalReturns).toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${openingCash.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${closingCash.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ' + (cashDiff <= 0 ? 'green' : 'red') + '">' + (cashDiff > 0 ? '-' : '+') + cashDiff.abs().toStringAsFixed(2) + '</div></div>
+  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${cashDiff.abs().toStringAsFixed(2)}</div></div>
 </div>
 ${txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
 <table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
@@ -1046,7 +1046,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
           .from('pos_transactions')
           .select('*, customers(shop_name), pos_customers(name), pos_sessions(session_number, pos_sessions_branch_id:branches(name))')
           .eq('org_id', widget.orgId)
-          .eq('transaction_type', 'sale')
+          .or('transaction_type.eq.sale,transaction_type.is.null')
           .order('transacted_at', ascending: false)
           .limit(500);
       // Filter out fully returned transactions
