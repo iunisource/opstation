@@ -887,19 +887,29 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                         final total = (t['total'] as num?)?.toDouble() ?? 0;
                         final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
                         final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
-                        return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(
-                          color: isReturn ? Colors.red.shade50 : Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: isReturn ? Colors.red.shade100 : AppTheme.border),
-                        ), child: Row(children: [
-                          Icon(isReturn ? Icons.reply : Icons.receipt_outlined, size: 16, color: isReturn ? Colors.red : AppTheme.primary),
-                          const SizedBox(width: 8),
-                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(customer, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
-                            Text(time, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                          ])),
-                          Text('${isReturn ? '-' : ''}${total.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: isReturn ? Colors.red : AppTheme.primary)),
-                        ]));
+                        return GestureDetector(
+                          onTap: isReturn ? null : () async {
+                            try {
+                              final ti = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String);
+                              String? fn; try { final fr = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId!).eq('key', 'org.voucher_footer_note').maybeSingle(); fn = fr?['value'] as String?; } catch (_) {}
+                              final ci = (ti as List).map((i) => {'name': i['products']?['name'] ?? '-', 'quantity': (i['quantity'] as num?)?.toDouble() ?? 0.0, 'unit_price': (i['unit_price'] as num?)?.toDouble() ?? 0.0, 'discount': (i['discount'] as num?)?.toDouble() ?? 0.0, 'discount_type': 'fixed'}).toList();
+                              if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: List<Map<String, dynamic>>.from(ci), orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: _session['branches']?['name'] as String? ?? '', cashierName: ref.read(currentUserProvider)?.name ?? '', footerNote: fn));
+                            } catch (_) {}
+                          },
+                          child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(
+                            color: isReturn ? Colors.red.shade50 : Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: isReturn ? Colors.red.shade100 : AppTheme.border),
+                          ), child: Row(children: [
+                            Icon(isReturn ? Icons.reply : Icons.receipt_outlined, size: 16, color: isReturn ? Colors.red : AppTheme.primary),
+                            const SizedBox(width: 8),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(customer, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+                              Text(time, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                            ])),
+                            Text('${isReturn ? '-' : ''}${total.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: isReturn ? Colors.red : AppTheme.primary)),
+                            if (!isReturn) const Icon(Icons.chevron_right, size: 14, color: AppTheme.textSecondary),
+                          ])));
                       })),
             ],
           ]),
@@ -921,7 +931,8 @@ class _ReceiptDialog extends StatelessWidget {
   final Map<String, dynamic> transaction;
   final List<Map<String, dynamic>> items;
   final String orgName, branchName, cashierName;
-  const _ReceiptDialog({required this.transaction, required this.items, required this.orgName, required this.branchName, required this.cashierName});
+  final String? footerNote;
+  const _ReceiptDialog({required this.transaction, required this.items, required this.orgName, required this.branchName, required this.cashierName, this.footerNote});
 
   @override Widget build(BuildContext context) {
     final total = (transaction['total'] as num?)?.toDouble() ?? 0;
@@ -930,7 +941,7 @@ class _ReceiptDialog extends StatelessWidget {
     final customer = (transaction['pos_customers']?['name'] ?? transaction['customers']?['shop_name'] ?? 'Walk-in') as String;
     final method = (transaction['payment_method'] as String? ?? 'cash').toUpperCase();
     final ts = transaction['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(transaction['transacted_at'] as String).toLocal()) : DateFormat('d MMM yyyy  HH:mm').format(DateTime.now());
-    return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 400), child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+    return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
       Text(orgName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
       Text(branchName, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       const SizedBox(height: 4),
@@ -942,57 +953,61 @@ class _ReceiptDialog extends StatelessWidget {
         Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
       ]),
       const SizedBox(height: 12),
-      Container(decoration: BoxDecoration(color: const Color(0xFFF8F9FA), borderRadius: BorderRadius.circular(8)),
-        child: Column(children: [
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), child: Row(children: const [
-            Expanded(flex: 4, child: Text('Item', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
-            Expanded(flex: 1, child: Text('Qty', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-            Expanded(flex: 2, child: Text('Price', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-            Expanded(flex: 2, child: Text('Total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-          ])),
-          ...items.map((it) {
-            final qty = it['quantity'] as double;
-            final price = it['unit_price'] as double;
-            final disc = it['discount'] as double;
-            final discType = it['discount_type'] as String? ?? 'fixed';
-            final discAmt = discType == 'percent' ? price * qty * (disc / 100) : disc;
-            final lt = qty * price - discAmt;
-            return Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), child: Row(children: [
-              Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(it['name'] as String? ?? '-', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                if (disc > 0) Text('Disc: ${discType == 'percent' ? '${disc.toStringAsFixed(0)}%' : disc.toStringAsFixed(2)}', style: const TextStyle(fontSize: 10, color: Colors.orange)),
-              ])),
-              Expanded(flex: 1, child: Text('×${qty.toStringAsFixed(0)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-              Expanded(flex: 2, child: Text(price.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-              Expanded(flex: 2, child: Text(lt.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-            ]));
-          }),
+      Container(decoration: BoxDecoration(color: const Color(0xFFF8F9FA), borderRadius: BorderRadius.circular(8)), child: Column(children: [
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), child: Row(children: const [
+          Expanded(flex: 4, child: Text('Item', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+          Expanded(flex: 1, child: Text('Qty', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+          Expanded(flex: 2, child: Text('Price', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+          Expanded(flex: 2, child: Text('Disc', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+          Expanded(flex: 2, child: Text('Total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
         ])),
+        const Divider(height: 1),
+        ...items.map((it) {
+          final qty = it['quantity'] as double; final price = it['unit_price'] as double;
+          final disc = it['discount'] as double; final discType = it['discount_type'] as String? ?? 'fixed';
+          final discAmt = discType == 'percent' ? price * qty * (disc / 100) : disc;
+          final lt = qty * price - discAmt;
+          return Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5), child: Row(children: [
+            Expanded(flex: 4, child: Text(it['name'] as String? ?? '-', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+            Expanded(flex: 1, child: Text('x${qty.toStringAsFixed(0)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text(price.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text(discAmt > 0 ? '-${discAmt.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: discAmt > 0 ? Colors.orange : AppTheme.textSecondary))),
+            Expanded(flex: 2, child: Text(lt.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+          ]));
+        }),
+      ])),
       const Divider(),
-      if (discount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         const Text('Subtotal', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
         Text(subtotal.toStringAsFixed(2), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
       ]),
-      if (discount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        const Text('Discount', style: TextStyle(fontSize: 13, color: Colors.orange)),
-        Text('- ${discount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, color: Colors.orange)),
-      ]),
-      const SizedBox(height: 4),
+      if (discount > 0) ...[
+        const SizedBox(height: 2),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          const Text('Total Discount', style: TextStyle(fontSize: 13, color: Colors.orange)),
+          Text('- ${discount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, color: Colors.orange, fontWeight: FontWeight.w600)),
+        ]),
+      ],
+      const SizedBox(height: 6),
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         const Text('TOTAL', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
         Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppTheme.primary)),
       ]),
       const SizedBox(height: 4),
       Text('Payment: $method', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-      const SizedBox(height: 4),
       Text('Cashier: $cashierName', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
+      if (footerNote != null && footerNote!.isNotEmpty) ...[
+        const Divider(),
+        Text(footerNote!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ],
       const SizedBox(height: 20),
       Row(children: [
         Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print'), onPressed: () {
-          final content = '<html><head><title>Receipt</title><style>body{font-family:monospace;padding:20px;max-width:300px;margin:0 auto}h2{text-align:center}table{width:100%;font-size:12px}td{padding:2px 4px}</style></head><body><h2>$orgName</h2><p style="text-align:center">$branchName<br>$ts<br>Customer: $customer</p><table>${items.map((i) { final q=(i['quantity'] as double);final p=(i['unit_price'] as double);final n=i['name'] as String? ?? '-';return '<tr><td>$n</td><td>${q.toStringAsFixed(0)}</td><td style="text-align:right">${(q*p).toStringAsFixed(2)}</td></tr>';}).join()}</table><hr><p style="text-align:right;font-size:14px;font-weight:bold">TOTAL: Rs.${total.toStringAsFixed(2)}</p><p>Payment: $method | Cashier: $cashierName</p><script>window.print()</script></body></html>';
-          final blob = html.Blob([content], 'text/html');
-          final url = html.Url.createObjectUrlFromBlob(blob);
-          html.window.open(url, '_blank');
+          final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? "-${da.toStringAsFixed(2)}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
+          final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
+          final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
+          final content = '<!DOCTYPE html><html><head><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body><h2>$orgName</h2><h3 style="font-weight:normal;color:#666">$branchName</h3><p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p><hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>$footerHtml<script>window.print()</script></body></html>';
+          final blob = html.Blob([content], 'text/html'); final url = html.Url.createObjectUrlFromBlob(blob); html.window.open(url, '_blank');
         })),
         const SizedBox(width: 12),
         Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.add_shopping_cart, size: 16), label: const Text('New Sale'), onPressed: () => Navigator.pop(context))),
@@ -1001,7 +1016,7 @@ class _ReceiptDialog extends StatelessWidget {
   }
 }
 
-// ── Return Dialog ──────────────────────────────────────────────────────────
+
 class _ReturnDialog extends StatefulWidget {
   final String orgId;
   final Future<void> Function(Map<String, dynamic>, List<Map<String, dynamic>>) onProcess;
