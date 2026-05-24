@@ -56,7 +56,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final List<Map<String, dynamic>> sup = [];
     var off = 0;
     while (true) {
-      final p = await client.from('suppliers').select('id,name,code').eq('org_id', orgId).order('name').range(off, off + 999);
+      final p = await client.from('suppliers').select('id,name').eq('org_id', orgId).order('name').range(off, off + 999);
       sup.addAll(List<Map<String, dynamic>>.from(p));
       if (p.length < 1000) break;
       off += 1000;
@@ -83,7 +83,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       final client = Supabase.instance.client;
       final po = await client.from('purchase_orders').select('*,suppliers(*),branches(name)').eq('id', id).single();
-      final items = await client.from('purchase_order_items').select('*,products(name,sku),uoms(abbreviation)').eq('purchase_order_id', id).order('created_at');
+      final items = await client.from('purchase_order_items').select('*,products(name,sku),uoms(abbreviation)').eq('purchase_order_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: po['created_by'] as String?);
       setState(() { _detail = Map<String, dynamic>.from(po); _items = List<Map<String, dynamic>>.from(items); _meta = meta; _detailLoading = false; });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
