@@ -107,7 +107,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 final year = DateTime.now().year;
                 try {
                   final voucherNum = await Supabase.instance.client
-                      .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_type': 'PO', 'p_year': year});
+                      .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PO', 'p_year': year});
                   final id = 'po_${DateTime.now().millisecondsSinceEpoch}';
                   await Supabase.instance.client.from('purchase_orders').insert({
                     'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -736,7 +736,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                 try {
                   final po = pos.firstWhere((p) => p['id'] == poId);
                   final voucherNum = await Supabase.instance.client
-                      .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_type': 'GRN', 'p_year': year});
+                      .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'GRN', 'p_year': year});
                   final id = 'grn_${DateTime.now().millisecondsSinceEpoch}';
                   await Supabase.instance.client.from('purchase_grns').insert({
                     'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -1192,7 +1192,7 @@ class _GrnDetailScreenState extends ConsumerState<GrnDetailScreen> {
     final year = DateTime.now().year;
     try {
       final voucherNum = await Supabase.instance.client
-          .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_type': 'PI', 'p_year': year});
+          .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PI', 'p_year': year});
       final piId = 'pi_${DateTime.now().millisecondsSinceEpoch}';
       double subtotal = 0;
       final piItems = _items.map((item) {
