@@ -88,7 +88,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
         'org_id': _orgId, 'voucher_id': id, 'voucher_type': 'GRN',
-        'action': action, 'details': details, 'user_id': ref.read(currentUserProvider)?.id,
+        'action': action, 'details': details, 'performed_by': ref.read(currentUserProvider)?.id,
       });
     } catch (e) { print('[Audit GRN] $e'); }
   }
@@ -495,7 +495,7 @@ class _GrnAuditTrail extends StatelessWidget {
   @override Widget build(BuildContext context) {
     if (voucherId.isEmpty) return const SizedBox.shrink();
     return FutureBuilder<List<dynamic>>(
-      future: Supabase.instance.client.from('voucher_audit_log').select('action,details,user_id,created_at').eq('voucher_id', voucherId).eq('voucher_type', 'GRN').order('created_at', ascending: false).limit(20),
+      future: Supabase.instance.client.from('voucher_audit_log').select('*, users(name)').eq('voucher_id', voucherId).eq('voucher_type', 'GRN').order('created_at', ascending: false).limit(20),
       builder: (ctx, snap) {
         if (!snap.hasData || (snap.data as List).isEmpty) return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)), child: const Row(children: [Icon(Icons.history, size: 14, color: AppTheme.textSecondary), SizedBox(width: 8), Text('No activity logged yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))]));
         final entries = List<Map<String, dynamic>>.from(snap.data!);

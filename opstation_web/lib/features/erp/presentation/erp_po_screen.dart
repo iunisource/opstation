@@ -94,7 +94,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
         'org_id': _orgId, 'voucher_id': id, 'voucher_type': 'PO',
-        'action': action, 'details': details, 'user_id': ref.read(currentUserProvider)?.id,
+        'action': action, 'details': details, 'performed_by': ref.read(currentUserProvider)?.id,
       });
     } catch (e) { print('[Audit PO] $e'); }
   }
@@ -509,7 +509,7 @@ class _PoAuditTrail extends StatelessWidget {
     if (voucherId.isEmpty) return const SizedBox.shrink();
     return FutureBuilder<List<dynamic>>(
       future: Supabase.instance.client.from('voucher_audit_log')
-          .select('action,details,user_id,created_at').eq('voucher_id', voucherId).eq('voucher_type', 'PO')
+          .select('*, users(name)').eq('voucher_id', voucherId).eq('voucher_type', 'PO')
           .order('created_at', ascending: false).limit(20),
       builder: (ctx, snap) {
         if (!snap.hasData || (snap.data as List).isEmpty) return Container(

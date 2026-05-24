@@ -869,8 +869,7 @@ class _AuditTrailWidget extends StatelessWidget {
             ...entries.map((e) {
               final action  = e['action'] as String? ?? '-';
               final details = e['details'] as String? ?? '';
-              final uid = e['user_id'] as String? ?? '';
-              final by = uid.length > 8 ? uid.substring(0, 8) : (uid.isEmpty ? '—' : uid);
+              final by = e['users']?['name'] as String? ?? '—';
               final ts      = e['created_at'] != null
                   ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
               Color color;
