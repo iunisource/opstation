@@ -285,6 +285,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _cart = [];
   Map<String, dynamic>? _selectedCustomer;
   String _paymentMethod = 'cash';
+  final _customPaymentCtrl = TextEditingController();
   double _orderDiscount = 0;
   String _orderDiscountType = 'fixed'; // 'fixed' | 'percent'
   bool _loading = true;
@@ -299,7 +300,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, double> _stockMap = {};  // product_id → qty in stock
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _customerSearchCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -409,7 +410,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'customer_id': _selectedCustomer?['id'],
         'pos_customer_id': _selectedPosCustomer?['id'],
         'total': totalAmt, 'discount': discountAmt,
-        'payment_method': _paymentMethod, 'transaction_type': 'sale',
+        'payment_method': _paymentMethod == 'other' ? (_customPaymentCtrl.text.trim().isEmpty ? 'other' : _customPaymentCtrl.text.trim()) : _paymentMethod, 'transaction_type': 'sale',
         'created_by': userId, 'transacted_at': now,
       });
       for (final item in cartSnapshot) {
@@ -437,7 +438,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'moved_at': now, 'created_by': userId,
         });
       }
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; });
+      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); });
       await _loadData();
       // Show receipt
       if (mounted) {
@@ -582,7 +583,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final t in returns) totalReturns += ((t['total'] as num?)?.toDouble() ?? 0).abs();
     final openingCash = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
     final closingCash = (_session['closing_cash'] as num?)?.toDouble() ?? 0;
-    final netCash = closingCash - openingCash;
+    final cashDiff = totalSales - totalReturns + openingCash - closingCash;  // +ve = cash short, -ve = cash over
     final branch = _session['branches']?['name'] as String? ?? '-';
     final user = ref.read(currentUserProvider);
     final cashier = user?.name ?? user?.id ?? '-';
@@ -593,7 +594,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final t in sales) {
       final tid = t['id'] as String;
       final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
-      final customer = t['customers']?['shop_name'] as String? ?? 'Walk-in';
+      final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
       final method = t['payment_method'] as String? ?? '';
       final total = (t['total'] as num?)?.toStringAsFixed(2) ?? '0.00';
       final disc = (t['discount'] as num?)?.toDouble() ?? 0;
@@ -607,7 +608,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final refId = t['reference_transaction_id'] as String? ?? '-';
       final refShort = refId.length > 10 ? '${refId.substring(0, 10)}…' : refId;
       final total = ((t['total'] as num?)?.toDouble() ?? 0).abs().toStringAsFixed(2);
-      final customer = t['customers']?['shop_name'] as String? ?? 'Walk-in';
+      final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
       retRows += '<tr style="background:#fff5f5"><td>$time</td><td>$customer</td><td style="font-size:11px;color:#666">← $refShort</td><td style="text-align:right;color:#e74c3c;font-weight:bold">-$total</td></tr>';
     }
 
@@ -639,7 +640,7 @@ tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;
   <div class="stat"><div class="sl">Net Sales</div><div class="sv">${(totalSales - totalReturns).toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${openingCash.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${closingCash.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${netCash >= 0 ? 'green' : 'red'}">${netCash >= 0 ? '+' : ''}${netCash.toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ' + (cashDiff <= 0 ? 'green' : 'red') + '">' + (cashDiff > 0 ? '-' : '+') + cashDiff.abs().toStringAsFixed(2) + '</div></div>
 </div>
 ${txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
 <table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
@@ -656,8 +657,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
 
     final blob = html.Blob([htmlContent], 'text/html');
     final url = html.Url.createObjectUrlFromBlob(blob);
-    final anchor = html.AnchorElement(href: url)..setAttribute('download', 'pos_summary_${DateTime.now().millisecondsSinceEpoch}.html')..click();
-    html.Url.revokeObjectUrl(url);
+    html.window.open(url, '_blank');  // opens in new tab, auto-prints via window.onload
   }
 
   @override
@@ -806,6 +806,14 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     style: const ButtonStyle(visualDensity: VisualDensity.compact),
                   ),
                 ]),
+              if (_paymentMethod == 'other') ...[
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _customPaymentCtrl,
+                  decoration: const InputDecoration(hintText: 'Specify payment method…', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                  textCapitalization: TextCapitalization.words,
+                ),
+              ],
                 const SizedBox(height: 10),
                 // Totals
                 if (_totalDiscount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -878,7 +886,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                         final isReturn = t['transaction_type'] == 'return';
                         final total = (t['total'] as num?)?.toDouble() ?? 0;
                         final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
-                        final customer = t['customers']?['shop_name'] as String? ?? 'Walk-in';
+                        final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
                         return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(
                           color: isReturn ? Colors.red.shade50 : Colors.white,
                           borderRadius: BorderRadius.circular(8),
@@ -902,7 +910,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
 
   void _showReturnDialog() {
     showDialog(context: context, builder: (_) => _ReturnDialog(
-      transactions: _transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'sale').toList(),
+      orgId: _orgId ?? '',
       onProcess: _processReturn,
     ));
   }
@@ -919,7 +927,7 @@ class _ReceiptDialog extends StatelessWidget {
     final total = (transaction['total'] as num?)?.toDouble() ?? 0;
     final discount = (transaction['discount'] as num?)?.toDouble() ?? 0;
     final subtotal = items.fold(0.0, (s, i) => s + ((i['unit_price'] as double) * (i['quantity'] as double)));
-    final customer = transaction['customers']?['shop_name'] as String? ?? 'Walk-in';
+    final customer = (transaction['pos_customers']?['name'] ?? transaction['customers']?['shop_name'] ?? 'Walk-in') as String;
     final method = (transaction['payment_method'] as String? ?? 'cash').toUpperCase();
     final ts = transaction['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(transaction['transacted_at'] as String).toLocal()) : DateFormat('d MMM yyyy  HH:mm').format(DateTime.now());
     return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 400), child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -995,25 +1003,59 @@ class _ReceiptDialog extends StatelessWidget {
 
 // ── Return Dialog ──────────────────────────────────────────────────────────
 class _ReturnDialog extends StatefulWidget {
-  final List<Map<String, dynamic>> transactions;
+  final String orgId;
   final Future<void> Function(Map<String, dynamic>, List<Map<String, dynamic>>) onProcess;
-  const _ReturnDialog({required this.transactions, required this.onProcess});
+  const _ReturnDialog({required this.orgId, required this.onProcess});
   @override State<_ReturnDialog> createState() => _ReturnDialogState();
 }
 class _ReturnDialogState extends State<_ReturnDialog> {
+  List<Map<String, dynamic>> _transactions = [];
   Map<String, dynamic>? _selectedTxn;
   List<Map<String, dynamic>> _txnItems = [];
+  bool _loadingTxns = true;
   bool _loadingItems = false;
   String _q = '';
+  DateTime? _dateFrom;
+  DateTime? _dateTo;
   final Map<String, bool> _selected = {};
   final Map<String, TextEditingController> _qtyCtrls = {};
 
+  @override void initState() { super.initState(); _loadTransactions(); }
   @override void dispose() { for (final c in _qtyCtrls.values) c.dispose(); super.dispose(); }
+
+  Future<void> _loadTransactions() async {
+    setState(() => _loadingTxns = true);
+    try {
+      // Load ALL sale transactions for this org that haven't been returned
+      final txns = await Supabase.instance.client
+          .from('pos_transactions')
+          .select('*, customers(shop_name), pos_customers(name), pos_sessions(session_number, pos_sessions_branch_id:branches(name))')
+          .eq('org_id', widget.orgId)
+          .eq('transaction_type', 'sale')
+          .order('transacted_at', ascending: false)
+          .limit(500);
+      // Filter out fully returned transactions
+      final returnedIds = await Supabase.instance.client
+          .from('pos_transactions')
+          .select('reference_transaction_id')
+          .eq('org_id', widget.orgId)
+          .eq('transaction_type', 'return');
+      final Set<String> returned = {for (final r in returnedIds as List) r['reference_transaction_id'] as String? ?? ''};
+      setState(() {
+        _transactions = (txns as List).map((t) => Map<String, dynamic>.from(t)).where((t) => !returned.contains(t['id'] as String)).toList();
+        _loadingTxns = false;
+      });
+    } catch (e) { setState(() => _loadingTxns = false); }
+  }
 
   Future<void> _loadItems(Map<String, dynamic> txn) async {
     setState(() { _selectedTxn = txn; _loadingItems = true; _txnItems = []; _selected.clear(); _qtyCtrls.forEach((_, c) => c.dispose()); _qtyCtrls.clear(); });
     try {
-      final items = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name, sku)').eq('transaction_id', txn['id'] as String);
+      final items = await Supabase.instance.client
+          .from('pos_transaction_items')
+          .select('*, products(name, sku)')
+          .eq('transaction_id', txn['id'] as String)
+          .gt('quantity', 0);
       setState(() {
         _txnItems = List<Map<String, dynamic>>.from(items);
         for (final it in _txnItems) {
@@ -1027,60 +1069,93 @@ class _ReturnDialogState extends State<_ReturnDialog> {
     } catch (e) { setState(() => _loadingItems = false); }
   }
 
-  @override Widget build(BuildContext context) {
-    final filtered = widget.transactions.where((t) {
-      final vn = t['id'] as String? ?? '';
-      final c = t['customers']?['shop_name'] as String? ?? '';
-      return _q.isEmpty || vn.toLowerCase().contains(_q.toLowerCase()) || c.toLowerCase().contains(_q.toLowerCase());
+  List<Map<String, dynamic>> get _filtered {
+    final q = _q.toLowerCase();
+    return _transactions.where((t) {
+      final custName = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase();
+      final txnId = (t['id'] as String? ?? '').toLowerCase();
+      final phone = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase();
+      final matchSearch = q.isEmpty || custName.contains(q) || txnId.contains(q) || phone.contains(q);
+      final ts = t['transacted_at'] != null ? DateTime.parse(t['transacted_at'] as String).toLocal() : null;
+      final matchFrom = _dateFrom == null || (ts != null && !ts.isBefore(_dateFrom!));
+      final matchTo = _dateTo == null || (ts != null && !ts.isAfter(_dateTo!.add(const Duration(days: 1))));
+      return matchSearch && matchFrom && matchTo;
     }).toList();
+  }
+
+  @override Widget build(BuildContext context) {
+    final filtered = _filtered;
     final selectedItems = _txnItems.where((it) => _selected[it['id']] == true).toList();
     final returnTotal = selectedItems.fold(0.0, (s, it) { final qty = double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0; final price = (it['unit_price'] as num?)?.toDouble() ?? 0; return s + qty * price; });
-    return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 700, maxHeight: 560), child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('Process Return', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+    return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 800, maxHeight: 600), child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Text('Process Return', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        const Spacer(),
+        Text('${_transactions.length} returnable orders', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      ]),
       const SizedBox(height: 12),
-      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Search + date filter row
+      Row(children: [
+        Expanded(child: TextField(decoration: const InputDecoration(hintText: 'Search by customer name, phone, transaction ID…', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (v) => setState(() => _q = v))),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(icon: const Icon(Icons.date_range, size: 16), label: Text(_dateFrom != null ? DateFormat('d MMM').format(_dateFrom!) : 'From', style: const TextStyle(fontSize: 12)),
+          onPressed: () async { final d = await showDatePicker(context: context, initialDate: _dateFrom ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) setState(() => _dateFrom = d); }),
+        const SizedBox(width: 4),
+        OutlinedButton.icon(icon: const Icon(Icons.date_range, size: 16), label: Text(_dateTo != null ? DateFormat('d MMM').format(_dateTo!) : 'To', style: const TextStyle(fontSize: 12)),
+          onPressed: () async { final d = await showDatePicker(context: context, initialDate: _dateTo ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) setState(() => _dateTo = d); }),
+        if (_dateFrom != null || _dateTo != null) ...[
+          const SizedBox(width: 4),
+          IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _dateFrom = null; _dateTo = null; })),
+        ],
+      ]),
+      const SizedBox(height: 12),
+      Expanded(child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Left: transaction list
-        Expanded(child: Column(children: [
-          TextField(decoration: const InputDecoration(hintText: 'Search transactions…', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (v) => setState(() => _q = v)),
-          const SizedBox(height: 8),
-          SizedBox(height: 340, child: filtered.isEmpty
-              ? const Center(child: Text('No transactions', style: TextStyle(color: AppTheme.textSecondary)))
-              : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final t = filtered[i]; final sel = _selectedTxn?['id'] == t['id'];
-                    final total = (t['total'] as num?)?.toDouble() ?? 0;
-                    final time = t['transacted_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
-                    return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.08),
-                      title: Row(children: [
-                        Expanded(child: Text(t['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
-                        Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
-                      ]),
-                      subtitle: Text(time, style: const TextStyle(fontSize: 11)),
-                      onTap: () => _loadItems(t));
-                  })),
-        ])),
+        Expanded(child: _loadingTxns ? const Center(child: CircularProgressIndicator())
+          : filtered.isEmpty ? Center(child: Text(_transactions.isEmpty ? 'No returnable orders found.' : 'No orders match your search.', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
+          : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final t = filtered[i]; final sel = _selectedTxn?['id'] == t['id'];
+                final total = (t['total'] as num?)?.toDouble() ?? 0;
+                final ts = t['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
+                final custName = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
+                return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.08),
+                  title: Row(children: [
+                    Expanded(child: Text(custName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+                    Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                  ]),
+                  subtitle: Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  onTap: () => _loadItems(t));
+              })),
         const SizedBox(width: 16),
         // Right: item selection
         Expanded(child: _selectedTxn == null
-            ? const Center(child: Text('Select a transaction on the left', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
+            ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.touch_app_outlined, size: 32, color: AppTheme.textSecondary), SizedBox(height: 8), Text('Select a transaction to view items', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))]))
             : _loadingItems ? const Center(child: CircularProgressIndicator())
             : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Items in transaction', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+                Text('Select items to return', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
                 const SizedBox(height: 8),
-                Expanded(child: ListView(children: _txnItems.map((it) {
-                  final id = it['id'] as String;
-                  final name = it['products']?['name'] as String? ?? '-';
-                  final origQty = (it['quantity'] as num?)?.toDouble() ?? 0;
-                  final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-                  return CheckboxListTile(dense: true, value: _selected[id] ?? false, onChanged: (v) => setState(() => _selected[id] = v ?? false),
-                    title: Text(name, style: const TextStyle(fontSize: 13)),
-                    subtitle: Text('${origQty.toStringAsFixed(0)} × ${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11)),
-                    secondary: _selected[id] == true ? SizedBox(width: 60, child: TextField(controller: _qtyCtrls[id], decoration: const InputDecoration(labelText: 'Qty', isDense: true), keyboardType: const TextInputType.numberWithOptions(decimal: true), onChanged: (_) => setState(() {}))) : null);
-                }).toList())),
+                Expanded(child: _txnItems.isEmpty ? const Center(child: Text('No items found', style: TextStyle(color: AppTheme.textSecondary)))
+                  : ListView(children: _txnItems.map((it) {
+                      final id = it['id'] as String;
+                      final name = it['products']?['name'] as String? ?? it['name'] as String? ?? '-';
+                      final origQty = (it['quantity'] as num?)?.toDouble() ?? 0;
+                      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+                      return CheckboxListTile(dense: true, value: _selected[id] ?? false, onChanged: (v) => setState(() => _selected[id] = v ?? false),
+                        title: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        subtitle: Text('${origQty.toStringAsFixed(0)} × Rs. ${price.toStringAsFixed(2)} = Rs. ${(origQty * price).toStringAsFixed(2)}', style: const TextStyle(fontSize: 11)),
+                        secondary: SizedBox(width: 72, child: TextField(
+                          controller: _qtyCtrls[id],
+                          decoration: InputDecoration(labelText: 'Return qty', isDense: true, filled: true, fillColor: _selected[id] == true ? Colors.orange.withOpacity(0.08) : Colors.grey.withOpacity(0.05)),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          enabled: _selected[id] == true,
+                          onChanged: (_) => setState(() {}),
+                        )));
+                    }).toList())),
                 if (selectedItems.isNotEmpty) Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
                   child: Row(children: [const Text('Refund Total: ', style: TextStyle(fontWeight: FontWeight.w600)), const Spacer(), Text('Rs. ${returnTotal.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.red, fontSize: 15))])),
               ])),
-      ]),
+      ])),
       const SizedBox(height: 12),
       Row(mainAxisAlignment: MainAxisAlignment.end, children: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
@@ -1099,7 +1174,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   }
 }
 
-// ── Product Card ───────────────────────────────────────────────────────────
+
 class _ProductCard extends StatelessWidget {
   final Map<String, dynamic> product;
   final bool inCart, isOpen;
@@ -1115,7 +1190,6 @@ class _ProductCard extends StatelessWidget {
         color: blocked ? const Color(0xFFF5F5F5) : (inCart ? AppTheme.primary.withOpacity(0.06) : Colors.white),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: blocked ? Colors.grey.withOpacity(0.3) : (inCart ? AppTheme.primary.withOpacity(0.4) : AppTheme.border), width: inCart ? 1.5 : 1),
-        boxShadow: isOpen && !inCart ? [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 4, offset: const Offset(0, 2))] : null,
       ),
       padding: const EdgeInsets.all(10),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -1127,7 +1201,7 @@ class _ProductCard extends StatelessWidget {
         const Spacer(),
         Row(children: [
           Expanded(child: Text('Rs. ${price.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: inCart ? AppTheme.primary : AppTheme.textPrimary))),
-          _StockBadge(stockQty: (product['stock_qty'] as num?)?.toDouble() ?? 0),
+          _StockBadge(stockQty: stockQty),
         ]),
         if (!isOpen) const Text('Session closed', style: TextStyle(fontSize: 9, color: AppTheme.textSecondary)),
       ]),
@@ -1135,8 +1209,7 @@ class _ProductCard extends StatelessWidget {
   }
 }
 
-// ── Cart Item Tile ─────────────────────────────────────────────────────────
-class _CartItemTile extends StatelessWidget {
+class _CartItemTile extends StatefulWidget {
   final Map<String, dynamic> item;
   final bool isOpen;
   final ValueChanged<double> onQtyChanged;
@@ -1144,48 +1217,43 @@ class _CartItemTile extends StatelessWidget {
   final VoidCallback onRemove;
   final double lineTotal;
   const _CartItemTile({required this.item, required this.isOpen, required this.onQtyChanged, required this.onDiscountChanged, required this.onRemove, required this.lineTotal});
-
+  @override State<_CartItemTile> createState() => _CartItemTileState();
+}
+class _CartItemTileState extends State<_CartItemTile> {
+  late TextEditingController _qtyCtrl;
+  @override void initState() { super.initState(); _qtyCtrl = TextEditingController(text: (widget.item['quantity'] as double).toStringAsFixed(0)); }
+  @override void didUpdateWidget(_CartItemTile old) { super.didUpdateWidget(old); final q = (widget.item['quantity'] as double).toStringAsFixed(0); if (_qtyCtrl.text != q) _qtyCtrl.text = q; }
+  @override void dispose() { _qtyCtrl.dispose(); super.dispose(); }
   @override Widget build(BuildContext context) {
-    final qty = item['quantity'] as double;
-    final disc = item['discount'] as double;
-    final discType = item['discount_type'] as String;
+    final qty = widget.item['quantity'] as double;
+    final disc = widget.item['discount'] as double;
+    final discType = widget.item['discount_type'] as String;
     return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: const Color(0xFFF8F9FA), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
       child: Column(children: [
         Row(children: [
-          Expanded(child: Text(item['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
-          Text('Rs. ${lineTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          Expanded(child: Text(widget.item['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+          Text('Rs. ${widget.lineTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.primary)),
           const SizedBox(width: 4),
-          if (isOpen) GestureDetector(onTap: onRemove, child: const Icon(Icons.close, size: 16, color: AppTheme.textSecondary)),
+          if (widget.isOpen) GestureDetector(onTap: widget.onRemove, child: const Icon(Icons.close, size: 16, color: AppTheme.textSecondary)),
         ]),
         const SizedBox(height: 6),
         Row(children: [
-          // Qty controls
-          if (isOpen) GestureDetector(onTap: () { if (qty > 1) onQtyChanged(qty - 1); }, child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.border, borderRadius: BorderRadius.circular(4)), child: const Icon(Icons.remove, size: 14))),
+          if (widget.isOpen) GestureDetector(onTap: () { if (qty > 1) widget.onQtyChanged(qty - 1); }, child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.border, borderRadius: BorderRadius.circular(4)), child: const Icon(Icons.remove, size: 14))),
           const SizedBox(width: 6),
-          Text('${qty.toStringAsFixed(0)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+          SizedBox(width: 48, child: TextField(controller: _qtyCtrl, textAlign: TextAlign.center, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700), decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4, horizontal: 4)), enabled: widget.isOpen, onSubmitted: (v) { final n = double.tryParse(v); if (n != null && n > 0) widget.onQtyChanged(n); else _qtyCtrl.text = qty.toStringAsFixed(0); })),
           const SizedBox(width: 6),
-          if (isOpen) GestureDetector(onTap: () => onQtyChanged(qty + 1), child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Icon(Icons.add, size: 14, color: AppTheme.primary))),
+          if (widget.isOpen) GestureDetector(onTap: () => widget.onQtyChanged(qty + 1), child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Icon(Icons.add, size: 14, color: AppTheme.primary))),
           const Spacer(),
-          // Item discount
-          if (isOpen) ...[
-            SizedBox(width: 60, child: TextField(
-              decoration: const InputDecoration(hintText: 'Disc', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4)),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              controller: TextEditingController(text: disc > 0 ? disc.toStringAsFixed(0) : ''),
-              onChanged: (v) => onDiscountChanged(double.tryParse(v) ?? 0, discType),
-              textAlign: TextAlign.right,
-            )),
+          if (widget.isOpen) ...[
+            SizedBox(width: 60, child: TextField(decoration: const InputDecoration(hintText: 'Disc', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4)), keyboardType: const TextInputType.numberWithOptions(decimal: true), controller: TextEditingController(text: disc > 0 ? disc.toStringAsFixed(0) : ''), onChanged: (v) => widget.onDiscountChanged(double.tryParse(v) ?? 0, discType), textAlign: TextAlign.right)),
             const SizedBox(width: 4),
-            GestureDetector(onTap: () => onDiscountChanged(disc, discType == 'fixed' ? 'percent' : 'fixed'),
-              child: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4), decoration: BoxDecoration(color: disc > 0 ? Colors.orange.withOpacity(0.1) : AppTheme.background, borderRadius: BorderRadius.circular(4), border: Border.all(color: AppTheme.border)),
-                child: Text(discType == 'percent' ? '%' : 'Rs', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: disc > 0 ? Colors.orange : AppTheme.textSecondary)))),
+            GestureDetector(onTap: () => widget.onDiscountChanged(disc, discType == 'fixed' ? 'percent' : 'fixed'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4), decoration: BoxDecoration(color: disc > 0 ? Colors.orange.withOpacity(0.1) : AppTheme.background, borderRadius: BorderRadius.circular(4), border: Border.all(color: AppTheme.border)), child: Text(discType == 'percent' ? '%' : 'Rs', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: disc > 0 ? Colors.orange : AppTheme.textSecondary)))),
           ],
         ]),
       ]));
   }
 }
 
-// ── Session Stat ───────────────────────────────────────────────────────────
 class _SessionStat extends StatelessWidget {
   final String label, value;
   final Color? color;
