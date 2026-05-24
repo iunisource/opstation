@@ -125,7 +125,7 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location),
         _menuDivider(),
         _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
-        _menuItem(context, 'Purchase Return Vouchers', Icons.description_outlined,       '/erp/purchase-return-vouchers', location),
+        _menuItem(context, 'Purchase Return Invoices', Icons.description_outlined,       '/erp/purchase-return-vouchers', location),
         _menuDivider(),
         _menuItem(context, 'Payments',                 Icons.payment_outlined,           '/erp/payment-vouchers',         location),
       ],

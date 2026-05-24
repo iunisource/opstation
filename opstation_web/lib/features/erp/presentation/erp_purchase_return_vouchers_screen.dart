@@ -9,10 +9,11 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 
-/// Purchase Return Vouchers (SRI) — stage 2 of the sales return flow.
+/// Purchase Return Invoices (PRI) — stage 2 of the purchase return flow.
 ///
-/// Consumes a saved SRN, snapshots its items, ADDS stock back to inventory,
-/// and produces the financial credit document.
+/// Flow: PRN (qty-only note) → PRI (user sets prices → Issue → stock OUT).
+/// Status: draft → issued.
+/// Stock moves ONLY when "Issue Invoice" is clicked.
 class ErpPurchaseReturnVouchersScreen extends ConsumerStatefulWidget {
   const ErpPurchaseReturnVouchersScreen({super.key});
   @override
@@ -24,6 +25,8 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
+  Map<String, TextEditingController> _priceCtrl = {};
+  Map<String, TextEditingController> _discCtrl = {};
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
@@ -32,17 +35,40 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   @override
   void initState() { super.initState(); _loadList(); }
 
+  @override
+  void dispose() {
+    for (final c in _priceCtrl.values) c.dispose();
+    for (final c in _discCtrl.values) c.dispose();
+    super.dispose();
+  }
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
+  bool get _isLocked => _detail['is_locked'] as bool? ?? false;
+  bool get _isDraft  => (_detail['status'] as String? ?? 'draft') == 'draft';
   bool get _canDelete {
     final role = ref.read(currentUserProvider)?.role;
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
   }
-  bool get _isLocked => _detail['is_locked'] as bool? ?? false;
 
   void _showSnack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  }
+
+  // ── Controllers for editable prices ────────────────────────────────────────
+  void _initControllers() {
+    for (final c in _priceCtrl.values) c.dispose();
+    for (final c in _discCtrl.values) c.dispose();
+    _priceCtrl = {};
+    _discCtrl = {};
+    for (final it in _items) {
+      final id = it['id'] as String;
+      final price = (it['unit_price'] as num?)?.toStringAsFixed(2) ?? '0.00';
+      final disc  = (it['discount']   as num?)?.toStringAsFixed(2) ?? '0.00';
+      _priceCtrl[id] = TextEditingController(text: price);
+      _discCtrl[id]  = TextEditingController(text: disc);
+    }
   }
 
   Future<void> _loadList() async {
@@ -60,8 +86,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
           .limit(2000);
       setState(() { _invoices = List<Map<String, dynamic>>.from(r); _listLoading = false; });
     } catch (e) {
-      // ignore: avoid_print
-      print('[PRV] loadList error: $e');
+      print('[PRI] loadList: $e');
       _showSnack('Failed to load list: $e');
       setState(() => _listLoading = false);
     }
@@ -79,7 +104,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
           .eq('voucher_id', id);
       final meta = await VoucherMeta.fetch(
         orgId: _orgId ?? '',
-        customerId: null as String?,
+        customerId: null,
         createdById: inv['created_by'] as String?,
       );
       setState(() {
@@ -87,11 +112,11 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         _items = List<Map<String, dynamic>>.from(items);
         _meta = meta;
         _detailLoading = false;
+        _initControllers();
       });
     } catch (e) {
-      // ignore: avoid_print
-      print('[PRV] loadDetail error: $e');
-      _showSnack('Failed to load detail: $e');
+      print('[PRI] loadDetail: $e');
+      _showSnack('Failed to load: $e');
       setState(() => _detailLoading = false);
     }
   }
@@ -100,148 +125,220 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
         'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
-        'voucher_id': id, 'voucher_type': 'PRV',
+        'voucher_id': id, 'voucher_type': 'PRI',
         'action': action, 'details': details,
         'user_id': ref.read(currentUserProvider)?.id,
       });
     } catch (_) {}
   }
 
-  // ── Create new SRI from a saved SRN ────────────────────────────────────────
+  // ── Create from a saved PRN ────────────────────────────────────────────────
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
-
-    // Fetch eligible SRNs: saved & not yet invoiced
     try {
-      final srns = await Supabase.instance.client.from('purchase_returns')
-          .select('id, voucher_number, voucher_date, grand_total, supplier_id, suppliers(name)')
-          .eq('org_id', orgId).eq('branch_id', branchId)
-          .eq('status', 'saved')
+      final prns = await Supabase.instance.client.from('purchase_returns')
+          .select('id, voucher_number, voucher_date, supplier_id, suppliers(name)')
+          .eq('org_id', orgId).eq('branch_id', branchId).eq('status', 'saved')
           .order('voucher_date', ascending: false);
-      if ((srns as List).isEmpty) {
-        _showSnack('No saved PRNs available — save an SRN first');
+      if ((prns as List).isEmpty) {
+        _showSnack('No saved PRNs available — save a PRN first');
         return;
       }
       final picked = await showDialog<Map<String, dynamic>?>(context: context,
-        builder: (_) => _PrnPickerDialog(srns: List<Map<String, dynamic>>.from(srns)));
+          builder: (_) => _PrnPickerDialog(prns: List<Map<String, dynamic>>.from(prns)));
       if (picked == null) return;
-      await _generateFromSrn(picked);
+      await _generateFromPrn(picked);
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  /// Public entry — also called from the SRN screen via a direct id.
-  Future<void> _generateFromSrn(Map<String, dynamic> srn) async {
+  Future<void> _generateFromPrn(Map<String, dynamic> prn) async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) return;
+    final prnId = prn['id'] as String;
+    // Check not already invoiced
+    final exists = await Supabase.instance.client.from('purchase_return_vouchers')
+        .select('id, voucher_number').eq('prn_id', prnId);
+    if ((exists as List).isNotEmpty) {
+      _showSnack('Invoice ${exists.first['voucher_number']} already exists for this PRN');
+      return;
+    }
     setState(() => _detailLoading = true);
     final userId = ref.read(currentUserProvider)?.id;
     try {
-      final srnId = srn['id'] as String;
-      // Load source SRN items
       final srnItems = await Supabase.instance.client.from('purchase_return_items')
-          .select('*').eq('return_id', srnId);
+          .select('*').eq('return_id', prnId);
       if ((srnItems as List).isEmpty) {
         setState(() => _detailLoading = false);
         _showSnack('PRN has no items'); return;
       }
-
-      // Voucher #
       final year = DateTime.now().year;
       final nextNum = await Supabase.instance.client.rpc('next_voucher_number',
-          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PRV', 'p_year': year});
-      final voucherNum = 'PRV-$year-${nextNum.toString().padLeft(4, '0')}';
+          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PRI', 'p_year': year});
+      final voucherNum = 'PRI-$year-${nextNum.toString().padLeft(4, '0')}';
       final invId = 'prv_${DateTime.now().millisecondsSinceEpoch}';
 
-      // Insert invoice header
       await Supabase.instance.client.from('purchase_return_vouchers').insert({
         'id': invId,
         'org_id': orgId,
         'branch_id': branchId,
         'voucher_number': voucherNum,
         'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-        'prn_id': srnId,
-        'supplier_id': srn['supplier_id'],
-        'subtotal': srn['subtotal'] ?? 0,
-        'discount_total': srn['discount_total'] ?? 0,
-        'grand_total': srn['grand_total'] ?? 0,
-        'status': 'issued',
-        'is_locked': true,  // auto-lock since stock has moved
-        'locked_by': userId,
-        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'prn_id': prnId,
+        'supplier_id': prn['supplier_id'],
+        'subtotal': 0, 'discount_total': 0, 'grand_total': 0,
+        'status': 'draft',
+        'is_locked': false,
         'created_by': userId,
       });
 
-      // Copy items + move stock (positive = stock back)
       for (final si in srnItems) {
-        final itemId = 'prvi_${DateTime.now().microsecondsSinceEpoch}_${(si['product_id'] as String).substring(0, 4)}';
+        final pid = si['product_id'] as String;
         await Supabase.instance.client.from('purchase_return_voucher_items').insert({
-          'id': itemId,
+          'id': 'prvi_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'voucher_id': invId,
           'prn_item_id': si['id'],
-          'product_id': si['product_id'],
+          'product_id': pid,
           'uom_id': si['uom_id'],
           'quantity': si['quantity'],
-          'unit_price': si['unit_price'],
-          'discount': si['discount'],
-          'line_total': si['line_total'],
+          'unit_price': 0,
+          'discount': 0,
+          'line_total': 0,
         });
-
-        // Stock back into inventory
-        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
-        if (qty > 0) {
-          final stock = await Supabase.instance.client.from('inventory_stock').select()
-              .eq('org_id', orgId).eq('product_id', si['product_id']).eq('branch_id', branchId).maybeSingle();
-          if (stock == null) {
-            await Supabase.instance.client.from('inventory_stock').insert({
-              'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${(si['product_id'] as String).substring(0, 4)}',
-              'org_id': orgId, 'product_id': si['product_id'], 'branch_id': branchId,
-              'quantity': -qty,
-            });
-          } else {
-            await Supabase.instance.client.from('inventory_stock').update({
-              'quantity': ((stock['quantity'] as num).toDouble()) - qty,
-              'updated_at': DateTime.now().toUtc().toIso8601String(),
-            }).eq('id', stock['id']);
-          }
-
-          await Supabase.instance.client.from('inventory_movements').insert({
-            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${(si['product_id'] as String).substring(0, 4)}',
-            'org_id': orgId, 'product_id': si['product_id'], 'branch_id': branchId,
-            'uom_id': si['uom_id'], 'quantity': -qty,
-            'movement_type': 'adjustment',
-            'reference_id': invId, 'reference_type': 'purchase_return_voucher',
-            'moved_at': DateTime.now().toUtc().toIso8601String(),
-            'created_by': userId,
-          });
-        }
       }
 
-      // Flip SRN → 'invoiced' and auto-lock
-      await Supabase.instance.client.from('purchase_returns').update({
-        'status': 'invoiced',
-        'is_locked': true,
-        'locked_by': userId,
-        'locked_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', srnId);
-
-      // Audit on both
-      await _logAudit(invId, 'created', 'Generated from PRN ${srn['voucher_number']}, stock moved out');
-      await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
-        'voucher_id': srnId, 'voucher_type': 'PRN',
-        'action': 'invoiced', 'details': 'Converted to voucher $voucherNum',
-        'user_id': userId,
-      });
-
-      _showSnack('$voucherNum created — stock removed from inventory');
+      await _logAudit(invId, 'created', 'Draft PRI from PRN ${prn['voucher_number']}');
+      _showSnack('$voucherNum created — set prices below, then issue to move stock');
       await _loadList();
       _loadDetail(invId);
     } catch (e) {
       setState(() => _detailLoading = false);
       _showSnack('Failed: $e');
     }
+  }
+
+  // ── Save price/discount edit for one item ────────────────────────────────
+  Future<void> _saveItemPrice(String itemId) async {
+    final price = double.tryParse(_priceCtrl[itemId]?.text ?? '') ?? 0;
+    final disc  = (double.tryParse(_discCtrl[itemId]?.text ?? '') ?? 0).clamp(0.0, 100.0);
+    final qty   = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => {})['quantity'] as num?)?.toDouble() ?? 0;
+    final lt    = qty * price * (1 - disc / 100);
+    try {
+      await Supabase.instance.client.from('purchase_return_voucher_items').update({
+        'unit_price': price, 'discount': disc, 'line_total': lt,
+      }).eq('id', itemId);
+      setState(() {
+        final idx = _items.indexWhere((i) => i['id'] == itemId);
+        if (idx >= 0) {
+          _items[idx]['unit_price'] = price;
+          _items[idx]['discount']   = disc;
+          _items[idx]['line_total'] = lt;
+        }
+      });
+      await _recalcTotals();
+    } catch (e) { _showSnack('Failed to save price: $e'); }
+  }
+
+  Future<void> _recalcTotals() async {
+    double subtotal = 0, discount = 0;
+    for (final it in _items) {
+      final qty   = (it['quantity']   as num?)?.toDouble() ?? 0;
+      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+      final disc  = (it['discount']   as num?)?.toDouble() ?? 0;
+      subtotal += qty * price;
+      discount += qty * price * (disc / 100);
+    }
+    final grand = subtotal - discount;
+    try {
+      await Supabase.instance.client.from('purchase_return_vouchers').update({
+        'subtotal': subtotal, 'discount_total': discount, 'grand_total': grand,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      setState(() {
+        _detail['subtotal'] = subtotal;
+        _detail['discount_total'] = discount;
+        _detail['grand_total'] = grand;
+        final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _invoices[idx]['grand_total'] = grand;
+      });
+    } catch (_) {}
+  }
+
+  // ── Issue Invoice: moves stock + locks ────────────────────────────────────
+  Future<void> _issueInvoice() async {
+    if (_items.isEmpty) { _showSnack('No items to issue'); return; }
+    // Save any unsaved prices first
+    for (final it in _items) {
+      await _saveItemPrice(it['id'] as String);
+    }
+    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Issue Purchase Return Invoice?'),
+      content: const Text('Stock will be removed from inventory (returned to supplier). This action cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Issue')),
+      ],
+    ));
+    if (confirm != true) return;
+
+    final orgId = _orgId;
+    final branchId = _detail['branch_id'] as String?;
+    final userId = ref.read(currentUserProvider)?.id;
+    final invId = _detail['id'] as String;
+    final prnId = _detail['prn_id'] as String?;
+
+    try {
+      for (final it in _items) {
+        final pid = it['product_id'] as String;
+        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+        if (qty <= 0 || branchId == null || orgId == null) continue;
+        final stock = await Supabase.instance.client.from('inventory_stock').select()
+            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+        if (stock == null) {
+          await Supabase.instance.client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+            'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': -qty,
+          });
+        } else {
+          await Supabase.instance.client.from('inventory_stock').update({
+            'quantity': ((stock['quantity'] as num).toDouble()) - qty,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }).eq('id', stock['id']);
+        }
+        await Supabase.instance.client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+          'uom_id': it['uom_id'], 'quantity': -qty,
+          'movement_type': 'adjustment',
+          'reference_id': invId, 'reference_type': 'purchase_return_invoice',
+          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
+        });
+      }
+
+      // Issue the PRI
+      await Supabase.instance.client.from('purchase_return_vouchers').update({
+        'status': 'issued',
+        'is_locked': true,
+        'locked_by': userId,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', invId);
+
+      // Flip PRN to invoiced + lock
+      if (prnId != null) {
+        await Supabase.instance.client.from('purchase_returns').update({
+          'status': 'invoiced', 'is_locked': true,
+          'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', prnId);
+      }
+
+      await _logAudit(invId, 'issued', 'Stock removed from inventory');
+      _showSnack('Issued — stock removed from inventory');
+      _loadDetail(invId);
+      _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void> _toggleLock() async {
@@ -262,8 +359,8 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   Future<void> _delete() async {
     if (!_canDelete) return;
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Purchase Return Voucher?'),
-      content: Text('Permanently delete ${_detail['voucher_number']}? Stock will be removed (reversal), and the source SRN will be restored to "saved". This cannot be undone.'),
+      title: const Text('Delete Purchase Return Invoice?'),
+      content: Text('Delete ${_detail['voucher_number']}?${_detail['status'] == 'issued' ? '\n\nStock will be reversed and the source PRN restored to saved.' : ''}'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
@@ -271,52 +368,46 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       ],
     ));
     if (confirm != true) return;
-    final orgId = _orgId;
-    final branchId = _detail['branch_id'] as String?;
+
+    final orgId = _orgId; final branchId = _detail['branch_id'] as String?;
     final userId = ref.read(currentUserProvider)?.id;
     try {
-      // Reverse stock
-      for (final it in _items) {
-        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-        final pid = it['product_id'] as String;
-        if (qty <= 0 || branchId == null || orgId == null) continue;
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock != null) {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((stock['quantity'] as num).toDouble()) + qty,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
+      // If issued, reverse stock
+      if (_detail['status'] == 'issued') {
+        for (final it in _items) {
+          final pid = it['product_id'] as String;
+          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+          if (qty <= 0 || branchId == null || orgId == null) continue;
+          final stock = await Supabase.instance.client.from('inventory_stock').select()
+              .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+          if (stock != null) {
+            await Supabase.instance.client.from('inventory_stock').update({
+              'quantity': ((stock['quantity'] as num).toDouble()) + qty,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            }).eq('id', stock['id']);
+          }
+          await Supabase.instance.client.from('inventory_movements').insert({
+            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+            'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+            'uom_id': it['uom_id'], 'quantity': qty,
+            'movement_type': 'adjustment',
+            'reference_id': _detail['id'], 'reference_type': 'purchase_return_invoice_deleted',
+            'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
+          });
         }
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'uom_id': it['uom_id'], 'quantity': qty,
-          'movement_type': 'adjustment',
-          'reference_id': _detail['id'], 'reference_type': 'purchase_return_voucher_deleted',
-          'moved_at': DateTime.now().toUtc().toIso8601String(),
-          'created_by': userId,
-        });
       }
-
-      // Flip SRN back to 'saved' and unlock
-      final srnId = _detail['prn_id'] as String?;
-      if (srnId != null) {
+      // Restore PRN to saved
+      final prnId = _detail['prn_id'] as String?;
+      if (prnId != null) {
         await Supabase.instance.client.from('purchase_returns').update({
-          'status': 'saved',
-          'is_locked': false,
-          'locked_by': null,
-          'locked_at': null,
+          'status': 'saved', 'is_locked': false, 'locked_by': null, 'locked_at': null,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', srnId);
+        }).eq('id', prnId);
       }
-
-      await _logAudit(_detail['id'] as String, 'deleted',
-          'Invoice ${_detail['voucher_number']} deleted, stock reversed, SRN restored');
+      await _logAudit(_detail['id'] as String, 'deleted', 'Invoice deleted');
       await Supabase.instance.client.from('purchase_return_voucher_items').delete().eq('voucher_id', _detail['id']);
       await Supabase.instance.client.from('purchase_return_vouchers').delete().eq('id', _detail['id']);
-
-      _showSnack('Deleted — stock reversed, SRN restored');
+      _showSnack('Deleted — PRN restored');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       await _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -325,26 +416,24 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
     final lines = _items.map((it) {
-      final qty   = (it['quantity'] as num?)?.toDouble() ?? 0;
+      final qty   = (it['quantity']   as num?)?.toDouble() ?? 0;
       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-      final disc  = (it['discount'] as num?)?.toDouble() ?? 0;
+      final disc  = (it['discount']   as num?)?.toDouble() ?? 0;
       final lt    = (it['line_total'] as num?)?.toDouble() ?? qty * price * (1 - disc / 100);
-      return VoucherLine(
-        product: it['products']?['name'] as String? ?? '-',
-        sku: it['products']?['sku'] as String?,
-        uom: it['uoms']?['abbreviation'] as String?,
-        qty: qty, unitPrice: price, discountPct: disc, lineTotal: lt,
-      );
+      return VoucherLine(product: it['products']?['name'] as String? ?? '-',
+          sku: it['products']?['sku'] as String?,
+          uom: it['uoms']?['abbreviation'] as String?,
+          qty: qty, unitPrice: price, discountPct: disc, lineTotal: lt);
     }).toList();
     final sup = _detail['suppliers'] as Map?;
-    final srnVoucher = _detail['purchase_returns']?['voucher_number'] as String?;
+    final prnVoucher = _detail['purchase_returns']?['voucher_number'] as String?;
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final createdAt = _detail['created_at'] != null
         ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
-      voucherTypeLabel: 'Purchase Return Voucher',
+      voucherTypeLabel: 'Purchase Return Invoice',
       orgName: user?.orgName ?? 'Opstation',
       branchName: _detail['branches']?['name'] as String?,
       date: date,
@@ -352,7 +441,6 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       customerAddress: sup?['address'] as String?,
       customerContact: sup?['contact_person'] as String?,
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
-      
       lines: lines,
       subtotal: (_detail['subtotal'] as num?)?.toDouble() ?? 0,
       discountTotal: (_detail['discount_total'] as num?)?.toDouble() ?? 0,
@@ -360,7 +448,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
       footerNote: _meta.footerNote,
-      relatedRefs: srnVoucher != null ? {'PRN #': srnVoucher} : null,
+      relatedRefs: prnVoucher != null ? {'PRN #': prnVoucher} : null,
     );
   }
 
@@ -375,7 +463,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         paneWidth: 360,
         listChild: _buildList(),
         detailChild: _selectedId == null
-            ? const Center(child: Text('Select or create a Purchase Return Voucher',
+            ? const Center(child: Text('Select or create a Purchase Return Invoice',
                 style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))
             : _buildDetail(),
       ),
@@ -387,7 +475,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     final filtered = _invoices.where((r) {
       if (q.isEmpty) return true;
       return (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             ((r['suppliers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q) ||
+             ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) ||
              ((r['purchase_returns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
     }).toList();
     return Container(
@@ -396,15 +484,14 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
           child: Row(children: [
-            const Expanded(child: Text('Purchase Return Vouchers', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700))),
+            const Expanded(child: Text('Purchase Return Invoices', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
             IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 32),
-                onPressed: _createNew, tooltip: 'New PRV from PRN'),
+                onPressed: _createNew, tooltip: 'New PRI from PRN'),
           ]),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 20),
           child: TextField(
-            decoration: const InputDecoration(hintText: 'Search PRV / PRN / supplier…',
+            decoration: const InputDecoration(hintText: 'Search PRI / PRN / supplier…',
                 prefixIcon: Icon(Icons.search, size: 18), isDense: true),
             onChanged: (v) => setState(() => _search = v),
           ),
@@ -419,18 +506,26 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                     itemBuilder: (_, i) {
                       final r = filtered[i];
                       final selected = r['id'] == _selectedId;
+                      final isDraft = (r['status'] as String? ?? '') == 'draft';
                       return ListTile(
                         dense: true,
                         selected: selected,
                         selectedTileColor: AppTheme.primary.withOpacity(0.06),
-                        title: Text(r['voucher_number'] as String? ?? '-',
-                            style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null)),
-                        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                          Text(r['suppliers']?['shop_name'] as String? ?? 'Cash Supplier', style: const TextStyle(fontSize: 11)),
-                          if (r['purchase_returns']?['voucher_number'] != null)
-                            Text('← ${r['purchase_returns']['voucher_number']}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                        title: Row(children: [
+                          Expanded(child: Text(r['voucher_number'] as String? ?? '-',
+                              style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null))),
+                          if (isDraft)
+                            Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                                child: const Text('draft', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w600))),
                         ]),
-                        trailing: Text(((r['grand_total'] as num?)?.toStringAsFixed(2)) ?? '0',
+                        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                          Text(r['suppliers']?['name'] as String? ?? 'Cash Supplier', style: const TextStyle(fontSize: 11)),
+                          if (r['purchase_returns']?['voucher_number'] != null)
+                            Text('← ${r['purchase_returns']['voucher_number']}',
+                                style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                        ]),
+                        trailing: Text(((r['grand_total'] as num?)?.toStringAsFixed(2)) ?? '0.00',
                             style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary)),
                         onTap: () => _loadDetail(r['id'] as String),
                       );
@@ -452,9 +547,18 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(_detail['voucher_number'] as String? ?? '-',
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const Text('Purchase Return Voucher',
+            const Text('Purchase Return Invoice',
                 style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
+          if (_isDraft) ...[
+            ElevatedButton.icon(
+              icon: const Icon(Icons.check_circle_outline, size: 16),
+              label: const Text('Issue Invoice'),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+              onPressed: _issueInvoice,
+            ),
+            const SizedBox(width: 8),
+          ],
           IconButton(
             icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
                 color: _isLocked ? Colors.orange : AppTheme.textSecondary),
@@ -470,21 +574,50 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Info chips
             Wrap(spacing: 12, runSpacing: 8, children: [
               _Chip(label: 'Supplier', value: sup?['name'] as String? ?? 'Cash Supplier'),
               _Chip(label: 'Date', value: _detail['voucher_date'] != null
                   ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
               _Chip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
               _Chip(label: 'Source PRN', value: _detail['purchase_returns']?['voucher_number'] as String? ?? '-'),
-              _Chip(label: 'Status', value: (_detail['status'] as String? ?? 'issued')),
+              _Chip(label: 'Status', value: _detail['status'] as String? ?? 'draft'),
             ]),
+            // Supplier strip
+            if (sup != null && (sup['address'] != null || sup['contact_person'] != null))
+              _SupplierInfoStrip(
+                address: sup['address'] as String?,
+                contact: sup['contact_person'] as String?,
+                phone: (sup['contact_number'] ?? sup['phone']) as String?,
+                ntn: sup['ntn'] as String?,
+                preparedBy: _meta.preparedBy,
+              ),
 
             const SizedBox(height: 20),
 
-            // Read-only items table
+            // Draft hint
+            if (_isDraft)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                ),
+                child: const Row(children: [
+                  Icon(Icons.edit_note, size: 16, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Expanded(child: Text('Draft — set prices below, then click "Issue Invoice" to move stock.',
+                      style: TextStyle(fontSize: 12, color: Colors.orange))),
+                ]),
+              ),
+
+            // Items table
             Container(
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
               child: Column(children: [
+                // Header row
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
@@ -498,20 +631,37 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                   ]),
                 ),
                 const Divider(height: 1),
+                if (_items.isEmpty)
+                  const Padding(padding: EdgeInsets.symmetric(vertical: 20),
+                      child: Text('No items.', style: TextStyle(color: AppTheme.textSecondary))),
                 ..._items.map((it) {
-                  final qty   = (it['quantity'] as num?)?.toDouble() ?? 0;
+                  final id    = it['id'] as String;
+                  final qty   = (it['quantity']   as num?)?.toDouble() ?? 0;
                   final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-                  final disc  = (it['discount'] as num?)?.toDouble() ?? 0;
-                  final total = (it['line_total'] as num?)?.toDouble() ?? qty * price * (1 - disc / 100);
+                  final disc  = (it['discount']   as num?)?.toDouble() ?? 0;
+                  final lt    = price > 0 ? qty * price * (1 - disc / 100) : 0.0;
                   return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                     child: Row(children: [
                       Expanded(flex: 4, child: Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
                       Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
-                      Expanded(flex: 2, child: Text(price.toStringAsFixed(2), textAlign: TextAlign.right)),
-                      Expanded(flex: 1, child: Text('${disc.toStringAsFixed(disc % 1 == 0 ? 0 : 2)}%', textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text(total.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                      Expanded(flex: 2, child: _isDraft
+                          ? TextField(controller: _priceCtrl[id],
+                              decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)),
+                              textAlign: TextAlign.right,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              onSubmitted: (_) => _saveItemPrice(id))
+                          : Text(price.toStringAsFixed(2), textAlign: TextAlign.right)),
+                      Expanded(flex: 1, child: _isDraft
+                          ? TextField(controller: _discCtrl[id],
+                              decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)),
+                              textAlign: TextAlign.right,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              onSubmitted: (_) => _saveItemPrice(id))
+                          : Text('${disc.toStringAsFixed(0)}%', textAlign: TextAlign.right)),
+                      Expanded(flex: 2, child: Text(lt.toStringAsFixed(2), textAlign: TextAlign.right,
+                          style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
                     ]),
                   );
                 }),
@@ -522,8 +672,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
 
             // Totals
             Align(alignment: Alignment.centerRight, child: Container(
-              padding: const EdgeInsets.all(12),
-              width: 280,
+              padding: const EdgeInsets.all(12), width: 280,
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 _totalRow('Subtotal', (_detail['subtotal'] as num?)?.toDouble() ?? 0),
@@ -532,6 +681,9 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                 _totalRow('Grand Total', (_detail['grand_total'] as num?)?.toDouble() ?? 0, bold: true),
               ]),
             )),
+
+            const SizedBox(height: 16),
+            _AuditTrailWidget(voucherId: _selectedId ?? '', voucherType: 'PRI'),
           ]),
         ),
       ),
@@ -539,82 +691,169 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   }
 
   Widget _totalRow(String label, double v, {bool bold = false, Color? color}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+    return Padding(padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         Text(label, style: TextStyle(color: color ?? AppTheme.textSecondary, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, fontSize: bold ? 14 : 12)),
         Text(v.toStringAsFixed(2), style: TextStyle(color: color ?? (bold ? AppTheme.primary : null), fontWeight: bold ? FontWeight.w700 : FontWeight.w600, fontSize: bold ? 15 : 13)),
-      ]),
-    );
+      ]));
   }
 }
 
-// ─── SRN picker dialog ────────────────────────────────────────────────────────
+// ─── PRN Picker Dialog ────────────────────────────────────────────────────────
 class _PrnPickerDialog extends StatefulWidget {
-  final List<Map<String, dynamic>> srns;
-  const _PrnPickerDialog({required this.srns});
+  final List<Map<String, dynamic>> prns;
+  const _PrnPickerDialog({required this.prns});
   @override
   State<_PrnPickerDialog> createState() => _PrnPickerDialogState();
 }
-
 class _PrnPickerDialogState extends State<_PrnPickerDialog> {
   String _q = '';
   @override
   Widget build(BuildContext context) {
-    final q = _q.toLowerCase().trim();
-    final filtered = widget.srns.where((s) {
-      if (q.isEmpty) return true;
-      return (s['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             ((s['suppliers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q);
-    }).toList();
+    final q = _q.toLowerCase();
+    final filtered = widget.prns.where((s) =>
+        (s['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
+        ((s['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q)).toList();
     return AlertDialog(
-      title: Text('Pick a saved PRN  ·  ${widget.srns.length} eligible'),
+      title: Text('Pick a saved PRN  ·  ${widget.prns.length} eligible'),
       content: SizedBox(width: 520, height: 460, child: Column(children: [
-        TextField(
-          decoration: const InputDecoration(hintText: 'Search PRN # / supplier', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
-          onChanged: (v) => setState(() => _q = v),
-          autofocus: true,
-        ),
+        TextField(decoration: const InputDecoration(hintText: 'Search PRN # / supplier',
+            prefixIcon: Icon(Icons.search, size: 18), isDense: true),
+            onChanged: (v) => setState(() => _q = v), autofocus: true),
         const SizedBox(height: 12),
         Expanded(child: filtered.isEmpty
-            ? const Center(child: Text('No saved PRNs match.', style: TextStyle(color: AppTheme.textSecondary)))
+            ? const Center(child: Text('No saved PRNs match.'))
             : ListView.separated(
                 itemCount: filtered.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (_, i) {
                   final s = filtered[i];
-                  final date = s['voucher_date'] != null
-                      ? DateFormat('d MMM yyyy').format(DateTime.parse(s['voucher_date'] as String)) : '';
-                  return ListTile(
-                    dense: true,
+                  return ListTile(dense: true,
                     title: Text(s['voucher_number'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w700)),
-                    subtitle: Text('${s['suppliers']?['shop_name'] ?? "Cash Supplier"}  ·  $date',
-                        style: const TextStyle(fontSize: 11)),
-                    trailing: Text(((s['grand_total'] as num?)?.toStringAsFixed(2)) ?? '0',
-                        style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary)),
-                    onTap: () => Navigator.pop(context, s),
-                  );
-                },
-              )),
+                    subtitle: Text(s['suppliers']?['name'] as String? ?? 'Cash Supplier', style: const TextStyle(fontSize: 11)),
+                    onTap: () => Navigator.pop(context, s));
+                })),
       ])),
       actions: [TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel'))],
     );
   }
 }
 
-class _Chip extends StatelessWidget {
-  final String label;
-  final String value;
-  const _Chip({required this.label, required this.value});
+// ─── Supplier Info Strip ──────────────────────────────────────────────────────
+class _SupplierInfoStrip extends StatelessWidget {
+  final String? address, contact, phone, ntn, preparedBy;
+  const _SupplierInfoStrip({this.address, this.contact, this.phone, this.ntn, this.preparedBy});
   @override
   Widget build(BuildContext context) {
+    final tiles = <Widget>[
+      if (address != null && address!.isNotEmpty) _tile(Icons.location_on_outlined, 'Address', address!),
+      if (contact != null && contact!.isNotEmpty) _tile(Icons.account_circle_outlined, 'Contact', contact!),
+      if (phone != null && phone!.isNotEmpty)     _tile(Icons.phone_outlined, 'Phone', phone!),
+      if (ntn != null && ntn!.isNotEmpty)         _tile(Icons.badge_outlined, 'NTN', ntn!),
+    ];
+    if (tiles.isEmpty && (preparedBy == null || preparedBy!.isEmpty)) return const SizedBox.shrink();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: AppTheme.background, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (tiles.isNotEmpty) Wrap(spacing: 24, runSpacing: 8, children: tiles),
+        if (preparedBy != null && preparedBy!.isNotEmpty) ...[
+          if (tiles.isNotEmpty) const SizedBox(height: 8),
+          Row(children: [
+            const Icon(Icons.draw_outlined, size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text('Prepared by: $preparedBy', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
+          ]),
+        ],
       ]),
+    );
+  }
+  Widget _tile(IconData icon, String label, String value) => ConstrainedBox(
+    constraints: const BoxConstraints(maxWidth: 300),
+    child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, size: 16, color: AppTheme.textSecondary),
+      const SizedBox(width: 6),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+        Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+      ]),
+    ]),
+  );
+}
+
+class _Chip extends StatelessWidget {
+  final String label, value;
+  const _Chip({required this.label, required this.value});
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+      Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+    ]),
+  );
+}
+
+// ─── Audit Trail Widget ───────────────────────────────────────────────────────
+class _AuditTrailWidget extends StatelessWidget {
+  final String voucherId, voucherType;
+  const _AuditTrailWidget({required this.voucherId, required this.voucherType});
+  @override
+  Widget build(BuildContext context) {
+    if (voucherId.isEmpty) return const SizedBox.shrink();
+    return FutureBuilder<List<dynamic>>(
+      future: Supabase.instance.client.from('voucher_audit_log')
+          .select('action, details, user_id, created_at, users(name)')
+          .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
+          .order('created_at', ascending: false).limit(30),
+      builder: (ctx, snap) {
+        if (!snap.hasData || (snap.data as List).isEmpty) return const SizedBox.shrink();
+        final entries = List<Map<String, dynamic>>.from(snap.data!);
+        return Container(
+          margin: const EdgeInsets.only(top: 4),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+            const SizedBox(height: 8),
+            ...entries.map((e) {
+              final action = e['action'] as String? ?? '-';
+              final ts = e['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+              final by = e['users']?['name'] as String? ?? '—';
+              final details = e['details'] as String? ?? '';
+              Color color;
+              IconData icon;
+              switch (action) {
+                case 'created':  icon = Icons.add_circle_outline;    color = AppTheme.success; break;
+                case 'saved':    icon = Icons.save_outlined;         color = AppTheme.primary; break;
+                case 'issued':   icon = Icons.check_circle_outline;  color = AppTheme.success; break;
+                case 'locked':   icon = Icons.lock_outline;          color = Colors.orange; break;
+                case 'unlocked': icon = Icons.lock_open;             color = AppTheme.textSecondary; break;
+                case 'deleted':  icon = Icons.delete_outline;        color = AppTheme.danger; break;
+                default:         icon = Icons.history;               color = AppTheme.textSecondary;
+              }
+              return Padding(padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(icon, size: 14, color: color),
+                  const SizedBox(width: 8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)),
+                      const SizedBox(width: 8),
+                      Text('by $by', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      const Spacer(),
+                      Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ]),
+                    if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ])),
+                ]));
+            }),
+          ]),
+        );
+      },
     );
   }
 }

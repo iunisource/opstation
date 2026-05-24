@@ -39,8 +39,6 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl  = TextEditingController(text: '1');
-  final _addPriceCtrl = TextEditingController(text: '0');
-  final _addDiscCtrl = TextEditingController(text: '0');
 
   @override
   void initState() { super.initState(); _loadList(); _loadLookups(); }
@@ -48,8 +46,6 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   @override
   void dispose() {
     _addQtyCtrl.dispose();
-    _addPriceCtrl.dispose();
-    _addDiscCtrl.dispose();
     super.dispose();
   }
 
@@ -213,14 +209,11 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   // ── Inline item add ────────────────────────────────────────────────────────
   Future<void> _addItem() async {
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
-    final qty   = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
-    final price = double.tryParse(_addPriceCtrl.text.trim()) ?? 0;
-    final disc  = (double.tryParse(_addDiscCtrl.text.trim()) ?? 0).clamp(0.0, 100.0);
+    final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _showSnack('Qty must be > 0'); return; }
 
     final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
     final uom  = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
-    final lineTotal = (qty * price) * (1 - disc / 100);
     final itemId = 'pri_${DateTime.now().microsecondsSinceEpoch}';
 
     try {
@@ -230,11 +223,10 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         'product_id': _addProductId,
         'uom_id': _addUomId,
         'quantity': qty,
-        'unit_price': price,
-        'discount': disc,
-        'line_total': lineTotal,
+        'unit_price': 0,
+        'discount': 0,
+        'line_total': 0,
       });
-      // Optimistic append
       setState(() {
         _items.add({
           'id': itemId,
@@ -242,16 +234,15 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
           'product_id': _addProductId,
           'uom_id': _addUomId,
           'quantity': qty,
-          'unit_price': price,
-          'discount': disc,
-          'line_total': lineTotal,
+          'unit_price': 0,
+          'discount': 0,
+          'line_total': 0,
           'products': {'name': prod['name'], 'sku': prod['sku']},
           'uoms': {'abbreviation': uom['abbreviation']},
         });
         _addProductId = null; _addUomId = null;
-        _addQtyCtrl.text = '1'; _addPriceCtrl.text = '0'; _addDiscCtrl.text = '0';
+        _addQtyCtrl.text = '1';
       });
-      await _recalcTotals();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -318,14 +309,24 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  Future<void> _generateVoucher() async {
+  Future<void> _generateInvoice() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     if (_items.isEmpty) { _showSnack('No items to invoice'); return; }
 
+    // Check if a PRI already exists for this PRN
+    try {
+      final existing = await Supabase.instance.client.from('purchase_return_vouchers')
+          .select('id, voucher_number').eq('prn_id', _detail['id'] as String);
+      if ((existing as List).isNotEmpty) {
+        _showSnack('Invoice ${existing.first['voucher_number']} already exists — open it in Purchase Return Invoices');
+        return;
+      }
+    } catch (_) {}
+
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Generate Purchase Return Voucher?'),
-      content: const Text('This will create a Purchase Return Voucher (PRV), remove stock from inventory (returned to supplier), and lock this PRN. Continue?'),
+      title: const Text('Generate Purchase Return Invoice?'),
+      content: const Text('A draft invoice will be created. You can set prices and then Issue it to move stock.'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Generate')),
@@ -338,8 +339,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     try {
       final year = DateTime.now().year;
       final nextNum = await Supabase.instance.client.rpc('next_voucher_number',
-          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PRV', 'p_year': year});
-      final voucherNum = 'PRV-$year-${nextNum.toString().padLeft(4, '0')}';
+          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PRI', 'p_year': year});
+      final voucherNum = 'PRI-$year-${nextNum.toString().padLeft(4, '0')}';
       final invId = 'prv_${DateTime.now().millisecondsSinceEpoch}';
 
       await Supabase.instance.client.from('purchase_return_vouchers').insert({
@@ -350,73 +351,29 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'prn_id': prnId,
         'supplier_id': _detail['supplier_id'],
-        'subtotal': _detail['subtotal'] ?? 0,
-        'discount_total': _detail['discount_total'] ?? 0,
-        'grand_total': _detail['grand_total'] ?? 0,
-        'status': 'issued',
-        'is_locked': true,
-        'locked_by': userId,
-        'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'subtotal': 0, 'discount_total': 0, 'grand_total': 0,
+        'status': 'draft',
+        'is_locked': false,
         'created_by': userId,
       });
 
       for (final si in _items) {
         final pid = si['product_id'] as String;
-        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
         await Supabase.instance.client.from('purchase_return_voucher_items').insert({
           'id': 'prvi_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'voucher_id': invId,
           'prn_item_id': si['id'],
           'product_id': pid,
           'uom_id': si['uom_id'],
-          'quantity': qty,
-          'unit_price': si['unit_price'],
-          'discount': si['discount'],
-          'line_total': si['line_total'],
-        });
-        if (qty <= 0) continue;
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock == null) {
-          await Supabase.instance.client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-            'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': -qty,
-          });
-        } else {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((stock['quantity'] as num).toDouble()) - qty,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
-        }
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'uom_id': si['uom_id'], 'quantity': -qty,
-          'movement_type': 'adjustment',
-          'reference_id': invId, 'reference_type': 'purchase_return_voucher',
-          'moved_at': DateTime.now().toUtc().toIso8601String(),
-          'created_by': userId,
+          'quantity': si['quantity'],
+          'unit_price': 0,
+          'discount': 0,
+          'line_total': 0,
         });
       }
 
-      // Flip PRN status + auto-lock
-      await Supabase.instance.client.from('purchase_returns').update({
-        'status': 'invoiced',
-        'is_locked': true,
-        'locked_by': userId,
-        'locked_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', prnId);
-
-      await _logAudit(prnId, 'invoiced', 'Converted to voucher $voucherNum');
-      await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
-        'voucher_id': invId, 'voucher_type': 'PRV',
-        'action': 'created', 'details': 'Generated from PRN ${_detail['voucher_number']}',
-        'user_id': userId,
-      });
-
-      _showSnack('$voucherNum created — stock removed. See "Purchase Return Vouchers" tab.');
+      await _logAudit(prnId, 'invoiced', 'Draft invoice $voucherNum created');
+      _showSnack('$voucherNum created as draft — set prices in Purchase Return Invoices tab');
       _loadDetail(prnId);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -604,9 +561,9 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
           if (!_isDraft && (_detail['status'] as String? ?? '') == 'saved') ...[
             ElevatedButton.icon(
               icon: const Icon(Icons.description, size: 16),
-              label: const Text('Generate Voucher'),
+              label: const Text('Generate Return Invoice'),
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-              onPressed: _generateVoucher,
+              onPressed: _generateInvoice,
             ),
             const SizedBox(width: 8),
           ],
@@ -653,12 +610,9 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
                   child: const Row(children: [
-                    Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 1, child: Text('Qty', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-                    Expanded(flex: 2, child: Text('Price', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('Disc%', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-                    Expanded(flex: 2, child: Text('Total', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+                    Expanded(flex: 5, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text('Qty', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
                     SizedBox(width: 44),
                   ]),
                 ),
@@ -669,19 +623,13 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                   const Padding(padding: EdgeInsets.symmetric(vertical: 20),
                     child: Text('No items yet — add below.', style: TextStyle(color: AppTheme.textSecondary))),
                 ..._items.map((it) {
-                  final qty   = (it['quantity'] as num?)?.toDouble() ?? 0;
-                  final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-                  final disc  = (it['discount'] as num?)?.toDouble() ?? 0;
-                  final total = (it['line_total'] as num?)?.toDouble() ?? qty * price * (1 - disc / 100);
+                  final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
                   return Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(children: [
-                      Expanded(flex: 4, child: Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
-                      Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 1, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
-                      Expanded(flex: 2, child: Text(price.toStringAsFixed(2), textAlign: TextAlign.right)),
-                      Expanded(flex: 1, child: Text('${disc.toStringAsFixed(disc % 1 == 0 ? 0 : 2)}%', textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text(total.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                      Expanded(flex: 5, child: Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
+                      Expanded(flex: 2, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                      Expanded(flex: 2, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
                       SizedBox(width: 44, child: _canEdit
                           ? IconButton(
                               icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
@@ -700,7 +648,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                     color: AppTheme.background,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(children: [
-                      Expanded(flex: 4, child: DropdownButtonFormField<String>(
+                      Expanded(flex: 5, child: DropdownButtonFormField<String>(
                         value: _addProductId,
                         isDense: true,
                         isExpanded: true,
@@ -714,10 +662,9 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                           _addProductId = v;
                           final p = _products.firstWhere((x) => x['id'] == v, orElse: () => {});
                           _addUomId = p['base_uom_id'] as String?;
-                          _addPriceCtrl.text = (p['cost_price'] as num?)?.toStringAsFixed(2) ?? '0';
                         }),
                       )),
-                      Expanded(flex: 1, child: Padding(
+                      Expanded(flex: 2, child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: DropdownButtonFormField<String>(
                           value: _addUomId,
@@ -731,34 +678,15 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                           onChanged: (v) => setState(() => _addUomId = v),
                         ),
                       )),
-                      Expanded(flex: 1, child: Padding(
+                      Expanded(flex: 2, child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: TextField(controller: _addQtyCtrl,
                             decoration: const InputDecoration(hintText: 'Qty', isDense: true),
                             textAlign: TextAlign.right,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            textInputAction: TextInputAction.next,
-                            onSubmitted: (_) => _addItem()),
-                      )),
-                      Expanded(flex: 2, child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: TextField(controller: _addPriceCtrl,
-                            decoration: const InputDecoration(hintText: 'Price', isDense: true),
-                            textAlign: TextAlign.right,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            textInputAction: TextInputAction.next,
-                            onSubmitted: (_) => _addItem()),
-                      )),
-                      Expanded(flex: 1, child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: TextField(controller: _addDiscCtrl,
-                            decoration: const InputDecoration(hintText: '%', isDense: true),
-                            textAlign: TextAlign.right,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             textInputAction: TextInputAction.done,
                             onSubmitted: (_) => _addItem()),
                       )),
-                      const Expanded(flex: 2, child: SizedBox()),
                       SizedBox(width: 44, child: IconButton(
                         icon: const Icon(Icons.add_circle, color: AppTheme.primary),
                         tooltip: 'Add item',
@@ -770,20 +698,10 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
               ]),
             ),
 
-            const SizedBox(height: 16),
+            // Prices are set in the Purchase Return Invoice (PRI) — no totals at note stage.
 
-            // Totals
-            Align(alignment: Alignment.centerRight, child: Container(
-              padding: const EdgeInsets.all(12),
-              width: 280,
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                _totalRow('Subtotal', (_detail['subtotal'] as num?)?.toDouble() ?? 0),
-                _totalRow('Discount', (_detail['discount_total'] as num?)?.toDouble() ?? 0, color: AppTheme.warning),
-                const Divider(height: 8),
-                _totalRow('Grand Total', (_detail['grand_total'] as num?)?.toDouble() ?? 0, bold: true),
-              ]),
-            )),
+            const SizedBox(height: 16),
+            _AuditTrailWidget(voucherId: _selectedId ?? '', voucherType: 'PRN'),
           ]),
         ),
       ),
@@ -923,6 +841,65 @@ class _Chip extends StatelessWidget {
         Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
         Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
       ]),
+    );
+  }
+}
+
+// ─── Audit Trail Widget (inline — mirrors PRI) ────────────────────────────────
+class _AuditTrailWidget extends StatelessWidget {
+  final String voucherId, voucherType;
+  const _AuditTrailWidget({required this.voucherId, required this.voucherType});
+  @override
+  Widget build(BuildContext context) {
+    if (voucherId.isEmpty) return const SizedBox.shrink();
+    return FutureBuilder<List<dynamic>>(
+      future: Supabase.instance.client.from('voucher_audit_log')
+          .select('action, details, user_id, created_at, users(name)')
+          .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
+          .order('created_at', ascending: false).limit(20),
+      builder: (ctx, snap) {
+        if (!snap.hasData || (snap.data as List).isEmpty) return const SizedBox.shrink();
+        final entries = List<Map<String, dynamic>>.from(snap.data!);
+        return Container(
+          margin: const EdgeInsets.only(top: 4),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+            const SizedBox(height: 8),
+            ...entries.map((e) {
+              final action  = e['action'] as String? ?? '-';
+              final details = e['details'] as String? ?? '';
+              final by      = e['users']?['name'] as String? ?? '—';
+              final ts      = e['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+              Color color;
+              switch (action) {
+                case 'created': case 'saved':   color = AppTheme.primary; break;
+                case 'invoiced':                color = AppTheme.success; break;
+                case 'locked':                  color = Colors.orange; break;
+                case 'deleted': case 'cancelled': color = AppTheme.danger; break;
+                default:                        color = AppTheme.textSecondary;
+              }
+              return Padding(padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.history, size: 14, color: color),
+                  const SizedBox(width: 8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)),
+                      const SizedBox(width: 8),
+                      Text('by $by', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      const Spacer(),
+                      Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ]),
+                    if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ])),
+                ]));
+            }),
+          ]),
+        );
+      },
     );
   }
 }
