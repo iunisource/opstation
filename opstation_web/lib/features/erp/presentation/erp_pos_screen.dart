@@ -337,7 +337,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final branchId = _session['branch_id'] as String? ?? '';
       final products = await client
           .from('pos_catalog')
-          .select('id, name, sku, price, is_active')
+          .select('id, name, sku, price, is_active, product_id, uom_id')
           .eq('org_id', orgId!)
           .eq('branch_id', branchId)
           .eq('is_active', true)
@@ -398,10 +398,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       } else {
         _cart.add({
           'pos_catalog_id': product['id'],
+          'product_id': product['product_id'],
           'name': product['name'],
           'sku': product['sku'],
           'unit_price': (product['price'] as num?)?.toDouble() ?? 0,
-          'uom_id': null,
+          'uom_id': product['uom_id'],
           'uom_abbr': '',
           'quantity': 1.0,
           'discount': 0.0,
@@ -456,6 +457,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       });
       for (final item in _cart) {
         final qty = item['quantity'] as double;
+        if (item['product_id'] == null) { _showSnack('Product missing catalog link — re-add item'); return; }
         await client.from('pos_transaction_items').insert({
           'id': 'posti_${DateTime.now().millisecondsSinceEpoch}_${item['product_id'].toString().substring(0, 4)}',
           'transaction_id': txnId,
