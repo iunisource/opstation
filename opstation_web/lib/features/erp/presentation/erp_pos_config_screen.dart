@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart';
 
 class ErpPosConfigScreen extends ConsumerStatefulWidget {
   const ErpPosConfigScreen({super.key});
@@ -20,16 +21,21 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
   String? _logoDataUri;
   bool _loading = true, _saving = false;
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   static const _keys = ['pos.company_name','pos.footer_note','pos.terms','pos.ntn','pos.contact','pos.logo'];
 
   @override void initState() { super.initState(); _load(); }
+  @override void didChangeDependencies() { super.didChangeDependencies(); }
   @override void dispose() { _companyCtrl.dispose(); _footerCtrl.dispose(); _termsCtrl.dispose(); _ntnCtrl.dispose(); _contactCtrl.dispose(); super.dispose(); }
 
   Future<void> _load() async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _loading = true);
     try {
-      final rows = await Supabase.instance.client.from('app_config').select('key, value').eq('org_id', orgId).inFilter('key', _keys);
+      final branchId = _branchId;
+      var q = Supabase.instance.client.from('app_config').select('key, value').eq('org_id', orgId).inFilter('key', _keys);
+      if (branchId != null) q = q.eq('branch_id', branchId); else q = q.filter('branch_id', 'is', null);
+      final rows = await q;
       final map = <String, String>{for (final r in rows as List) r['key'] as String: r['value'] as String? ?? ''};
       setState(() {
         _companyCtrl.text = map['pos.company_name'] ?? '';
@@ -53,7 +59,10 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         'pos.contact': _contactCtrl.text.trim(), 'pos.logo': _logoDataUri ?? '',
       };
       for (final e in configs.entries) {
-        await Supabase.instance.client.from('app_config').upsert({'key': e.key, 'value': e.value, 'org_id': orgId}, onConflict: 'key,org_id');
+        final branchId = _branchId;
+        final row = <String, dynamic>{'key': e.key, 'value': e.value, 'org_id': orgId};
+        if (branchId != null) row['branch_id'] = branchId;
+        await Supabase.instance.client.from('app_config').upsert(row, onConflict: branchId != null ? 'key,org_id,branch_id' : 'key,org_id');
       }
       _snack('POS configuration saved');
     } catch (e) { _snack('Save error: $e'); }
@@ -87,7 +96,9 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
               Text('POS Configuration', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
               SizedBox(height: 4),
               Text('These settings appear on POS receipts. Leave any field blank to hide it.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-            ])),
+              const SizedBox(height: 4),
+                            const SizedBox(height: 4),
+                          ])),
             ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 18), label: const Text('Save Configuration'), onPressed: _saving ? null : _save, style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14))),
           ]),
           const SizedBox(height: 32),

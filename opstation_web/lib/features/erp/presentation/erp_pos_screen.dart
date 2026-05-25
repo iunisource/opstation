@@ -321,6 +321,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _posCustomers = [];
   Map<String, dynamic>? _selectedPosCustomer;  // quick POS customer
   Map<String, double> _stockMap = {};  // product_id → qty in stock
+  Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
   @override void dispose() { _searchCtrl.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); super.dispose(); }
@@ -479,7 +480,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           transaction: txn, items: cartSnapshot,
           orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
           branchName: _session['branches']?['name'] as String? ?? '',
-          cashierName: ref.read(currentUserProvider)?.name ?? '',
+          cashierName: ref.read(currentUserProvider)?.name ?? '', posConfig: _posConfig,
         ));
       }
     } catch (e) { _showSnack('Failed: $e'); }
@@ -978,7 +979,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                               final ti = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String);
                               String? fn; try { final fr = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId!).eq('key', 'org.voucher_footer_note').maybeSingle(); fn = fr?['value'] as String?; } catch (_) {}
                               final ci = (ti as List).map((i) => {'name': i['products']?['name'] ?? '-', 'quantity': (i['quantity'] as num?)?.toDouble() ?? 0.0, 'unit_price': (i['unit_price'] as num?)?.toDouble() ?? 0.0, 'discount': (i['discount'] as num?)?.toDouble() ?? 0.0, 'discount_type': 'fixed'}).toList();
-                              if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: List<Map<String, dynamic>>.from(ci), orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: _session['branches']?['name'] as String? ?? '', cashierName: ref.read(currentUserProvider)?.name ?? '', footerNote: fn));
+                              if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: List<Map<String, dynamic>>.from(ci), orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: _session['branches']?['name'] as String? ?? '', cashierName: ref.read(currentUserProvider)?.name ?? '', posConfig: _posConfig, footerNote: fn));
                             } catch (_) {}
                           },
                           child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(
@@ -1053,8 +1054,8 @@ class _ReceiptDialog extends StatelessWidget {
   final List<Map<String, dynamic>> items;
   final String orgName, branchName, cashierName;
   final String? footerNote;
-  final String? orgId;
-  const _ReceiptDialog({required this.transaction, required this.items, required this.orgName, required this.branchName, required this.cashierName, this.footerNote, this.orgId});
+  final Map<String, String> posConfig;
+  const _ReceiptDialog({required this.transaction, required this.items, required this.orgName, required this.branchName, required this.cashierName, this.footerNote, this.posConfig = const {}});
 
   @override Widget build(BuildContext context) {
     final total = (transaction['total'] as num?)?.toDouble() ?? 0;
@@ -1124,23 +1125,17 @@ class _ReceiptDialog extends StatelessWidget {
       ],
       const SizedBox(height: 20),
       Row(children: [
-        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print'), onPressed: () async {
-          Map<String,String> cfg = {};
-          try {
-            final cfgRows = await Supabase.instance.client.from('app_config').select('key,value')
-                .eq('org_id', orgId ?? '').inFilter('key', ['pos.company_name','pos.ntn','pos.contact','pos.footer_note','pos.terms','pos.logo']);
-            cfg = {for (final r in cfgRows as List) r['key'] as String: r['value'] as String? ?? ''};
-          } catch (_) {}
-          final posCompany = cfg['pos.company_name']?.isNotEmpty == true ? cfg['pos.company_name']! : orgName;
-          final posNtn = cfg['pos.ntn'] ?? '';
-          final posContact = cfg['pos.contact'] ?? '';
-          final posFooter = cfg['pos.footer_note']?.isNotEmpty == true ? cfg['pos.footer_note']! : (footerNote ?? '');
-          final posTerms = cfg['pos.terms'] ?? '';
-          final posLogo = cfg['pos.logo'] ?? '';
+        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print'), onPressed: () {
+          final posCompany = posConfig['pos.company_name']?.isNotEmpty == true ? posConfig['pos.company_name']! : orgName;
+          final posNtn = posConfig['pos.ntn'] ?? '';
+          final posContact = posConfig['pos.contact'] ?? '';
+          final posFooter = posConfig['pos.footer_note']?.isNotEmpty == true ? posConfig['pos.footer_note']! : (footerNote ?? '');
+          final posTerms = posConfig['pos.terms'] ?? '';
+          final posLogo = posConfig['pos.logo'] ?? '';
           final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? "-${da.toStringAsFixed(2)}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
           final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
-          final content = '<!DOCTYPE html><html><head><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2><h3 style="font-weight:normal;color:#666">$branchName</h3><p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p><hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
+          final content = '<!DOCTYPE html><html><head><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2><h3 style="font-weight:normal;color:#666">$branchName</h3>${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p><hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
           final blob = html.Blob([content], 'text/html'); final url = html.Url.createObjectUrlFromBlob(blob); html.window.open(url, '_blank');
         })),
         const SizedBox(width: 12),
