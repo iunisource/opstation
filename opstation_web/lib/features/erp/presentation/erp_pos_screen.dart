@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -461,7 +462,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final branchId = _session['branch_id'] as String;
     try {
       final client = Supabase.instance.client;
-      final txnId = 'post_\${DateTime.now().millisecondsSinceEpoch}';
+      final txnId = 'post_${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(9999999)}';
       String txnNumber = 'TRX-\${DateTime.now().year}-00001';
       try {
         final lastTxn = await client.from('pos_transactions').select('transaction_number')
