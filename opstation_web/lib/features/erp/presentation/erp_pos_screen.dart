@@ -463,7 +463,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     try {
       final client = Supabase.instance.client;
       final txnId = 'post_${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(9999999)}';
-      String txnNumber = 'TRX-\${DateTime.now().year}-00001';
+      String txnNumber = 'TRX-${DateTime.now().year}-00001';
       try {
         final lastTxn = await client.from('pos_transactions').select('transaction_number')
             .eq('org_id', orgId ?? '').not('transaction_number', 'is', null)
@@ -471,7 +471,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         if ((lastTxn as List).isNotEmpty && lastTxn[0]['transaction_number'] != null) {
           final last = lastTxn[0]['transaction_number'] as String;
           final lastNum = int.tryParse(last.split('-').last) ?? 0;
-          txnNumber = 'TRX-\${DateTime.now().year}-\${(lastNum + 1).toString().padLeft(5, "0")}';
+          txnNumber = 'TRX-${DateTime.now().year}-${(lastNum + 1).toString().padLeft(5, "0")}'; 
         }
       } catch (_) {}
       final now = DateTime.now().toUtc().toIso8601String();
