@@ -325,6 +325,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   // Split payment
   bool _splitPayment = false;
   List<Map<String, dynamic>> _splitEntries = [{'method': 'cash', 'amount': ''}];
+  final List<TextEditingController> _splitCtrls = [TextEditingController()];
   double _orderDiscount = 0;
   String _orderDiscountType = 'fixed'; // 'fixed' | 'percent'
   bool _loading = true;
@@ -343,7 +344,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); for (final f in _discFocusNodes) f.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); for (final f in _discFocusNodes) f.dispose(); for (final sc in _splitCtrls) sc.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -444,7 +445,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   double get _cartTotal => (_cartSubtotal - _cartItemDiscounts - _orderDiscountAmt).clamp(0, double.infinity);
   double get _totalDiscount => _cartItemDiscounts + _orderDiscountAmt;
 
+  bool _checkingOut = false;
   Future<void> _checkout() async {
+    if (_checkingOut) return;
+    _checkingOut = true;
     if (_cart.isEmpty) { _showSnack('Cart is empty'); return; }
     if (_cart.any((i) => i['product_id'] == null)) { _showSnack('Some items have no product link — remove and re-add'); return; }
     // Stock check
@@ -508,7 +512,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'moved_at': now, 'created_by': userId,
         });
       }
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _splitEntries = [{'method': 'cash', 'amount': ''}]; _syncFocusNodes(); });
+      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _splitEntries = [{'method': 'cash', 'amount': ''}]; for (final sc in _splitCtrls) sc.dispose(); _splitCtrls.clear(); _splitCtrls.add(TextEditingController()); _syncFocusNodes(); });
       await _loadData();
       // Show receipt
       if (mounted) {
@@ -601,7 +605,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final newCust = {'id': id, 'name': nameCtrl.text.trim(), 'phone': phoneCtrl.text.trim(), 'cnic': cnicCtrl.text.trim(), '_type': 'pos'};
       setState(() { _posCustomers.add(newCust); _selectedPosCustomer = newCust; _selectedCustomer = null; _customerSearchCtrl.clear(); });
       _showSnack('Customer "${nameCtrl.text.trim()}" added');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack('Failed: $e'); } finally { _checkingOut = false; }
   }
 
   Future<void> _closeSession() async {
@@ -931,8 +935,8 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                         items: ['cash','card','other'].map((m) => DropdownMenuItem(value: m, child: Text(m[0].toUpperCase() + m.substring(1), style: const TextStyle(fontSize: 12)))).toList(),
                         onChanged: _isOpen ? (v) => setState(() => _splitEntries[si]['method'] = v!) : null)),
                       const SizedBox(width: 6),
-                      Expanded(child: TextField(decoration: const InputDecoration(hintText: 'Amount', isDense: true, prefixText: 'Rs. ', contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)), keyboardType: const TextInputType.numberWithOptions(decimal: true), enabled: _isOpen, controller: TextEditingController(text: entry['amount'] as String), onChanged: (v) => setState(() => _splitEntries[si]['amount'] = v))),
-                      if (_splitEntries.length > 1) IconButton(icon: const Icon(Icons.remove_circle_outline, size: 18, color: AppTheme.danger), onPressed: () => setState(() => _splitEntries.removeAt(si)), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+                      Expanded(child: Builder(builder: (_) { while (_splitCtrls.length <= si) _splitCtrls.add(TextEditingController()); return TextField(decoration: const InputDecoration(hintText: 'Amount', isDense: true, prefixText: 'Rs. ', contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)), keyboardType: const TextInputType.numberWithOptions(decimal: true), enabled: _isOpen, controller: _splitCtrls[si], onChanged: (v) { setState(() => _splitEntries[si]['amount'] = v); }); })),
+                      if (_splitEntries.length > 1) IconButton(icon: const Icon(Icons.remove_circle_outline, size: 18, color: AppTheme.danger), onPressed: () => setState(() { _splitEntries.removeAt(si); _splitCtrls.removeAt(si).dispose(); }), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
                     ]));
                   }),
                   if (_isOpen) TextButton.icon(icon: const Icon(Icons.add, size: 15), label: const Text('Add', style: TextStyle(fontSize: 12)), onPressed: () => setState(() => _splitEntries.add({'method': 'cash', 'amount': ''}))),
@@ -941,7 +945,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     final diff = totalEntered - _cartTotal;
                     return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                       const Text('Total entered:', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                      Text('Rs. \${totalEntered.toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: diff >= 0 ? AppTheme.success : AppTheme.danger)),
+                      Text('Rs. ${totalEntered.toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: diff >= 0 ? AppTheme.success : AppTheme.danger)),
                       if (diff > 0) Text('Change: Rs. \${diff.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11, color: Colors.orange)),
                     ]);
                   }),
@@ -962,7 +966,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   child: SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
                     focusNode: FocusNode(),
                     icon: const Icon(Icons.check_circle_outline, size: 20),
-                    label: Builder(builder: (_) { final splitOk = !_splitPayment || _splitEntries.fold(0.0, (s, e) => s + (double.tryParse(e['amount'] as String? ?? '') ?? 0)) >= _cartTotal; return Text(_cart.isEmpty ? 'Add items to checkout' : splitOk ? 'Complete Sale — Rs. \${_cartTotal.toStringAsFixed(2)}' : 'Enter payment amounts', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
+                    label: Builder(builder: (_) { final splitOk = !_splitPayment || _splitEntries.fold(0.0, (s, e) => s + (double.tryParse(e['amount'] as String? ?? '') ?? 0)) >= _cartTotal; return Text(_cart.isEmpty ? 'Add items to checkout' : splitOk ? 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}' : 'Enter payment amounts', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
                     style: ElevatedButton.styleFrom(backgroundColor: _cart.isNotEmpty && _isOpen ? AppTheme.primary : Colors.grey, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                     onPressed: _cart.isNotEmpty && _isOpen && (!_splitPayment || _splitEntries.fold(0.0, (s, e) => s + (double.tryParse(e['amount'] as String? ?? '') ?? 0)) >= _cartTotal) ? _checkout : null,
                   ))),
