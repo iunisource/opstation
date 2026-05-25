@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -317,6 +318,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, dynamic>? _selectedCustomer;
   String _paymentMethod = 'cash';
   final _customPaymentCtrl = TextEditingController();
+  // Focus nodes for keyboard navigation
+  final List<FocusNode> _qtyFocusNodes = [];
+  final List<FocusNode> _discFocusNodes = [];
+  final FocusNode _checkoutFocusNode = FocusNode();
+  // Split payment
+  bool _splitPayment = false;
+  List<Map<String, dynamic>> _splitEntries = [{'method': 'cash', 'amount': ''}];
   double _orderDiscount = 0;
   String _orderDiscountType = 'fixed'; // 'fixed' | 'percent'
   bool _loading = true;
@@ -335,7 +343,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); for (final f in _discFocusNodes) f.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -389,6 +397,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           (p['name'] as String? ?? '').toLowerCase().contains(q.toLowerCase()) ||
           (p['sku'] as String? ?? '').toLowerCase().contains(q.toLowerCase())).toList();
     });
+  }
+
+  void _syncFocusNodes() {
+    while (_qtyFocusNodes.length < _cart.length) { _qtyFocusNodes.add(FocusNode()); _discFocusNodes.add(FocusNode()); }
+    while (_qtyFocusNodes.length > _cart.length) { _qtyFocusNodes.removeLast().dispose(); _discFocusNodes.removeLast().dispose(); }
   }
 
   void _addToCart(Map<String, dynamic> product) {
@@ -465,7 +478,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'customer_id': _selectedCustomer?['id'],
         'pos_customer_id': _selectedPosCustomer?['id'],
         'total': totalAmt, 'discount': discountAmt,
-        'payment_method': _paymentMethod == 'other' ? (_customPaymentCtrl.text.trim().isEmpty ? 'other' : _customPaymentCtrl.text.trim()) : _paymentMethod, 'transaction_type': 'sale',
+        'payment_method': _splitPayment ? 'split' : (_paymentMethod == 'other' ? (_customPaymentCtrl.text.trim().isEmpty ? 'other' : _customPaymentCtrl.text.trim()) : _paymentMethod),
+        'payment_details': _splitPayment ? _splitEntries.map((e) => {'method': e['method'], 'amount': double.tryParse(e['amount'] as String? ?? '') ?? 0}).toList() : null,
+        'transaction_type': 'sale',
         'created_by': userId, 'transacted_at': now,
       });
       for (final item in cartSnapshot) {
@@ -493,7 +508,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'moved_at': now, 'created_by': userId,
         });
       }
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); });
+      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _splitEntries = [{'method': 'cash', 'amount': ''}]; _syncFocusNodes(); });
       await _loadData();
       // Show receipt
       if (mounted) {
@@ -866,12 +881,13 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                     itemCount: _cart.length, separatorBuilder: (_, __) => const SizedBox(height: 6),
-                    itemBuilder: (_, i) => _CartItemTile(item: _cart[i], isOpen: _isOpen,
+                    itemBuilder: (_, i) { final qFn = i < _qtyFocusNodes.length ? _qtyFocusNodes[i] : null; final dFn = i < _discFocusNodes.length ? _discFocusNodes[i] : null; return _CartItemTile(item: _cart[i], isOpen: _isOpen, qtyFocusNode: qFn, discFocusNode: dFn, onFieldDone: () { final ni = i + 1; if (ni < _qtyFocusNodes.length) _qtyFocusNodes[ni].requestFocus(); else _checkoutFocusNode.requestFocus(); },
                       onQtyChanged: (v) => setState(() => _cart[i]['quantity'] = v),
                       onDiscountChanged: (d, dt) => setState(() { _cart[i]['discount'] = d; _cart[i]['discount_type'] = dt; }),
                       onRemove: () => setState(() => _cart.removeAt(i)),
                       lineTotal: _lineSubtotal(_cart[i]),
-                    ))),
+                    ); },
+                    )),
             // Order discount + payment + total
             Container(padding: const EdgeInsets.all(12), decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppTheme.border))),
               child: Column(children: [
@@ -891,25 +907,45 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     onChanged: _isOpen ? (v) => setState(() => _orderDiscountType = v!) : null),
                 ]),
                 const SizedBox(height: 6),
-                // Payment method
+                // Payment
                 Row(children: [
                   const Text('Payment', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                   const Spacer(),
+                  if (_isOpen) TextButton.icon(icon: Icon(_splitPayment ? Icons.call_merge : Icons.call_split, size: 15), label: Text(_splitPayment ? 'Single' : 'Split', style: const TextStyle(fontSize: 11)), onPressed: () => setState(() { _splitPayment = !_splitPayment; if (!_splitPayment) { _splitEntries = [{'method': 'cash', 'amount': ''}]; } })),
+                ]),
+                if (!_splitPayment) ...[
                   SegmentedButton<String>(
                     segments: const [ButtonSegment(value: 'cash', label: Text('Cash', style: TextStyle(fontSize: 11))), ButtonSegment(value: 'card', label: Text('Card', style: TextStyle(fontSize: 11))), ButtonSegment(value: 'other', label: Text('Other', style: TextStyle(fontSize: 11)))],
-                    selected: {_paymentMethod},
-                    onSelectionChanged: _isOpen ? (s) => setState(() => _paymentMethod = s.first) : null,
-                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                  ),
-                ]),
-              if (_paymentMethod == 'other') ...[
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _customPaymentCtrl,
-                  decoration: const InputDecoration(hintText: 'Specify payment method…', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-                  textCapitalization: TextCapitalization.words,
-                ),
-              ],
+                    selected: {_paymentMethod}, onSelectionChanged: _isOpen ? (s) => setState(() => _paymentMethod = s.first) : null,
+                    style: const ButtonStyle(visualDensity: VisualDensity.compact)),
+                  if (_paymentMethod == 'other') ...[
+                    const SizedBox(height: 6),
+                    TextField(controller: _customPaymentCtrl, decoration: const InputDecoration(hintText: 'Specify payment method…', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)), textCapitalization: TextCapitalization.words),
+                  ],
+                ] else ...[
+                  const SizedBox(height: 6),
+                  ...List.generate(_splitEntries.length, (si) {
+                    final entry = _splitEntries[si];
+                    return Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [
+                      SizedBox(width: 90, child: DropdownButtonFormField<String>(value: entry['method'] as String, isDense: true, decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
+                        items: ['cash','card','other'].map((m) => DropdownMenuItem(value: m, child: Text(m[0].toUpperCase() + m.substring(1), style: const TextStyle(fontSize: 12)))).toList(),
+                        onChanged: _isOpen ? (v) => setState(() => _splitEntries[si]['method'] = v!) : null)),
+                      const SizedBox(width: 6),
+                      Expanded(child: TextField(decoration: const InputDecoration(hintText: 'Amount', isDense: true, prefixText: 'Rs. ', contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)), keyboardType: const TextInputType.numberWithOptions(decimal: true), enabled: _isOpen, controller: TextEditingController(text: entry['amount'] as String), onChanged: (v) => setState(() => _splitEntries[si]['amount'] = v))),
+                      if (_splitEntries.length > 1) IconButton(icon: const Icon(Icons.remove_circle_outline, size: 18, color: AppTheme.danger), onPressed: () => setState(() => _splitEntries.removeAt(si)), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+                    ]));
+                  }),
+                  if (_isOpen) TextButton.icon(icon: const Icon(Icons.add, size: 15), label: const Text('Add', style: TextStyle(fontSize: 12)), onPressed: () => setState(() => _splitEntries.add({'method': 'cash', 'amount': ''}))),
+                  Builder(builder: (_) {
+                    final totalEntered = _splitEntries.fold(0.0, (s, e) => s + (double.tryParse(e['amount'] as String? ?? '') ?? 0));
+                    final diff = totalEntered - _cartTotal;
+                    return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                      const Text('Total entered:', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      Text('Rs. \${totalEntered.toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: diff >= 0 ? AppTheme.success : AppTheme.danger)),
+                      if (diff > 0) Text('Change: Rs. \${diff.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11, color: Colors.orange)),
+                    ]);
+                  }),
+                ],
                 const SizedBox(height: 10),
                 // Totals
                 if (_totalDiscount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -922,12 +958,14 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   Text('Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primary)),
                 ]),
                 const SizedBox(height: 10),
-                SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
-                  icon: const Icon(Icons.check_circle_outline, size: 20),
-                  label: Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                  style: ElevatedButton.styleFrom(backgroundColor: _cart.isNotEmpty && _isOpen ? AppTheme.primary : Colors.grey, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                  onPressed: _cart.isNotEmpty && _isOpen ? _checkout : null,
-                )),
+                KeyboardListener(focusNode: _checkoutFocusNode, onKeyEvent: (e) { if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.enter && _cart.isNotEmpty && _isOpen) _checkout(); },
+                  child: SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
+                    focusNode: FocusNode(),
+                    icon: const Icon(Icons.check_circle_outline, size: 20),
+                    label: Builder(builder: (_) { final splitOk = !_splitPayment || _splitEntries.fold(0.0, (s, e) => s + (double.tryParse(e['amount'] as String? ?? '') ?? 0)) >= _cartTotal; return Text(_cart.isEmpty ? 'Add items to checkout' : splitOk ? 'Complete Sale — Rs. \${_cartTotal.toStringAsFixed(2)}' : 'Enter payment amounts', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
+                    style: ElevatedButton.styleFrom(backgroundColor: _cart.isNotEmpty && _isOpen ? AppTheme.primary : Colors.grey, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                    onPressed: _cart.isNotEmpty && _isOpen && (!_splitPayment || _splitEntries.fold(0.0, (s, e) => s + (double.tryParse(e['amount'] as String? ?? '') ?? 0)) >= _cartTotal) ? _checkout : null,
+                  ))),
               ])),
           ]),
         ),
@@ -1410,7 +1448,10 @@ class _CartItemTile extends StatefulWidget {
   final void Function(double, String) onDiscountChanged;
   final VoidCallback onRemove;
   final double lineTotal;
-  const _CartItemTile({required this.item, required this.isOpen, required this.onQtyChanged, required this.onDiscountChanged, required this.onRemove, required this.lineTotal});
+  final FocusNode? qtyFocusNode;
+  final FocusNode? discFocusNode;
+  final VoidCallback? onFieldDone;
+  const _CartItemTile({required this.item, required this.isOpen, required this.onQtyChanged, required this.onDiscountChanged, required this.onRemove, required this.lineTotal, this.qtyFocusNode, this.discFocusNode, this.onFieldDone});
   @override State<_CartItemTile> createState() => _CartItemTileState();
 }
 class _CartItemTileState extends State<_CartItemTile> {
@@ -1434,12 +1475,12 @@ class _CartItemTileState extends State<_CartItemTile> {
         Row(children: [
           if (widget.isOpen) GestureDetector(onTap: () { if (qty > 1) widget.onQtyChanged(qty - 1); }, child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.border, borderRadius: BorderRadius.circular(4)), child: const Icon(Icons.remove, size: 14))),
           const SizedBox(width: 6),
-          SizedBox(width: 48, child: TextField(controller: _qtyCtrl, textAlign: TextAlign.center, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700), decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4, horizontal: 4)), enabled: widget.isOpen, onSubmitted: (v) { final n = double.tryParse(v); if (n != null && n > 0) widget.onQtyChanged(n); else _qtyCtrl.text = qty.toStringAsFixed(0); })),
+          SizedBox(width: 48, child: TextField(controller: _qtyCtrl, focusNode: widget.qtyFocusNode, textAlign: TextAlign.center, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700), decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4, horizontal: 4)), enabled: widget.isOpen, onSubmitted: (v) { final n = double.tryParse(v); if (n != null && n > 0) widget.onQtyChanged(n); else _qtyCtrl.text = qty.toStringAsFixed(0); widget.discFocusNode?.requestFocus(); })),
           const SizedBox(width: 6),
           if (widget.isOpen) GestureDetector(onTap: () => widget.onQtyChanged(qty + 1), child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Icon(Icons.add, size: 14, color: AppTheme.primary))),
           const Spacer(),
           if (widget.isOpen) ...[
-            SizedBox(width: 60, child: TextField(decoration: const InputDecoration(hintText: 'Disc', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4)), keyboardType: const TextInputType.numberWithOptions(decimal: true), controller: TextEditingController(text: disc > 0 ? disc.toStringAsFixed(0) : ''), onChanged: (v) => widget.onDiscountChanged(double.tryParse(v) ?? 0, discType), textAlign: TextAlign.right)),
+            SizedBox(width: 60, child: TextField(focusNode: widget.discFocusNode, decoration: const InputDecoration(hintText: 'Disc', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4)), keyboardType: const TextInputType.numberWithOptions(decimal: true), controller: TextEditingController(text: disc > 0 ? disc.toStringAsFixed(0) : ''), onChanged: (v) => widget.onDiscountChanged(double.tryParse(v) ?? 0, discType), textAlign: TextAlign.right, onSubmitted: (_) => widget.onFieldDone?.call())),
             const SizedBox(width: 4),
             GestureDetector(onTap: () => widget.onDiscountChanged(disc, discType == 'fixed' ? 'percent' : 'fixed'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4), decoration: BoxDecoration(color: disc > 0 ? Colors.orange.withOpacity(0.1) : AppTheme.background, borderRadius: BorderRadius.circular(4), border: Border.all(color: AppTheme.border)), child: Text(discType == 'percent' ? '%' : 'Rs', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: disc > 0 ? Colors.orange : AppTheme.textSecondary)))),
           ],
