@@ -349,7 +349,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final stockRows = List<Map<String, dynamic>>.from(results[4] as List);
       final stockMap = <String, double>{for (final s in stockRows) s['product_id'] as String: (s['quantity'] as num?)?.toDouble() ?? 0.0};
       // Embed stock qty into each catalog product
-      for (final p in prods) { p['stock_qty'] = stockMap[p['product_id'] as String? ?? ''] ?? 0.0; }
+      for (final p in prods) { final pid = p['product_id'] as String?; p['stock_qty'] = pid != null && pid.isNotEmpty ? (stockMap[pid] ?? -1.0) : -1.0; }
       setState(() {
         _transactions = List<Map<String, dynamic>>.from(results[0] as List);
         _allProducts = prods; _displayProducts = prods;
@@ -1022,7 +1022,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     try {
       await Supabase.instance.client.from('pos_expenses').insert({
         'id': 'pex_${DateTime.now().millisecondsSinceEpoch}',
-        'org_id': orgId, 'branch_id': _session['branch_id'],
+        'org_id': orgId ?? '', 'branch_id': _session['branch_id']?.toString() ?? _session['branch_id'] as String? ?? '',
         'session_id': _session['id'], 'amount': amt,
         'category': category, 'note': noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
         'created_by': userId,
@@ -1399,6 +1399,7 @@ class _StockBadge extends StatelessWidget {
   final double stockQty;
   const _StockBadge({required this.stockQty});
   @override Widget build(BuildContext context) {
+    if (stockQty < 0) return const SizedBox.shrink(); // no product_id link
     if (stockQty > 10) return const SizedBox.shrink();
     if (stockQty <= 0) return Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2), decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: const Text('OUT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppTheme.danger)));
     return Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text('${stockQty.toStringAsFixed(0)} left', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.orange)));

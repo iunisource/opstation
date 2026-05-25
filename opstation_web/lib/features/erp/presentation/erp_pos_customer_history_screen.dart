@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -185,7 +187,8 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                         final items = _itemsByTxn[t['id'] as String] ?? [];
                         final branch = t['pos_sessions']?['branches']?['name'] as String? ?? '-';
                         final payment = t['payment_method'] as String? ?? '-';
-                        return Container(
+                        return InkWell(borderRadius: BorderRadius.circular(10), onTap: isReturn ? null : () => _printReceipt(t, items),
+                          child: Container(
                           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: isReturn ? Colors.orange.withOpacity(0.3) : AppTheme.border)),
                           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             // Header row
@@ -212,12 +215,35 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                                 }).toList())),
                             ],
                           ]),
-                        );
+                        ));
                       })),
               ])),
       ]),
     );
   }
+  void _printReceipt(Map<String, dynamic> t, List<Map<String, dynamic>> items) {
+    final customer = _selectedCustomer?['name'] as String? ?? 'Walk-in';
+    final total = (t['total'] as num?)?.toDouble() ?? 0;
+    final disc = (t['discount'] as num?)?.toDouble() ?? 0;
+    final subtotal = items.fold(0.0, (s, i) => s + ((i['quantity'] as num?)?.toDouble() ?? 0) * ((i['unit_price'] as num?)?.toDouble() ?? 0));
+    final payment = (t['payment_method'] as String? ?? 'cash').toUpperCase();
+    final ts = t['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '-';
+    final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+    final rows = items.map((i) {
+      final q = (i['quantity'] as num?)?.toDouble() ?? 0;
+      final p = (i['unit_price'] as num?)?.toDouble() ?? 0;
+      final d = (i['discount'] as num?)?.toDouble() ?? 0;
+      final lt = q * p - d;
+      final n = i['products']?['name'] as String? ?? '-';
+      return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${d > 0 ? "#e67e22" : "#999"}">${d > 0 ? "-${d.toStringAsFixed(2)}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>';
+    }).join();
+    final discRow = disc > 0 ? '<tr><td colspan="4" style="color:#e67e22">Discount</td><td style="text-align:right;color:#e67e22">-${disc.toStringAsFixed(2)}</td></tr>' : '';
+    final content = '''<!DOCTYPE html><html><head><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.tr td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body><h2>$orgName</h2><p style="text-align:center">$ts<br>Customer: $customer</p><hr><table><thead><tr><th>Item</th><th>Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="tr"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $payment</p><script>window.print()</script></body></html>''';
+    final blob = html.Blob([content], 'text/html');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+  }
+
 }
 
 class _InfoChip extends StatelessWidget {
