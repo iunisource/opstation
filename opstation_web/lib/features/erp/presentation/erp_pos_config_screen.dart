@@ -34,7 +34,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
     try {
       final branchId = _branchId;
       var q = Supabase.instance.client.from('app_config').select('key, value').eq('org_id', orgId).inFilter('key', _keys);
-      if (branchId != null) q = q.eq('branch_id', branchId); else q = q.filter('branch_id', 'is', null);
+      q = q.eq('branch_id', branchId ?? '');
       final rows = await q;
       final map = <String, String>{for (final r in rows as List) r['key'] as String: r['value'] as String? ?? ''};
       setState(() {
@@ -60,9 +60,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
       };
       for (final e in configs.entries) {
         final branchId = _branchId;
-        final row = <String, dynamic>{'key': e.key, 'value': e.value, 'org_id': orgId};
-        if (branchId != null) row['branch_id'] = branchId;
-        await Supabase.instance.client.from('app_config').upsert(row, onConflict: branchId != null ? 'key,org_id,branch_id' : 'key,org_id');
+        await Supabase.instance.client.from('app_config').upsert({'key': e.key, 'value': e.value, 'org_id': orgId, 'branch_id': branchId ?? ''}, onConflict: 'key,org_id,branch_id');
       }
       _snack('POS configuration saved');
     } catch (e) { _snack('Save error: $e'); }
