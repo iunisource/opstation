@@ -512,7 +512,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       await _loadData();
       // Show receipt
       if (mounted) {
-        final txn = _transactions.firstWhere((t) => t['id'] == txnId, orElse: () => {'id': txnId, 'total': totalAmt, 'discount': discountAmt, 'payment_method': _paymentMethod, 'transacted_at': now, 'customers': _selectedCustomer != null ? {'shop_name': _selectedCustomer!['shop_name']} : (_selectedPosCustomer != null ? {'shop_name': _selectedPosCustomer!['name']} : null)});
+        final txn = _transactions.firstWhere((t) => t['id'] == txnId, orElse: () => {'id': txnId, 'transaction_number': txnNumber, 'total': totalAmt, 'discount': discountAmt, 'payment_method': _paymentMethod, 'transacted_at': now, 'customers': _selectedCustomer != null ? {'shop_name': _selectedCustomer!['shop_name']} : (_selectedPosCustomer != null ? {'shop_name': _selectedPosCustomer!['name']} : null)});
         await showDialog(context: context, barrierDismissible: false, builder: (_) => _ReceiptDialog(
           transaction: txn, items: cartSnapshot,
           orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
@@ -803,7 +803,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 final blocked = stock <= 0;
                 return ListTile(dense: true, enabled: !blocked,
                   title: Text(p['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  subtitle: Text('Rs. \${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12)),
+                  subtitle: Text('Rs. ${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12)),
                   trailing: blocked ? const Text('OUT', style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w700)) : null,
                   onTap: () { if (!blocked) onSel(p); },
                 );
@@ -880,8 +880,8 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   ]))
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                    itemCount: _cart.length, separatorBuilder: (_, __) => const SizedBox(height: 6),
-                    itemBuilder: (_, i) { final qFn = i < _qtyFocusNodes.length ? _qtyFocusNodes[i] : null; final dFn = i < _discFocusNodes.length ? _discFocusNodes[i] : null; return _CartItemTile(item: _cart[i], isOpen: _isOpen, qtyFocusNode: qFn, discFocusNode: dFn, onFieldDone: () { final ni = i + 1; if (ni < _qtyFocusNodes.length) _qtyFocusNodes[ni].requestFocus(); else _checkoutFocusNode.requestFocus(); },
+                    itemCount: (_cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList()).length, separatorBuilder: (_, __) => const SizedBox(height: 6),
+                    itemBuilder: (_, i) { final cv = _cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList(); final actualIdx = _cart.indexOf(cv[i]); final qFn = actualIdx < _qtyFocusNodes.length ? _qtyFocusNodes[actualIdx] : null; final dFn = actualIdx < _discFocusNodes.length ? _discFocusNodes[actualIdx] : null; return _CartItemTile(item: cv[i], isOpen: _isOpen, qtyFocusNode: qFn, discFocusNode: dFn, onFieldDone: () { final ni = i + 1; if (ni < _qtyFocusNodes.length) _qtyFocusNodes[ni].requestFocus(); else _checkoutFocusNode.requestFocus(); },
                       onQtyChanged: (v) => setState(() => _cart[i]['quantity'] = v),
                       onDiscountChanged: (d, dt) => setState(() { _cart[i]['discount'] = d; _cart[i]['discount_type'] = dt; }),
                       onRemove: () => setState(() => _cart.removeAt(i)),
@@ -1156,7 +1156,7 @@ class _ReceiptDialog extends StatelessWidget {
       Text(branchName, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       const SizedBox(height: 4),
       const Text('SALES RECEIPT', style: TextStyle(fontSize: 11, letterSpacing: 2, color: AppTheme.textSecondary)),
-      if ((transaction['transaction_number'] as String?)?.isNotEmpty == true) Text(transaction['transaction_number'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      if ((transaction['transaction_number'] as String?)?.isNotEmpty == true) Text('Ref: ' + (transaction['transaction_number'] as String? ?? ''), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
       const SizedBox(height: 12),
       const Divider(),
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
