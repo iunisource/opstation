@@ -65,9 +65,18 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
         .showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
-  void _showOpenSessionDialog() {
+  void _showOpenSessionDialog() async {
     String? branchId;
-    final cashCtrl = TextEditingController(text: '0');
+    String lastClosing = '0';
+    try {
+      final orgId = ref.read(currentUserProvider)?.orgId;
+      final last = await Supabase.instance.client.from('pos_sessions')
+          .select('closing_cash').eq('org_id', orgId ?? '').eq('status', 'closed')
+          .order('closed_at', ascending: false).limit(1);
+      if ((last as List).isNotEmpty && last[0]['closing_cash'] != null)
+        lastClosing = (last[0]['closing_cash'] as num).toStringAsFixed(2);
+    } catch (_) {}
+    final cashCtrl = TextEditingController(text: lastClosing);
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
@@ -304,6 +313,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _displayProducts = [];
   List<Map<String, dynamic>> _customers = [];
   List<Map<String, dynamic>> _cart = [];
+  String _cartSearch = '';
   Map<String, dynamic>? _selectedCustomer;
   String _paymentMethod = 'cash';
   final _customPaymentCtrl = TextEditingController();
@@ -315,6 +325,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   bool _showExpenses = false;  // toggle between txns and expenses in panel
   String _search = '';
   final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
   final _customerSearchCtrl = TextEditingController();
   bool _showCustomerDropdown = false;
   List<Map<String, dynamic>> _filteredCustomers = [];
@@ -324,7 +335,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -338,7 +349,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final client = Supabase.instance.client;
       final branchId = _session['branch_id'] as String? ?? '';
       final results = await Future.wait([
-        client.from('pos_transactions').select('*, customers(shop_name), pos_customers(name)').eq('session_id', _session['id']).order('transacted_at', ascending: false),
+        client.from('pos_transactions').select('*, customers(shop_name), pos_customers(name, phone), transaction_number').eq('session_id', _session['id']).order('transacted_at', ascending: false),
         client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name'),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name'),
         client.from('pos_sessions').select('*, branches(name)').eq('id', _session['id']).single(),
@@ -433,13 +444,24 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final branchId = _session['branch_id'] as String;
     try {
       final client = Supabase.instance.client;
-      final txnId = 'post_${DateTime.now().millisecondsSinceEpoch}';
+      final txnId = 'post_\${DateTime.now().millisecondsSinceEpoch}';
+      String txnNumber = 'TRX-\${DateTime.now().year}-00001';
+      try {
+        final lastTxn = await client.from('pos_transactions').select('transaction_number')
+            .eq('org_id', orgId ?? '').not('transaction_number', 'is', null)
+            .order('transacted_at', ascending: false).limit(1);
+        if ((lastTxn as List).isNotEmpty && lastTxn[0]['transaction_number'] != null) {
+          final last = lastTxn[0]['transaction_number'] as String;
+          final lastNum = int.tryParse(last.split('-').last) ?? 0;
+          txnNumber = 'TRX-\${DateTime.now().year}-\${(lastNum + 1).toString().padLeft(5, "0")}';
+        }
+      } catch (_) {}
       final now = DateTime.now().toUtc().toIso8601String();
       final cartSnapshot = List<Map<String, dynamic>>.from(_cart);
       final totalAmt = _cartTotal;
       final discountAmt = _totalDiscount;
       await client.from('pos_transactions').insert({
-        'id': txnId, 'org_id': orgId, 'session_id': _session['id'],
+        'id': txnId, 'transaction_number': txnNumber, 'org_id': orgId, 'session_id': _session['id'],
         'customer_id': _selectedCustomer?['id'],
         'pos_customer_id': _selectedPosCustomer?['id'],
         'total': totalAmt, 'discount': discountAmt,
@@ -735,17 +757,42 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       body: _loading ? const Center(child: CircularProgressIndicator()) : Row(children: [
         // ── Products Panel ─────────────────────────────────────────────
         Expanded(child: Column(children: [
-          Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 8), child: TextField(
-            controller: _searchCtrl,
-            decoration: InputDecoration(
-              hintText: 'Search products by name or SKU…',
-              prefixIcon: const Icon(Icons.search, size: 20),
-              suffixIcon: _search.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, size: 18), onPressed: () { _searchCtrl.clear(); _filterProducts(''); }) : null,
-              filled: true, fillColor: Colors.white,
-              contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+          Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 8), child: RawAutocomplete<Map<String, dynamic>>(
+            textEditingController: _searchCtrl,
+            focusNode: _searchFocus,
+            optionsBuilder: (tv) {
+              final q = tv.text.toLowerCase();
+              final opts = q.isEmpty ? _allProducts : _allProducts.where((p) => (p['name'] as String? ?? '').toLowerCase().contains(q) || (p['sku'] as String? ?? '').toLowerCase().contains(q)).toList();
+              return opts.take(8).toList();
+            },
+            displayStringForOption: (p) => p['name'] as String? ?? '',
+            onSelected: (p) { if (_isOpen) { _addToCart(p); _searchCtrl.clear(); _filterProducts(''); } },
+            fieldViewBuilder: (ctx, ctrl, focus, onSub) => TextField(
+              controller: ctrl, focusNode: focus,
+              decoration: InputDecoration(
+                hintText: 'Search products by name or SKU…',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: _search.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, size: 18), onPressed: () { _searchCtrl.clear(); _filterProducts(''); }) : null,
+                filled: true, fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              ),
+              onChanged: _filterProducts,
+              onSubmitted: (v) { if (_displayProducts.isNotEmpty && _isOpen) { _addToCart(_displayProducts.first); ctrl.clear(); _filterProducts(''); } },
             ),
-            onChanged: _filterProducts,
+            optionsViewBuilder: (ctx, onSel, opts) => Align(alignment: Alignment.topLeft, child: Material(elevation: 4, borderRadius: BorderRadius.circular(10), child: ConstrainedBox(constraints: const BoxConstraints(maxHeight: 320, maxWidth: 380), child: ListView.separated(padding: const EdgeInsets.symmetric(vertical: 4), shrinkWrap: true, itemCount: opts.length, separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final p = opts.elementAt(i);
+                final price = (p['price'] as num?)?.toDouble() ?? 0;
+                final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
+                final blocked = stock <= 0;
+                return ListTile(dense: true, enabled: !blocked,
+                  title: Text(p['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  subtitle: Text('Rs. \${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12)),
+                  trailing: blocked ? const Text('OUT', style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w700)) : null,
+                  onTap: () { if (!blocked) onSel(p); },
+                );
+              })))),
           )),
           Expanded(child: _displayProducts.isEmpty
               ? Center(child: Text(_search.isEmpty ? 'No products in catalog for this branch.\nAdd products to the POS catalog first.' : 'No products matching "$_search"', textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.textSecondary)))
@@ -761,10 +808,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         ])),
         // ── Cart Panel ─────────────────────────────────────────────────
         Container(
-          width: 380,
+          width: 480,
           decoration: const BoxDecoration(color: Colors.white, border: Border(left: BorderSide(color: AppTheme.border))),
           child: Column(children: [
-            // Customer
+            // Customer search filter
+          if (_cart.length > 4) Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 0), child: TextField(decoration: const InputDecoration(hintText: "Filter cart items...", prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8)), onChanged: (v) => setState(() => _cartSearch = v))),
+          // Customer
             Padding(padding: const EdgeInsets.fromLTRB(12, 12, 12, 0), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Customer', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary, letterSpacing: 0.5)),
               const SizedBox(height: 4),
@@ -1069,6 +1118,7 @@ class _ReceiptDialog extends StatelessWidget {
       Text(branchName, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       const SizedBox(height: 4),
       const Text('SALES RECEIPT', style: TextStyle(fontSize: 11, letterSpacing: 2, color: AppTheme.textSecondary)),
+      if ((transaction['transaction_number'] as String?)?.isNotEmpty == true) Text(transaction['transaction_number'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
       const SizedBox(height: 12),
       const Divider(),
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -1173,7 +1223,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
       // Load ALL sale transactions for this org that haven't been returned
       final txns = await Supabase.instance.client
           .from('pos_transactions')
-          .select('*, customers(shop_name), pos_customers(name)')
+          .select('*, customers(shop_name), pos_customers(name, phone)')
           .eq('org_id', widget.orgId)
           .or('transaction_type.eq.sale,transaction_type.is.null')
           .order('transacted_at', ascending: false)
