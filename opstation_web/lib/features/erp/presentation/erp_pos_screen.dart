@@ -341,7 +341,6 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name'),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name'),
         client.from('pos_sessions').select('*, branches(name)').eq('id', _session['id']).single(),
-        client.from('pos_expenses').select('*').eq('session_id', _session['id']).order('created_at', ascending: false),
         client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId),
         client.from('pos_customers').select('id, name, phone, cnic').eq('org_id', orgId).eq('branch_id', branchId).order('name'),
       ]);
@@ -350,12 +349,20 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final stockMap = <String, double>{for (final s in stockRows) s['product_id'] as String: (s['quantity'] as num?)?.toDouble() ?? 0.0};
       // Embed stock qty into each catalog product
       for (final p in prods) { final pid = p['product_id'] as String?; p['stock_qty'] = pid != null && pid.isNotEmpty ? (stockMap[pid] ?? -1.0) : -1.0; }
+      List<Map<String, dynamic>> expenseList = [];
+      try {
+        final expRows = await Supabase.instance.client.from('pos_expenses').select('*').eq('session_id', _session['id']).order('created_at', ascending: false);
+        expenseList = List<Map<String, dynamic>>.from(expRows);
+      } catch (_) {}
+      // Load expenses separately (avoids Future.wait index issues)
+
       setState(() {
+        _expenses = expenseList;
+        _expenses = expenseList;
         _transactions = List<Map<String, dynamic>>.from(results[0] as List);
         _allProducts = prods; _displayProducts = prods;
         _customers = List<Map<String, dynamic>>.from(results[2] as List);
         _session = Map<String, dynamic>.from(results[3] as Map);
-        _expenses = List<Map<String, dynamic>>.from(results[4] as List);
         _stockMap = stockMap;
         _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
         _loading = false;
@@ -1046,7 +1053,8 @@ class _ReceiptDialog extends StatelessWidget {
   final List<Map<String, dynamic>> items;
   final String orgName, branchName, cashierName;
   final String? footerNote;
-  const _ReceiptDialog({required this.transaction, required this.items, required this.orgName, required this.branchName, required this.cashierName, this.footerNote});
+  final String? orgId;
+  const _ReceiptDialog({required this.transaction, required this.items, required this.orgName, required this.branchName, required this.cashierName, this.footerNote, this.orgId});
 
   @override Widget build(BuildContext context) {
     final total = (transaction['total'] as num?)?.toDouble() ?? 0;
@@ -1116,7 +1124,19 @@ class _ReceiptDialog extends StatelessWidget {
       ],
       const SizedBox(height: 20),
       Row(children: [
-        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print'), onPressed: () {
+        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print'), onPressed: () async {
+          Map<String,String> cfg = {};
+          try {
+            final cfgRows = await Supabase.instance.client.from('app_config').select('key,value')
+                .eq('org_id', orgId ?? '').inFilter('key', ['pos.company_name','pos.ntn','pos.contact','pos.footer_note','pos.terms','pos.logo']);
+            cfg = {for (final r in cfgRows as List) r['key'] as String: r['value'] as String? ?? ''};
+          } catch (_) {}
+          final posCompany = cfg['pos.company_name']?.isNotEmpty == true ? cfg['pos.company_name']! : orgName;
+          final posNtn = cfg['pos.ntn'] ?? '';
+          final posContact = cfg['pos.contact'] ?? '';
+          final posFooter = cfg['pos.footer_note']?.isNotEmpty == true ? cfg['pos.footer_note']! : (footerNote ?? '');
+          final posTerms = cfg['pos.terms'] ?? '';
+          final posLogo = cfg['pos.logo'] ?? '';
           final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? "-${da.toStringAsFixed(2)}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
           final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';

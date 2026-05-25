@@ -146,6 +146,7 @@ class _TopNav extends ConsumerWidget {
 
     final posItems = <Widget>[
       if (modules.contains('pos')) ...[
+        _menuItem(context, 'Configuration', Icons.tune_outlined, '/erp/pos-config', location),
         _menuItem(context, 'POS',         Icons.storefront_outlined, '/erp/pos',         location),
         _menuItem(context, 'POS Catalog',    Icons.list_alt_outlined,     '/erp/pos-catalog',           location),
         _menuItem(context, 'Customer History', Icons.manage_accounts_outlined, '/erp/pos-customer-history', location),
@@ -181,7 +182,7 @@ class _TopNav extends ConsumerWidget {
           salesItems),
       if (posItems.isNotEmpty)
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
-          ['/erp/pos', '/erp/pos-catalog', '/erp/pos-customer-history'], posItems),
+          ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history'], posItems),
       if (ledgerItems.isNotEmpty)
         _navMenu(context, 'Ledgers', Icons.analytics_outlined, location,
           ['/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
