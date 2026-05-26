@@ -958,7 +958,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       Icon(diff < 0 ? Icons.account_balance_wallet_outlined : Icons.savings_outlined, size: 16, color: diff < 0 ? Colors.red.shade700 : Colors.green.shade700),
                       const SizedBox(width: 6),
                       Expanded(child: Text(diff < 0 ? 'Balance due Rs. ${(-diff).toStringAsFixed(2)} added to customer account' : 'Credit Rs. ${diff.toStringAsFixed(2)} added to customer account', style: TextStyle(fontSize: 11, color: diff < 0 ? Colors.red.shade700 : Colors.green.shade700, fontWeight: FontWeight.w600))),
-                      if (!hasCust) const Text('Select customer!', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w700)),
+                      if (!hasCust) const Text('Select customer to proceed', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
                     ]));
                 }),
               ],
@@ -980,7 +980,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     icon: const Icon(Icons.check_circle_outline, size: 20),
                     label: Builder(builder: (_) { if (_splitPayment && _amountPaidCtrl.text.isNotEmpty) { final paid = double.tryParse(_amountPaidCtrl.text.trim()) ?? 0; final diff = paid - _cartTotal; if (diff < 0) return Text('Complete Sale (Balance: Rs. ${(-diff).toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); if (diff > 0) return Text('Complete Sale (Credit: Rs. ${diff.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); } return Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
                     style: ElevatedButton.styleFrom(backgroundColor: _cart.isNotEmpty && _isOpen ? AppTheme.primary : Colors.grey, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                    onPressed: _cart.isNotEmpty && _isOpen && (!_splitPayment || (_amountPaidCtrl.text.isNotEmpty)) ? _checkout : null,
+                    onPressed: _cart.isNotEmpty && _isOpen && (!_splitPayment || (_amountPaidCtrl.text.isNotEmpty && (() { final paid = double.tryParse(_amountPaidCtrl.text.trim()) ?? 0; final diff = paid - _cartTotal; final needsCust = diff != 0 && _selectedCustomer == null && _selectedPosCustomer == null; return !needsCust; })())) ? _checkout : null,
                   ))),
               ])),
           ]),
