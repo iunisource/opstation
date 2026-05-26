@@ -133,14 +133,14 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null});
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         final created = await client.from('cpv_vouchers').select().eq('id', vid).single();
-        setState(() { _currentVoucher = created; _status = newStatus; }); _logAudit('created');
+        setState(() { _currentVoucher = created; _status = newStatus; }); _logAudit('created', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines  •  \$_cashAccountName');
         _snack(post ? 'Voucher $vNum posted ✓' : 'Voucher $vNum saved');
       } else {
         final vid = _currentVoucher!['id'] as String;
         await client.from('cpv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null}).eq('id', vid);
         await client.from('cpv_voucher_lines').delete().eq('voucher_id', vid);
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
-        setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted');
+        setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
         _snack(post ? 'Voucher posted ✓' : 'Saved');
       }
       await _loadVouchers();
@@ -163,7 +163,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     } catch (_) {}
   }
 
-  Future<void> _logAudit(String action) async {
+  Future<void> _logAudit(String action, {String? notes}) async {
     if (_currentVoucher == null) return;
     final userId = ref.read(currentUserProvider)?.id;
     final userName = ref.read(currentUserProvider)?.name ?? '';
@@ -175,6 +175,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         'performed_by': userId,
         'performed_by_name': userName,
         'performed_at': DateTime.now().toIso8601String(),
+        'notes': notes,
       });
       await _loadAudit(_currentVoucher!['id'] as String);
     } catch (e) { _snack('Audit log error: $e'); }
@@ -232,7 +233,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     if (ok != true || !mounted) return;
     try {
       await Supabase.instance.client.from('cpv_vouchers').update({'status': 'draft'}).eq('id', _currentVoucher!['id'] as String);
-      setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; }); _logAudit('unlocked');
+      setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; }); _logAudit('unlocked', notes: 'Voucher reopened for editing');
       _snack('Voucher unlocked for editing');
     } catch (e) { _snack('Failed: $e'); }
   }
