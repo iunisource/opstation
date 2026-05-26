@@ -32,7 +32,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
   String _search = '';
 
   static const _groups = ['Assets', 'Capital', 'Liability', 'Income', 'Expense'];
-  static const _accountTypes = ['BANK', 'CASH IN HAND', 'RECEIVABLE', 'PAYABLE', 'INCOME', 'EXPENSE', 'FIXED ASSET', 'INVENTORY', 'CUSTOMER', 'EMPLOYEE', 'OTHER'];
+  static const _accountTypes = ['BANK', 'CASH IN HAND', 'CUSTOMER', 'EMPLOYEE', 'EXPENSE', 'FIXED ASSETS', 'G/L ACCOUNT', 'PURCHASES', 'SALES', 'SUPPLIER'];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
@@ -77,6 +77,19 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
   }
 
   bool get _canSubmit => _selectedGroup != null && _nameCtrl.text.trim().isNotEmpty && _accountType != null;
+
+  void _autoGenCode() {
+    // Generate code: parent_code + 2-digit sequence
+    final parentAcc = _sel3 ?? _sel2 ?? _sel1;
+    final parentCode = parentAcc?['code'] as String? ?? '';
+    final siblings = _accounts.where((a) {
+      if (parentAcc != null) return a['parent_id'] == parentAcc['id'];
+      return a['parent_id'] == null && a['account_group'] == _selectedGroup && a['level'] == 1;
+    }).toList();
+    final seq = (siblings.length + 1).toString().padLeft(2, '0');
+    final base = parentCode.isNotEmpty ? parentCode : (_selectedGroup?[0] ?? '0');
+    setState(() => _codeCtrl.text = base + seq);
+  }
 
   Future<void> _submit() async {
     if (!_canSubmit) { _snack('Fill all required fields'); return; }
@@ -261,7 +274,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
               Container(width: 10, height: 10, decoration: BoxDecoration(color: _groupColor(g), shape: BoxShape.circle)),
               const SizedBox(width: 8), Text(g),
             ]))).toList(),
-            onChanged: (v) => setState(() { _selectedGroup = v; _sel1 = null; _sel2 = null; _sel3 = null; _show1 = v != null; _show2 = false; _show3 = false; }),
+            onChanged: (v) { setState(() { _selectedGroup = v; _sel1 = null; _sel2 = null; _sel3 = null; _show1 = v != null; _show2 = false; _show3 = false; }); if (v != null) _autoGenCode(); },
           ),
           const SizedBox(height: 16),
 
@@ -278,7 +291,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
                 const DropdownMenuItem(value: null, child: Text('— None (create here) —', style: TextStyle(color: AppTheme.textSecondary))),
                 ...level1List.map((a) => DropdownMenuItem(value: a, child: Text('${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}'))),
               ],
-              onChanged: (v) => setState(() { _sel1 = v; _sel2 = null; _sel3 = null; _show2 = v != null; _show3 = false; }),
+              onChanged: (v) { setState(() { _sel1 = v; _sel2 = null; _sel3 = null; _show2 = v != null; _show3 = false; }); _autoGenCode(); },
             )) : null,
           ),
           const SizedBox(height: 12),
@@ -296,7 +309,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
                 const DropdownMenuItem(value: null, child: Text('— None (create here) —', style: TextStyle(color: AppTheme.textSecondary))),
                 ...level2List.map((a) => DropdownMenuItem(value: a, child: Text('${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}'))),
               ],
-              onChanged: (v) => setState(() { _sel2 = v; _sel3 = null; _show3 = v != null; }),
+              onChanged: (v) { setState(() { _sel2 = v; _sel3 = null; _show3 = v != null; }); _autoGenCode(); },
             )) : null,
           ),
           const SizedBox(height: 12),
@@ -314,7 +327,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
                 const DropdownMenuItem(value: null, child: Text('— None (create here) —', style: TextStyle(color: AppTheme.textSecondary))),
                 ...level3List.map((a) => DropdownMenuItem(value: a, child: Text('${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}'))),
               ],
-              onChanged: (v) => setState(() => _sel3 = v),
+              onChanged: (v) { setState(() => _sel3 = v); _autoGenCode(); },
             )) : null,
           ),
           const SizedBox(height: 20),
