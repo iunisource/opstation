@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,60 +15,61 @@ class ErpPaymentVoucherScreen extends ConsumerStatefulWidget {
 }
 
 class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScreen> {
-  // Voucher list (drawer)
   List<Map<String, dynamic>> _vouchers = [];
   bool _drawerOpen = true;
   bool _loadingList = true;
   String _listSearch = '';
   Map<String, dynamic>? _currentVoucher;
 
-  // Form state
   final _voucherDateCtrl = TextEditingController();
   String? _cashAccountId;
   String _cashAccountName = '';
-  String _cashAccountSearch = '';
-  bool _showCashDropdown = false;
+  String _cashAccSearch = '';
+  bool _showCashDrop = false;
   String _status = 'draft';
 
-  // Line items
-  List<_VoucherLine> _lines = [];
-
-  // Master data
-  List<Map<String, dynamic>> _coaAccounts = [];
-  List<Map<String, dynamic>> _suppliers = [];
-  List<Map<String, dynamic>> _customers = [];
+  List<_VLine> _lines = [];
+  List<Map<String, dynamic>> _coaList = [];
+  List<Map<String, dynamic>> _supplierList = [];
+  List<Map<String, dynamic>> _customerList = [];
+  List<Map<String, dynamic>> _allAccounts = [];
   bool _loadingMaster = true;
   bool _saving = false;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
+  bool get _isLocked => _status == 'posted';
 
   @override void initState() {
     super.initState();
-    _voucherDateCtrl.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    _loadMaster();
-    _loadVouchers();
+    _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(DateTime.now());
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchers(); });
     _addLine();
   }
-  @override void dispose() { _voucherDateCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _voucherDateCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
   Future<void> _loadMaster() async {
-    final orgId = _orgId; if (orgId == null) return;
+    final orgId = _orgId;
+    if (orgId == null) { await Future.delayed(const Duration(milliseconds: 500)); if (mounted) _loadMaster(); return; }
     try {
+      final client = Supabase.instance.client;
       final results = await Future.wait([
-        Supabase.instance.client.from('chart_of_accounts').select('id, code, name, account_type, account_group').eq('org_id', orgId).order('code'),
-        Supabase.instance.client.from('suppliers').select('id, name, code').eq('org_id', orgId).order('name'),
-        Supabase.instance.client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name'),
+        client.from('chart_of_accounts').select('id, code, name, account_type').eq('org_id', orgId).order('code'),
+        client.from('suppliers').select('id, name, code').eq('org_id', orgId).order('name'),
+        client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name'),
       ]);
-      setState(() {
-        _coaAccounts = List<Map<String, dynamic>>.from(results[0] as List);
-        _suppliers = List<Map<String, dynamic>>.from(results[1] as List);
-        _customers = List<Map<String, dynamic>>.from(results[2] as List);
-        _loadingMaster = false;
-      });
-    } catch (e) { setState(() => _loadingMaster = false); }
+      final coa = List<Map<String, dynamic>>.from(results[0] as List);
+      final sup = List<Map<String, dynamic>>.from(results[1] as List);
+      final cus = List<Map<String, dynamic>>.from(results[2] as List);
+      final all = <Map<String, dynamic>>[
+        ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': a['account_type'] ?? 'COA', 'type': 'coa'}),
+        ...sup.map((s) => {'id': s['id'], 'label': '${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}', 'sub': 'Supplier', 'type': 'supplier'}),
+        ...cus.map((c) => {'id': c['id'], 'label': '${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name']}', 'sub': 'Customer', 'type': 'customer'}),
+      ];
+      if (mounted) setState(() { _coaList = coa; _supplierList = sup; _customerList = cus; _allAccounts = all; _loadingMaster = false; });
+    } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loadingMaster = false); } }
   }
 
   Future<void> _loadVouchers() async {
@@ -75,416 +77,311 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     setState(() => _loadingList = true);
     try {
       var q = Supabase.instance.client.from('cpv_vouchers').select().eq('org_id', orgId);
-      final branchId = _branchId;
-      if (branchId != null) q = q.eq('branch_id', branchId);
-      final rows = await q.order('created_at', ascending: false).limit(100);
-      setState(() { _vouchers = List<Map<String, dynamic>>.from(rows); _loadingList = false; });
-    } catch (_) { setState(() => _loadingList = false); }
+      final bid = _branchId;
+      if (bid != null) q = q.eq('branch_id', bid);
+      final rows = await q.order('created_at', ascending: false).limit(200);
+      if (mounted) setState(() { _vouchers = List<Map<String, dynamic>>.from(rows); _loadingList = false; });
+    } catch (_) { if (mounted) setState(() => _loadingList = false); }
   }
 
-  void _addLine() => setState(() => _lines.add(_VoucherLine()));
+  void _addLine() { setState(() => _lines.add(_VLine())); }
 
-  void _removeLine(int i) { setState(() => _lines.removeAt(i)); if (_lines.isEmpty) _addLine(); }
+  void _removeLine(int i) { setState(() { _lines[i].dispose(); _lines.removeAt(i); }); if (_lines.isEmpty) _addLine(); }
 
-  double get _total => _lines.fold(0, (s, l) => s + (l.amount ?? 0));
+  double get _total => _lines.fold(0.0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
 
-  List<Map<String, dynamic>> get _allAccounts {
-    return [
-      ..._coaAccounts.map((a) => {'id': a['id'], 'label': '${a['code'] ?? ''} — ${a['name']}', 'sub': a['account_type'] ?? '', 'type': 'coa', 'raw': a}),
-      ..._suppliers.map((s) => {'id': s['id'], 'label': '${s['code'] ?? ''} — ${s['name']}', 'sub': 'Supplier', 'type': 'supplier', 'raw': s}),
-      ..._customers.map((c) => {'id': c['id'], 'label': '${c['code'] ?? ''} — ${c['shop_name']}', 'sub': 'Customer', 'type': 'customer', 'raw': c}),
-    ];
-  }
-
-  List<Map<String, dynamic>> get _cashAccounts => _coaAccounts
-      .where((a) => ['BANK', 'CASH IN HAND'].contains(a['account_type']))
-      .map((a) => {'id': a['id'], 'label': '${a['code'] ?? ''} — ${a['name']}', 'type': a['account_type']})
-      .toList();
-
-  List<Map<String, dynamic>> _filterCash(String q) {
-    if (q.isEmpty) return _cashAccounts;
+  List<Map<String, dynamic>> _filterAccounts(String q) {
+    if (q.isEmpty) return _allAccounts.take(12).toList();
     final ql = q.toLowerCase();
-    return _cashAccounts.where((a) => (a['label'] as String).toLowerCase().contains(ql)).toList();
+    return _allAccounts.where((a) => (a['label'] as String).toLowerCase().contains(ql) || (a['sub'] as String).toLowerCase().contains(ql)).take(15).toList();
   }
 
-  Future<void> _newVoucher() async {
-    setState(() {
-      _currentVoucher = null; _cashAccountId = null; _cashAccountName = '';
-      _voucherDateCtrl.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      _status = 'draft'; _lines = []; _addLine();
-    });
+  List<Map<String, dynamic>> get _cashAccounts => _coaList.where((a) => ['BANK', 'CASH IN HAND'].contains(a['account_type'])).map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'type': a['account_type'] as String}).toList();
+
+  void _newVoucher() {
+    for (final l in _lines) l.dispose();
+    setState(() { _currentVoucher = null; _cashAccountId = null; _cashAccountName = ''; _status = 'draft'; _lines = [_VLine()]; _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(DateTime.now()); });
   }
 
   Future<void> _loadVoucher(Map<String, dynamic> v) async {
-    final orgId = _orgId; if (orgId == null) return;
     try {
-      final lines = await Supabase.instance.client.from('cpv_voucher_lines')
-          .select().eq('voucher_id', v['id'] as String).order('line_order');
-      setState(() {
-        _currentVoucher = v;
-        _voucherDateCtrl.text = v['voucher_date'] as String? ?? '';
-        _cashAccountId = v['cash_account_id'] as String?;
-        _cashAccountName = v['cash_account_name'] as String? ?? '';
-        _status = v['status'] as String? ?? 'draft';
-        _lines = (lines as List).map((l) {
-          final vl = _VoucherLine();
-          vl.accountId = l['account_id'] as String?;
-          vl.accountName = l['account_name'] as String? ?? '';
-          vl.accountType = l['account_type'] as String? ?? 'coa';
-          vl.descCtrl.text = l['description'] as String? ?? '';
-          vl.amtCtrl.text = (l['amount'] as num?)?.toStringAsFixed(2) ?? '';
-          return vl;
-        }).toList();
-        if (_lines.isEmpty) _addLine();
-      });
-    } catch (e) { _snack('Failed to load: $e'); }
+      final rows = await Supabase.instance.client.from('cpv_voucher_lines').select().eq('voucher_id', v['id'] as String).order('line_order');
+      for (final l in _lines) l.dispose();
+      final newLines = (rows as List).map((r) { final l = _VLine(); l.accountId = r['account_id'] as String?; l.accountName = r['account_name'] as String? ?? ''; l.accountType = r['account_type'] as String? ?? 'coa'; l.descCtrl.text = r['description'] as String? ?? ''; l.amtCtrl.text = (r['amount'] as num?)?.toStringAsFixed(2) ?? ''; return l; }).toList();
+      if (mounted) setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDateCtrl.text = v['voucher_date'] as String? ?? ''; });
+    } catch (e) { _snack('Load error: $e'); }
   }
 
-  Future<void> _save() async {
-    if (_cashAccountId == null) { _snack('Select a cash account'); return; }
-    if (_lines.every((l) => l.accountId == null)) { _snack('Add at least one line'); return; }
-    final orgId = _orgId; final branchId = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id;
+  Future<void> _save({bool post = false}) async {
+    if (_cashAccountId == null) { _snack('Select a cash account first'); return; }
+    final validLines = _lines.where((l) => l.accountId != null).toList();
+    if (validLines.isEmpty) { _snack('Add at least one line item'); return; }
+    final orgId = _orgId; final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id;
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
-      final validLines = _lines.where((l) => l.accountId != null).toList();
-      final total = validLines.fold<double>(0, (s, l) => s + (l.amount ?? 0));
+      final total = validLines.fold<double>(0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
+      final newStatus = post ? 'posted' : 'draft';
       final dateStr = _voucherDateCtrl.text.trim();
       if (_currentVoucher == null) {
-        // Generate voucher number
-        final count = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
-        final vNum = 'CPV-${DateTime.now().year}-${((count as List).length + 1).toString().padLeft(4, '0')}';
+        final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
+        final vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
         final vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
-        await client.from('cpv_vouchers').insert({
-          'id': vid, 'org_id': orgId, 'branch_id': branchId,
-          'voucher_number': vNum, 'voucher_date': dateStr,
-          'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName,
-          'status': _status, 'total_amount': total, 'created_by': userId,
-        });
-        for (var i = 0; i < validLines.length; i++) {
-          final l = validLines[i];
-          await client.from('cpv_voucher_lines').insert({
-            'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i',
-            'voucher_id': vid, 'account_type': l.accountType,
-            'account_id': l.accountId, 'account_name': l.accountName,
-            'description': l.descCtrl.text.trim(), 'amount': l.amount ?? 0, 'line_order': i,
-          });
-        }
-        _snack('Voucher $vNum created');
+        await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null});
+        for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
+        final created = await client.from('cpv_vouchers').select().eq('id', vid).single();
+        setState(() { _currentVoucher = created; _status = newStatus; });
+        _snack(post ? 'Voucher $vNum posted ✓' : 'Voucher $vNum saved');
       } else {
         final vid = _currentVoucher!['id'] as String;
-        await client.from('cpv_vouchers').update({
-          'voucher_date': dateStr, 'cash_account_id': _cashAccountId,
-          'cash_account_name': _cashAccountName, 'status': _status, 'total_amount': total,
-        }).eq('id', vid);
+        await client.from('cpv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null}).eq('id', vid);
         await client.from('cpv_voucher_lines').delete().eq('voucher_id', vid);
-        for (var i = 0; i < validLines.length; i++) {
-          final l = validLines[i];
-          await client.from('cpv_voucher_lines').insert({
-            'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i',
-            'voucher_id': vid, 'account_type': l.accountType,
-            'account_id': l.accountId, 'account_name': l.accountName,
-            'description': l.descCtrl.text.trim(), 'amount': l.amount ?? 0, 'line_order': i,
-          });
-        }
-        _snack('Voucher updated');
+        for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
+        setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; });
+        _snack(post ? 'Voucher posted ✓' : 'Saved');
       }
       await _loadVouchers();
     } catch (e) { _snack('Failed: $e'); }
     setState(() => _saving = false);
   }
 
+  Future<void> _delete() async {
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Voucher?'), content: const Text('This cannot be undone.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red))]));
+    if (ok != true) return;
+    try {
+      if (_currentVoucher != null) { await Supabase.instance.client.from('cpv_vouchers').delete().eq('id', _currentVoucher!['id'] as String); _snack('Deleted'); _newVoucher(); await _loadVouchers(); }
+    } catch (e) { _snack('Failed: $e'); }
+  }
+
+  void _print() {
+    if (_currentVoucher == null) { _snack('Save the voucher first'); return; }
+    final lines = _lines.where((l) => l.accountId != null).toList();
+    final html_str = '''<!DOCTYPE html><html><head><title>Payment Voucher</title><style>
+      body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db}
+      table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;text-align:left}
+      th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:1.1em}.footer{margin-top:40px;display:flex;justify-content:space-between}
+      @media print{.no-print{display:none}}
+    </style></head><body>
+    <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">🖨 Print</button></div>
+    <h2>Cash Payment Voucher</h2>
+    <table style="margin-bottom:8px;border:none"><tr><td style="border:none"><b>Voucher #:</b> ${_currentVoucher!['voucher_number'] ?? ''}</td><td style="border:none"><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</td><td style="border:none"><b>Cash Account:</b> $_cashAccountName</td><td style="border:none"><b>Status:</b> ${_status.toUpperCase()}</td></tr></table>
+    <table><thead><tr><th>#</th><th>Account / Party</th><th>Description</th><th style="text-align:right">Amount (Rs.)</th></tr></thead><tbody>
+    ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td style="text-align:right">${double.tryParse(e.value.amtCtrl.text)?.toStringAsFixed(2) ?? '0.00'}</td></tr>').join()}
+    </tbody><tfoot><tr><td colspan="3" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${_total.toStringAsFixed(2)}</td></tr></tfoot></table>
+    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Received by: _______________</div></div>
+    </body></html>''';
+    final blob = html.Blob([html_str], 'text/html');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+  }
+
   @override
   Widget build(BuildContext context) {
-    final filteredVouchers = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
-      final q = _listSearch.toLowerCase();
-      return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             (v['cash_account_name'] as String? ?? '').toLowerCase().contains(q);
-    }).toList();
-    final cashFiltered = _filterCash(_cashAccountSearch);
+    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) { final q = _listSearch.toLowerCase(); return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || (v['cash_account_name'] as String? ?? '').toLowerCase().contains(q); }).toList();
+    final cashFiltered = _cashAccSearch.isEmpty ? _cashAccounts : _cashAccounts.where((a) => (a['label'] as String).toLowerCase().contains(_cashAccSearch.toLowerCase())).toList();
 
     return Container(color: AppTheme.background, child: Row(children: [
-      // ── DRAWER ─────────────────────────────────────────────────────
-      AnimatedContainer(duration: const Duration(milliseconds: 200),
-        width: _drawerOpen ? 280 : 40,
-        decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
-        child: Column(children: [
-          InkWell(onTap: () => setState(() => _drawerOpen = !_drawerOpen),
-            child: Container(height: 48, padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Row(children: [
-                Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, color: AppTheme.textSecondary, size: 20),
-                if (_drawerOpen) ...[const SizedBox(width: 6), const Expanded(child: Text('Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)))],
-                if (_drawerOpen) ElevatedButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('New', style: TextStyle(fontSize: 11)), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero), onPressed: _newVoucher),
-              ]))),
-          if (_drawerOpen) ...[
-            Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 4), child: TextField(
-              decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 15), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8)),
-              onChanged: (v) => setState(() => _listSearch = v),
-            )),
-            Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-              : filteredVouchers.isEmpty ? const Center(child: Text('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-              : ListView.builder(itemCount: filteredVouchers.length, itemBuilder: (_, i) {
-                  final v = filteredVouchers[i];
-                  final isSelected = _currentVoucher?['id'] == v['id'];
-                  final isPosted = v['status'] == 'posted';
-                  return InkWell(onTap: () => _loadVoucher(v), child: Container(
-                    color: isSelected ? AppTheme.primary.withOpacity(0.08) : null,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(children: [
-                        Expanded(child: Text(v['voucher_number'] as String? ?? 'Draft', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isSelected ? AppTheme.primary : AppTheme.textPrimary))),
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: (isPosted ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(isPosted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: isPosted ? Colors.green : Colors.orange))),
-                      ]),
-                      Text(v['cash_account_name'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
-                      Text('Rs. ${(v['total_amount'] as num?)?.toStringAsFixed(2) ?? '0.00'}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.primary)),
-                    ]),
-                  ));
-                })),
-          ],
-        ])),
-      // ── MAIN FORM ──────────────────────────────────────────────────
+      // ── DRAWER ─────────────────────────────────────────────────
+      AnimatedContainer(duration: const Duration(milliseconds: 200), width: _drawerOpen ? 260 : 36, decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
+        InkWell(onTap: () => setState(() => _drawerOpen = !_drawerOpen), child: Container(height: 44, padding: const EdgeInsets.symmetric(horizontal: 8), child: Row(children: [Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18, color: AppTheme.textSecondary), if (_drawerOpen) ...[const SizedBox(width: 6), const Expanded(child: Text('Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))), ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero), onPressed: _newVoucher)]]))),
+        if (_drawerOpen) ...[
+          Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 4), child: TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 14), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 8)), onChanged: (v) => setState(() => _listSearch = v))),
+          Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2)) : filtered.isEmpty ? const Center(child: Text('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))) : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
+            final v = filtered[i]; final sel = _currentVoucher?['id'] == v['id']; final posted = v['status'] == 'posted';
+            return InkWell(onTap: () => _loadVoucher(v), child: Container(color: sel ? AppTheme.primary.withOpacity(0.07) : null, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [Expanded(child: Text(v['voucher_number'] as String? ?? 'Draft', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))), Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: (posted ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(posted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, color: posted ? Colors.green : Colors.orange, fontWeight: FontWeight.w700)))]),
+              Text(v['cash_account_name'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
+              Text('Rs. ${(v['total_amount'] as num?)?.toStringAsFixed(2) ?? '0.00'}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sel ? AppTheme.primary : AppTheme.textPrimary)),
+            ])));
+          })),
+        ],
+      ])),
+      // ── MAIN AREA ───────────────────────────────────────────────
       Expanded(child: Column(children: [
-        // Header bar
-        Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(20, 12, 20, 12), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            const Icon(Icons.receipt_long_outlined, color: AppTheme.primary, size: 22),
-            const SizedBox(width: 10),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_currentVoucher?['voucher_number'] as String? ?? 'New Voucher', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-              Text(_status == 'posted' ? 'Posted' : 'Draft', style: TextStyle(fontSize: 11, color: _status == 'posted' ? Colors.green : Colors.orange, fontWeight: FontWeight.w600)),
-            ])),
-            // Status toggle
-            if (_status == 'draft') OutlinedButton.icon(icon: const Icon(Icons.check_circle_outline, size: 14), label: const Text('Post', style: TextStyle(fontSize: 12)), onPressed: () { setState(() => _status = 'posted'); _save(); }, style: OutlinedButton.styleFrom(foregroundColor: Colors.green, side: const BorderSide(color: Colors.green))),
-            if (_status == 'posted') OutlinedButton.icon(icon: const Icon(Icons.undo, size: 14), label: const Text('Unpost', style: TextStyle(fontSize: 12)), onPressed: () => setState(() => _status = 'draft'), style: OutlinedButton.styleFrom(foregroundColor: Colors.orange, side: const BorderSide(color: Colors.orange))),
-            const SizedBox(width: 8),
-            ElevatedButton.icon(
-              icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_outlined, size: 16),
-              label: const Text('Save'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-              onPressed: _saving ? null : _save,
-            ),
+        // Top bar
+        Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(16, 10, 16, 10), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))), child: Row(children: [
+          const Icon(Icons.receipt_long_outlined, color: AppTheme.primary),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_currentVoucher?['voucher_number'] as String? ?? 'New Voucher', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), decoration: BoxDecoration(color: (_isLocked ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text(_isLocked ? '🔒 Posted & Locked' : '✏️ Draft', style: TextStyle(fontSize: 11, color: _isLocked ? Colors.green : Colors.orange, fontWeight: FontWeight.w600)))]),
           ])),
-        // Voucher header fields
-        Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(20, 12, 20, 12), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            // Voucher Number
-            SizedBox(width: 160, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Voucher No.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Text(_currentVoucher?['voucher_number'] as String? ?? '(auto)', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
-            ])),
-            const SizedBox(width: 16),
-            // Date
-            SizedBox(width: 160, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Voucher Date *', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              TextField(controller: _voucherDateCtrl, decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), hintText: 'YYYY-MM-DD')),
-            ])),
-            const SizedBox(width: 16),
-            // Cash Account
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Cash Account Name *', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              GestureDetector(onTap: () => setState(() => _showCashDropdown = !_showCashDropdown),
-                child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6)),
-                  child: Row(children: [
-                    Expanded(child: Text(_cashAccountName.isNotEmpty ? _cashAccountName : 'Select Cash Account', style: TextStyle(fontSize: 13, color: _cashAccountName.isEmpty ? Colors.grey : AppTheme.textPrimary))),
-                    Icon(_showCashDropdown ? Icons.expand_less : Icons.expand_more, size: 16, color: AppTheme.textSecondary),
-                  ]))),
-              if (_showCashDropdown) Container(margin: const EdgeInsets.only(top: 2), constraints: const BoxConstraints(maxHeight: 200), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)]),
-                child: Column(children: [
-                  Padding(padding: const EdgeInsets.all(8), child: TextField(
-                    autofocus: true,
-                    decoration: const InputDecoration(hintText: 'Search cash accounts...', isDense: true, prefixIcon: Icon(Icons.search, size: 14)),
-                    onChanged: (v) => setState(() => _cashAccountSearch = v),
-                  )),
-                  Expanded(child: ListView(children: cashFiltered.map((a) => ListTile(dense: true,
-                    title: Text(a['label'] as String, style: const TextStyle(fontSize: 12)),
-                    subtitle: Text(a['type'] as String, style: const TextStyle(fontSize: 10)),
-                    onTap: () => setState(() { _cashAccountId = a['id'] as String; _cashAccountName = a['label'] as String; _showCashDropdown = false; _cashAccountSearch = ''; }),
-                  )).toList())),
-                ])),
-            ])),
+          if (_currentVoucher != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _print, tooltip: 'Print'),
+          if (_currentVoucher != null) IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
+          const SizedBox(width: 8),
+          if (!_isLocked) ElevatedButton.icon(
+            icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle_outline, size: 16),
+            label: const Text('Post'),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+            onPressed: _saving ? null : () => _save(post: true),
+          ),
+          if (_isLocked) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.3))), child: const Row(children: [Icon(Icons.lock, size: 14, color: Colors.green), SizedBox(width: 4), Text('Posted', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: 13))])),
+        ])),
+        // Header fields
+        Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(16, 10, 16, 10), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))), child: Row(children: [
+          SizedBox(width: 140, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Voucher No.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)), const SizedBox(height: 3), Text(_currentVoucher?['voucher_number'] as String? ?? '(auto)', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary))])),
+          const SizedBox(width: 12),
+          SizedBox(width: 150, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Voucher Date *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)), const SizedBox(height: 3), TextField(controller: _voucherDateCtrl, enabled: !_isLocked, decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7)))])),
+          const SizedBox(width: 12),
+          // Cash Account with proper dropdown
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Cash Account *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 3),
+            if (!_isLocked) _SearchableDropdown(
+              value: _cashAccountName,
+              hint: 'Select cash account (BANK / CASH IN HAND)',
+              items: _cashAccounts,
+              onSelect: (a) => setState(() { _cashAccountId = a['id'] as String; _cashAccountName = a['label'] as String; }),
+            )
+            else Text(_cashAccountName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           ])),
+        ])),
         // Table header
-        Container(color: const Color(0xFFF8F9FA), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Row(children: const [
-            SizedBox(width: 32),
-            Expanded(flex: 4, child: Text('Account / Party', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
-            SizedBox(width: 8),
-            Expanded(flex: 3, child: Text('Description', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
-            SizedBox(width: 8),
-            SizedBox(width: 120, child: Text('Amount', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-            SizedBox(width: 36),
-          ])),
+        Container(color: const Color(0xFFF8F9FA), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7), child: Row(children: const [
+          SizedBox(width: 28),
+          Expanded(flex: 4, child: Text('Account / Party', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+          SizedBox(width: 8),
+          Expanded(flex: 3, child: Text('Description', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+          SizedBox(width: 8),
+          SizedBox(width: 130, child: Text('Amount (Rs.)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+          SizedBox(width: 30),
+        ])),
         const Divider(height: 1),
         // Lines
-        Expanded(child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 80),
-          itemCount: _lines.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 4),
-          itemBuilder: (_, i) => _LineRow(
-            key: ValueKey(_lines[i].id),
-            line: _lines[i],
-            allAccounts: _allAccounts,
-            lineNumber: i + 1,
-            onRemove: () => _removeLine(i),
-            onAddNext: i == _lines.length - 1 ? _addLine : null,
-            onChanged: () => setState(() {}),
-          ),
-        )),
+        Expanded(child: _loadingMaster
+          ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Loading accounts...', style: TextStyle(color: AppTheme.textSecondary))]))
+          : ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 60),
+              itemCount: _lines.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 4),
+              itemBuilder: (_, i) => _LineWidget(
+                key: ValueKey('line_${_lines[i].id}'),
+                line: _lines[i], lineNum: i + 1,
+                allAccounts: _allAccounts, filterFn: _filterAccounts,
+                locked: _isLocked,
+                onRemove: () => _removeLine(i),
+                onNextLine: i == _lines.length - 1 ? _addLine : () {},
+                onChanged: () => setState(() {}),
+              ),
+            )),
         // Footer
-        Container(decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppTheme.border))), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: Row(children: [
-            TextButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('Add Line'), onPressed: _addLine),
-            const Spacer(),
-            Text('Total:', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
-            const SizedBox(width: 12),
-            Text('Rs. ${_total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
-          ])),
+        Container(decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppTheme.border))), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Row(children: [
+          if (!_isLocked) TextButton.icon(icon: const Icon(Icons.add, size: 15), label: const Text('Add Line'), onPressed: _addLine),
+          const Spacer(),
+          Text('${_lines.where((l) => l.accountId != null).length} lines', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(width: 16),
+          const Text('Total:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 10),
+          Text('Rs. ${_total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+        ])),
       ])),
     ]));
   }
 }
 
-// ── Line data model ─────────────────────────────────────────────────────────
-class _VoucherLine {
-  final String id = 'vl_${DateTime.now().microsecondsSinceEpoch}_${(1000 * (DateTime.now().microsecond / 1000000)).round()}';
-  String? accountId;
-  String accountName = '';
-  String accountType = 'coa';
+// ── Searchable dropdown (proper overlay) ────────────────────────────────────
+class _SearchableDropdown extends StatefulWidget {
+  final String value, hint;
+  final List<Map<String, dynamic>> items;
+  final ValueChanged<Map<String, dynamic>> onSelect;
+  const _SearchableDropdown({required this.value, required this.hint, required this.items, required this.onSelect});
+  @override State<_SearchableDropdown> createState() => _SearchableDropdownState();
+}
+
+class _SearchableDropdownState extends State<_SearchableDropdown> {
+  bool _open = false;
+  String _q = '';
+
+  List<Map<String, dynamic>> get _filtered => _q.isEmpty ? widget.items : widget.items.where((a) => (a['label'] as String).toLowerCase().contains(_q.toLowerCase())).toList();
+
+  @override Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    InkWell(onTap: () => setState(() => _open = !_open), child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(border: Border.all(color: _open ? AppTheme.primary : AppTheme.border), borderRadius: BorderRadius.circular(6)), child: Row(children: [Expanded(child: Text(widget.value.isNotEmpty ? widget.value : widget.hint, style: TextStyle(fontSize: 13, color: widget.value.isEmpty ? Colors.grey : AppTheme.textPrimary), overflow: TextOverflow.ellipsis)), Icon(_open ? Icons.expand_less : Icons.expand_more, size: 16, color: AppTheme.textSecondary)]))),
+    if (_open) Container(margin: const EdgeInsets.only(top: 2), constraints: const BoxConstraints(maxHeight: 220), decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))]), child: Column(children: [
+      Padding(padding: const EdgeInsets.all(8), child: TextField(autofocus: true, decoration: const InputDecoration(hintText: 'Search...', isDense: true, prefixIcon: Icon(Icons.search, size: 14), contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8)), onChanged: (v) => setState(() => _q = v))),
+      Expanded(child: _filtered.isEmpty ? const Center(child: Text('No results', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))) : ListView(children: _filtered.map((a) => InkWell(onTap: () { widget.onSelect(a); setState(() { _open = false; _q = ''; }); }, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), child: Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(a['type'] as String? ?? '', style: const TextStyle(fontSize: 9, color: AppTheme.primary, fontWeight: FontWeight.w700))), const SizedBox(width: 6), Explained(child: Text(a['label'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))])))).toList())),
+    ])),
+  ]);
+}
+
+class Explained extends StatelessWidget {
+  final Widget child;
+  const Explained({super.key, required this.child});
+  @override Widget build(BuildContext context) => Expanded(child: child);
+}
+
+// ── Line model ───────────────────────────────────────────────────────────────
+class _VLine {
+  final String id = 'vl_${DateTime.now().microsecondsSinceEpoch}';
+  String? accountId; String accountName = ''; String accountType = 'coa';
   final TextEditingController descCtrl = TextEditingController();
   final TextEditingController amtCtrl = TextEditingController();
-  double? get amount => double.tryParse(amtCtrl.text);
   void dispose() { descCtrl.dispose(); amtCtrl.dispose(); }
 }
 
-// ── Line Row Widget ─────────────────────────────────────────────────────────
-class _LineRow extends StatefulWidget {
-  final _VoucherLine line;
+// ── Line widget ──────────────────────────────────────────────────────────────
+class _LineWidget extends StatefulWidget {
+  final _VLine line; final int lineNum;
   final List<Map<String, dynamic>> allAccounts;
-  final int lineNumber;
-  final VoidCallback onRemove;
-  final VoidCallback? onAddNext;
-  final VoidCallback onChanged;
-  const _LineRow({super.key, required this.line, required this.allAccounts, required this.lineNumber, required this.onRemove, this.onAddNext, required this.onChanged});
-  @override State<_LineRow> createState() => _LineRowState();
+  final List<Map<String, dynamic>> Function(String) filterFn;
+  final bool locked;
+  final VoidCallback onRemove, onNextLine, onChanged;
+  const _LineWidget({super.key, required this.line, required this.lineNum, required this.allAccounts, required this.filterFn, required this.locked, required this.onRemove, required this.onNextLine, required this.onChanged});
+  @override State<_LineWidget> createState() => _LineWidgetState();
 }
 
-class _LineRowState extends State<_LineRow> {
+class _LineWidgetState extends State<_LineWidget> {
   bool _showDrop = false;
-  String _accSearch = '';
-  late FocusNode _accFocus, _descFocus, _amtFocus;
-  late TextEditingController _accCtrl;
-  OverlayEntry? _overlay;
+  String _q = '';
+  final _accFocus = FocusNode();
+  final _descFocus = FocusNode();
+  final _amtFocus = FocusNode();
+  final _accCtrl = TextEditingController();
 
-  @override void initState() {
-    super.initState();
-    _accCtrl = TextEditingController(text: widget.line.accountName);
-    _accFocus = FocusNode()..addListener(() { if (_accFocus.hasFocus) { setState(() { _showDrop = true; _accSearch = ''; _accCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _accCtrl.text.length); }); } else { Future.delayed(const Duration(milliseconds: 150), () { if (mounted) setState(() => _showDrop = false); }); } });
-    _descFocus = FocusNode();
-    _amtFocus = FocusNode();
-  }
+  @override void initState() { super.initState(); _accCtrl.text = widget.line.accountName; _accFocus.addListener(() { if (!_accFocus.hasFocus) Future.delayed(const Duration(milliseconds: 160), () { if (mounted && !_accFocus.hasFocus) setState(() => _showDrop = false); }); }); }
   @override void dispose() { _accFocus.dispose(); _descFocus.dispose(); _amtFocus.dispose(); _accCtrl.dispose(); super.dispose(); }
 
-  List<Map<String, dynamic>> get _filtered {
-    final q = _accSearch.toLowerCase();
-    if (q.isEmpty) return widget.allAccounts.take(20).toList();
-    return widget.allAccounts.where((a) => (a['label'] as String).toLowerCase().contains(q) || (a['sub'] as String).toLowerCase().contains(q)).take(15).toList();
-  }
-
-  void _selectAccount(Map<String, dynamic> acc) {
-    setState(() {
-      widget.line.accountId = acc['id'] as String;
-      widget.line.accountName = acc['label'] as String;
-      widget.line.accountType = acc['type'] as String;
-      _accCtrl.text = acc['label'] as String;
-      _showDrop = false;
-    });
+  void _pick(Map<String, dynamic> a) {
+    widget.line.accountId = a['id'] as String;
+    widget.line.accountName = a['label'] as String;
+    widget.line.accountType = a['type'] as String;
+    _accCtrl.text = a['label'] as String;
+    setState(() { _showDrop = false; _q = ''; });
     widget.onChanged();
     _descFocus.requestFocus();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border.withOpacity(0.6))),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 24, child: Center(child: Text('${widget.lineNumber}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)))),
-        const SizedBox(width: 8),
-        // Account field with dropdown
-        Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          TextField(
-            controller: _accCtrl,
-            focusNode: _accFocus,
-            decoration: InputDecoration(
-              hintText: 'Search account, supplier, customer...',
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              suffixIcon: widget.line.accountId != null ? const Icon(Icons.check_circle, color: Colors.green, size: 14) : null,
-            ),
-            onChanged: (v) => setState(() { _accSearch = v; _showDrop = true; }),
-            onSubmitted: (_) {
-              final filtered = _filtered;
-              if (filtered.isNotEmpty) _selectAccount(filtered.first);
-            },
-          ),
-          if (_showDrop && _filtered.isNotEmpty) Container(
-            constraints: const BoxConstraints(maxHeight: 180),
-            margin: const EdgeInsets.only(top: 2),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8)]),
-            child: ListView(shrinkWrap: true, children: _filtered.map((a) {
-              final type = a['type'] as String;
-              final color = type == 'supplier' ? Colors.blue : type == 'customer' ? Colors.purple : AppTheme.primary;
-              return InkWell(
-                onTap: () => _selectAccount(a),
-                child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), child: Row(children: [
-                  Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(a['sub'] as String, style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w700))),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text(a['label'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
-                ])),
-              );
-            }).toList()),
-          ),
-        ])),
-        const SizedBox(width: 8),
-        // Description
-        Expanded(flex: 3, child: KeyboardListener(
-          focusNode: FocusNode(),
-          onKeyEvent: (e) { if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.enter) _amtFocus.requestFocus(); },
-          child: TextField(
-            controller: widget.line.descCtrl,
-            focusNode: _descFocus,
-            decoration: const InputDecoration(hintText: 'Description', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-            onChanged: (_) => widget.onChanged(),
-            textInputAction: TextInputAction.next,
-            onSubmitted: (_) => _amtFocus.requestFocus(),
-          ),
-        )),
-        const SizedBox(width: 8),
-        // Amount
-        SizedBox(width: 120, child: KeyboardListener(
-          focusNode: FocusNode(),
-          onKeyEvent: (e) {
-            if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.enter) {
-              if (widget.onAddNext != null) { widget.onAddNext!(); }
-              else { _accFocus.requestFocus(); }
-            }
-          },
-          child: TextField(
-            controller: widget.line.amtCtrl,
-            focusNode: _amtFocus,
-            textAlign: TextAlign.right,
-            decoration: const InputDecoration(hintText: '0.00', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), prefixText: 'Rs. ', prefixStyle: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-            onChanged: (_) => widget.onChanged(),
-            onSubmitted: (_) { if (widget.onAddNext != null) widget.onAddNext!(); else _accFocus.requestFocus(); },
-          ),
-        )),
-        const SizedBox(width: 8),
-        SizedBox(width: 28, child: IconButton(icon: const Icon(Icons.close, size: 14), onPressed: widget.onRemove, color: Colors.red.shade300, padding: EdgeInsets.zero, visualDensity: VisualDensity.compact)),
-      ]),
-    );
+  @override Widget build(BuildContext context) {
+    final filtered = widget.filterFn(_q);
+    return Container(decoration: BoxDecoration(color: widget.locked ? Colors.grey.shade50 : Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border.withOpacity(0.5))), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(width: 20, child: Center(child: Text('${widget.lineNum}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
+      const SizedBox(width: 8),
+      Expanded(flex: 4, child: Column(children: [
+        TextField(controller: _accCtrl, focusNode: _accFocus, enabled: !widget.locked,
+          decoration: InputDecoration(hintText: 'Search account, supplier, customer...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7), suffixIcon: widget.line.accountId != null ? const Icon(Icons.check_circle, color: Colors.green, size: 14) : null),
+          onChanged: (v) { setState(() { _q = v; _showDrop = v.isNotEmpty || _accFocus.hasFocus; }); },
+          onTap: () => setState(() => _showDrop = true),
+          onSubmitted: (_) { if (filtered.isNotEmpty) _pick(filtered.first); },
+        ),
+        if (_showDrop && filtered.isNotEmpty) Container(constraints: const BoxConstraints(maxHeight: 160), margin: const EdgeInsets.only(top: 2), decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 6)]), child: ListView(shrinkWrap: true, children: filtered.map((a) {
+          final t = a['type'] as String;
+          final c = t == 'supplier' ? Colors.blue : t == 'customer' ? Colors.purple : AppTheme.primary;
+          return InkWell(onTap: () => _pick(a), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), child: Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(a['sub'] as String? ?? t, style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))), const SizedBox(width: 6), Expanded(child: Text(a['label'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))])));
+        }).toList())),
+      ])),
+      const SizedBox(width: 8),
+      Expanded(flex: 3, child: TextField(controller: widget.line.descCtrl, focusNode: _descFocus, enabled: !widget.locked, decoration: const InputDecoration(hintText: 'Description', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7)), onChanged: (_) => widget.onChanged(), textInputAction: TextInputAction.next, onSubmitted: (_) => _amtFocus.requestFocus())),
+      const SizedBox(width: 8),
+      SizedBox(width: 130, child: TextField(
+        controller: widget.line.amtCtrl, focusNode: _amtFocus, enabled: !widget.locked,
+        textAlign: TextAlign.right,
+        decoration: const InputDecoration(hintText: '0.00', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7), prefixText: 'Rs. ', prefixStyle: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+        onChanged: (_) => widget.onChanged(),
+        onSubmitted: (_) => widget.onNextLine(),
+      )),
+      const SizedBox(width: 4),
+      SizedBox(width: 26, child: widget.locked ? const SizedBox() : IconButton(icon: const Icon(Icons.close, size: 13), onPressed: widget.onRemove, color: Colors.red.shade300, padding: EdgeInsets.zero, visualDensity: VisualDensity.compact)),
+    ]));
   }
 }

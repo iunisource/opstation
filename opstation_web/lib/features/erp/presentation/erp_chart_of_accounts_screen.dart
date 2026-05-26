@@ -125,6 +125,37 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     setState(() => _saving = false);
   }
 
+
+  Future<void> _editAccount(Map<String, dynamic> acc) async {
+    final nameCtrl = TextEditingController(text: acc['name'] as String? ?? '');
+    String? selectedType = acc['account_type'] as String?;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+      title: Text('Edit Account  ${acc['code'] ?? ''}'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: 'Account Name *')),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String?>(
+          value: selectedType,
+          decoration: const InputDecoration(labelText: 'Account Type'),
+          items: [const DropdownMenuItem<String?>(value: null, child: Text('— None —')), ...['BANK','CASH IN HAND','CUSTOMER','EMPLOYEE','EXPENSE','FIXED ASSETS','G/L ACCOUNT','PURCHASES','SALES','SUPPLIER'].map((t) => DropdownMenuItem(value: t, child: Text(t)))].toList(),
+          onChanged: (v) => setS(() => selectedType = v),
+        ),
+        const SizedBox(height: 8),
+        Text('Code: ${acc['code'] ?? 'auto'}  (read-only)', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () { if (nameCtrl.text.trim().isNotEmpty) Navigator.pop(ctx, true); }, child: const Text('Save'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
+      ],
+    )));
+    if (ok != true || !mounted) return;
+    try {
+      await Supabase.instance.client.from('chart_of_accounts').update({'name': nameCtrl.text.trim(), 'account_type': selectedType}).eq('id', acc['id'] as String);
+      await _load(); _snack('Account updated');
+    } catch (e) { _snack('Failed: $e'); }
+    nameCtrl.dispose();
+  }
+
   void _resetForm() {
     setState(() { _selectedGroup = null; _sel1 = null; _sel2 = null; _sel3 = null; _accountType = null; _show1 = false; _show2 = false; _show3 = false; });
     _nameCtrl.clear();
@@ -181,6 +212,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
               Text(code.isNotEmpty ? '$code — $name' : name, style: TextStyle(fontSize: 12, fontWeight: level <= 2 ? FontWeight.w700 : FontWeight.w500, color: active ? AppTheme.textPrimary : Colors.grey), overflow: TextOverflow.ellipsis),
               if (type != null) Text(type, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600)),
             ])),
+            IconButton(icon: const Icon(Icons.edit_outlined, size: 15), onPressed: () => _editAccount(node), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact, tooltip: 'Edit'),
             Switch.adaptive(value: active, onChanged: (_) => _toggleActive(node), materialTapTargetSize: MaterialTapTargetSize.shrinkWrap),
           ]),
         ),
