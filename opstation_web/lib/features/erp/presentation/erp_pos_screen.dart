@@ -1,4 +1,6 @@
 import 'dart:math' as math;
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:js' as js;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -357,7 +359,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   // ── Staging ──────────────────────────────────────────────
   Map<String, dynamic>? _stagedProduct;
   int? _stagedCartIndex;  // null=new, int=editing existing
-  String _stagedDiscType = 'fixed';
+  String _stagedDiscType = 'percent';
   int _dropdownHighlight = -1;
   final _stagedQtyCtrl = TextEditingController();
   final _stagedDiscCtrl = TextEditingController();
@@ -379,6 +381,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   String _orderDiscountType = 'fixed'; // 'fixed' | 'percent'
   bool _loading = true;
   bool _sessionPanelOpen = true;
+  List<Map<String, dynamic>> _heldBills = [];
+  bool _holdsPanelExpanded = false;
   List<Map<String, dynamic>> _expenses = [];
   bool _showExpenses = false;  // toggle between txns and expenses in panel
   String _search = '';
@@ -412,6 +416,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         client.from('pos_sessions').select('*, branches(name)').eq('id', _session['id']).single(),
         client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId),
         client.from('pos_customers').select('id, name, phone, cnic').eq('org_id', orgId).eq('branch_id', branchId).order('name'),
+        client.from('pos_held_bills').select('*').eq('session_id', _session['id']).eq('status', 'held').order('held_at', ascending: false),
       ]);
       final prods = List<Map<String, dynamic>>.from(results[1] as List);
       final stockRows = List<Map<String, dynamic>>.from(results[4] as List);
@@ -434,6 +439,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _session = Map<String, dynamic>.from(results[3] as Map);
         _stockMap = stockMap;
         _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
+        _heldBills = List<Map<String, dynamic>>.from(results[6] as List);
         _loading = false;
       });
     } catch (e) { _showSnack('Load error: $e'); setState(() => _loading = false); }
@@ -441,6 +447,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   // ── Stage a product for editing before adding to bill ─────
   void _stageProduct(Map<String, dynamic> product, {int? cartIndex}) {
+    // Block if 0 stock
+    final pStock = (product['stock_qty'] as num?)?.toDouble() ?? 0;
+    if (cartIndex == null && pStock <= 0) { _playBadgeSound(); return; }
+    // If already in cart and not explicitly editing, load that cart entry
+    if (cartIndex == null) {
+      final existIdx = _cart.indexWhere((ci) => ci['pos_catalog_id'] == (product['id'] ?? product['pos_catalog_id']));
+      if (existIdx >= 0) { _stageProduct(product, cartIndex: existIdx); return; }
+    }
     setState(() {
       _stagedProduct = product;
       _dropdownHighlight = -1;
@@ -455,7 +469,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _stagedCartIndex = null;
         _stagedQtyCtrl.text = '1';
         _stagedDiscCtrl.clear();
-        _stagedDiscType = 'fixed';
+        _stagedDiscType = 'percent';
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -570,6 +584,23 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         ]),
       ]),
     );
+  }
+
+  void _playBadgeSound() {
+    try { _playTone(880, 0.3, 'sawtooth'); } catch (_) {}
+  }
+
+  void _playSuccessSound() {
+    try { _playTone(523, 0.15, 'sine'); Future.delayed(const Duration(milliseconds: 150), () { try { _playTone(659, 0.15, 'sine'); } catch (_) {} }); Future.delayed(const Duration(milliseconds: 300), () { try { _playTone(784, 0.2, 'sine'); } catch (_) {} }); } catch (_) {}
+  }
+
+  void _playTone(double freq, double duration, String type) {
+    // Uses dart:js to call Web Audio API
+    try {
+      js.context.callMethod('eval', [
+        'try{var a=new AudioContext();var o=a.createOscillator();var g=a.createGain();o.connect(g);g.connect(a.destination);o.type="' + type + '";o.frequency.value=' + freq.toString() + ';g.gain.setValueAtTime(0.3,a.currentTime);g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+' + duration.toString() + ');o.start(a.currentTime);o.stop(a.currentTime+' + duration.toString() + ');}catch(e){}'
+      ]);
+    } catch (_) {}
   }
 
   void _filterProducts(String q) {
@@ -994,8 +1025,9 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
               final opts = _displayProducts.take(8).toList();
               if (opts.isNotEmpty) {
                 final idx = _dropdownHighlight.clamp(0, opts.length - 1);
-                _stageProduct(opts[idx]);
-                _searchCtrl.clear(); _filterProducts('');
+                final sel = opts[idx];
+                final selStock = (sel['stock_qty'] as num?)?.toDouble() ?? 0;
+                if (selStock <= 0) { _playBadgeSound(); } else { _stageProduct(sel); _searchCtrl.clear(); _filterProducts(''); }
               }
             },
           )),
@@ -1014,7 +1046,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   final blocked = stock <= 0;
                   final highlighted = i == _dropdownHighlight;
                   return InkWell(
-                    onTap: blocked ? null : () { _stageProduct(p); _searchCtrl.clear(); _filterProducts(''); },
+                    onTap: blocked ? () { _playBadgeSound(); } : () { _stageProduct(p); _searchCtrl.clear(); _filterProducts(''); },
                     child: Container(
                       color: highlighted ? AppTheme.primary.withOpacity(0.08) : Colors.transparent,
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1101,6 +1133,11 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     }),
                   ])),
             ])),
+            // Bill search
+            if (_cart.length > 3) Padding(padding: const EdgeInsets.fromLTRB(10, 6, 10, 0), child: TextField(
+              decoration: const InputDecoration(hintText: 'Filter bill items...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 8)),
+              onChanged: (v) => setState(() => _cartSearch = v),
+            )),
             // Bill — read-only, tap to edit
             Expanded(child: _cart.isEmpty
                 ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1111,10 +1148,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   ]))
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-                    itemCount: _cart.length,
+                    itemCount: (_cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList()).length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (_, i) {
-                      final item = _cart[i];
+                      final billView = _cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList();
+                      final item = billView[i];
+                      final cartIdx = _cart.indexOf(item);
                       final qty = item['quantity'] as double;
                       final price = item['unit_price'] as double;
                       final disc = item['discount'] as double;
@@ -1123,7 +1162,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       final lineTotal = qty * price - da;
                       final editing = _stagedCartIndex == i;
                       return InkWell(
-                        onTap: _isOpen ? () => _stageProduct(item, cartIndex: i) : null,
+                        onTap: _isOpen ? () => _stageProduct(item, cartIndex: cartIdx) : null,
                         child: Container(
                           color: editing ? AppTheme.primary.withOpacity(0.05) : Colors.transparent,
                           padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
@@ -1148,9 +1187,9 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                                 constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
                                 color: AppTheme.textSecondary,
                                 onPressed: () => setState(() {
-                                  if (_stagedCartIndex == i) { _stagedProduct = null; _stagedCartIndex = null; }
-                                  else if (_stagedCartIndex != null && _stagedCartIndex! > i) _stagedCartIndex = _stagedCartIndex! - 1;
-                                  _cart.removeAt(i);
+                                  if (_stagedCartIndex == cartIdx) { _stagedProduct = null; _stagedCartIndex = null; }
+                                  else if (_stagedCartIndex != null && _stagedCartIndex! > cartIdx) _stagedCartIndex = _stagedCartIndex! - 1;
+                                  _cart.removeAt(cartIdx);
                                 }),
                               ),
                           ]),
@@ -1225,6 +1264,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   Text('Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primary)),
                 ]),
                 const SizedBox(height: 10),
+                if (_isOpen && _cart.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: SizedBox(width: double.infinity, height: 36, child: OutlinedButton.icon(
+                  icon: const Icon(Icons.pause_circle_outline, size: 16),
+                  label: const Text('Hold Bill', style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.orange.shade700, side: BorderSide(color: Colors.orange.shade300)),
+                  onPressed: _holdBill,
+                ))),
                 KeyboardListener(focusNode: _checkoutFocusNode, onKeyEvent: (e) { if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.enter && _cart.isNotEmpty && _isOpen) _checkout(); },
                   child: SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
                     focusNode: FocusNode(),
@@ -1392,6 +1437,67 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       _showSnack('Expense recorded: Rs. ${amt.toStringAsFixed(2)}');
       _loadData();
     } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // ── Hold Bill ─────────────────────────────────────────────────
+  Future<void> _holdBill() async {
+    if (_cart.isEmpty) { _showSnack('Cart is empty'); return; }
+    final orgId = _orgId;
+    final branchId = _session['branch_id'] as String;
+    final userId = ref.read(currentUserProvider)?.id;
+    final customerName = _selectedPosCustomer?['name'] as String? ?? _selectedCustomer?['shop_name'] as String? ?? 'Walk-in';
+    try {
+      await Supabase.instance.client.from('pos_held_bills').insert({
+        'id': 'held_${DateTime.now().millisecondsSinceEpoch}',
+        'org_id': orgId, 'branch_id': branchId, 'session_id': _session['id'],
+        'customer_id': _selectedCustomer?['id'],
+        'pos_customer_id': _selectedPosCustomer?['id'],
+        'customer_name': customerName,
+        'items': _cart,
+        'order_discount': _orderDiscount,
+        'order_discount_type': _orderDiscountType,
+        'payment_method': _paymentMethod,
+        'total': _cartTotal,
+        'held_by': userId,
+        'status': 'held',
+      });
+      setState(() {
+        _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null;
+        _customerSearchCtrl.clear(); _paymentMethod = 'cash';
+        _stagedProduct = null; _stagedCartIndex = null;
+        _holdsPanelExpanded = true;
+      });
+      await _loadData();
+      _showSnack('Bill held — tap to restore');
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _restoreBill(Map<String, dynamic> bill) async {
+    if (_cart.isNotEmpty) {
+      final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+        title: const Text('Replace current cart?'),
+        content: const Text('Current cart items will be cleared and replaced with this held bill.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Restore'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
+        ],
+      ));
+      if (ok != true) return;
+    }
+    final items = (bill['items'] as List).map((i) => Map<String, dynamic>.from(i as Map)).toList();
+    setState(() {
+      _cart = items;
+      _orderDiscount = (bill['order_discount'] as num?)?.toDouble() ?? 0;
+      _orderDiscountType = bill['order_discount_type'] as String? ?? 'fixed';
+      _paymentMethod = bill['payment_method'] as String? ?? 'cash';
+      _stagedProduct = null; _stagedCartIndex = null;
+    });
+    try {
+      await Supabase.instance.client.from('pos_held_bills')
+          .update({'status': 'restored'}).eq('id', bill['id'] as String);
+      await _loadData();
+    } catch (_) {}
+    _showSnack('Bill restored');
   }
 
   void _showReturnDialog() {
