@@ -112,23 +112,18 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
     // Category summary
     final catSummary = _byCategory.entries.map((e) => '<tr><td>${e.key}</td><td class="amt">Rs. ${e.value.toStringAsFixed(2)}</td></tr>').join();
 
-    final content = '''<!DOCTYPE html><html><head><title>Expense Report</title>
+    final content = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Expense Report</title>
 <style>
-  body { font-family: Arial, sans-serif; padding: 24px; font-size: 12px; color: #333; }
-  h1 { font-size: 18px; margin: 0; } h2 { font-size: 13px; color: #666; margin: 2px 0 16px; }
-  .meta { color: #666; font-size: 11px; margin-bottom: 20px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-  th { background: #f5f5f5; padding: 8px 6px; text-align: left; font-size: 11px; border-bottom: 2px solid #ddd; }
-  td { padding: 7px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
+  body { font-family: Arial, sans-serif; padding: 14px; font-size: 11px; color: #333; }
+  h1 { font-size: 14px; margin: 0 0 2px; } h2 { font-size: 11px; color: #666; margin: 0 0 6px; }
+  .meta { color: #666; font-size: 10px; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  th { background: #f5f5f5; padding: 4px 6px; text-align: left; font-size: 10px; border-bottom: 2px solid #ddd; }
+  td { padding: 4px 6px; border-bottom: 1px solid #eee; vertical-align: top; font-size: 11px; }
   .amt { text-align: right; font-weight: bold; }
-  .cat { background: #fff3e0; color: #e65100; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
-  .total-row td { font-weight: bold; font-size: 13px; border-top: 2px solid #333; background: #f9f9f9; }
-  .summary { display: flex; gap: 24px; margin-bottom: 20px; }
-  .stat { background: #f5f5f5; padding: 10px 16px; border-radius: 6px; }
-  .stat-label { font-size: 10px; color: #888; letter-spacing: 0.5px; text-transform: uppercase; }
-  .stat-value { font-size: 18px; font-weight: bold; color: #333; }
-  .cat-table { width: 280px; }
-  @media print { .no-print { display: none; } }
+  .cat { background: #fff3e0; color: #e65100; padding: 1px 5px; border-radius: 4px; font-size: 10px; }
+  .total-row td { font-weight: bold; font-size: 12px; border-top: 2px solid #333; background: #f9f9f9; }
+  @media print { .no-print { display: none; } @page { margin: 10mm; } }
 </style></head><body>
 <h1>$orgName — Expense Report</h1>
 <h2>$branchName</h2>
@@ -140,12 +135,12 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
 <h3 style="font-size:13px;margin-bottom:8px">By Category</h3>
 <table class="cat-table"><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>$catSummary</tbody></table>
 <h3 style="font-size:13px;margin-bottom:8px">Expense Details</h3>
-<table><thead><tr><th>Date & Time</th><th>Session</th><th>Branch</th><th>Category</th><th>Note</th><th>Cashier</th><th>Amount</th></tr></thead>
-<tbody>$rows<tr class="total-row"><td colspan="6">TOTAL</td><td class="amt">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table>
+<table><thead><tr><th>Date & Time</th><th>Branch</th><th>Category</th><th>Note</th><th>Cashier</th><th>Amount</th></tr></thead>
+<tbody>$rows<tr class="total-row"><td colspan="5">TOTAL</td><td class="amt">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table>
 ${print ? '<script>window.print()</script>' : ''}
 </body></html>''';
 
-    final blob = html.Blob([content], 'text/html');
+    final blob = html.Blob([content], 'text/html;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.window.open(url, '_blank');
   }

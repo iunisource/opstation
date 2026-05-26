@@ -181,7 +181,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   }
 
   void _showAuditTrail() {
-    showDialog(context: context, builder: (_) => AlertDialog(
+    showDialog(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Audit Trail'),
       content: SizedBox(width: 420, child: _auditTrail.isEmpty
           ? const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('No audit records yet.', style: TextStyle(color: AppTheme.textSecondary)))
@@ -202,7 +202,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
                 );
               },
             )),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
     ));
   }
 
@@ -251,7 +251,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     </style></head><body>
     <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">&#x1F5A8; Print</button></div>
     <h2>Cash Payment Voucher</h2>
-    <div class="info"><span><b>Voucher#:</b> ${_currentVoucher!['voucher_number'] ?? ''}</span><span><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</span><span><b>Cash A/c:</b> $_cashAccountName</span><span><b>Status:</b> ${_status.toUpperCase()}</span></div>
+    <table style="border:none;margin-bottom:5px;width:100%"><tr><td style="border:none;padding:1px 10px 1px 0;font-size:10px;white-space:nowrap"><b>Voucher#:</b> ${_currentVoucher!['voucher_number'] ?? ''}</td><td style="border:none;padding:1px 10px;font-size:10px;white-space:nowrap"><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</td><td style="border:none;padding:1px 10px;font-size:10px"><b>Cash A/c:</b> $_cashAccountName</td><td style="border:none;padding:1px 0;font-size:10px;white-space:nowrap"><b>Status:</b> ${_status.toUpperCase()}</td></tr></table>
     <table><thead><tr><th>#</th><th>Account / Party</th><th>Description</th><th style="text-align:right">Amount (Rs.)</th></tr></thead><tbody>
     ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td style="text-align:right">${double.tryParse(e.value.amtCtrl.text)?.toStringAsFixed(2) ?? '0.00'}</td></tr>').join()}
     </tbody><tfoot><tr><td colspan="3" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${_total.toStringAsFixed(2)}</td></tr></tfoot></table>

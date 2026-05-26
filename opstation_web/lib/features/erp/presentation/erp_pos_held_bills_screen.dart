@@ -40,12 +40,12 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
   }
 
   Future<void> _cancelBill(Map<String, dynamic> bill) async {
-    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Cancel held bill?'),
       content: const Text('This will permanently discard this held bill.'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Keep')),
-        ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cancel Bill'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red)),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Cancel Bill'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red)),
       ],
     ));
     if (ok != true) return;
@@ -72,7 +72,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
       final session = sessions.first as Map<String, dynamic>;
       // Navigate to POS session and pass the bill to restore
       if (mounted) {
-        context.go('/erp/pos/session', extra: {'session': session, 'restoreBill': bill});
+        Navigator.pop(context); _snack('Bill restored — find it in the session Hold panel');
       }
     } catch (e) { _snack('Failed: $e'); }
   }
