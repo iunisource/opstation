@@ -60,7 +60,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       final results = await Future.wait([
         client.from('chart_of_accounts').select('id, code, name, account_type').eq('org_id', orgId).order('code'),
         client.from('suppliers').select('id, name').eq('org_id', orgId).order('name'),
-        client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name'),
+        client.from('customers').select('id, shop_name').eq('org_id', orgId).order('shop_name'),
       ]);
       final coa = List<Map<String, dynamic>>.from(results[0] as List);
       final sup = List<Map<String, dynamic>>.from(results[1] as List);
@@ -93,9 +93,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   double get _total => _lines.fold(0.0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
 
   List<Map<String, dynamic>> _filterAccounts(String q) {
-    if (q.isEmpty) return _allAccounts.take(12).toList();
+    if (q.isEmpty) return _allAccounts.take(30).toList();
     final ql = q.toLowerCase();
-    return _allAccounts.where((a) => (a['label'] as String).toLowerCase().contains(ql) || (a['sub'] as String).toLowerCase().contains(ql)).take(15).toList();
+    return _allAccounts.where((a) => (a['label'] as String).toLowerCase().contains(ql) || (a['sub'] as String).toLowerCase().contains(ql)).take(30).toList();
   }
 
   List<Map<String, dynamic>> get _cashAccounts => _coaList.where((a) => ['BANK', 'CASH IN HAND'].contains(a['account_type'])).map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'type': a['account_type'] as String}).toList();
@@ -149,7 +149,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   }
 
   Future<void> _delete() async {
-    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('Delete Voucher?'), content: const Text('This cannot be undone.'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red))]));
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('Delete Voucher?'), content: const Text('This cannot be undone.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red))]));
     if (ok != true) return;
     try {
       if (_currentVoucher != null) { await Supabase.instance.client.from('cpv_vouchers').delete().eq('id', _currentVoucher!['id'] as String); _snack('Deleted'); _newVoucher(); await _loadVouchers(); }
@@ -221,12 +221,12 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   }
 
     Future<void> _unlockVoucher() async {
-    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Unlock Voucher?'),
       content: const Text('This will set the voucher back to Draft and allow editing.'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Unlock'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange)),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Unlock'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange)),
       ],
     ));
     if (ok != true || !mounted) return;
@@ -251,7 +251,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     </style></head><body>
     <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">&#x1F5A8; Print</button></div>
     <h2>Cash Payment Voucher</h2>
-    <table style="margin-bottom:8px;border:none"><tr><td style="border:none"><b>Voucher #:</b> ${_currentVoucher!['voucher_number'] ?? ''}</td><td style="border:none"><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</td><td style="border:none"><b>Cash Account:</b> $_cashAccountName</td><td style="border:none"><b>Status:</b> ${_status.toUpperCase()}</td></tr></table>
+    <div class="info"><span><b>Voucher#:</b> ${_currentVoucher!['voucher_number'] ?? ''}</span><span><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</span><span><b>Cash A/c:</b> $_cashAccountName</span><span><b>Status:</b> ${_status.toUpperCase()}</span></div>
     <table><thead><tr><th>#</th><th>Account / Party</th><th>Description</th><th style="text-align:right">Amount (Rs.)</th></tr></thead><tbody>
     ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td style="text-align:right">${double.tryParse(e.value.amtCtrl.text)?.toStringAsFixed(2) ?? '0.00'}</td></tr>').join()}
     </tbody><tfoot><tr><td colspan="3" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${_total.toStringAsFixed(2)}</td></tr></tfoot></table>
