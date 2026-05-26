@@ -401,7 +401,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   Future<void> _loadData() async {
     final orgId = _orgId; if (orgId == null) return;
-    setState(() => _loading = true);
+    setState(() { _loading = true; _stagedProduct = null; _stagedCartIndex = null; _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear(); });
     try {
       final client = Supabase.instance.client;
       final branchId = _session['branch_id'] as String? ?? '';
@@ -719,7 +719,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           cashierName: ref.read(currentUserProvider)?.name ?? '', posConfig: _posConfig,
         ));
       }
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack('Failed: $e'); } finally { setState(() => _checkingOut = false); }
   }
 
   Future<void> _processReturn(Map<String, dynamic> originalTxn, List<Map<String, dynamic>> returnItems) async {
