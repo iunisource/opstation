@@ -49,6 +49,8 @@ import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
 import '../../features/erp/presentation/erp_pos_catalog_screen.dart';
 import '../../features/erp/presentation/erp_pos_config_screen.dart';
 import '../../features/erp/presentation/erp_pos_customer_history_screen.dart';
+import '../../features/erp/presentation/erp_pos_held_bills_screen.dart';
+import '../../features/erp/presentation/erp_pos_expense_management_screen.dart';
 import '../../features/erp/presentation/erp_customer_aging_screen.dart';
 import '../../features/erp/presentation/erp_supplier_aging_screen.dart';
 import '../../features/erp/presentation/erp_sales_returns_screen.dart';
@@ -156,6 +158,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/pos-config', builder: (_, __) => const ErpPosConfigScreen()),
           GoRoute(path: '/erp/pos-catalog', builder: (_, __) => const ErpPosCatalogScreen()),
           GoRoute(path: '/erp/pos-customer-history', builder: (_, __) => const ErpPosCustomerHistoryScreen()),
+          GoRoute(path: '/erp/pos-held-bills', builder: (_, __) => const ErpPosHeldBillsScreen()),
+          GoRoute(path: '/erp/pos-expense-management', builder: (_, __) => const ErpPosExpenseManagementScreen()),
           GoRoute(path: '/erp/delivery-orders', builder: (_, __) => const ErpDeliveryOrdersScreen()),
           GoRoute(path: '/erp/sales-invoices', builder: (_, __) => const ErpSalesInvoicesScreen()),
           GoRoute(path: '/erp/grn', builder: (_, __) => const ErpGrnScreen()),

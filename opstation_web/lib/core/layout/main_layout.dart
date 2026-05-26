@@ -149,6 +149,8 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'POS',         Icons.storefront_outlined, '/erp/pos',         location),
         _menuItem(context, 'POS Catalog',    Icons.list_alt_outlined,     '/erp/pos-catalog',           location),
         _menuItem(context, 'Customer History', Icons.manage_accounts_outlined, '/erp/pos-customer-history', location),
+        _menuItem(context, 'Bills on Hold',       Icons.pause_circle_outlined,    '/erp/pos-held-bills',          location),
+        _menuItem(context, 'Expense Management',  Icons.receipt_outlined,          '/erp/pos-expense-management',  location),
       ],
     ];
 
@@ -186,7 +188,7 @@ class _TopNav extends ConsumerWidget {
           salesItems),
       if (posItems.isNotEmpty)
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
-          ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history'], posItems),
+          ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management'], posItems),
       if (ledgerItems.isNotEmpty)
         _navMenu(context, 'Ledgers', Icons.analytics_outlined, location,
           ['/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
