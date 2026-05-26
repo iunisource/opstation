@@ -469,6 +469,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'quantity': qty,
           'discount': disc,
           'discount_type': _stagedDiscType,
+          'stock_qty': (_stagedProduct!['stock_qty'] as num?)?.toDouble() ?? 0.0,
         });
       }
       _stagedProduct = null; _stagedCartIndex = null;
@@ -1557,8 +1558,9 @@ class _ReturnDialogState extends State<_ReturnDialog> {
     return _transactions.where((t) {
       final custName = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase();
       final txnId = (t['id'] as String? ?? '').toLowerCase();
+      final txnNum = (t['transaction_number'] as String? ?? '').toLowerCase();
       final phone = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase();
-      final matchSearch = q.isEmpty || custName.contains(q) || txnId.contains(q) || phone.contains(q);
+      final matchSearch = q.isEmpty || custName.contains(q) || txnId.contains(q) || txnNum.contains(q) || phone.contains(q);
       final ts = t['transacted_at'] != null ? DateTime.parse(t['transacted_at'] as String).toLocal() : null;
       final matchFrom = _dateFrom == null || (ts != null && !ts.isBefore(_dateFrom!));
       final matchTo = _dateTo == null || (ts != null && !ts.isAfter(_dateTo!.add(const Duration(days: 1))));
@@ -1607,7 +1609,11 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                     Expanded(child: Text(custName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
                     Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
                   ]),
-                  subtitle: Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  subtitle: Row(children: [
+                    Expanded(child: Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                    if ((t['transaction_number'] as String?)?.isNotEmpty == true)
+                      Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(t['transaction_number'] as String, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))),
+                  ]),
                   onTap: () => _loadItems(t));
               })),
         const SizedBox(width: 16),
