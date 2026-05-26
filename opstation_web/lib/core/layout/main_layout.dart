@@ -153,6 +153,10 @@ class _TopNav extends ConsumerWidget {
       ],
     ];
 
+    final financialItems = <Widget>[
+      _menuItem(context, 'Chart of Accounts', Icons.account_tree_outlined, '/erp/chart-of-accounts', location),
+    ];
+
     final erpAdminItems = <Widget>[
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
         _menuItem(context, 'ERP Users', Icons.manage_accounts_outlined, '/erp/users', location),
@@ -161,7 +165,7 @@ class _TopNav extends ConsumerWidget {
     // Legacy combined list (still used for isNotEmpty guards)
     final erpMenuItems = <Widget>[
       ...inventoryItems, ...purchaseItems, ...salesItems, ...posItems,
-      ...ledgerItems, ...erpAdminItems,
+      ...ledgerItems, ...financialItems, ...erpAdminItems,
     ];
 
     List<Widget> splitErpMenus() => [
@@ -188,6 +192,10 @@ class _TopNav extends ConsumerWidget {
           ['/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
            '/erp/customer-aging', '/erp/supplier-aging'],
           ledgerItems),
+      if (financialItems.isNotEmpty)
+        _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
+          ['/erp/chart-of-accounts'],
+          financialItems),
       if (erpAdminItems.isNotEmpty)
         _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
           ['/erp/users'], erpAdminItems),
