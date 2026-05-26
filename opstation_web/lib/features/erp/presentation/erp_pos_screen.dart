@@ -213,7 +213,21 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
             if (_filterFrom != null || _filterTo != null) ...[const SizedBox(width: 4), IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _filterFrom = null; _filterTo = null; }), tooltip: 'Clear dates')],
           ]),
           const SizedBox(height: 8),
-          TextField(decoration: const InputDecoration(hintText: 'Search by branch name…', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (v) => setState(() => _sessionSearch = v)),
+          TextField(decoration: const InputDecoration(hintText: 'Search by branch, customer, phone or TRX ID…', prefixIcon: Icon(Icons.manage_search, size: 18), isDense: true), onChanged: (v) async {
+            setState(() => _sessionSearch = v);
+            if (v.trim().length >= 2) {
+              final q2 = v.toLowerCase();
+              for (final s in _sessions) {
+                final sid = s['id'] as String;
+                if (!_sessionTxns.containsKey(sid)) {
+                  try { final rows = await Supabase.instance.client.from('pos_transactions').select('id, transaction_number, total, transacted_at, transaction_type, customers(shop_name), pos_customers(name, phone)').eq('session_id', sid).order('transacted_at', ascending: false); if (mounted) setState(() => _sessionTxns[sid] = List<Map<String, dynamic>>.from(rows)); } catch (_) {}
+                }
+                final txns = _sessionTxns[sid] ?? [];
+                final hasMatch = txns.any((t) { final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase(); final ph = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase(); final tr = (t['transaction_number'] as String? ?? '').toLowerCase(); return cu.contains(q2) || ph.contains(q2) || tr.contains(q2); });
+                if (hasMatch && mounted) setState(() => _sessionExpanded[sid] = true);
+              }
+            }
+          }),
           const SizedBox(height: 12),
           if (_loading)
             const Center(child: CircularProgressIndicator())
@@ -246,7 +260,10 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                       final q = _sessionSearch.toLowerCase();
                       final filtered = _sessions.where((s) {
                         final branch = (s['branches']?['name'] as String? ?? '').toLowerCase();
-                        final matchSearch = q.isEmpty || branch.contains(q);
+                        final sid2 = s['id'] as String;
+                        final txnsForSearch = _sessionTxns[sid2] ?? [];
+                        final txnMatch = txnsForSearch.any((t) { final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase(); final ph = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase(); final tr = (t['transaction_number'] as String? ?? '').toLowerCase(); return cu.contains(q) || ph.contains(q) || tr.contains(q); });
+                        final matchSearch = q.isEmpty || branch.contains(q) || txnMatch;
                         final opened = s['opened_at'] != null ? DateTime.parse(s['opened_at'] as String).toLocal() : null;
                         final matchFrom = _filterFrom == null || (opened != null && !opened.isBefore(_filterFrom!));
                         final matchTo = _filterTo == null || (opened != null && !opened.isAfter(_filterTo!.add(const Duration(days: 1))));
@@ -263,7 +280,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                               final isOpen = s['status'] == 'open';
                               final expanded = _sessionExpanded[sid] ?? false;
                               final txns = _sessionTxns[sid] ?? [];
-                              final q = _globalTxnSearch.toLowerCase();
+                              final q = _sessionSearch.toLowerCase();
                               final filteredTxns = q.isEmpty ? txns : txns.where((t) { final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase(); final ph = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase(); final tr = (t['transaction_number'] as String? ?? '').toLowerCase(); return cu.contains(q) || ph.contains(q) || tr.contains(q); }).toList();
                               final openedAt = s['opened_at'] != null
                                   ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(s['opened_at'] as String).toLocal())
