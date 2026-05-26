@@ -57,9 +57,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final orgId = _orgId; if (orgId == null) return;
     try {
       final results = await Future.wait([
-        Supabase.instance.client.from('chart_of_accounts').select('id, code, name, account_type, account_group').eq('org_id', orgId).eq('is_active', true).order('code'),
-        Supabase.instance.client.from('suppliers').select('id, name, code').eq('org_id', orgId).eq('is_active', true).order('name'),
-        Supabase.instance.client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name'),
+        Supabase.instance.client.from('chart_of_accounts').select('id, code, name, account_type, account_group').eq('org_id', orgId).order('code'),
+        Supabase.instance.client.from('suppliers').select('id, name, code').eq('org_id', orgId).order('name'),
+        Supabase.instance.client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name'),
       ]);
       setState(() {
         _coaAccounts = List<Map<String, dynamic>>.from(results[0] as List);
