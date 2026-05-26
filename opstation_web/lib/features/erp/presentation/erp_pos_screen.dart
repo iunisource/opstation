@@ -337,6 +337,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _displayProducts = [];
   List<Map<String, dynamic>> _customers = [];
   List<Map<String, dynamic>> _cart = [];
+  // ── Staging ──────────────────────────────────────────────
+  Map<String, dynamic>? _stagedProduct;
+  int? _stagedCartIndex;  // null=new, int=editing existing
+  String _stagedDiscType = 'fixed';
+  int _dropdownHighlight = -1;
+  final _stagedQtyCtrl = TextEditingController();
+  final _stagedDiscCtrl = TextEditingController();
+  final _stagedQtyFocus = FocusNode();
+  final _stagedDiscFocus = FocusNode();
+  final _searchFocus = FocusNode();
   String _cartSearch = '';
   Map<String, dynamic>? _selectedCustomer;
   String _paymentMethod = 'cash';
@@ -356,7 +366,6 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   bool _showExpenses = false;  // toggle between txns and expenses in panel
   String _search = '';
   final _searchCtrl = TextEditingController();
-  final _searchFocus = FocusNode();
   final _customerSearchCtrl = TextEditingController();
   bool _showCustomerDropdown = false;
   List<Map<String, dynamic>> _filteredCustomers = [];
@@ -366,7 +375,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -411,6 +420,138 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _loading = false;
       });
     } catch (e) { _showSnack('Load error: $e'); setState(() => _loading = false); }
+  }
+
+  // ── Stage a product for editing before adding to bill ─────
+  void _stageProduct(Map<String, dynamic> product, {int? cartIndex}) {
+    setState(() {
+      _stagedProduct = product;
+      _dropdownHighlight = -1;
+      if (cartIndex != null) {
+        _stagedCartIndex = cartIndex;
+        final it = _cart[cartIndex];
+        _stagedQtyCtrl.text = (it['quantity'] as double).toStringAsFixed(0);
+        final d = (it['discount'] as double);
+        _stagedDiscCtrl.text = d > 0 ? d.toStringAsFixed(0) : '';
+        _stagedDiscType = it['discount_type'] as String? ?? 'fixed';
+      } else {
+        _stagedCartIndex = null;
+        _stagedQtyCtrl.text = '1';
+        _stagedDiscCtrl.clear();
+        _stagedDiscType = 'fixed';
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _stagedQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _stagedQtyCtrl.text.length);
+      _stagedQtyFocus.requestFocus();
+    });
+  }
+
+  void _confirmStaged() {
+    if (_stagedProduct == null || !_isOpen) return;
+    final qty = double.tryParse(_stagedQtyCtrl.text.trim()) ?? 1;
+    if (qty <= 0) return;
+    final disc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
+    final price = (_stagedProduct!['price'] as num?)?.toDouble() ?? (_stagedProduct!['unit_price'] as num?)?.toDouble() ?? 0;
+    setState(() {
+      if (_stagedCartIndex != null && _stagedCartIndex! < _cart.length) {
+        _cart[_stagedCartIndex!]['quantity'] = qty;
+        _cart[_stagedCartIndex!]['discount'] = disc;
+        _cart[_stagedCartIndex!]['discount_type'] = _stagedDiscType;
+      } else {
+        _cart.add({
+          'pos_catalog_id': _stagedProduct!['id'] ?? _stagedProduct!['pos_catalog_id'],
+          'product_id': _stagedProduct!['product_id'],
+          'name': _stagedProduct!['name'],
+          'sku': _stagedProduct!['sku'] ?? '',
+          'uom_id': _stagedProduct!['uom_id'],
+          'unit_price': price,
+          'quantity': qty,
+          'discount': disc,
+          'discount_type': _stagedDiscType,
+        });
+      }
+      _stagedProduct = null; _stagedCartIndex = null;
+      _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear();
+      _searchCtrl.clear(); _filterProducts('');
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _searchFocus.requestFocus());
+  }
+
+  void _clearStaged() {
+    setState(() { _stagedProduct = null; _stagedCartIndex = null; _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear(); });
+    _searchFocus.requestFocus();
+  }
+
+  Widget _buildStagingCard() {
+    final p = _stagedProduct!;
+    final price = (p['price'] as num?)?.toDouble() ?? (p['unit_price'] as num?)?.toDouble() ?? 0;
+    final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
+    final qty = double.tryParse(_stagedQtyCtrl.text.trim()) ?? 1;
+    final disc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
+    final da = _stagedDiscType == 'percent' ? price * qty * disc / 100 : disc;
+    final total = price * qty - da;
+    final isEdit = _stagedCartIndex != null;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      decoration: BoxDecoration(
+        color: Colors.white, borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: isEdit ? AppTheme.primary : Colors.green.shade300, width: 1.5),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 10, offset: const Offset(0, 3))],
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(p['name'] as String? ?? '-', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+          if (isEdit) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: const Text('Editing', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w700))),
+        ]),
+        const SizedBox(height: 3),
+        Text('Rs. ' + price.toStringAsFixed(2) + '   Stock: ' + stock.toStringAsFixed(0), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        const SizedBox(height: 14),
+        Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Qty', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            TextField(controller: _stagedQtyCtrl, focusNode: _stagedQtyFocus,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              decoration: InputDecoration(filled: true, fillColor: const Color(0xFFF8F9FA), border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(vertical: 12)),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _stagedDiscFocus.requestFocus()),
+          ])),
+          const SizedBox(width: 14),
+          Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Discount', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Row(children: [
+              Expanded(child: TextField(controller: _stagedDiscCtrl, focusNode: _stagedDiscFocus,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(filled: true, fillColor: const Color(0xFFF8F9FA), border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _confirmStaged())),
+              const SizedBox(width: 8),
+              DropdownButton<String>(value: _stagedDiscType, isDense: true, underline: const SizedBox(),
+                items: const [DropdownMenuItem(value: 'fixed', child: Text('Rs')), DropdownMenuItem(value: 'percent', child: Text('%'))],
+                onChanged: (v) => setState(() => _stagedDiscType = v!)),
+            ]),
+          ])),
+        ]),
+        const SizedBox(height: 14),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('Rs. ' + total.toStringAsFixed(2), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          Row(children: [
+            TextButton(onPressed: _clearStaged, child: const Text('Cancel')),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              icon: Icon(isEdit ? Icons.check : Icons.add_shopping_cart, size: 16),
+              label: Text(isEdit ? 'Update Bill' : 'Add to Bill'),
+              onPressed: _confirmStaged,
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
+          ]),
+        ]),
+      ]),
+    );
   }
 
   void _filterProducts(String q) {
@@ -810,58 +951,89 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         ],
       ),
       body: _loading ? const Center(child: CircularProgressIndicator()) : Row(children: [
-        // ── Products Panel ─────────────────────────────────────────────
+        // ── Staging Panel ──────────────────────────────────────
         Expanded(child: Column(children: [
-          Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 8), child: RawAutocomplete<Map<String, dynamic>>(
-            textEditingController: _searchCtrl,
-            focusNode: _searchFocus,
-            optionsBuilder: (tv) {
-              final q = tv.text.toLowerCase();
-              final opts = q.isEmpty ? _allProducts : _allProducts.where((p) => (p['name'] as String? ?? '').toLowerCase().contains(q) || (p['sku'] as String? ?? '').toLowerCase().contains(q)).toList();
-              return opts.take(8).toList();
-            },
-            displayStringForOption: (p) => p['name'] as String? ?? '',
-            onSelected: (p) { if (_isOpen) { _addToCart(p); _searchCtrl.clear(); _filterProducts(''); } },
-            fieldViewBuilder: (ctx, ctrl, focus, onSub) => TextField(
-              controller: ctrl, focusNode: focus,
-              decoration: InputDecoration(
-                hintText: 'Search products by name or SKU…',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                suffixIcon: _search.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, size: 18), onPressed: () { _searchCtrl.clear(); _filterProducts(''); }) : null,
-                filled: true, fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-              ),
-              onChanged: _filterProducts,
-              onSubmitted: (v) { if (_displayProducts.isNotEmpty && _isOpen) { _addToCart(_displayProducts.first); ctrl.clear(); _filterProducts(''); } },
+          // Search bar
+          Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 8), child: TextField(
+            controller: _searchCtrl, focusNode: _searchFocus,
+            decoration: InputDecoration(
+              hintText: _stagedProduct != null
+                  ? 'Editing: ' + (_stagedProduct!['name'] as String? ?? '')
+                  : 'Search product by name or SKU...',
+              prefixIcon: Icon(_stagedProduct != null ? Icons.edit_outlined : Icons.search, size: 20,
+                  color: _stagedProduct != null ? AppTheme.primary : null),
+              suffixIcon: (_search.isNotEmpty || _stagedProduct != null)
+                  ? IconButton(icon: const Icon(Icons.clear, size: 18), onPressed: () {
+                      _searchCtrl.clear(); _filterProducts('');
+                      setState(() { _stagedProduct = null; _stagedCartIndex = null; });
+                    }) : null,
+              filled: true, fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
             ),
-            optionsViewBuilder: (ctx, onSel, opts) => Align(alignment: Alignment.topLeft, child: Material(elevation: 4, borderRadius: BorderRadius.circular(10), child: ConstrainedBox(constraints: const BoxConstraints(maxHeight: 320, maxWidth: 380), child: ListView.separated(padding: const EdgeInsets.symmetric(vertical: 4), shrinkWrap: true, itemCount: opts.length, separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
-                final p = opts.elementAt(i);
-                final price = (p['price'] as num?)?.toDouble() ?? 0;
-                final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
-                final blocked = stock <= 0;
-                return ListTile(dense: true, enabled: !blocked,
-                  title: Text(p['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  subtitle: Text('Rs. ${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12)),
-                  trailing: blocked ? const Text('OUT', style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w700)) : null,
-                  onTap: () { if (!blocked) onSel(p); },
-                );
-              })))),
+            onChanged: (v) { _filterProducts(v); setState(() => _dropdownHighlight = -1); },
+            onSubmitted: (_) {
+              final opts = _displayProducts.take(8).toList();
+              if (opts.isNotEmpty) {
+                final idx = _dropdownHighlight.clamp(0, opts.length - 1);
+                _stageProduct(opts[idx]);
+                _searchCtrl.clear(); _filterProducts('');
+              }
+            },
           )),
-          Expanded(child: _displayProducts.isEmpty
-              ? Center(child: Text(_search.isEmpty ? 'No products in catalog for this branch.\nAdd products to the POS catalog first.' : 'No products matching "$_search"', textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.textSecondary)))
-              : GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 180, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 0.85),
-                  itemCount: _displayProducts.length,
-                  itemBuilder: (_, i) {
-                    final p = _displayProducts[i];
-                    final inCart = _cart.any((c) => c['pos_catalog_id'] == p['id']);
-                    return _ProductCard(product: p, inCart: inCart, isOpen: _isOpen, onTap: _isOpen ? () => _addToCart(p) : null);
-                  })),
+          // Dropdown results (only when searching and nothing staged)
+          if (_search.isNotEmpty && _stagedProduct == null)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.border),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 10)]),
+              child: Column(
+                children: _displayProducts.take(8).toList().asMap().entries.map((entry) {
+                  final i = entry.key; final p = entry.value;
+                  final price = (p['price'] as num?)?.toDouble() ?? 0;
+                  final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
+                  final blocked = stock <= 0;
+                  final highlighted = i == _dropdownHighlight;
+                  return InkWell(
+                    onTap: blocked ? null : () { _stageProduct(p); _searchCtrl.clear(); _filterProducts(''); },
+                    child: Container(
+                      color: highlighted ? AppTheme.primary.withOpacity(0.08) : Colors.transparent,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      child: Row(children: [
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(p['name'] as String? ?? '-',
+                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                                  color: blocked ? Colors.grey : AppTheme.textPrimary)),
+                          Text('Rs. ' + price.toStringAsFixed(2) + '  |  Stock: ' + stock.toStringAsFixed(0),
+                              style: TextStyle(fontSize: 11,
+                                  color: blocked ? Colors.red.shade300 : AppTheme.textSecondary)),
+                        ])),
+                        if (blocked)
+                          const Text('OUT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.red))
+                        else if (highlighted)
+                          const Icon(Icons.keyboard_return, size: 14, color: AppTheme.primary),
+                      ]),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          // Staging card
+          if (_stagedProduct != null) _buildStagingCard(),
+          // Empty state
+          if (_stagedProduct == null && _search.isEmpty)
+            Expanded(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.point_of_sale_outlined, size: 64, color: Colors.grey.shade200),
+              const SizedBox(height: 12),
+              Text(_allProducts.isEmpty
+                  ? 'No products in catalog\nAdd products via POS Catalog'
+                  : 'Search to add products to the bill',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
+            ]))),
         ])),
-        // ── Cart Panel ─────────────────────────────────────────────────
+                // ── Cart Panel ─────────────────────────────────────────────────
         Container(
           width: 480,
           decoration: const BoxDecoration(color: Colors.white, border: Border(left: BorderSide(color: AppTheme.border))),
@@ -911,24 +1083,63 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     }),
                   ])),
             ])),
-            // Cart items
+            // Bill — read-only, tap to edit
             Expanded(child: _cart.isEmpty
                 ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.shopping_cart_outlined, size: 48, color: Colors.grey.shade300),
+                    Icon(Icons.receipt_long_outlined, size: 48, color: Colors.grey.shade200),
                     const SizedBox(height: 8),
-                    Text(_isOpen ? 'Tap a product to add it' : 'Session closed', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                    Text(_isOpen ? 'Use search to add products' : 'Session closed',
+                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
                   ]))
                 : ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                    itemCount: (_cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList()).length, separatorBuilder: (_, __) => const SizedBox(height: 6),
-                    itemBuilder: (_, i) { final cv = _cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList(); final actualIdx = _cart.indexOf(cv[i]); final qFn = actualIdx < _qtyFocusNodes.length ? _qtyFocusNodes[actualIdx] : null; final dFn = actualIdx < _discFocusNodes.length ? _discFocusNodes[actualIdx] : null; return _CartItemTile(item: cv[i], isOpen: _isOpen, qtyFocusNode: qFn, discFocusNode: dFn, onFieldDone: () { final ni = i + 1; if (ni < _qtyFocusNodes.length) _qtyFocusNodes[ni].requestFocus(); else _checkoutFocusNode.requestFocus(); },
-                      onQtyChanged: (v) => setState(() => _cart[i]['quantity'] = v),
-                      onDiscountChanged: (d, dt) => setState(() { _cart[i]['discount'] = d; _cart[i]['discount_type'] = dt; }),
-                      onRemove: () => setState(() => _cart.removeAt(i)),
-                      lineTotal: _lineSubtotal(_cart[i]),
-                    ); },
-                    )),
-            // Order discount + payment + total
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+                    itemCount: _cart.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final item = _cart[i];
+                      final qty = item['quantity'] as double;
+                      final price = item['unit_price'] as double;
+                      final disc = item['discount'] as double;
+                      final discType = item['discount_type'] as String? ?? 'fixed';
+                      final da = discType == 'percent' ? price * qty * disc / 100 : disc;
+                      final lineTotal = qty * price - da;
+                      final editing = _stagedCartIndex == i;
+                      return InkWell(
+                        onTap: _isOpen ? () => _stageProduct(item, cartIndex: i) : null,
+                        child: Container(
+                          color: editing ? AppTheme.primary.withOpacity(0.05) : Colors.transparent,
+                          padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+                          child: Row(children: [
+                            SizedBox(width: 18, child: editing
+                                ? const Icon(Icons.edit, size: 13, color: AppTheme.primary)
+                                : const SizedBox()),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(item['name'] as String? ?? '-',
+                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                                      color: editing ? AppTheme.primary : AppTheme.textPrimary)),
+                              Text(qty.toStringAsFixed(0) + ' x Rs. ' + price.toStringAsFixed(2)
+                                  + (da > 0 ? '  (-' + da.toStringAsFixed(2) + ')' : ''),
+                                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                            ])),
+                            Text('Rs. ' + lineTotal.toStringAsFixed(2),
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                            if (_isOpen)
+                              IconButton(
+                                icon: const Icon(Icons.close, size: 15),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                                color: AppTheme.textSecondary,
+                                onPressed: () => setState(() {
+                                  if (_stagedCartIndex == i) { _stagedProduct = null; _stagedCartIndex = null; }
+                                  else if (_stagedCartIndex != null && _stagedCartIndex! > i) _stagedCartIndex = _stagedCartIndex! - 1;
+                                  _cart.removeAt(i);
+                                }),
+                              ),
+                          ]),
+                        ),
+                      );
+                    })),
+                        // Order discount + payment + total
             Container(padding: const EdgeInsets.all(12), decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppTheme.border))),
               child: Column(children: [
                 // Order-level discount
