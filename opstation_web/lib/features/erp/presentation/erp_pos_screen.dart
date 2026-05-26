@@ -1,6 +1,4 @@
 import 'dart:math' as math;
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:js' as js;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -327,7 +325,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                               if (expanded) Container(color: const Color(0xFFF9FAFB), padding: const EdgeInsets.only(bottom: 4), child: Column(children: [
                                 if (!_sessionTxns.containsKey(sid)) const Padding(padding: EdgeInsets.all(12), child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
                                 else if (filteredTxns.isEmpty) const Padding(padding: EdgeInsets.fromLTRB(52,8,20,8), child: Text('No invoices', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-                                else ...filteredTxns.map((t) { final isRet = t['transaction_type'] == 'return'; final tot = (t['total'] as num?)?.toDouble() ?? 0; final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String); final ph = t['pos_customers']?['phone'] as String? ?? ''; final tr = t['transaction_number'] as String? ?? ''; final ti = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : ''; return Padding(padding: const EdgeInsets.fromLTRB(48,7,20,7), child: Row(children: [Icon(isRet ? Icons.reply : Icons.receipt_outlined, size: 13, color: isRet ? Colors.orange : AppTheme.primary), const SizedBox(width: 8), Expanded(child: Wrap(spacing: 8, children: [Text(cu, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)), if (ph.isNotEmpty) Text(ph, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), if (tr.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal:5,vertical:1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(tr, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))), Text(ti, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))])), Text('${isRet ? '-' : ''}Rs. ${tot.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isRet ? Colors.orange : AppTheme.primary))])); }),
+                                else ...filteredTxns.map((t) { final isRet = t['transaction_type'] == 'return'; final tot = (t['total'] as num?)?.toDouble() ?? 0; final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String); final ph = t['pos_customers']?['phone'] as String? ?? ''; final tr = t['transaction_number'] as String? ?? ''; final ti = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : ''; return InkWell(onTap: () async { try { final ti2 = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String); final ci2 = (ti2 as List).map((i) => {'name': i['products']?['name'] ?? '-', 'quantity': (i['quantity'] as num?)?.toDouble() ?? 0.0, 'unit_price': (i['unit_price'] as num?)?.toDouble() ?? 0.0, 'discount': (i['discount'] as num?)?.toDouble() ?? 0.0, 'discount_type': 'fixed'}).toList(); if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: ci2, orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: s['branches']?['name'] as String? ?? '', cashierName: '', footerNote: null)); } catch (_) {} }, child: Padding(padding: const EdgeInsets.fromLTRB(48,7,20,7), child: Row(children: [Icon(isRet ? Icons.reply : Icons.receipt_outlined, size: 13, color: isRet ? Colors.orange : AppTheme.primary), const SizedBox(width: 8), Expanded(child: Wrap(spacing: 8, children: [Text(cu, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)), if (ph.isNotEmpty) Text(ph, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), if (tr.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal:5,vertical:1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(tr, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))), Text(ti, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))])), Text('${isRet ? '-' : ''}Rs. ${tot.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isRet ? Colors.orange : AppTheme.primary))])));  }),
                               ])),
                               ]);
                             });
@@ -361,6 +359,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   int? _stagedCartIndex;  // null=new, int=editing existing
   String _stagedDiscType = 'percent';
   int _dropdownHighlight = -1;
+  bool _showDropdown = false;
   final _stagedQtyCtrl = TextEditingController();
   final _stagedDiscCtrl = TextEditingController();
   final _stagedQtyFocus = FocusNode();
@@ -595,11 +594,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   }
 
   void _playTone(double freq, double duration, String type) {
-    // Uses dart:js to call Web Audio API
     try {
-      js.context.callMethod('eval', [
-        'try{var a=new AudioContext();var o=a.createOscillator();var g=a.createGain();o.connect(g);g.connect(a.destination);o.type="' + type + '";o.frequency.value=' + freq.toString() + ';g.gain.setValueAtTime(0.3,a.currentTime);g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+' + duration.toString() + ');o.start(a.currentTime);o.stop(a.currentTime+' + duration.toString() + ');}catch(e){}'
-      ]);
+      final s = html.ScriptElement();
+      s.text = 'try{var a=new(window.AudioContext||window.webkitAudioContext)();var o=a.createOscillator();var g=a.createGain();o.connect(g);g.connect(a.destination);o.type="$type";o.frequency.value=$freq;g.gain.setValueAtTime(0.3,a.currentTime);g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+$duration);o.start();o.stop(a.currentTime+$duration);}catch(e){}';
+      html.document.head!.append(s);
     } catch (_) {}
   }
 
@@ -1003,7 +1001,16 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         // ── Staging Panel ──────────────────────────────────────
         Expanded(child: Column(children: [
           // Search bar
-          Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 8), child: TextField(
+          Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 8), child: KeyboardListener(
+            focusNode: FocusNode(),
+            onKeyEvent: (e) {
+              if (e is! KeyDownEvent) return;
+              final opts = _displayProducts.take(8).toList();
+              if (e.logicalKey == LogicalKeyboardKey.arrowDown) { setState(() => _dropdownHighlight = (_dropdownHighlight + 1).clamp(0, opts.length - 1)); }
+              else if (e.logicalKey == LogicalKeyboardKey.arrowUp) { setState(() => _dropdownHighlight = (_dropdownHighlight - 1).clamp(0, opts.length - 1)); }
+              else if (e.logicalKey == LogicalKeyboardKey.escape) { setState(() { _showDropdown = false; _searchCtrl.clear(); _filterProducts(''); }); }
+            },
+            child: TextField(
             controller: _searchCtrl, focusNode: _searchFocus,
             decoration: InputDecoration(
               hintText: _stagedProduct != null
@@ -1020,7 +1027,9 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
               contentPadding: const EdgeInsets.symmetric(vertical: 12),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
             ),
-            onChanged: (v) { _filterProducts(v); setState(() => _dropdownHighlight = -1); },
+            onTap: () => setState(() => _showDropdown = true),
+            onTapOutside: (_) => setState(() => _showDropdown = false),
+            onChanged: (v) { _filterProducts(v); setState(() { _dropdownHighlight = -1; _showDropdown = true; }); },
             onSubmitted: (_) {
               final opts = _displayProducts.take(8).toList();
               if (opts.isNotEmpty) {
@@ -1030,9 +1039,9 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 if (selStock <= 0) { _playBadgeSound(); } else { _stageProduct(sel); _searchCtrl.clear(); _filterProducts(''); }
               }
             },
-          )),
+          ))),
           // Dropdown results (only when searching and nothing staged)
-          if (_search.isNotEmpty && _stagedProduct == null)
+          if ((_search.isNotEmpty || _showDropdown) && _stagedProduct == null)
             Container(
               margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10),
@@ -1174,9 +1183,13 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                               Text(item['name'] as String? ?? '-',
                                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                                       color: editing ? AppTheme.primary : AppTheme.textPrimary)),
-                              Text(qty.toStringAsFixed(0) + ' x Rs. ' + price.toStringAsFixed(2)
-                                  + (da > 0 ? '  (-' + da.toStringAsFixed(2) + ')' : ''),
-                                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                              Builder(builder: (_) {
+                                final discStr = da > 0
+                                    ? (discType == 'percent' ? '  (-${disc.toStringAsFixed(0)}%)' : '  (-${da.toStringAsFixed(2)})')
+                                    : '';
+                                return Text(qty.toStringAsFixed(0) + ' x Rs. ' + price.toStringAsFixed(2) + discStr,
+                                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary));
+                              }),
                             ])),
                             Text('Rs. ' + lineTotal.toStringAsFixed(2),
                                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
@@ -1755,7 +1768,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
                       return CheckboxListTile(dense: true, value: _selected[id] ?? false, onChanged: (v) => setState(() => _selected[id] = v ?? false),
                         title: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                        subtitle: Builder(builder: (_) { final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final net = origQty * price - discAmt; return Text('${origQty.toStringAsFixed(0)} × Rs. ${price.toStringAsFixed(2)}${discAmt > 0 ? ' - Rs. ${discAmt.toStringAsFixed(2)} disc' : ''} = Rs. ${net.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11)); }),
+                        subtitle: Builder(builder: (_) { final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final discLabel = disc > 0 ? (discType == 'percent' ? ' -${disc.toStringAsFixed(0)}%' : ' -Rs.${discAmt.toStringAsFixed(2)}') : ''; final net = origQty * price - discAmt; return Text('${origQty.toStringAsFixed(0)} × Rs. ${price.toStringAsFixed(2)}$discLabel = Rs. ${net.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11)); }),
                         secondary: SizedBox(width: 72, child: TextField(
                           controller: _qtyCtrls[id],
                           decoration: InputDecoration(labelText: 'Return qty', isDense: true, filled: true, fillColor: _selected[id] == true ? Colors.orange.withOpacity(0.08) : Colors.grey.withOpacity(0.05)),
