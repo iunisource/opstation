@@ -110,7 +110,6 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
     }).join();
 
     // Category summary
-    final catSummary = _byCategory.entries.map((e) => '<tr><td>${e.key}</td><td class="amt">Rs. ${e.value.toStringAsFixed(2)}</td></tr>').join();
 
     final content = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Expense Report</title>
 <style>
@@ -128,12 +127,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
 <h1>$orgName — Expense Report</h1>
 <h2>$branchName</h2>
 <p class="meta">Period: $dateRange &nbsp;|&nbsp; Generated: ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())} &nbsp;|&nbsp; ${data.length} entries</p>
-<div class="summary">
-  <div class="stat"><div class="stat-label">Total Expenses</div><div class="stat-value">Rs. ${total.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="stat-label">Entries</div><div class="stat-value">${data.length}</div></div>
 </div>
-<h3 style="font-size:13px;margin-bottom:8px">By Category</h3>
-<table class="cat-table"><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>$catSummary</tbody></table>
 <h3 style="font-size:13px;margin-bottom:8px">Expense Details</h3>
 <table><thead><tr><th>Date & Time</th><th>Branch</th><th>Category</th><th>Note</th><th>Cashier</th><th>Amount</th></tr></thead>
 <tbody>$rows<tr class="total-row"><td colspan="5">TOTAL</td><td class="amt">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table>
