@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
+import 'dart:js_util' as js_util;
 
 class ErpPosScreen extends ConsumerStatefulWidget {
   const ErpPosScreen({super.key});
