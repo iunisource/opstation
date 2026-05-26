@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 
 class ErpPosScreen extends ConsumerStatefulWidget {
   const ErpPosScreen({super.key});
@@ -404,7 +405,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   Future<void> _loadData() async {
     final orgId = _orgId; if (orgId == null) return;
-    setState(() { _loading = true; _stagedProduct = null; _stagedCartIndex = null; _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear(); });
+    setState(() { _loading = true; _stagedProduct = null; _stagedCartIndex = null; _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear(); _showDropdown = false; });
     try {
       final client = Supabase.instance.client;
       final branchId = _session['branch_id'] as String? ?? '';
@@ -595,9 +596,15 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   void _playTone(double freq, double duration, String type) {
     try {
-      final s = html.ScriptElement();
-      s.text = 'try{var a=new(window.AudioContext||window.webkitAudioContext)();var o=a.createOscillator();var g=a.createGain();o.connect(g);g.connect(a.destination);o.type="$type";o.frequency.value=$freq;g.gain.setValueAtTime(0.3,a.currentTime);g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+$duration);o.start();o.stop(a.currentTime+$duration);}catch(e){}';
-      html.document.head!.append(s);
+      js_util.callMethod(js_util.globalThis, 'eval', [
+        'try{var a=new(window.AudioContext||window.webkitAudioContext)();'
+        'var o=a.createOscillator();var g=a.createGain();'
+        'o.connect(g);g.connect(a.destination);'
+        'o.type="$type";o.frequency.value=$freq;'
+        'g.gain.setValueAtTime(0.3,a.currentTime);'
+        'g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+$duration);'
+        'o.start();o.stop(a.currentTime+$duration);}catch(e){}'
+      ]);
     } catch (_) {}
   }
 
@@ -1028,7 +1035,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
             ),
             onTap: () => setState(() => _showDropdown = true),
-            onTapOutside: (_) => setState(() => _showDropdown = false),
+            onTapOutside: (_) => Future.delayed(const Duration(milliseconds: 150), () { if (mounted) setState(() => _showDropdown = false); }),
             onChanged: (v) { _filterProducts(v); setState(() { _dropdownHighlight = -1; _showDropdown = true; }); },
             onSubmitted: (_) {
               final opts = _displayProducts.take(8).toList();
@@ -1608,7 +1615,7 @@ class _ReceiptDialog extends StatelessWidget {
           final posLogo = posConfig['pos.logo'] ?? '';
           final amountPaid = (transaction['amount_paid'] as num?)?.toDouble()?.toStringAsFixed(2) ?? '0';
           final balanceChange = (transaction['balance_change'] as num?)?.toDouble()?.toStringAsFixed(2) ?? '0';
-          final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? "-${da.toStringAsFixed(2)}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
+          final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? "-${da.toStringAsFixed(2)}${dt == 'percent' ? '%' : ''}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
           final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
           final content = '<!DOCTYPE html><html><head><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2><h3 style="font-weight:normal;color:#666">$branchName</h3>${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + (-bc).toStringAsFixed(2) : 'Credit Added: Rs. ' + bc.toStringAsFixed(2)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
