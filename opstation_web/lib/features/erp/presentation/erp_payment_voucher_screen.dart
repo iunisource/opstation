@@ -57,7 +57,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       final client = Supabase.instance.client;
       final results = await Future.wait([
         client.from('chart_of_accounts').select('id, code, name, account_type').eq('org_id', orgId).order('code'),
-        client.from('suppliers').select('id, name, code').eq('org_id', orgId).order('name'),
+        client.from('suppliers').select('id, name').eq('org_id', orgId).order('name'),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name'),
       ]);
       final coa = List<Map<String, dynamic>>.from(results[0] as List);
