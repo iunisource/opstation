@@ -50,10 +50,12 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
     try {
       final orgId = _orgId;
       var q = Supabase.instance.client.from('pos_transactions')
-          .select('*, pos_sessions(session_number, branches(name))')
+          .select('*, balance_change, amount_paid, pos_sessions(session_number, branches(name))')
           .eq('org_id', orgId!).eq('pos_customer_id', customer['id'] as String)
           .order('transacted_at', ascending: false);
       final rows = await q;
+      // Refresh customer to get latest balance
+      try { final fresh = await Supabase.instance.client.from('pos_customers').select('id,name,phone,cnic,branch_id,balance').eq('id', customer['id'] as String).single(); setState(() => _selectedCustomer = Map<String, dynamic>.from(fresh)); } catch (_) {}
       final txns = List<Map<String, dynamic>>.from(rows);
       // Load items for all transactions
       final txnIds = txns.map((t) => t['id'] as String).toList();
@@ -157,6 +159,8 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                     _StatBox(label: 'Refunded', value: 'Rs. ${_totalRefunded.toStringAsFixed(2)}', color: Colors.orange),
                     const SizedBox(width: 12),
                     _StatBox(label: 'Net Paid', value: 'Rs. ${(_totalSpent - _totalRefunded).toStringAsFixed(2)}', color: AppTheme.primary),
+                    const SizedBox(width: 12),
+                    Builder(builder: (_) { final bal = (_selectedCustomer!['balance'] as num?)?.toDouble() ?? 0; return _StatBox(label: 'Account Balance', value: 'Rs. ${bal.toStringAsFixed(2)}', color: bal >= 0 ? Colors.green.shade700 : Colors.red.shade700); }),
                   ]),
                   const SizedBox(height: 12),
                   // Date filter
@@ -200,6 +204,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                                 Text('$branch · $payment', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                               ])),
                               if (disc > 0) Padding(padding: const EdgeInsets.only(right: 12), child: Text('Disc: -${disc.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12, color: Colors.orange))),
+                      Builder(builder: (_) { final bc = (t['balance_change'] as num?)?.toDouble() ?? 0; if (bc == 0) return const SizedBox.shrink(); return Container(margin: const EdgeInsets.only(right: 8), padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bc > 0 ? Colors.green.shade50 : Colors.red.shade50, borderRadius: BorderRadius.circular(4)), child: Text(bc > 0 ? '+Rs.${bc.toStringAsFixed(0)}' : '-Rs.${(-bc).toStringAsFixed(0)}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: bc > 0 ? Colors.green.shade700 : Colors.red.shade700))); }),
                               Text('${isReturn ? 'REFUND  -' : ''}Rs. ${total.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: isReturn ? Colors.orange : AppTheme.primary)),
                             ])),
                             if (items.isNotEmpty) ...[
