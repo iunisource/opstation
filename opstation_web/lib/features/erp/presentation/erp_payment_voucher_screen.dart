@@ -177,7 +177,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         'performed_at': DateTime.now().toIso8601String(),
       });
       await _loadAudit(_currentVoucher!['id'] as String);
-    } catch (_) {}
+    } catch (e) { _snack('Audit log error: $e'); }
   }
 
   void _showAuditTrail() {

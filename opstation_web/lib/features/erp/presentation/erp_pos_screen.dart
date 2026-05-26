@@ -995,7 +995,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
           if (_isOpen) ...[
             TextButton.icon(icon: const Icon(Icons.reply, size: 18), label: const Text('Return'), onPressed: () => _showReturnDialog(), style: TextButton.styleFrom(foregroundColor: Colors.orange)),
             const SizedBox(width: 4),
-            TextButton.icon(icon: const Icon(Icons.pause_circle_outline, size: 18), label: const Text('Holds'), onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ErpPosHeldBillsScreen())), style: TextButton.styleFrom(foregroundColor: Colors.orange)),
+            TextButton.icon(icon: const Icon(Icons.pause_circle_outline, size: 18), label: const Text('Holds'), onPressed: () async { final bill = await Navigator.of(context).push<Map<String, dynamic>>(MaterialPageRoute(builder: (_) => const ErpPosHeldBillsScreen())); if (bill != null && mounted) _restoreBill(bill); }, style: TextButton.styleFrom(foregroundColor: Colors.orange)),
             const SizedBox(width: 4),
             TextButton.icon(icon: const Icon(Icons.receipt_long_outlined, size: 18), label: const Text('Expense'), onPressed: _addExpense, style: TextButton.styleFrom(foregroundColor: Colors.red.shade700)),
             const SizedBox(width: 4),

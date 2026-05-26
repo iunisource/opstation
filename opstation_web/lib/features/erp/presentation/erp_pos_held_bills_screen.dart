@@ -72,7 +72,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
       final session = sessions.first as Map<String, dynamic>;
       // Navigate to POS session and pass the bill to restore
       if (mounted) {
-        Navigator.pop(context); _snack('Bill restored — find it in the session Hold panel');
+        Navigator.pop(context, bill);
       }
     } catch (e) { _snack('Failed: $e'); }
   }
