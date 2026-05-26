@@ -24,6 +24,7 @@ import '../../features/live_map/presentation/live_map_screen.dart';
 import '../../features/compliance/presentation/compliance_screen.dart';
 import '../layout/main_layout.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart';
+import '../../features/erp/presentation/erp_payment_voucher_screen.dart';
 import '../../features/erp/presentation/erp_products_screen.dart';
 import '../../features/erp/presentation/erp_branches_screen.dart';
 import '../../features/erp/presentation/erp_uoms_screen.dart';
@@ -147,7 +148,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
           GoRoute(path: '/erp/opening-stock', builder: (_, __) => const ErpOpeningStockScreen()),
           GoRoute(path: '/erp/stock-transfers', builder: (_, __) => const ErpStockTransfersScreen()),
-          GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVouchersScreen()),
+          GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVoucherScreen()),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => const ErpReceiptVouchersScreen()),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => const ErpSupplierLedgerScreen()),
           GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),

@@ -127,7 +127,6 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
         _menuItem(context, 'Purchase Return Invoices', Icons.description_outlined,       '/erp/purchase-return-vouchers', location),
         _menuDivider(),
-        _menuItem(context, 'Payments',                 Icons.payment_outlined,           '/erp/payment-vouchers',         location),
       ],
     ];
 
@@ -155,6 +154,7 @@ class _TopNav extends ConsumerWidget {
 
     final financialItems = <Widget>[
       _menuItem(context, 'Chart of Accounts', Icons.account_tree_outlined, '/erp/chart-of-accounts', location),
+      _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
     ];
 
     final erpAdminItems = <Widget>[
@@ -194,7 +194,7 @@ class _TopNav extends ConsumerWidget {
           ledgerItems),
       if (financialItems.isNotEmpty)
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
-          ['/erp/chart-of-accounts'],
+          ['/erp/chart-of-accounts', '/erp/payment-vouchers'],
           financialItems),
       if (erpAdminItems.isNotEmpty)
         _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
