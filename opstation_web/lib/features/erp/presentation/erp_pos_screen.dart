@@ -23,6 +23,9 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
   DateTime? _filterFrom;
   DateTime? _filterTo;
   String _sessionSearch = '';
+  final Map<String, List<Map<String, dynamic>>> _sessionTxns = {};
+  final Map<String, bool> _sessionExpanded = {};
+  String _globalTxnSearch = '';
 
   @override
   void initState() {
@@ -256,15 +259,26 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                             separatorBuilder: (_, __) => const Divider(height: 1),
                             itemBuilder: (_, i) {
                               final s = filtered[i];
+                              final sid = s['id'] as String;
                               final isOpen = s['status'] == 'open';
+                              final expanded = _sessionExpanded[sid] ?? false;
+                              final txns = _sessionTxns[sid] ?? [];
+                              final q = _globalTxnSearch.toLowerCase();
+                              final filteredTxns = q.isEmpty ? txns : txns.where((t) { final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase(); final ph = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase(); final tr = (t['transaction_number'] as String? ?? '').toLowerCase(); return cu.contains(q) || ph.contains(q) || tr.contains(q); }).toList();
                               final openedAt = s['opened_at'] != null
                                   ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(s['opened_at'] as String).toLocal())
                                   : '-';
                               final closedAt = s['closed_at'] != null
                                   ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(s['closed_at'] as String).toLocal())
                                   : '-';
-                              return InkWell(
-                                onTap: () => _openSession(s),
+                              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              InkWell(
+                                onTap: () async {
+                                  if (!_sessionTxns.containsKey(sid)) {
+                                    try { final rows = await Supabase.instance.client.from('pos_transactions').select('id, transaction_number, total, transacted_at, transaction_type, customers(shop_name), pos_customers(name, phone)').eq('session_id', sid).order('transacted_at', ascending: false); setState(() => _sessionTxns[sid] = List<Map<String, dynamic>>.from(rows)); } catch (_) {}
+                                  }
+                                  setState(() => _sessionExpanded[sid] = !expanded);
+                                },
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                                   child: Row(children: [
@@ -285,10 +299,18 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                                               color: isOpen ? AppTheme.success : AppTheme.textSecondary,
                                               fontSize: 12, fontWeight: FontWeight.w600)),
                                     )),
-                                    const SizedBox(width: 48, child: Icon(Icons.chevron_right, color: AppTheme.textSecondary)),
+                                    SizedBox(width: 48, child: isOpen
+                                      ? TextButton(onPressed: () => _openSession(s), child: const Text('Enter', style: TextStyle(fontSize: 11)))
+                                      : Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary)),
                                   ]),
                                 ),
-                              );
+                              ),
+                              if (expanded) Container(color: const Color(0xFFF9FAFB), padding: const EdgeInsets.only(bottom: 4), child: Column(children: [
+                                if (!_sessionTxns.containsKey(sid)) const Padding(padding: EdgeInsets.all(12), child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+                                else if (filteredTxns.isEmpty) const Padding(padding: EdgeInsets.fromLTRB(52,8,20,8), child: Text('No invoices', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+                                else ...filteredTxns.map((t) { final isRet = t['transaction_type'] == 'return'; final tot = (t['total'] as num?)?.toDouble() ?? 0; final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String); final ph = t['pos_customers']?['phone'] as String? ?? ''; final tr = t['transaction_number'] as String? ?? ''; final ti = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : ''; return Padding(padding: const EdgeInsets.fromLTRB(48,7,20,7), child: Row(children: [Icon(isRet ? Icons.reply : Icons.receipt_outlined, size: 13, color: isRet ? Colors.orange : AppTheme.primary), const SizedBox(width: 8), Expanded(child: Wrap(spacing: 8, children: [Text(cu, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)), if (ph.isNotEmpty) Text(ph, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), if (tr.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal:5,vertical:1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(tr, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))), Text(ti, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))])), Text('${isRet ? '-' : ''}Rs. ${tot.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isRet ? Colors.orange : AppTheme.primary))])); }),
+                              ])),
+                              ]);
                             });
                     }),
                   ),
@@ -358,7 +380,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final client = Supabase.instance.client;
       final branchId = _session['branch_id'] as String? ?? '';
       final results = await Future.wait([
-        client.from('pos_transactions').select('*, customers(shop_name), pos_customers(name, phone), transaction_number').eq('session_id', _session['id']).order('transacted_at', ascending: false),
+        client.from('pos_transactions').select('*, customers(shop_name), pos_customers(name, phone), transaction_number, amount_paid, balance_change').eq('session_id', _session['id']).order('transacted_at', ascending: false),
         client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name'),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name'),
         client.from('pos_sessions').select('*, branches(name)').eq('id', _session['id']).single(),
@@ -1236,6 +1258,8 @@ class _ReceiptDialog extends StatelessWidget {
           final posFooter = posConfig['pos.footer_note']?.isNotEmpty == true ? posConfig['pos.footer_note']! : (footerNote ?? '');
           final posTerms = posConfig['pos.terms'] ?? '';
           final posLogo = posConfig['pos.logo'] ?? '';
+          final amountPaid = (transaction['amount_paid'] as num?)?.toDouble()?.toStringAsFixed(2) ?? '0';
+          final balanceChange = (transaction['balance_change'] as num?)?.toDouble()?.toStringAsFixed(2) ?? '0';
           final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? "-${da.toStringAsFixed(2)}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
           final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
