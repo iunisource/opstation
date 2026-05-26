@@ -29,6 +29,8 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   String _status = 'draft';
 
   List<_VLine> _lines = [];
+  String? _pendingFocusId;
+  List<Map<String, dynamic>> _auditTrail = [];
   List<Map<String, dynamic>> _coaList = [];
   List<Map<String, dynamic>> _supplierList = [];
   List<Map<String, dynamic>> _customerList = [];
@@ -84,7 +86,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     } catch (_) { if (mounted) setState(() => _loadingList = false); }
   }
 
-  void _addLine() { setState(() => _lines.add(_VLine())); }
+  void _addLine() { final nl = _VLine(); setState(() { _lines.add(nl); _pendingFocusId = nl.id; }); WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) setState(() => _pendingFocusId = null); }); }
 
   void _removeLine(int i) { setState(() { _lines[i].dispose(); _lines.removeAt(i); }); if (_lines.isEmpty) _addLine(); }
 
@@ -108,7 +110,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       final rows = await Supabase.instance.client.from('cpv_voucher_lines').select().eq('voucher_id', v['id'] as String).order('line_order');
       for (final l in _lines) l.dispose();
       final newLines = (rows as List).map((r) { final l = _VLine(); l.accountId = r['account_id'] as String?; l.accountName = r['account_name'] as String? ?? ''; l.accountType = r['account_type'] as String? ?? 'coa'; l.descCtrl.text = r['description'] as String? ?? ''; l.amtCtrl.text = (r['amount'] as num?)?.toStringAsFixed(2) ?? ''; return l; }).toList();
-      if (mounted) setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDateCtrl.text = v['voucher_date'] as String? ?? ''; });
+      if (mounted) { setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDateCtrl.text = v['voucher_date'] as String? ?? ''; }); _loadAudit(v['id'] as String); }
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -117,6 +119,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final validLines = _lines.where((l) => l.accountId != null).toList();
     if (validLines.isEmpty) { _snack('Add at least one line item'); return; }
     final orgId = _orgId; final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id;
+        final userName = ref.read(currentUserProvider)?.name ?? '';
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
@@ -127,17 +130,17 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
         final vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
         final vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
-        await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null});
+        await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null});
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         final created = await client.from('cpv_vouchers').select().eq('id', vid).single();
-        setState(() { _currentVoucher = created; _status = newStatus; });
+        setState(() { _currentVoucher = created; _status = newStatus; }); _logAudit('created');
         _snack(post ? 'Voucher $vNum posted ✓' : 'Voucher $vNum saved');
       } else {
         final vid = _currentVoucher!['id'] as String;
-        await client.from('cpv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null}).eq('id', vid);
+        await client.from('cpv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null}).eq('id', vid);
         await client.from('cpv_voucher_lines').delete().eq('voucher_id', vid);
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
-        setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; });
+        setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted');
         _snack(post ? 'Voucher posted ✓' : 'Saved');
       }
       await _loadVouchers();
@@ -153,24 +156,108 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     } catch (e) { _snack('Failed: $e'); }
   }
 
+  Future<void> _loadAudit(String voucherId) async {
+    try {
+      final rows = await Supabase.instance.client.from('cpv_audit_trail').select().eq('voucher_id', voucherId).order('performed_at');
+      if (mounted) setState(() => _auditTrail = List<Map<String, dynamic>>.from(rows));
+    } catch (_) {}
+  }
+
+  Future<void> _logAudit(String action) async {
+    if (_currentVoucher == null) return;
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name ?? '';
+    try {
+      await Supabase.instance.client.from('cpv_audit_trail').insert({
+        'id': 'aud_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': _currentVoucher!['id'] as String,
+        'action': action,
+        'performed_by': userId,
+        'performed_by_name': userName,
+        'performed_at': DateTime.now().toIso8601String(),
+      });
+      await _loadAudit(_currentVoucher!['id'] as String);
+    } catch (_) {}
+  }
+
+  void _showAuditTrail() {
+    showDialog(context: context, builder: (_) => AlertDialog(
+      title: const Text('Audit Trail'),
+      content: SizedBox(width: 420, child: _auditTrail.isEmpty
+          ? const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('No audit records yet.', style: TextStyle(color: AppTheme.textSecondary)))
+          : ListView.separated(
+              shrinkWrap: true,
+              itemCount: _auditTrail.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final e = _auditTrail[i];
+                final raw = e['performed_at'] as String? ?? '';
+                final at = raw.length >= 16 ? raw.substring(0, 16).replaceAll('T', ' ') : raw;
+                final who = e['performed_by_name'] as String? ?? 'Unknown';
+                return ListTile(
+                  dense: true,
+                  leading: Icon(_auditIcon(e['action'] as String? ?? ''), size: 18, color: _auditColor(e['action'] as String? ?? '')),
+                  title: Text((e['action'] as String? ?? '').toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  subtitle: Text('$who  •  $at', style: const TextStyle(fontSize: 11)),
+                );
+              },
+            )),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+    ));
+  }
+
+  IconData _auditIcon(String action) {
+    if (action == 'created') return Icons.add_circle_outline;
+    if (action == 'posted') return Icons.lock_outline;
+    if (action == 'unlocked') return Icons.lock_open_outlined;
+    return Icons.info_outline;
+  }
+
+  Color _auditColor(String action) {
+    if (action == 'created') return Colors.blue;
+    if (action == 'posted') return Colors.green;
+    if (action == 'unlocked') return Colors.orange;
+    return Colors.grey;
+  }
+
+    Future<void> _unlockVoucher() async {
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Unlock Voucher?'),
+      content: const Text('This will set the voucher back to Draft and allow editing.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Unlock'), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange)),
+      ],
+    ));
+    if (ok != true || !mounted) return;
+    try {
+      await Supabase.instance.client.from('cpv_vouchers').update({'status': 'draft'}).eq('id', _currentVoucher!['id'] as String);
+      setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; }); _logAudit('unlocked');
+      _snack('Voucher unlocked for editing');
+    } catch (e) { _snack('Failed: $e'); }
+  }
+
   void _print() {
     if (_currentVoucher == null) { _snack('Save the voucher first'); return; }
     final lines = _lines.where((l) => l.accountId != null).toList();
-    final html_str = '''<!DOCTYPE html><html><head><title>Payment Voucher</title><style>
+    final postedBy = _currentVoucher!['posted_by_name'] as String? ?? '_______________';
+    final rawPostedAt = _currentVoucher!['posted_at'] as String?;
+    final postedAtStr = rawPostedAt != null ? '  (' + rawPostedAt.replaceAll('T', ' ').substring(0, rawPostedAt.length > 16 ? 16 : rawPostedAt.length) + ')' : '';
+    final html_str = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Payment Voucher</title><style>
       body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db}
       table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;text-align:left}
       th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:1.1em}.footer{margin-top:40px;display:flex;justify-content:space-between}
-      @media print{.no-print{display:none}}
+      @media print{.no-print{display:none}@page{margin:0}body{padding:15mm 20mm}}
     </style></head><body>
-    <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">🖨 Print</button></div>
+    <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">&#x1F5A8; Print</button></div>
     <h2>Cash Payment Voucher</h2>
     <table style="margin-bottom:8px;border:none"><tr><td style="border:none"><b>Voucher #:</b> ${_currentVoucher!['voucher_number'] ?? ''}</td><td style="border:none"><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</td><td style="border:none"><b>Cash Account:</b> $_cashAccountName</td><td style="border:none"><b>Status:</b> ${_status.toUpperCase()}</td></tr></table>
     <table><thead><tr><th>#</th><th>Account / Party</th><th>Description</th><th style="text-align:right">Amount (Rs.)</th></tr></thead><tbody>
     ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td style="text-align:right">${double.tryParse(e.value.amtCtrl.text)?.toStringAsFixed(2) ?? '0.00'}</td></tr>').join()}
     </tbody><tfoot><tr><td colspan="3" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${_total.toStringAsFixed(2)}</td></tr></tfoot></table>
-    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Received by: _______________</div></div>
+    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Posted by: $postedBy$postedAtStr</div></div>
     </body></html>''';
-    final blob = html.Blob([html_str], 'text/html');
+    final blob = html.Blob([html_str], 'text/html;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.window.open(url, '_blank');
   }
@@ -206,6 +293,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
             Text(_currentVoucher?['voucher_number'] as String? ?? 'New Voucher', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), decoration: BoxDecoration(color: (_isLocked ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text(_isLocked ? '🔒 Posted & Locked' : '✏️ Draft', style: TextStyle(fontSize: 11, color: _isLocked ? Colors.green : Colors.orange, fontWeight: FontWeight.w600)))]),
           ])),
+          if (_currentVoucher != null) IconButton(icon: const Icon(Icons.history_outlined, size: 20), onPressed: _showAuditTrail, tooltip: 'Audit Trail'),
           if (_currentVoucher != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _print, tooltip: 'Print'),
           if (_currentVoucher != null) IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
           const SizedBox(width: 8),
@@ -215,7 +303,11 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
             onPressed: _saving ? null : () => _save(post: true),
           ),
-          if (_isLocked) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.3))), child: const Row(children: [Icon(Icons.lock, size: 14, color: Colors.green), SizedBox(width: 4), Text('Posted', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: 13))])),
+          if (_isLocked) Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.3))), child: const Row(children: [Icon(Icons.lock, size: 14, color: Colors.green), SizedBox(width: 4), Text('Posted', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: 13))])),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(icon: const Icon(Icons.lock_open_outlined, size: 14), label: const Text('Unlock', style: TextStyle(fontSize: 12)), onPressed: _unlockVoucher, style: OutlinedButton.styleFrom(foregroundColor: Colors.orange, side: const BorderSide(color: Colors.orange), padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
+          ]),
         ])),
         // Header fields
         Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(16, 10, 16, 10), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))), child: Row(children: [
@@ -259,6 +351,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
                 line: _lines[i], lineNum: i + 1,
                 allAccounts: _allAccounts, filterFn: _filterAccounts,
                 locked: _isLocked,
+                autoFocus: _lines[i].id == _pendingFocusId,
                 onRemove: () => _removeLine(i),
                 onNextLine: i == _lines.length - 1 ? _addLine : () {},
                 onChanged: () => setState(() {}),
@@ -324,8 +417,9 @@ class _LineWidget extends StatefulWidget {
   final List<Map<String, dynamic>> allAccounts;
   final List<Map<String, dynamic>> Function(String) filterFn;
   final bool locked;
+  final bool autoFocus;
   final VoidCallback onRemove, onNextLine, onChanged;
-  const _LineWidget({super.key, required this.line, required this.lineNum, required this.allAccounts, required this.filterFn, required this.locked, required this.onRemove, required this.onNextLine, required this.onChanged});
+  const _LineWidget({super.key, required this.line, required this.lineNum, required this.allAccounts, required this.filterFn, required this.locked, required this.onRemove, required this.onNextLine, required this.onChanged, this.autoFocus = false});
   @override State<_LineWidget> createState() => _LineWidgetState();
 }
 
@@ -337,7 +431,7 @@ class _LineWidgetState extends State<_LineWidget> {
   final _amtFocus = FocusNode();
   final _accCtrl = TextEditingController();
 
-  @override void initState() { super.initState(); _accCtrl.text = widget.line.accountName; _accFocus.addListener(() { if (!_accFocus.hasFocus) Future.delayed(const Duration(milliseconds: 160), () { if (mounted && !_accFocus.hasFocus) setState(() => _showDrop = false); }); }); }
+  @override void initState() { super.initState(); _accCtrl.text = widget.line.accountName; _accFocus.addListener(() { if (!_accFocus.hasFocus) Future.delayed(const Duration(milliseconds: 160), () { if (mounted && !_accFocus.hasFocus) setState(() => _showDrop = false); }); }); if (widget.autoFocus) WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _accFocus.requestFocus(); }); }
   @override void dispose() { _accFocus.dispose(); _descFocus.dispose(); _amtFocus.dispose(); _accCtrl.dispose(); super.dispose(); }
 
   void _pick(Map<String, dynamic> a) {

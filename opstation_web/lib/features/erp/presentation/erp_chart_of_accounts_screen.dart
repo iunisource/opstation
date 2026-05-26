@@ -129,28 +129,57 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
   Future<void> _editAccount(Map<String, dynamic> acc) async {
     final nameCtrl = TextEditingController(text: acc['name'] as String? ?? '');
     String? selectedType = acc['account_type'] as String?;
-    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
-      title: Text('Edit Account  ${acc['code'] ?? ''}'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: 'Account Name *')),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String?>(
-          value: selectedType,
-          decoration: const InputDecoration(labelText: 'Account Type'),
-          items: [const DropdownMenuItem<String?>(value: null, child: Text('— None —')), ...['BANK','CASH IN HAND','CUSTOMER','EMPLOYEE','EXPENSE','FIXED ASSETS','G/L ACCOUNT','PURCHASES','SALES','SUPPLIER'].map((t) => DropdownMenuItem(value: t, child: Text(t)))].toList(),
-          onChanged: (v) => setS(() => selectedType = v),
-        ),
-        const SizedBox(height: 8),
-        Text('Code: ${acc['code'] ?? 'auto'}  (read-only)', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-      ]),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () { if (nameCtrl.text.trim().isNotEmpty) Navigator.pop(ctx, true); }, child: const Text('Save'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
-      ],
-    )));
+    String? selectedGroup = acc['account_group'] as String?;
+    String? selectedParentId = acc['parent_id'] as String?;
+    final level = acc['level'] as int;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+      final parentItems = level == 2
+          ? _accounts.where((a) => a['level'] == 1 && a['account_group'] == selectedGroup).toList()
+          : level == 3
+              ? _accounts.where((a) => a['level'] == 2 && a['account_group'] == selectedGroup).toList()
+              : <Map<String, dynamic>>[];
+      return AlertDialog(
+        title: Text('Edit Account  ${acc["code"] ?? ""}'),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: 'Account Name *')),
+          const SizedBox(height: 12),
+          if (level == 1) DropdownButtonFormField<String?>(
+            value: selectedGroup,
+            decoration: const InputDecoration(labelText: 'Account Group'),
+            items: ['Assets','Capital','Liability','Income','Expense'].map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
+            onChanged: (v) => setS(() => selectedGroup = v),
+          ),
+          if (level > 1) ...[
+            const SizedBox(height: 4),
+            DropdownButtonFormField<String?>(
+              value: parentItems.any((p) => p['id'] == selectedParentId) ? selectedParentId : null,
+              decoration: InputDecoration(labelText: 'Parent (Level ${level - 1})'),
+              items: parentItems.map((p) => DropdownMenuItem(value: p['id'] as String, child: Text('${p["code"] ?? ""} — ${p["name"] ?? ""}'))).toList(),
+              onChanged: (v) => setS(() => selectedParentId = v),
+            ),
+          ],
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String?>(
+            value: selectedType,
+            decoration: const InputDecoration(labelText: 'Account Type'),
+            items: [const DropdownMenuItem<String?>(value: null, child: Text('— None —')), ...['BANK','CASH IN HAND','CUSTOMER','EMPLOYEE','EXPENSE','FIXED ASSETS','G/L ACCOUNT','PURCHASES','SALES','SUPPLIER'].map((t) => DropdownMenuItem(value: t, child: Text(t)))].toList(),
+            onChanged: (v) => setS(() => selectedType = v),
+          ),
+          const SizedBox(height: 8),
+          Text('Code: ${acc["code"] ?? "auto"}  (read-only)', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () { if (nameCtrl.text.trim().isNotEmpty) Navigator.pop(ctx, true); }, child: const Text('Save'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
+        ],
+      );
+    }));
     if (ok != true || !mounted) return;
     try {
-      await Supabase.instance.client.from('chart_of_accounts').update({'name': nameCtrl.text.trim(), 'account_type': selectedType}).eq('id', acc['id'] as String);
+      final updates = <String, dynamic>{'name': nameCtrl.text.trim(), 'account_type': selectedType};
+      if (level == 1) updates['account_group'] = selectedGroup;
+      if (level > 1 && selectedParentId != null) updates['parent_id'] = selectedParentId;
+      await Supabase.instance.client.from('chart_of_accounts').update(updates).eq('id', acc['id'] as String);
       await _load(); _snack('Account updated');
     } catch (e) { _snack('Failed: $e'); }
     nameCtrl.dispose();
