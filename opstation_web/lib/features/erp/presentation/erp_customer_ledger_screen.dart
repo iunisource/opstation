@@ -36,7 +36,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   String _typeFilter = 'All';
   final _entrySearchCtrl = TextEditingController();
 
-  static const _types = ['All', 'Sales Invoice', 'POS Sale', 'Purchase Return', 'Receipt (CRV)', 'Payment (CPV)'];
+  static const _types = ['All', 'Sales Invoice', 'Sales Return', 'POS Sale', 'POS Return', 'Receipt (CRV)', 'Payment (CPV)'];
 
   @override
   void initState() {
@@ -169,20 +169,21 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             .eq('org_id', orgId).eq('customer_id', customerId);
       }
       for (final t in posTxns as List) {
-        final ttotal = (t['total'] as num?)?.toDouble() ?? 0;
+        final ttotalRaw = (t['total'] as num?)?.toDouble() ?? 0;
         final ttype = (t['transaction_type'] as String?) ?? 'sale';
-        if (ttype == 'expense' || ttotal == 0) continue;
+        if (ttype == 'expense' || ttotalRaw == 0) continue;
         final vno = ((t['transaction_number'] ?? '') as String);
-        final isReturn = ttype == 'return';
+        final isReturn = ttype == 'return' || ttotalRaw < 0;
+        final amt = ttotalRaw.abs();
         entries.add({
           'date': ((t['transacted_at'] ?? t['created_at'] ?? '') as String),
           'voucher': vno,
           'description': isReturn
-            ? (vno.isNotEmpty ? 'Purchase Return $vno' : 'Purchase Return')
+            ? (vno.isNotEmpty ? 'POS Return $vno' : 'POS Return')
             : (vno.isNotEmpty ? 'POS $vno' : 'POS Sale'),
-          'debit': isReturn ? 0.0 : ttotal,
-          'credit': isReturn ? ttotal : 0.0,
-          'type': isReturn ? 'Purchase Return' : 'POS Sale',
+          'debit': isReturn ? 0.0 : amt,
+          'credit': isReturn ? amt : 0.0,
+          'type': isReturn ? 'POS Return' : 'POS Sale',
         });
       }
     } catch (e) { errors.add('POS: $e'); }
@@ -190,7 +191,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     // 4. CRV -> Credit (customer paid us)
     try {
       final crvVouchers = await client.from('crv_vouchers')
-          .select('id, voucher_number, voucher_date').eq('org_id', orgId).eq('status', 'posted');
+          .select('id, voucher_number, voucher_date, created_at').eq('org_id', orgId).eq('status', 'posted');
       final crvIds = (crvVouchers as List).map((v) => v['id'] as String).toList();
       if (crvIds.isNotEmpty) {
         final crvLines = await client.from('crv_voucher_lines')
@@ -200,7 +201,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         for (final line in crvLines as List) {
           final v = crvMap[line['voucher_id'] as String]; if (v == null) continue;
           entries.add({
-            'date': v['voucher_date'] ?? '', 'voucher': v['voucher_number'] ?? '',
+            'date': v['voucher_date'] ?? v['created_at'] ?? '', 'voucher': v['voucher_number'] ?? '',
             'description': 'Receipt — ${line['description'] ?? v['voucher_number']}',
             'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
             'type': 'Receipt (CRV)',
@@ -212,7 +213,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     // 5. CPV -> Debit (we paid customer)
     try {
       final cpvVouchers = await client.from('cpv_vouchers')
-          .select('id, voucher_number, voucher_date').eq('org_id', orgId).eq('status', 'posted');
+          .select('id, voucher_number, voucher_date, created_at').eq('org_id', orgId).eq('status', 'posted');
       final cpvIds = (cpvVouchers as List).map((v) => v['id'] as String).toList();
       if (cpvIds.isNotEmpty) {
         final cpvLines = await client.from('cpv_voucher_lines')
@@ -222,7 +223,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         for (final line in cpvLines as List) {
           final v = cpvMap[line['voucher_id'] as String]; if (v == null) continue;
           entries.add({
-            'date': v['voucher_date'] ?? '', 'voucher': v['voucher_number'] ?? '',
+            'date': v['voucher_date'] ?? v['created_at'] ?? '', 'voucher': v['voucher_number'] ?? '',
             'description': 'Payment — ${line['description'] ?? v['voucher_number']}',
             'debit': (line['amount'] as num?)?.toDouble() ?? 0,
             'credit': 0.0, 'type': 'Payment (CPV)',
@@ -232,26 +233,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     } catch (e) { errors.add('CPV: $e'); }
 
     // Diagnostics
-    final siCount = entries.where((e) => e['type'] == 'Sales Invoice').length;
-    final posCount = entries.where((e) => e['type'] == 'POS Sale').length;
-    final prCount = entries.where((e) => e['type'] == 'Purchase Return').length;
-    final crvCount = entries.where((e) => e['type'] == 'Receipt (CRV)').length;
-    final cpvCount = entries.where((e) => e['type'] == 'Payment (CPV)').length;
-    if (crvCount == 0) {
-      try {
-        final any = await client.from('crv_voucher_lines')
-            .select('voucher_id, account_type, account_id, amount')
-            .eq('account_id', customerId);
-        final anyList = any as List;
-        if (anyList.isNotEmpty) {
-          final s = anyList.first as Map;
-          errors.add('CRV: ${anyList.length} line(s) found with this account_id but none matched filter. Sample: account_type="${s['account_type']}"');
-        } else {
-          errors.add('CRV: no lines reference this customer (account_id="$customerId")');
-        }
-      } catch (e) { errors.add('CRV diag: $e'); }
-    }
-    errors.add('Found: SI=$siCount POS=$posCount PR=$prCount CRV=$crvCount CPV=$cpvCount');
+    // diagnostic counts removed
+    // crv diagnostic removed
+    // diagnostic counts no longer added to banner
 
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
@@ -500,7 +484,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     switch (type) {
       case 'Sales Invoice': return Colors.indigo;
       case 'POS Sale': return Colors.purple;
-      case 'Purchase Return': return Colors.deepOrange;
+      case 'POS Return': return Colors.deepOrange;
+      case 'Sales Return': return Colors.amber.shade800;
       case 'Receipt (CRV)': return Colors.green;
       case 'Payment (CPV)': return Colors.orange;
       default: return AppTheme.textSecondary;
@@ -543,90 +528,88 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   }
 
   void _printLedger() {
-    final display = _displayEntries;
-    if (display.isEmpty || _selectedCustomer == null) return;
-    final branch = ref.read(selectedBranchProvider);
-    double td = 0, tc = 0;
-    for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
-    final netBal = td - tc;
-    final cust = _selectedCustomer!;
-    final customerName = (cust['shop_name'] as String?) ?? '';
-    final customerCode = (cust['code'] as String?) ?? '';
-    final branchName = (branch?['name'] as String?) ?? 'All Branches';
-    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
-    final rowsBuf = StringBuffer();
-    for (final e in display) {
-      final ds = e['date'] as String? ?? '';
-      final dt = DateTime.tryParse(ds); final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
-      final debit = e['debit'] as double;
-      final credit = e['credit'] as double;
-      final bal = e['display_balance'] as double;
-      final dStr = debit > 0 ? 'Rs. ' + debit.toStringAsFixed(2) : '-';
-      final cStr = credit > 0 ? 'Rs. ' + credit.toStringAsFixed(2) : '-';
-      rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num debit">' + dStr + '</td><td class="num credit">' + cStr + '</td><td class="num bold">Rs. ' + bal.toStringAsFixed(2) + '</td></tr>');
-    }
-    final periodStr = (_dateFrom != null || _dateTo != null)
-      ? '<div class="info"><strong>Period:</strong> ' + (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today') + '</div>'
-      : '';
-    final balColor = netBal > 0 ? '#c62828' : '#2e7d32';
-    final codeStr = customerCode.isNotEmpty ? ' (' + customerCode + ')' : '';
+    try {
+      final display = _displayEntries;
+      if (display.isEmpty || _selectedCustomer == null) return;
+      final branch = ref.read(selectedBranchProvider);
+      double td = 0, tc = 0;
+      for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
+      final netBal = td - tc;
+      final cust = _selectedCustomer!;
+      final customerName = (cust['shop_name'] as String?) ?? '';
+      final customerCode = (cust['code'] as String?) ?? '';
+      final branchName = (branch?['name'] as String?) ?? 'All Branches';
+      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+      final codeStr = customerCode.isNotEmpty ? ' (' + customerCode + ')' : '';
+      final periodStr = (_dateFrom != null || _dateTo != null)
+        ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
+        : '';
+      final balColor = netBal > 0 ? '#c62828' : '#2e7d32';
 
-    final htmlDoc = '<!DOCTYPE html>'
-      '<html><head><meta charset="UTF-8"><title>Customer Ledger - ' + customerName + '</title>'
-      '<style>'
-      '@page { margin: 0.5cm; }'
-      'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; }'
-      '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; }'
-      'h1 { font-size: 18px; margin: 0 0 4px 0; }'
-      '.info { font-size: 10px; margin: 2px 0; }'
-      '.stats { display: flex; gap: 10px; margin: 8px 0 12px 0; }'
-      '.stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; }'
-      '.stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }'
-      '.stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; }'
-      '.debit { color: #1976d2; } .credit { color: #2e7d32; }'
-      '.bal-col { color: ' + balColor + '; }'
-      'table { width: 100%; border-collapse: collapse; }'
-      'th, td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; }'
-      'th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; }'
-      '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; }'
-      '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; }'
-      'tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; }'
-      '</style></head><body>'
-      '<div class="header"><div>'
-      '<h1>Customer Ledger</h1>'
-      '<div class="info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
-      '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
-      + periodStr +
-      '</div><div style="text-align: right;"><div class="info">Generated: ' + genTime + '</div></div></div>'
-      '<div class="stats">'
-      '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + td.toStringAsFixed(2) + '</div></div>'
-      '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + tc.toStringAsFixed(2) + '</div></div>'
-      '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal-col">Rs. ' + netBal.toStringAsFixed(2) + '</div></div>'
-      '</div><table>'
-      '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
-      '<tbody>' + rowsBuf.toString() + '</tbody>'
-      '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="num credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="num bal-col">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
-      '</table></body></html>';
+      final rowsBuf = StringBuffer();
+      for (final e in display) {
+        final ds = e['date'] as String? ?? '';
+        final dt = DateTime.tryParse(ds);
+        final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
+        final debit = e['debit'] as double;
+        final credit = e['credit'] as double;
+        final bal = e['display_balance'] as double;
+        final dStr = debit > 0 ? 'Rs. ' + debit.toStringAsFixed(2) : '-';
+        final cStr = credit > 0 ? 'Rs. ' + credit.toStringAsFixed(2) : '-';
+        rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="lp-badge">' + (e['type'] as String) + '</span></td><td class="lp-num lp-debit">' + dStr + '</td><td class="lp-num lp-credit">' + cStr + '</td><td class="lp-num lp-bold">Rs. ' + bal.toStringAsFixed(2) + '</td></tr>');
+      }
 
-    final iframe = html.IFrameElement();
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.onLoad.first.then((_) {
-      Future.delayed(const Duration(milliseconds: 200), () {
-        try {
-          js_util.callMethod(iframe.contentWindow!, 'print', const []);
-        } catch (_) {
-          try { (iframe.contentWindow as dynamic)?.print(); } catch (_) {}
-        }
-        Future.delayed(const Duration(seconds: 60), () => iframe.remove());
+      final bodyHtml = '<div class="lp-header"><div><h1>Customer Ledger</h1>'
+        '<div class="lp-info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
+        '<div class="lp-info"><strong>Branch:</strong> ' + branchName + '</div>'
+        + (periodStr.isNotEmpty ? '<div class="lp-info"><strong>Period:</strong> ' + periodStr + '</div>' : '') +
+        '</div><div style="text-align: right;"><div class="lp-info">Generated: ' + genTime + '</div></div></div>'
+        '<div class="lp-stats">'
+        '<div class="lp-stat"><div class="lp-stat-label">Total Debit</div><div class="lp-stat-value lp-debit">Rs. ' + td.toStringAsFixed(2) + '</div></div>'
+        '<div class="lp-stat"><div class="lp-stat-label">Total Credit</div><div class="lp-stat-value lp-credit">Rs. ' + tc.toStringAsFixed(2) + '</div></div>'
+        '<div class="lp-stat"><div class="lp-stat-label">Net Balance</div><div class="lp-stat-value" style="color: ' + balColor + ';">Rs. ' + netBal.toStringAsFixed(2) + '</div></div>'
+        '</div>'
+        '<table class="lp-table"><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="lp-num">Debit</th><th class="lp-num">Credit</th><th class="lp-num">Balance</th></tr></thead>'
+        '<tbody>' + rowsBuf.toString() + '</tbody>'
+        '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="lp-num lp-debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="lp-num lp-credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="lp-num" style="color: ' + balColor + ';">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
+        '</table>';
+
+      final printCss = '@media screen { #ledger-print-area { display: none !important; } } '
+        '@media print { '
+        '  @page { margin: 0.5cm; } '
+        '  body > *:not(#ledger-print-area) { display: none !important; } '
+        '  #ledger-print-area { display: block !important; position: absolute; left: 0; top: 0; width: 100%; font-family: Arial, sans-serif; font-size: 10px; color: #000; padding: 16px; background: #fff; } '
+        '  #ledger-print-area .lp-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
+        '  #ledger-print-area h1 { font-size: 18px; margin: 0 0 4px 0; } '
+        '  #ledger-print-area .lp-info { font-size: 10px; margin: 2px 0; } '
+        '  #ledger-print-area .lp-stats { display: flex; gap: 10px; margin: 8px 0 12px 0; } '
+        '  #ledger-print-area .lp-stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; } '
+        '  #ledger-print-area .lp-stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; } '
+        '  #ledger-print-area .lp-stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; } '
+        '  #ledger-print-area .lp-debit { color: #1976d2; } '
+        '  #ledger-print-area .lp-credit { color: #2e7d32; } '
+        '  #ledger-print-area .lp-table { width: 100%; border-collapse: collapse; } '
+        '  #ledger-print-area .lp-table th, #ledger-print-area .lp-table td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; } '
+        '  #ledger-print-area .lp-table th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; } '
+        '  #ledger-print-area .lp-num { text-align: right; white-space: nowrap; } '
+        '  #ledger-print-area .lp-bold { font-weight: 800; } '
+        '  #ledger-print-area .lp-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; } '
+        '  #ledger-print-area tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; } '
+        '}';
+
+      final div = html.DivElement()..id = 'ledger-print-area';
+      div.setInnerHtml(bodyHtml, treeSanitizer: html.NodeTreeSanitizer.trusted);
+      final styleEl = html.StyleElement()..text = printCss;
+      html.document.head!.append(styleEl);
+      html.document.body!.append(div);
+
+      Future.delayed(const Duration(milliseconds: 100), () {
+        html.window.print();
+        Future.delayed(const Duration(seconds: 3), () { div.remove(); styleEl.remove(); });
       });
-    });
-    html.document.body!.append(iframe);
-    iframe.srcdoc = htmlDoc;
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: $e')));
+    }
   }
 }
 
