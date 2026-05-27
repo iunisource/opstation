@@ -24,6 +24,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   final _searchFocus = FocusNode();
 
   List<Map<String, dynamic>> _entries = [];
+  List<String> _errors = [];
   bool _loading = false;
 
   DateTime? _dateFrom;
@@ -31,7 +32,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   String _typeFilter = 'All';
   final _entrySearchCtrl = TextEditingController();
 
-  static const _types = ['All', 'Sales Order', 'POS Sale', 'Receipt (CRV)'];
+  static const _types = ['All', 'Sales Order', 'Sales Invoice', 'POS Sale', 'Receipt (CRV)', 'Payment (CPV)'];
 
   @override
   void initState() {
@@ -71,7 +72,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     final orgId = _orgId; if (orgId == null) { setState(() => _loadingCustomers = false); return; }
     try {
       final rows = await Supabase.instance.client.from('customers').select('id, shop_name, code')
-          .eq('org_id', orgId).eq('is_active', true).order('shop_name').limit(10000);
+          .eq('org_id', orgId).order('shop_name').limit(50000);
       setState(() { _customers = List<Map<String, dynamic>>.from(rows); _filteredCustomers = _customers; _loadingCustomers = false; });
     } catch (_) { setState(() => _loadingCustomers = false); }
   }
@@ -79,14 +80,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   Future<void> _loadLedger(String customerId) async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null) return;
-    setState(() { _loading = true; _entries = []; });
-    try {
-      final client = Supabase.instance.client;
-      final List<Map<String, dynamic>> entries = [];
+    setState(() { _loading = true; _entries = []; _errors = []; });
+    final client = Supabase.instance.client;
+    final List<Map<String, dynamic>> entries = [];
+    final List<String> errors = [];
 
-      // 1. Sales Orders (delivered) → Debit
+    // 1. Sales Orders -> Debit
+    try {
       var soQ = client.from('sales_orders')
-          .select('id, updated_at, created_at, order_number')
+          .select('id, updated_at, created_at, status')
           .eq('org_id', orgId).eq('customer_id', customerId)
           .inFilter('status', ['delivered', 'invoiced', 'completed']);
       if (branchId != null) soQ = soQ.eq('branch_id', branchId);
@@ -103,35 +105,70 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           final da = dt == 'percent' ? qty * price * disc / 100 : disc;
           total += qty * price - da;
         }
-        if (total > 0) entries.add({
-          'date': so['updated_at'] ?? so['created_at'] ?? '',
-          'description': 'Sales Order ${so['order_number'] ?? '#${(so['id'] as String).substring(0, 10)}'}',
-          'voucher': so['order_number'] ?? '', 'debit': total, 'credit': 0.0, 'type': 'Sales Order',
-        });
+        if (total > 0) {
+          final soId = so['id'] as String;
+          final vno = soId.length >= 12 ? soId.substring(soId.length - 8) : soId;
+          entries.add({
+            'date': so['updated_at'] ?? so['created_at'] ?? '',
+            'description': 'Sales Order #$vno',
+            'voucher': vno, 'debit': total, 'credit': 0.0, 'type': 'Sales Order',
+          });
+        }
       }
+    } catch (e) { errors.add('SO: $e'); }
 
-      // 2. POS Transactions → Debit
+    // 2. Sales Invoices -> Debit (using select(*) to be schema-agnostic)
+    try {
+      var siQ = client.from('sales_invoices').select('*')
+          .eq('org_id', orgId).eq('customer_id', customerId);
+      if (branchId != null) siQ = siQ.eq('branch_id', branchId);
+      final sis = await siQ;
+      for (final si in sis as List) {
+        final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;
+        final vno = ((si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '') as String);
+        final date = ((si['voucher_date'] ?? si['invoice_date'] ?? si['si_date'] ?? si['created_at'] ?? '') as String);
+        if (total > 0) {
+          entries.add({
+            'date': date, 'voucher': vno,
+            'description': vno.isNotEmpty ? 'Sales Invoice $vno' : 'Sales Invoice',
+            'debit': total, 'credit': 0.0, 'type': 'Sales Invoice',
+          });
+        }
+      }
+    } catch (e) { errors.add('SI: $e'); }
+
+    // 3. POS Transactions -> Debit (sales) / Credit (returns)
+    try {
       List posTxns = [];
       if (branchId != null) {
         final sessions = await client.from('pos_sessions').select('id').eq('branch_id', branchId);
         final sids = (sessions as List).map((s) => s['id'] as String).toList();
-        if (sids.isNotEmpty) posTxns = await client.from('pos_transactions')
-            .select('id, transacted_at, total, transaction_number')
-            .eq('customer_id', customerId).eq('transaction_type', 'sale').inFilter('session_id', sids);
+        if (sids.isNotEmpty) {
+          posTxns = await client.from('pos_transactions').select('*')
+              .eq('customer_id', customerId).inFilter('session_id', sids);
+        }
       } else {
-        posTxns = await client.from('pos_transactions')
-            .select('id, transacted_at, total, transaction_number')
-            .eq('org_id', orgId).eq('customer_id', customerId).eq('transaction_type', 'sale');
+        posTxns = await client.from('pos_transactions').select('*')
+            .eq('org_id', orgId).eq('customer_id', customerId);
       }
       for (final t in posTxns as List) {
+        final ttotal = (t['total'] as num?)?.toDouble() ?? 0;
+        final ttype = (t['transaction_type'] as String?) ?? 'sale';
+        if (ttype == 'expense' || ttotal == 0) continue;
+        final vno = ((t['transaction_number'] ?? '') as String);
         entries.add({
-          'date': t['transacted_at'] ?? '', 'voucher': t['transaction_number'] ?? '',
-          'description': 'POS Sale${t['transaction_number'] != null ? ' — ${t['transaction_number']}' : ''}',
-          'debit': (t['total'] as num?)?.toDouble() ?? 0, 'credit': 0.0, 'type': 'POS Sale',
+          'date': ((t['transacted_at'] ?? t['created_at'] ?? '') as String),
+          'voucher': vno,
+          'description': vno.isNotEmpty ? 'POS $vno' : 'POS Sale',
+          'debit': ttype == 'return' ? 0.0 : ttotal,
+          'credit': ttype == 'return' ? ttotal : 0.0,
+          'type': 'POS Sale',
         });
       }
+    } catch (e) { errors.add('POS: $e'); }
 
-      // 3. CRV voucher lines (customer paid us) → Credit
+    // 4. CRV -> Credit (customer paid us)
+    try {
       final crvVouchers = await client.from('crv_vouchers')
           .select('id, voucher_number, voucher_date').eq('org_id', orgId).eq('status', 'posted');
       final crvIds = (crvVouchers as List).map((v) => v['id'] as String).toList();
@@ -145,19 +182,39 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           entries.add({
             'date': v['voucher_date'] ?? '', 'voucher': v['voucher_number'] ?? '',
             'description': 'Receipt — ${line['description'] ?? v['voucher_number']}',
-            'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0, 'type': 'Receipt (CRV)',
+            'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
+            'type': 'Receipt (CRV)',
           });
         }
       }
+    } catch (e) { errors.add('CRV: $e'); }
 
-      entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
-      double bal = 0;
-      for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
-      setState(() { _entries = entries; _loading = false; });
-    } catch (e) {
-      setState(() => _loading = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), behavior: SnackBarBehavior.floating));
-    }
+    // 5. CPV -> Debit (we paid customer)
+    try {
+      final cpvVouchers = await client.from('cpv_vouchers')
+          .select('id, voucher_number, voucher_date').eq('org_id', orgId).eq('status', 'posted');
+      final cpvIds = (cpvVouchers as List).map((v) => v['id'] as String).toList();
+      if (cpvIds.isNotEmpty) {
+        final cpvLines = await client.from('cpv_voucher_lines')
+            .select('amount, description, voucher_id')
+            .eq('account_id', customerId).eq('account_type', 'customer').inFilter('voucher_id', cpvIds);
+        final cpvMap = {for (final v in cpvVouchers) v['id'] as String: v};
+        for (final line in cpvLines as List) {
+          final v = cpvMap[line['voucher_id'] as String]; if (v == null) continue;
+          entries.add({
+            'date': v['voucher_date'] ?? '', 'voucher': v['voucher_number'] ?? '',
+            'description': 'Payment — ${line['description'] ?? v['voucher_number']}',
+            'debit': (line['amount'] as num?)?.toDouble() ?? 0,
+            'credit': 0.0, 'type': 'Payment (CPV)',
+          });
+        }
+      }
+    } catch (e) { errors.add('CPV: $e'); }
+
+    entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
+    double bal = 0;
+    for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
+    setState(() { _entries = entries; _loading = false; _errors = errors; });
   }
 
   List<Map<String, dynamic>> get _displayEntries {
@@ -203,6 +260,17 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             ]),
           ]),
           const SizedBox(height: 16),
+          if (_errors.isNotEmpty) Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.shade300)),
+            child: Row(children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Some sources failed: ${_errors.join(' | ')}', style: TextStyle(fontSize: 11, color: Colors.orange.shade900))),
+              IconButton(icon: Icon(Icons.close, size: 14, color: Colors.orange.shade700), onPressed: () => setState(() => _errors = []), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+            ]),
+          ),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             SizedBox(width: 340, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Focus(
@@ -370,8 +438,10 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   Color _typeColor(String type) {
     switch (type) {
       case 'Sales Order': return AppTheme.primary;
+      case 'Sales Invoice': return Colors.indigo;
       case 'POS Sale': return Colors.purple;
       case 'Receipt (CRV)': return Colors.green;
+      case 'Payment (CPV)': return Colors.orange;
       default: return AppTheme.textSecondary;
     }
   }
