@@ -1,3 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:convert';
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -62,6 +65,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       _selectedCustomer = c; _entries = []; _showDropdown = false; _highlightIndex = -1;
       _searchCtrl.text = '${c['shop_name']}${c['code'] != null ? ' (${c['code']})' : ''}';
     });
+    _persist();
     _loadLedger(c['id'] as String);
   }
 
@@ -71,10 +75,54 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   Future<void> _loadCustomers() async {
     final orgId = _orgId; if (orgId == null) { setState(() => _loadingCustomers = false); return; }
     try {
-      final rows = await Supabase.instance.client.from('customers').select('id, shop_name, code')
-          .eq('org_id', orgId).order('shop_name').limit(50000);
-      setState(() { _customers = List<Map<String, dynamic>>.from(rows); _filteredCustomers = _customers; _loadingCustomers = false; });
-    } catch (_) { setState(() => _loadingCustomers = false); }
+      final List<Map<String, dynamic>> all = [];
+      int from = 0; const pageSize = 1000;
+      while (true) {
+        final page = await Supabase.instance.client.from('customers')
+            .select('id, shop_name, code').eq('org_id', orgId)
+            .order('shop_name').range(from, from + pageSize - 1);
+        final list = List<Map<String, dynamic>>.from(page);
+        all.addAll(list);
+        if (list.length < pageSize) break;
+        from += pageSize;
+        if (from > 100000) break;
+      }
+      if (mounted) setState(() { _customers = all; _filteredCustomers = _customers; _loadingCustomers = false; });
+      _restoreState();
+    } catch (e) {
+      if (mounted) setState(() => _loadingCustomers = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Customers load error: $e'), behavior: SnackBarBehavior.floating));
+    }
+  }
+
+  void _restoreState() {
+    try {
+      final s = html.window.localStorage;
+      final cid = s['ledger_customer_id'];
+      if (cid == null || cid.isEmpty) return;
+      final m = _customers.where((c) => c['id'] == cid).toList();
+      if (m.isEmpty) return;
+      final dfStr = s['ledger_date_from'];
+      final dtStr = s['ledger_date_to'];
+      if (dfStr != null && dfStr.isNotEmpty) _dateFrom = DateTime.tryParse(dfStr);
+      if (dtStr != null && dtStr.isNotEmpty) _dateTo = DateTime.tryParse(dtStr);
+      final tf = s['ledger_type_filter'];
+      if (tf != null && _types.contains(tf)) _typeFilter = tf;
+      _selectCustomer(m.first);
+    } catch (_) {}
+  }
+
+  void _persist() {
+    try {
+      final s = html.window.localStorage;
+      if (_selectedCustomer != null) s['ledger_customer_id'] = _selectedCustomer!['id'] as String;
+      else s.remove('ledger_customer_id');
+      if (_dateFrom != null) s['ledger_date_from'] = _dateFrom!.toIso8601String();
+      else s.remove('ledger_date_from');
+      if (_dateTo != null) s['ledger_date_to'] = _dateTo!.toIso8601String();
+      else s.remove('ledger_date_to');
+      s['ledger_type_filter'] = _typeFilter;
+    } catch (_) {}
   }
 
   Future<void> _loadLedger(String customerId) async {
@@ -179,6 +227,27 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       }
     } catch (e) { errors.add('CPV: $e'); }
 
+    // Diagnostics
+    final siCount = entries.where((e) => e['type'] == 'Sales Invoice').length;
+    final posCount = entries.where((e) => e['type'] == 'POS Sale').length;
+    final crvCount = entries.where((e) => e['type'] == 'Receipt (CRV)').length;
+    final cpvCount = entries.where((e) => e['type'] == 'Payment (CPV)').length;
+    if (crvCount == 0) {
+      try {
+        final any = await client.from('crv_voucher_lines')
+            .select('voucher_id, account_type, account_id, amount')
+            .eq('account_id', customerId);
+        final anyList = any as List;
+        if (anyList.isNotEmpty) {
+          final s = anyList.first as Map;
+          errors.add('CRV: ${anyList.length} line(s) found with this account_id but none matched filter. Sample: account_type="${s['account_type']}"');
+        } else {
+          errors.add('CRV: no lines reference this customer (account_id="$customerId")');
+        }
+      } catch (e) { errors.add('CRV diag: $e'); }
+    }
+    errors.add('Found: SI=$siCount POS=$posCount CRV=$crvCount CPV=$cpvCount');
+
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
     for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
@@ -226,6 +295,22 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
               const Text('Customer Ledger', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
               Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
             ]),
+            const Spacer(),
+            if (_selectedCustomer != null && _entries.isNotEmpty) ...[
+              OutlinedButton.icon(
+                icon: const Icon(Icons.print_outlined, size: 16),
+                label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
+                onPressed: _printLedger,
+                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
+                label: Text('Export Excel', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
+                onPressed: _exportCsv,
+                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.green.shade300)),
+              ),
+            ],
           ]),
           const SizedBox(height: 16),
           if (_errors.isNotEmpty) Container(
@@ -256,7 +341,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     labelText: 'Search Customer', hintText: 'Name or code...',
                     prefixIcon: const Icon(Icons.search, size: 18), isDense: true,
                     suffixIcon: _selectedCustomer != null ? IconButton(icon: const Icon(Icons.close, size: 16),
-                        onPressed: () => setState(() { _selectedCustomer = null; _entries = []; _searchCtrl.clear(); _showDropdown = false; })) : null,
+                        onPressed: () { setState(() { _selectedCustomer = null; _entries = []; _searchCtrl.clear(); _showDropdown = false; }); try { html.window.localStorage.remove('ledger_customer_id'); } catch (_) {} }) : null,
                   ),
                   onTap: () => setState(() { _showDropdown = true; if (_searchCtrl.text.isEmpty) _filteredCustomers = _customers; }),
                 ),
@@ -291,19 +376,22 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             ])),
             if (_selectedCustomer != null) ...[
               const SizedBox(width: 12),
-              OutlinedButton.icon(icon: const Icon(Icons.calendar_today_outlined, size: 14),
-                label: Text(_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'From', style: const TextStyle(fontSize: 12)),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.date_range, size: 14),
+                label: Text(
+                  (_dateFrom != null || _dateTo != null)
+                    ? '${_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : '...'}  →  ${_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : '...'}'
+                    : 'Date Range', style: const TextStyle(fontSize: 12)),
                 onPressed: () async {
-                  final d = await showDatePicker(context: context, initialDate: _dateFrom ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now().add(const Duration(days: 365)));
-                  if (d != null) setState(() => _dateFrom = d);
-                }, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(icon: const Icon(Icons.calendar_today_outlined, size: 14),
-                label: Text(_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'To', style: const TextStyle(fontSize: 12)),
-                onPressed: () async {
-                  final d = await showDatePicker(context: context, initialDate: _dateTo ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now().add(const Duration(days: 365)));
-                  if (d != null) setState(() => _dateTo = d);
-                }, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
+                  final picked = await showDateRangePicker(
+                    context: context, firstDate: DateTime(2020),
+                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                    initialDateRange: (_dateFrom != null && _dateTo != null) ? DateTimeRange(start: _dateFrom!, end: _dateTo!) : null,
+                  );
+                  if (picked != null) setState(() { _dateFrom = picked.start; _dateTo = picked.end; });
+                },
+                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+              ),
               if (_dateFrom != null || _dateTo != null) ...[
                 const SizedBox(width: 6),
                 TextButton(onPressed: () => setState(() { _dateFrom = null; _dateTo = null; }), child: const Text('Clear', style: TextStyle(fontSize: 12))),
@@ -327,7 +415,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                 child: DropdownButtonHideUnderline(child: DropdownButton<String>(
                   value: _typeFilter, isDense: true,
                   items: _types.map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(fontSize: 12)))).toList(),
-                  onChanged: (v) => setState(() => _typeFilter = v ?? 'All'),
+                  onChanged: (v) { setState(() => _typeFilter = v ?? 'All'); _persist(); },
                 )),
               ),
             ]),
@@ -411,6 +499,116 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       case 'Payment (CPV)': return Colors.orange;
       default: return AppTheme.textSecondary;
     }
+  }
+
+  void _exportCsv() {
+    final display = _displayEntries;
+    if (display.isEmpty || _selectedCustomer == null) return;
+    final branch = ref.read(selectedBranchProvider);
+    final buf = StringBuffer();
+    String esc(String s) => '"' + s.replaceAll('"', '""') + '"';
+    final cust = _selectedCustomer!;
+    final custLabel = '${cust['shop_name']}${cust['code'] != null ? ' (${cust['code']})' : ''}';
+    buf.writeln('Customer Ledger');
+    buf.writeln('Customer,' + esc(custLabel));
+    buf.writeln('Branch,' + esc((branch?['name'] as String?) ?? 'All Branches'));
+    if (_dateFrom != null) buf.writeln('From,' + DateFormat('yyyy-MM-dd').format(_dateFrom!));
+    if (_dateTo != null) buf.writeln('To,' + DateFormat('yyyy-MM-dd').format(_dateTo!));
+    buf.writeln('Generated,' + DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()));
+    buf.writeln('');
+    buf.writeln('Date,Voucher,Description,Type,Debit,Credit,Balance');
+    double td = 0, tc = 0;
+    for (final e in display) {
+      final ds = e['date'] as String? ?? '';
+      final date = ds.length >= 10 ? DateFormat('yyyy-MM-dd').format(DateTime.parse(ds)) : '';
+      td += e['debit'] as double; tc += e['credit'] as double;
+      buf.writeln([date, esc(e['voucher'] as String? ?? ''), esc(e['description'] as String), esc(e['type'] as String), (e['debit'] as double).toStringAsFixed(2), (e['credit'] as double).toStringAsFixed(2), (e['display_balance'] as double).toStringAsFixed(2)].join(','));
+    }
+    buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (td - tc).toStringAsFixed(2));
+    final bytes = <int>[0xEF, 0xBB, 0xBF, ...utf8.encode(buf.toString())];
+    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final safeName = (cust['shop_name'] as String).replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    final filename = 'ledger_' + safeName + '_' + DateFormat('yyyyMMdd').format(DateTime.now()) + '.csv';
+    html.AnchorElement(href: url)..download = filename..click();
+    html.Url.revokeObjectUrl(url);
+  }
+
+  void _printLedger() {
+    final display = _displayEntries;
+    if (display.isEmpty || _selectedCustomer == null) return;
+    final branch = ref.read(selectedBranchProvider);
+    double td = 0, tc = 0;
+    for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
+    final netBal = td - tc;
+    final cust = _selectedCustomer!;
+    final customerName = (cust['shop_name'] as String?) ?? '';
+    final customerCode = (cust['code'] as String?) ?? '';
+    final branchName = (branch?['name'] as String?) ?? 'All Branches';
+    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final rowsBuf = StringBuffer();
+    for (final e in display) {
+      final ds = e['date'] as String? ?? '';
+      final date = ds.length >= 10 ? DateFormat('d MMM yy').format(DateTime.parse(ds)) : '-';
+      final debit = e['debit'] as double;
+      final credit = e['credit'] as double;
+      final bal = e['display_balance'] as double;
+      final dStr = debit > 0 ? 'Rs. ' + debit.toStringAsFixed(2) : '-';
+      final cStr = credit > 0 ? 'Rs. ' + credit.toStringAsFixed(2) : '-';
+      rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num debit">' + dStr + '</td><td class="num credit">' + cStr + '</td><td class="num bold">Rs. ' + bal.toStringAsFixed(2) + '</td></tr>');
+    }
+    final periodStr = (_dateFrom != null || _dateTo != null)
+      ? '<div class="info"><strong>Period:</strong> ' + (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today') + '</div>'
+      : '';
+    final balColor = netBal > 0 ? '#c62828' : '#2e7d32';
+    final codeStr = customerCode.isNotEmpty ? ' (' + customerCode + ')' : '';
+
+    final htmlDoc = '<!DOCTYPE html>'
+      '<html><head><meta charset="UTF-8"><title>Customer Ledger - ' + customerName + '</title>'
+      '<style>'
+      '@page { margin: 0.5cm; }'
+      'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; }'
+      '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; }'
+      'h1 { font-size: 18px; margin: 0 0 4px 0; }'
+      '.info { font-size: 10px; margin: 2px 0; }'
+      '.stats { display: flex; gap: 10px; margin: 8px 0 12px 0; }'
+      '.stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; }'
+      '.stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }'
+      '.stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; }'
+      '.debit { color: #1976d2; } .credit { color: #2e7d32; }'
+      '.bal-col { color: ' + balColor + '; }'
+      'table { width: 100%; border-collapse: collapse; }'
+      'th, td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; }'
+      'th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; }'
+      '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; }'
+      '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; }'
+      'tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; }'
+      '</style></head><body>'
+      '<div class="header"><div>'
+      '<h1>Customer Ledger</h1>'
+      '<div class="info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
+      '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
+      + periodStr +
+      '</div><div style="text-align: right;"><div class="info">Generated: ' + genTime + '</div></div></div>'
+      '<div class="stats">'
+      '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + td.toStringAsFixed(2) + '</div></div>'
+      '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + tc.toStringAsFixed(2) + '</div></div>'
+      '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal-col">Rs. ' + netBal.toStringAsFixed(2) + '</div></div>'
+      '</div><table>'
+      '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
+      '<tbody>' + rowsBuf.toString() + '</tbody>'
+      '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="num credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="num bal-col">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
+      '</table></body></html>';
+
+    final iframe = html.IFrameElement()
+      ..style.position = 'fixed' ..style.right = '0' ..style.bottom = '0'
+      ..style.width = '0' ..style.height = '0' ..style.border = '0'
+      ..srcdoc = htmlDoc;
+    html.document.body!.append(iframe);
+    iframe.onLoad.listen((_) {
+      (iframe.contentWindow as dynamic)?.print();
+      Future.delayed(const Duration(seconds: 60), () => iframe.remove());
+    });
   }
 }
 
