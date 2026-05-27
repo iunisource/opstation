@@ -36,7 +36,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   String _typeFilter = 'All';
   final _entrySearchCtrl = TextEditingController();
 
-  static const _types = ['All', 'Sales Invoice', 'Sales Return', 'POS Sale', 'POS Return', 'Receipt (CRV)', 'Payment (CPV)'];
+  static const _types = ['All', 'Sales Invoice', 'Sale Return', 'POS Sale', 'POS Return', 'Receipt (CRV)', 'Payment (CPV)'];
 
   @override
   void initState() {
@@ -134,7 +134,19 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     final List<Map<String, dynamic>> entries = [];
     final List<String> errors = [];
 
-    // 2. Sales Invoices -> Debit (using select(*) to be schema-agnostic)
+    String extractDate(Map v, List<String> fields) {
+      for (final f in fields) {
+        final val = v[f];
+        if (val == null) continue;
+        if (val is String && val.isNotEmpty) return val;
+        if (val is DateTime) return val.toIso8601String();
+        final s = val.toString();
+        if (s.isNotEmpty && s != 'null') return s;
+      }
+      return '';
+    }
+
+    // 1. Sales Invoices -> Debit
     try {
       var siQ = client.from('sales_invoices').select('*')
           .eq('org_id', orgId).eq('customer_id', customerId);
@@ -143,18 +155,18 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       for (final si in sis as List) {
         final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;
         final vno = ((si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '') as String);
-        final date = ((si['voucher_date'] ?? si['invoice_date'] ?? si['si_date'] ?? si['created_at'] ?? '') as String);
+        final date = extractDate(si as Map, const ['voucher_date', 'invoice_date', 'si_date', 'date', 'posted_at', 'created_at']);
         if (total > 0) {
           entries.add({
             'date': date, 'voucher': vno,
-            'description': vno.isNotEmpty ? 'Sales Invoice $vno' : 'Sales Invoice',
+            'description': vno.isNotEmpty ? 'Sales Invoice ' + vno : 'Sales Invoice',
             'debit': total, 'credit': 0.0, 'type': 'Sales Invoice',
           });
         }
       }
-    } catch (e) { errors.add('SI: $e'); }
+    } catch (e) { errors.add('SI: ' + e.toString()); }
 
-    // 3. POS Transactions -> Debit (sales) / Credit (returns)
+    // 2. POS Transactions -> Sale or Return
     try {
       List posTxns = [];
       if (branchId != null) {
@@ -205,27 +217,35 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           'type': isReturn ? 'POS Return' : 'POS Sale',
         });
       }
-    } catch (e) { errors.add('POS: $e'); }
+    } catch (e) { errors.add('POS: ' + e.toString()); }
 
-      // 3b. Sales Returns (SRN) -> Credit
+    // 3. Sale Return Invoices (SRI) -> Credit
+    String? sriTable;
+    for (final tbl in const ['sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
-        var srnQ = client.from('sales_returns').select('*')
+        var q = client.from(tbl).select('*')
             .eq('org_id', orgId).eq('customer_id', customerId);
-        if (branchId != null) srnQ = srnQ.eq('branch_id', branchId);
-        final srns = await srnQ;
-        for (final sr in srns as List) {
-          final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount']) as num?)?.toDouble() ?? 0;
-          final vno = ((sr['return_number'] ?? sr['srn_number'] ?? sr['voucher_number'] ?? '') as String);
-          final date = ((sr['return_date'] ?? sr['voucher_date'] ?? sr['srn_date'] ?? sr['created_at'] ?? '') as String);
+        if (branchId != null) q = q.eq('branch_id', branchId);
+        final rows = await q;
+        sriTable = tbl;
+        for (final sr in rows as List) {
+          final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount'] ?? sr['net_amount']) as num?)?.toDouble() ?? 0;
+          final vno = ((sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? '') as String);
+          final date = extractDate(sr as Map, const ['return_date', 'invoice_date', 'voucher_date', 'sri_date', 'srn_date', 'date', 'posted_at', 'created_at']);
           if (total > 0) {
             entries.add({
               'date': date, 'voucher': vno,
-              'description': vno.isNotEmpty ? 'Sales Return ' + vno : 'Sales Return',
-              'debit': 0.0, 'credit': total, 'type': 'Sales Return',
+              'description': vno.isNotEmpty ? 'Sale Return ' + vno : 'Sale Return',
+              'debit': 0.0, 'credit': total, 'type': 'Sale Return',
             });
           }
         }
-      } catch (e) { errors.add('SRN: ' + e.toString()); }
+        break;
+      } catch (_) { continue; }
+    }
+    if (sriTable == null) {
+      errors.add('SRI: no matching table. Tried: sale_return_invoices, sales_returns, sale_returns, sri_vouchers, srn_vouchers, sri');
+    }
 
     // 4. CRV -> Credit (customer paid us)
     try {
@@ -237,23 +257,28 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             .select('amount, description, voucher_id')
             .eq('account_id', customerId).eq('account_type', 'customer').inFilter('voucher_id', crvIds);
         final crvMap = {for (final v in crvVouchers) v['id'] as String: v};
+        Map? firstNoDate;
         for (final line in crvLines as List) {
           final v = crvMap[line['voucher_id'] as String]; if (v == null) continue;
+          final date = extractDate(v as Map, const ['voucher_date', 'value_date', 'transaction_date', 'date', 'posted_at', 'posted_date', 'created_at', 'created_date', 'updated_at']);
+          if (date.isEmpty && firstNoDate == null) firstNoDate = v;
           entries.add({
-            'date': (() {
-              for (final f in const ['voucher_date', 'posted_at', 'created_at', 'updated_at']) {
-                final val = v[f];
-                if (val is String && val.isNotEmpty) return val;
-              }
-              return '';
-            })(), 'voucher': v['voucher_number'] ?? '',
-            'description': 'Receipt — ${line['description'] ?? v['voucher_number']}',
+            'date': date,
+            'voucher': (v['voucher_number'] as String?) ?? '',
+            'description': 'Receipt — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
             'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
             'type': 'Receipt (CRV)',
           });
         }
+        if (firstNoDate != null) {
+          final fields = firstNoDate.keys.toList().join(', ');
+          errors.add('CRV missing date. Available fields: ' + fields);
+          for (final f in const ['voucher_date', 'posted_at', 'created_at']) {
+            errors.add('CRV.' + f + ' = ' + (firstNoDate[f]?.toString() ?? 'null'));
+          }
+        }
       }
-    } catch (e) { errors.add('CRV: $e'); }
+    } catch (e) { errors.add('CRV: ' + e.toString()); }
 
     // 5. CPV -> Debit (we paid customer)
     try {
@@ -267,26 +292,17 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         final cpvMap = {for (final v in cpvVouchers) v['id'] as String: v};
         for (final line in cpvLines as List) {
           final v = cpvMap[line['voucher_id'] as String]; if (v == null) continue;
+          final date = extractDate(v as Map, const ['voucher_date', 'value_date', 'transaction_date', 'date', 'posted_at', 'posted_date', 'created_at', 'created_date', 'updated_at']);
           entries.add({
-            'date': (() {
-              for (final f in const ['voucher_date', 'posted_at', 'created_at', 'updated_at']) {
-                final val = v[f];
-                if (val is String && val.isNotEmpty) return val;
-              }
-              return '';
-            })(), 'voucher': v['voucher_number'] ?? '',
-            'description': 'Payment — ${line['description'] ?? v['voucher_number']}',
+            'date': date,
+            'voucher': (v['voucher_number'] as String?) ?? '',
+            'description': 'Payment — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
             'debit': (line['amount'] as num?)?.toDouble() ?? 0,
             'credit': 0.0, 'type': 'Payment (CPV)',
           });
         }
       }
-    } catch (e) { errors.add('CPV: $e'); }
-
-    // Diagnostics
-    // diagnostic counts removed
-    // crv diagnostic removed
-    // diagnostic counts no longer added to banner
+    } catch (e) { errors.add('CPV: ' + e.toString()); }
 
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
@@ -536,7 +552,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       case 'Sales Invoice': return Colors.indigo;
       case 'POS Sale': return Colors.purple;
       case 'POS Return': return Colors.deepOrange;
-      case 'Sales Return': return Colors.amber.shade800;
+      case 'Sale Return': return Colors.amber.shade800;
       case 'Receipt (CRV)': return Colors.green;
       case 'Payment (CPV)': return Colors.orange;
       default: return AppTheme.textSecondary;
@@ -629,12 +645,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; } '
         '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; } '
         'tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; } '
-        '@media print { .no-print { display: none !important; } }'
         '</style></head><body>'
-        '<div class="no-print" style="text-align: right; padding-bottom: 8px; border-bottom: 1px solid #ddd; margin-bottom: 8px;">'
-        '<button onclick="window.print()" style="padding: 6px 14px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Print / Save PDF</button>'
-        '<button onclick="window.close()" style="margin-left: 8px; padding: 6px 14px; background: #888; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Close</button>'
-        '</div>'
         '<div class="header"><div><h1>Customer Ledger</h1>'
         '<div class="info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
         '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
@@ -648,28 +659,14 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
         '<tbody>' + rowsBuf.toString() + '</tbody>'
         '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="num credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="num bal">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
-        '</table>'
-        '<script>window.onload = function() { setTimeout(function() { window.focus(); window.print(); }, 350); };</script>'
-        '</body></html>';
+        '</table></body></html>';
 
-      final win = html.window.open('', 'PrintLedger', 'width=900,height=700,scrollbars=1,toolbar=0,menubar=0,location=0');
-      if (win == null) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Pop-up blocked. Allow pop-ups for this site to print.'),
-          duration: Duration(seconds: 6),
-        ));
-        return;
-      }
-      try {
-        final doc = js_util.getProperty(win, 'document');
-        js_util.callMethod(doc, 'open', const []);
-        js_util.callMethod(doc, 'write', [htmlDoc]);
-        js_util.callMethod(doc, 'close', const []);
-      } catch (e) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print write failed: $e')));
-      }
+      // Original method used across vouchers: blob URL in new tab
+      final blob = html.Blob([htmlDoc], 'text/html;charset=utf-8');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.window.open(url, '_blank');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: ' + e.toString())));
     }
   }
 }
