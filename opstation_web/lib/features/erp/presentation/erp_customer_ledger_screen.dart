@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -15,289 +16,377 @@ class ErpCustomerLedgerScreen extends ConsumerStatefulWidget {
 class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScreen> {
   List<Map<String, dynamic>> _customers = [];
   Map<String, dynamic>? _selectedCustomer;
+  List<Map<String, dynamic>> _filteredCustomers = [];
+  bool _loadingCustomers = true;
+  bool _showDropdown = false;
+  int _highlightIndex = -1;
+  final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
+
   List<Map<String, dynamic>> _entries = [];
   bool _loading = false;
-  bool _loadingCustomers = true;
-  final _searchCtrl = TextEditingController();
-  List<Map<String, dynamic>> _filteredCustomers = [];
+
+  DateTime? _dateFrom;
+  DateTime? _dateTo;
+  String _typeFilter = 'All';
+  final _entrySearchCtrl = TextEditingController();
+
+  static const _types = ['All', 'Sales Order', 'POS Sale', 'Receipt (CRV)'];
 
   @override
   void initState() {
     super.initState();
     _loadCustomers();
-    _searchCtrl.addListener(_filterCustomers);
+    _searchCtrl.addListener(_onSearchChanged);
+    _entrySearchCtrl.addListener(() => setState(() {}));
+    _searchFocus.addListener(() { if (_searchFocus.hasFocus) setState(() { _showDropdown = true; if (_searchCtrl.text.isEmpty) _filteredCustomers = _customers; }); });
   }
 
   @override
-  void dispose() {
-    _searchCtrl.dispose();
-    super.dispose();
-  }
+  void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _entrySearchCtrl.dispose(); super.dispose(); }
 
-  void _filterCustomers() {
+  void _onSearchChanged() {
     final q = _searchCtrl.text.toLowerCase();
     setState(() {
-      _filteredCustomers = _customers.where((c) =>
-          q.isEmpty ||
+      _highlightIndex = -1;
+      _showDropdown = true;
+      _filteredCustomers = q.isEmpty ? _customers : _customers.where((c) =>
           (c['shop_name'] as String? ?? '').toLowerCase().contains(q) ||
           (c['code'] as String? ?? '').toLowerCase().contains(q)).toList();
     });
   }
 
+  void _selectCustomer(Map<String, dynamic> c) {
+    setState(() {
+      _selectedCustomer = c; _entries = []; _showDropdown = false; _highlightIndex = -1;
+      _searchCtrl.text = '${c['shop_name']}${c['code'] != null ? ' (${c['code']})' : ''}';
+    });
+    _loadLedger(c['id'] as String);
+  }
+
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
 
   Future<void> _loadCustomers() async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
-    if (orgId == null) { setState(() => _loadingCustomers = false); return; }
+    final orgId = _orgId; if (orgId == null) { setState(() => _loadingCustomers = false); return; }
     try {
-      final customers = await Supabase.instance.client
-          .from('customers').select('id, shop_name, code')
+      final rows = await Supabase.instance.client.from('customers').select('id, shop_name, code')
           .eq('org_id', orgId).eq('is_active', true).order('shop_name').limit(10000);
-      setState(() {
-        _customers = List<Map<String, dynamic>>.from(customers);
-        _filteredCustomers = _customers;
-        _loadingCustomers = false;
-      });
+      setState(() { _customers = List<Map<String, dynamic>>.from(rows); _filteredCustomers = _customers; _loadingCustomers = false; });
     } catch (_) { setState(() => _loadingCustomers = false); }
   }
 
   Future<void> _loadLedger(String customerId) async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
-    final branchId = _branchId;
+    final orgId = _orgId; final branchId = _branchId;
     if (orgId == null) return;
-    setState(() => _loading = true);
+    setState(() { _loading = true; _entries = []; });
     try {
       final client = Supabase.instance.client;
       final List<Map<String, dynamic>> entries = [];
 
-      // Sales orders (debits — customer owes us)
-      final soQuery = client.from('sales_orders')
-          .select('id, created_at, status, updated_at')
+      // 1. Sales Orders (delivered) → Debit
+      var soQ = client.from('sales_orders')
+          .select('id, updated_at, created_at, order_number')
           .eq('org_id', orgId).eq('customer_id', customerId)
-          .inFilter('status', ['delivered']);
-      final sos = branchId != null
-          ? await soQuery.eq('branch_id', branchId)
-          : await soQuery;
-
+          .inFilter('status', ['delivered', 'invoiced', 'completed']);
+      if (branchId != null) soQ = soQ.eq('branch_id', branchId);
+      final sos = await soQ;
       for (final so in sos as List) {
         final items = await client.from('sales_order_items')
-            .select('quantity, unit_price, discount').eq('sales_order_id', so['id']);
+            .select('quantity, unit_price, discount, discount_type').eq('sales_order_id', so['id']);
         double total = 0;
-        for (final item in items as List) {
-          final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
-          final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-          final disc = (item['discount'] as num?)?.toDouble() ?? 0;
-          total += (qty * price) - disc;
+        for (final it in items as List) {
+          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+          final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+          final disc = (it['discount'] as num?)?.toDouble() ?? 0;
+          final dt = it['discount_type'] as String? ?? 'fixed';
+          final da = dt == 'percent' ? qty * price * disc / 100 : disc;
+          total += qty * price - da;
         }
-        if (total > 0) {
+        if (total > 0) entries.add({
+          'date': so['updated_at'] ?? so['created_at'] ?? '',
+          'description': 'Sales Order ${so['order_number'] ?? '#${(so['id'] as String).substring(0, 10)}'}',
+          'voucher': so['order_number'] ?? '', 'debit': total, 'credit': 0.0, 'type': 'Sales Order',
+        });
+      }
+
+      // 2. POS Transactions → Debit
+      List posTxns = [];
+      if (branchId != null) {
+        final sessions = await client.from('pos_sessions').select('id').eq('branch_id', branchId);
+        final sids = (sessions as List).map((s) => s['id'] as String).toList();
+        if (sids.isNotEmpty) posTxns = await client.from('pos_transactions')
+            .select('id, transacted_at, total, transaction_number')
+            .eq('customer_id', customerId).eq('transaction_type', 'sale').inFilter('session_id', sids);
+      } else {
+        posTxns = await client.from('pos_transactions')
+            .select('id, transacted_at, total, transaction_number')
+            .eq('org_id', orgId).eq('customer_id', customerId).eq('transaction_type', 'sale');
+      }
+      for (final t in posTxns as List) {
+        entries.add({
+          'date': t['transacted_at'] ?? '', 'voucher': t['transaction_number'] ?? '',
+          'description': 'POS Sale${t['transaction_number'] != null ? ' — ${t['transaction_number']}' : ''}',
+          'debit': (t['total'] as num?)?.toDouble() ?? 0, 'credit': 0.0, 'type': 'POS Sale',
+        });
+      }
+
+      // 3. CRV voucher lines (customer paid us) → Credit
+      final crvVouchers = await client.from('crv_vouchers')
+          .select('id, voucher_number, voucher_date').eq('org_id', orgId).eq('status', 'posted');
+      final crvIds = (crvVouchers as List).map((v) => v['id'] as String).toList();
+      if (crvIds.isNotEmpty) {
+        final crvLines = await client.from('crv_voucher_lines')
+            .select('amount, description, voucher_id')
+            .eq('account_id', customerId).eq('account_type', 'customer').inFilter('voucher_id', crvIds);
+        final crvMap = {for (final v in crvVouchers) v['id'] as String: v};
+        for (final line in crvLines as List) {
+          final v = crvMap[line['voucher_id'] as String]; if (v == null) continue;
           entries.add({
-            'date': so['updated_at'] ?? so['created_at'],
-            'description': 'Sales Order #${(so['id'] as String).substring(3, 16)}',
-            'debit': total, 'credit': 0.0, 'type': 'sale',
+            'date': v['voucher_date'] ?? '', 'voucher': v['voucher_number'] ?? '',
+            'description': 'Receipt — ${line['description'] ?? v['voucher_number']}',
+            'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0, 'type': 'Receipt (CRV)',
           });
         }
       }
 
-      // POS transactions
-      List posTxns = [];
-      if (branchId != null) {
-        final sessions = await client.from('pos_sessions').select('id').eq('branch_id', branchId);
-        final sessionIds = (sessions as List).map((s) => s['id'] as String).toList();
-        if (sessionIds.isNotEmpty) {
-          posTxns = await client.from('pos_transactions')
-              .select('id, transacted_at, total, payment_method')
-              .eq('customer_id', customerId)
-              .inFilter('session_id', sessionIds);
-        }
-      } else {
-        posTxns = await client.from('pos_transactions')
-            .select('id, transacted_at, total, payment_method')
-            .eq('org_id', orgId).eq('customer_id', customerId);
-      }
-
-      for (final txn in posTxns as List) {
-        entries.add({
-          'date': txn['transacted_at'],
-          'description': 'POS Sale — ${txn['payment_method']}',
-          'debit': 0.0, 'credit': (txn['total'] as num?)?.toDouble() ?? 0, 'type': 'pos',
-        });
-      }
-
-      // Receipt vouchers (credits — customer paid)
-      final rvQuery = client.from('receipt_vouchers')
-          .select().eq('org_id', orgId).eq('customer_id', customerId);
-      final rvs = branchId != null
-          ? await rvQuery.eq('branch_id', branchId)
-          : await rvQuery;
-
-      for (final rv in rvs as List) {
-        entries.add({
-          'date': rv['voucher_date'] ?? rv['created_at'],
-          'description': 'Receipt — ${rv['payment_method']}${rv['reference'] != null ? ' (${rv['reference']})' : ''}',
-          'debit': 0.0, 'credit': (rv['amount'] as num?)?.toDouble() ?? 0, 'type': 'receipt',
-        });
-      }
-
       entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
-      double balance = 0;
-      for (final e in entries) {
-        balance += (e['debit'] as double) - (e['credit'] as double);
-        e['balance'] = balance;
-      }
-
+      double bal = 0;
+      for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
       setState(() { _entries = entries; _loading = false; });
-    } catch (_) { setState(() => _loading = false); }
+    } catch (e) {
+      setState(() => _loading = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), behavior: SnackBarBehavior.floating));
+    }
+  }
+
+  List<Map<String, dynamic>> get _displayEntries {
+    var list = _entries.where((e) {
+      if (_typeFilter != 'All' && e['type'] != _typeFilter) return false;
+      final ds = e['date'] as String? ?? '';
+      if (ds.length >= 10) {
+        final d = DateTime.tryParse(ds);
+        if (d != null) {
+          if (_dateFrom != null && d.isBefore(_dateFrom!)) return false;
+          if (_dateTo != null && d.isAfter(_dateTo!.add(const Duration(days: 1)))) return false;
+        }
+      }
+      final q = _entrySearchCtrl.text.toLowerCase();
+      if (q.isNotEmpty) {
+        if (!(e['description'] as String).toLowerCase().contains(q) && !(e['voucher'] as String).toLowerCase().contains(q)) return false;
+      }
+      return true;
+    }).toList();
+    // Recalculate running balance for filtered view
+    double rb = 0;
+    return list.map((e) { rb += (e['debit'] as double) - (e['credit'] as double); return {...e, 'display_balance': rb}; }).toList();
   }
 
   @override
   Widget build(BuildContext context) {
     final branch = ref.watch(selectedBranchProvider);
+    final display = _displayEntries;
     double totalDebit = 0, totalCredit = 0;
-    for (final e in _entries) {
-      totalDebit += e['debit'] as double;
-      totalCredit += e['credit'] as double;
-    }
-    final balance = totalDebit - totalCredit;
+    for (final e in display) { totalDebit += e['debit'] as double; totalCredit += e['credit'] as double; }
+    final netBal = totalDebit - totalCredit;
+    final maxDrop = _filteredCustomers.length.clamp(0, 10);
 
-    return Container(
-      color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Customer Ledger', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 4),
-        Text(branch == null ? 'Select a branch' : 'Branch: ${branch['name']}',
-            style: const TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 20),
-        if (_loadingCustomers)
-          const Center(child: CircularProgressIndicator())
-        else
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              SizedBox(
-                width: 320,
+    return GestureDetector(
+      onTap: () { if (_showDropdown) setState(() => _showDropdown = false); },
+      child: Container(
+        color: AppTheme.background, padding: const EdgeInsets.all(24),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Customer Ledger', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+              Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            ]),
+          ]),
+          const SizedBox(height: 16),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(width: 340, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Focus(
+                onKeyEvent: (_, event) {
+                  if (!_showDropdown || event is! KeyDownEvent) return KeyEventResult.ignored;
+                  if (event.logicalKey == LogicalKeyboardKey.arrowDown) { setState(() => _highlightIndex = (_highlightIndex + 1).clamp(0, maxDrop - 1)); return KeyEventResult.handled; }
+                  if (event.logicalKey == LogicalKeyboardKey.arrowUp) { setState(() => _highlightIndex = (_highlightIndex - 1).clamp(0, maxDrop - 1)); return KeyEventResult.handled; }
+                  if (event.logicalKey == LogicalKeyboardKey.enter && _highlightIndex >= 0 && _highlightIndex < maxDrop) { _selectCustomer(_filteredCustomers[_highlightIndex]); return KeyEventResult.handled; }
+                  if (event.logicalKey == LogicalKeyboardKey.escape) { setState(() => _showDropdown = false); return KeyEventResult.handled; }
+                  return KeyEventResult.ignored;
+                },
                 child: TextField(
-                  controller: _searchCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Search Customer',
-                    prefixIcon: Icon(Icons.search, size: 18),
-                    isDense: true,
+                  controller: _searchCtrl, focusNode: _searchFocus,
+                  decoration: InputDecoration(
+                    labelText: 'Search Customer', hintText: 'Name or code...',
+                    prefixIcon: const Icon(Icons.search, size: 18), isDense: true,
+                    suffixIcon: _selectedCustomer != null ? IconButton(icon: const Icon(Icons.close, size: 16),
+                        onPressed: () => setState(() { _selectedCustomer = null; _entries = []; _searchCtrl.clear(); _showDropdown = false; })) : null,
+                  ),
+                  onTap: () => setState(() { _showDropdown = true; if (_searchCtrl.text.isEmpty) _filteredCustomers = _customers; }),
+                ),
+              ),
+              if (_showDropdown && _filteredCustomers.isNotEmpty)
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 260), width: 340,
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))]),
+                  child: ListView.separated(
+                    shrinkWrap: true, itemCount: maxDrop, separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final c = _filteredCustomers[i]; final hi = i == _highlightIndex;
+                      return InkWell(
+                        onTap: () => _selectCustomer(c),
+                        child: Container(
+                          color: hi ? AppTheme.primary.withOpacity(0.08) : null,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          child: Row(children: [
+                            Expanded(child: Text(c['shop_name'] as String? ?? '', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500))),
+                            if (c['code'] != null) Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(4)),
+                              child: Text(c['code'] as String, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w700)),
+                            ),
+                          ]),
+                        ),
+                      );
+                    },
                   ),
                 ),
-              ),
-              if (_entries.isNotEmpty) ...[
-                const SizedBox(width: 24),
-                _LedgerStat(label: 'Total Sales', value: totalDebit.toStringAsFixed(2), color: AppTheme.primary),
-                const SizedBox(width: 16),
-                _LedgerStat(label: 'Total Received', value: totalCredit.toStringAsFixed(2), color: AppTheme.success),
-                const SizedBox(width: 16),
-                _LedgerStat(label: 'Balance Receivable', value: balance.toStringAsFixed(2),
-                    color: balance > 0 ? AppTheme.danger : AppTheme.success),
+            ])),
+            if (_selectedCustomer != null) ...[
+              const SizedBox(width: 12),
+              OutlinedButton.icon(icon: const Icon(Icons.calendar_today_outlined, size: 14),
+                label: Text(_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'From', style: const TextStyle(fontSize: 12)),
+                onPressed: () async {
+                  final d = await showDatePicker(context: context, initialDate: _dateFrom ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now().add(const Duration(days: 365)));
+                  if (d != null) setState(() => _dateFrom = d);
+                }, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(icon: const Icon(Icons.calendar_today_outlined, size: 14),
+                label: Text(_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'To', style: const TextStyle(fontSize: 12)),
+                onPressed: () async {
+                  final d = await showDatePicker(context: context, initialDate: _dateTo ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now().add(const Duration(days: 365)));
+                  if (d != null) setState(() => _dateTo = d);
+                }, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
+              if (_dateFrom != null || _dateTo != null) ...[
+                const SizedBox(width: 6),
+                TextButton(onPressed: () => setState(() { _dateFrom = null; _dateTo = null; }), child: const Text('Clear', style: TextStyle(fontSize: 12))),
               ],
-            ]),
-            if (_filteredCustomers.isNotEmpty && _searchCtrl.text.isNotEmpty && _selectedCustomer == null)
-              Container(
-                constraints: const BoxConstraints(maxHeight: 180),
-                width: 320,
-                decoration: BoxDecoration(
-                  color: Colors.white, borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.border),
-                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)],
-                ),
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: _filteredCustomers.take(6).length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final c = _filteredCustomers[i];
-                    return ListTile(
-                      dense: true,
-                      title: Text('${c['shop_name']} (${c['code']})', style: const TextStyle(fontSize: 13)),
-                      onTap: () {
-                        setState(() {
-                          _selectedCustomer = c;
-                          _entries = [];
-                          _searchCtrl.text = '${c['shop_name']} (${c['code']})';
-                        });
-                        _loadLedger(c['id'] as String);
-                      },
-                    );
-                  },
-                ),
-              ),
+            ],
           ]),
-        const SizedBox(height: 20),
-        if (_loading)
-          const Center(child: CircularProgressIndicator())
-        else if (_selectedCustomer == null)
-          const Center(child: Text('Search and select a customer to view ledger.', style: TextStyle(color: AppTheme.textSecondary)))
-        else
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
-              child: Column(children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-                  child: const Row(children: [
-                    Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 4, child: Text('Description', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Debit', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Credit', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Balance', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                  ]),
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: _entries.isEmpty
-                      ? const Center(child: Text('No transactions found.', style: TextStyle(color: AppTheme.textSecondary)))
-                      : ListView.separated(
-                          itemCount: _entries.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (_, i) {
-                            final e = _entries[i];
-                            final dateStr = e['date'] as String? ?? '';
-                            final date = dateStr.length >= 10
-                                ? DateFormat('d MMM yyyy').format(DateTime.parse(dateStr)) : '-';
-                            final debit = e['debit'] as double;
-                            final credit = e['credit'] as double;
-                            final bal = e['balance'] as double;
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                              child: Row(children: [
-                                Expanded(flex: 2, child: Text(date, style: const TextStyle(fontSize: 13))),
-                                Expanded(flex: 4, child: Text(e['description'] as String, style: const TextStyle(fontSize: 13))),
-                                Expanded(flex: 2, child: Text(debit > 0 ? debit.toStringAsFixed(2) : '-',
-                                    style: TextStyle(fontWeight: FontWeight.w600, color: debit > 0 ? AppTheme.primary : Colors.black54))),
-                                Expanded(flex: 2, child: Text(credit > 0 ? credit.toStringAsFixed(2) : '-',
-                                    style: TextStyle(fontWeight: FontWeight.w600, color: credit > 0 ? AppTheme.success : Colors.black54))),
-                                Expanded(flex: 2, child: Text(bal.toStringAsFixed(2),
-                                    style: TextStyle(fontWeight: FontWeight.w700, color: bal > 0 ? AppTheme.danger : AppTheme.success))),
-                              ]),
-                            );
-                          }),
-                ),
-              ]),
-            ),
-          ),
-      ]),
+          const SizedBox(height: 12),
+          if (_selectedCustomer != null && _entries.isNotEmpty) ...[
+            Row(children: [
+              _Stat(label: 'Total Debit', value: 'Rs. ${totalDebit.toStringAsFixed(2)}', color: AppTheme.primary),
+              const SizedBox(width: 10),
+              _Stat(label: 'Total Credit', value: 'Rs. ${totalCredit.toStringAsFixed(2)}', color: Colors.green.shade700),
+              const SizedBox(width: 10),
+              _Stat(label: 'Net Balance', value: 'Rs. ${netBal.toStringAsFixed(2)}', color: netBal > 0 ? AppTheme.danger : Colors.green.shade700),
+              const Spacer(),
+              SizedBox(width: 200, child: TextField(controller: _entrySearchCtrl, decoration: const InputDecoration(hintText: 'Search entries...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)))),
+              const SizedBox(width: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+                child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+                  value: _typeFilter, isDense: true,
+                  items: _types.map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(fontSize: 12)))).toList(),
+                  onChanged: (v) => setState(() => _typeFilter = v ?? 'All'),
+                )),
+              ),
+            ]),
+            const SizedBox(height: 12),
+          ],
+          if (_loading) const Expanded(child: Center(child: CircularProgressIndicator()))
+          else if (_selectedCustomer == null) Expanded(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.person_search_outlined, size: 52, color: AppTheme.textSecondary.withOpacity(0.3)),
+            const SizedBox(height: 12),
+            const Text('Search and select a customer to view their ledger', style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
+          ])))
+          else Expanded(child: Container(
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+            child: Column(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
+                child: const Row(children: [
+                  SizedBox(width: 90, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+                  SizedBox(width: 100, child: Text('Voucher', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+                  Expanded(child: Text('Description', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+                  SizedBox(width: 80, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+                  SizedBox(width: 110, child: Text('Debit', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+                  SizedBox(width: 110, child: Text('Credit', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+                  SizedBox(width: 110, child: Text('Balance', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+                ]),
+              ),
+              const Divider(height: 1),
+              Expanded(child: display.isEmpty
+                  ? const Center(child: Text('No transactions found.', style: TextStyle(color: AppTheme.textSecondary)))
+                  : ListView.separated(
+                      itemCount: display.length, separatorBuilder: (_, __) => const Divider(height: 1, color: AppTheme.border),
+                      itemBuilder: (_, i) {
+                        final e = display[i];
+                        final ds = e['date'] as String? ?? '';
+                        final date = ds.length >= 10 ? DateFormat('d MMM yy').format(DateTime.parse(ds)) : '-';
+                        final debit = e['debit'] as double; final credit = e['credit'] as double;
+                        final bal = e['display_balance'] as double; final type = e['type'] as String;
+                        return Container(
+                          color: i.isEven ? null : Colors.grey.shade50,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                          child: Row(children: [
+                            SizedBox(width: 90, child: Text(date, style: const TextStyle(fontSize: 12))),
+                            SizedBox(width: 100, child: Text(e['voucher'] as String? ?? '', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                            Expanded(child: Text(e['description'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+                            SizedBox(width: 80, child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(color: _typeColor(type).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                              child: Text(type, style: TextStyle(fontSize: 9, color: _typeColor(type), fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+                            )),
+                            SizedBox(width: 110, child: Text(debit > 0 ? 'Rs. ${debit.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: debit > 0 ? AppTheme.primary : Colors.black26))),
+                            SizedBox(width: 110, child: Text(credit > 0 ? 'Rs. ${credit.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: credit > 0 ? Colors.green.shade700 : Colors.black26))),
+                            SizedBox(width: 110, child: Text('Rs. ${bal.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: bal > 0 ? AppTheme.danger : Colors.green.shade700))),
+                          ]),
+                        );
+                      })),
+              if (display.isNotEmpty) Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)), border: const Border(top: BorderSide(color: AppTheme.border))),
+                child: Row(children: [
+                  const SizedBox(width: 90), const SizedBox(width: 100),
+                  Expanded(child: Text('${display.length} entries', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+                  const SizedBox(width: 80),
+                  SizedBox(width: 110, child: Text('Rs. ${totalDebit.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.primary))),
+                  SizedBox(width: 110, child: Text('Rs. ${totalCredit.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.green.shade700))),
+                  SizedBox(width: 110, child: Text('Rs. ${netBal.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: netBal > 0 ? AppTheme.danger : Colors.green.shade700))),
+                ]),
+              ),
+            ]),
+          )),
+        ]),
+      ),
     );
+  }
+
+  Color _typeColor(String type) {
+    switch (type) {
+      case 'Sales Order': return AppTheme.primary;
+      case 'POS Sale': return Colors.purple;
+      case 'Receipt (CRV)': return Colors.green;
+      default: return AppTheme.textSecondary;
+    }
   }
 }
 
-class _LedgerStat extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-  const _LedgerStat({required this.label, required this.value, required this.color});
+class _Stat extends StatelessWidget {
+  final String label, value; final Color color;
+  const _Stat({required this.label, required this.value, required this.color});
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-        Text(value, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: color)),
-      ]),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+      Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: color)),
+    ]),
+  );
 }
