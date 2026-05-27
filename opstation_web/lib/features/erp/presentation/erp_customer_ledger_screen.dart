@@ -32,7 +32,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   String _typeFilter = 'All';
   final _entrySearchCtrl = TextEditingController();
 
-  static const _types = ['All', 'Sales Order', 'Sales Invoice', 'POS Sale', 'Receipt (CRV)', 'Payment (CPV)'];
+  static const _types = ['All', 'Sales Invoice', 'POS Sale', 'Receipt (CRV)', 'Payment (CPV)'];
 
   @override
   void initState() {
@@ -84,38 +84,6 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     final client = Supabase.instance.client;
     final List<Map<String, dynamic>> entries = [];
     final List<String> errors = [];
-
-    // 1. Sales Orders -> Debit
-    try {
-      var soQ = client.from('sales_orders')
-          .select('id, updated_at, created_at, status')
-          .eq('org_id', orgId).eq('customer_id', customerId)
-          .inFilter('status', ['delivered', 'invoiced', 'completed']);
-      if (branchId != null) soQ = soQ.eq('branch_id', branchId);
-      final sos = await soQ;
-      for (final so in sos as List) {
-        final items = await client.from('sales_order_items')
-            .select('quantity, unit_price, discount, discount_type').eq('sales_order_id', so['id']);
-        double total = 0;
-        for (final it in items as List) {
-          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-          final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-          final disc = (it['discount'] as num?)?.toDouble() ?? 0;
-          final dt = it['discount_type'] as String? ?? 'fixed';
-          final da = dt == 'percent' ? qty * price * disc / 100 : disc;
-          total += qty * price - da;
-        }
-        if (total > 0) {
-          final soId = so['id'] as String;
-          final vno = soId.length >= 12 ? soId.substring(soId.length - 8) : soId;
-          entries.add({
-            'date': so['updated_at'] ?? so['created_at'] ?? '',
-            'description': 'Sales Order #$vno',
-            'voucher': vno, 'debit': total, 'credit': 0.0, 'type': 'Sales Order',
-          });
-        }
-      }
-    } catch (e) { errors.add('SO: $e'); }
 
     // 2. Sales Invoices -> Debit (using select(*) to be schema-agnostic)
     try {
@@ -437,7 +405,6 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
   Color _typeColor(String type) {
     switch (type) {
-      case 'Sales Order': return AppTheme.primary;
       case 'Sales Invoice': return Colors.indigo;
       case 'POS Sale': return Colors.purple;
       case 'Receipt (CRV)': return Colors.green;
