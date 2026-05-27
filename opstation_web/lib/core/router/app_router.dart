@@ -49,6 +49,7 @@ import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
 import '../../features/erp/presentation/erp_pos_catalog_screen.dart';
 import '../../features/erp/presentation/erp_pos_config_screen.dart';
 import '../../features/erp/presentation/erp_pos_customer_history_screen.dart';
+import '../../features/erp/presentation/erp_receipt_vouchers_screen.dart';
 import '../../features/erp/presentation/erp_pos_held_bills_screen.dart';
 import '../../features/erp/presentation/erp_pos_expense_management_screen.dart';
 import '../../features/erp/presentation/erp_customer_aging_screen.dart';

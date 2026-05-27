@@ -139,7 +139,7 @@ class _TopNav extends ConsumerWidget {
         _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
         _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location),
         _menuDivider(),
-        _menuItem(context, 'Receipts',              Icons.payments_outlined,          '/erp/receipt-vouchers',      location),
+        
       ],
     ];
 
@@ -157,6 +157,7 @@ class _TopNav extends ConsumerWidget {
     final financialItems = <Widget>[
       _menuItem(context, 'Chart of Accounts', Icons.account_tree_outlined, '/erp/chart-of-accounts', location),
       _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
+      _menuItem(context, 'Receipt Vouchers', Icons.payments_outlined,     '/erp/receipt-vouchers', location),
     ];
 
     final erpAdminItems = <Widget>[
@@ -184,7 +185,7 @@ class _TopNav extends ConsumerWidget {
       if (salesItems.isNotEmpty)
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/erp/sales', '/erp/delivery-orders', '/erp/sales-invoices',
-           '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/receipt-vouchers'],
+           '/erp/sales-returns', '/erp/sales-return-invoices'],
           salesItems),
       if (posItems.isNotEmpty)
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
@@ -196,7 +197,7 @@ class _TopNav extends ConsumerWidget {
           ledgerItems),
       if (financialItems.isNotEmpty)
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
-          ['/erp/chart-of-accounts', '/erp/payment-vouchers'],
+          ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers'],
           financialItems),
       if (erpAdminItems.isNotEmpty)
         _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
