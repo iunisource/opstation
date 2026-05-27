@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,7 +36,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   String _typeFilter = 'All';
   final _entrySearchCtrl = TextEditingController();
 
-  static const _types = ['All', 'Sales Invoice', 'POS Sale', 'Receipt (CRV)', 'Payment (CPV)'];
+  static const _types = ['All', 'Sales Invoice', 'POS Sale', 'Purchase Return', 'Receipt (CRV)', 'Payment (CPV)'];
 
   @override
   void initState() {
@@ -172,13 +173,16 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         final ttype = (t['transaction_type'] as String?) ?? 'sale';
         if (ttype == 'expense' || ttotal == 0) continue;
         final vno = ((t['transaction_number'] ?? '') as String);
+        final isReturn = ttype == 'return';
         entries.add({
           'date': ((t['transacted_at'] ?? t['created_at'] ?? '') as String),
           'voucher': vno,
-          'description': vno.isNotEmpty ? 'POS $vno' : 'POS Sale',
-          'debit': ttype == 'return' ? 0.0 : ttotal,
-          'credit': ttype == 'return' ? ttotal : 0.0,
-          'type': 'POS Sale',
+          'description': isReturn
+            ? (vno.isNotEmpty ? 'Purchase Return $vno' : 'Purchase Return')
+            : (vno.isNotEmpty ? 'POS $vno' : 'POS Sale'),
+          'debit': isReturn ? 0.0 : ttotal,
+          'credit': isReturn ? ttotal : 0.0,
+          'type': isReturn ? 'Purchase Return' : 'POS Sale',
         });
       }
     } catch (e) { errors.add('POS: $e'); }
@@ -230,6 +234,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     // Diagnostics
     final siCount = entries.where((e) => e['type'] == 'Sales Invoice').length;
     final posCount = entries.where((e) => e['type'] == 'POS Sale').length;
+    final prCount = entries.where((e) => e['type'] == 'Purchase Return').length;
     final crvCount = entries.where((e) => e['type'] == 'Receipt (CRV)').length;
     final cpvCount = entries.where((e) => e['type'] == 'Payment (CPV)').length;
     if (crvCount == 0) {
@@ -246,7 +251,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         }
       } catch (e) { errors.add('CRV diag: $e'); }
     }
-    errors.add('Found: SI=$siCount POS=$posCount CRV=$crvCount CPV=$cpvCount');
+    errors.add('Found: SI=$siCount POS=$posCount PR=$prCount CRV=$crvCount CPV=$cpvCount');
 
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
@@ -320,7 +325,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             child: Row(children: [
               Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 18),
               const SizedBox(width: 8),
-              Expanded(child: Text('Some sources failed: ${_errors.join(' | ')}', style: TextStyle(fontSize: 11, color: Colors.orange.shade900))),
+              Expanded(child: Text(_errors.join(' | '), style: TextStyle(fontSize: 11, color: Colors.orange.shade900))),
               IconButton(icon: Icon(Icons.close, size: 14, color: Colors.orange.shade700), onPressed: () => setState(() => _errors = []), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
             ]),
           ),
@@ -451,7 +456,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                       itemBuilder: (_, i) {
                         final e = display[i];
                         final ds = e['date'] as String? ?? '';
-                        final date = ds.length >= 10 ? DateFormat('d MMM yy').format(DateTime.parse(ds)) : '-';
+                        final dt = DateTime.tryParse(ds); final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
                         final debit = e['debit'] as double; final credit = e['credit'] as double;
                         final bal = e['display_balance'] as double; final type = e['type'] as String;
                         return Container(
@@ -495,6 +500,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     switch (type) {
       case 'Sales Invoice': return Colors.indigo;
       case 'POS Sale': return Colors.purple;
+      case 'Purchase Return': return Colors.deepOrange;
       case 'Receipt (CRV)': return Colors.green;
       case 'Payment (CPV)': return Colors.orange;
       default: return AppTheme.textSecondary;
@@ -520,18 +526,20 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     double td = 0, tc = 0;
     for (final e in display) {
       final ds = e['date'] as String? ?? '';
-      final date = ds.length >= 10 ? DateFormat('yyyy-MM-dd').format(DateTime.parse(ds)) : '';
+      final dt = DateTime.tryParse(ds); final date = dt != null ? DateFormat('yyyy-MM-dd').format(dt) : '';
       td += e['debit'] as double; tc += e['credit'] as double;
       buf.writeln([date, esc(e['voucher'] as String? ?? ''), esc(e['description'] as String), esc(e['type'] as String), (e['debit'] as double).toStringAsFixed(2), (e['credit'] as double).toStringAsFixed(2), (e['display_balance'] as double).toStringAsFixed(2)].join(','));
     }
     buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (td - tc).toStringAsFixed(2));
-    final bytes = <int>[0xEF, 0xBB, 0xBF, ...utf8.encode(buf.toString())];
-    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
+    final csvContent = String.fromCharCode(0xFEFF) + buf.toString();
+    final blob = html.Blob([csvContent], 'text/csv;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     final safeName = (cust['shop_name'] as String).replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
     final filename = 'ledger_' + safeName + '_' + DateFormat('yyyyMMdd').format(DateTime.now()) + '.csv';
-    html.AnchorElement(href: url)..download = filename..click();
-    html.Url.revokeObjectUrl(url);
+    final anchor = html.AnchorElement(href: url)..download = filename..style.display = 'none';
+    html.document.body!.append(anchor);
+    anchor.click();
+    Future.delayed(const Duration(seconds: 5), () { anchor.remove(); html.Url.revokeObjectUrl(url); });
   }
 
   void _printLedger() {
@@ -549,7 +557,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     final rowsBuf = StringBuffer();
     for (final e in display) {
       final ds = e['date'] as String? ?? '';
-      final date = ds.length >= 10 ? DateFormat('d MMM yy').format(DateTime.parse(ds)) : '-';
+      final dt = DateTime.tryParse(ds); final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
       final debit = e['debit'] as double;
       final credit = e['credit'] as double;
       final bal = e['display_balance'] as double;
@@ -600,15 +608,25 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="num credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="num bal-col">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
       '</table></body></html>';
 
-    final iframe = html.IFrameElement()
-      ..style.position = 'fixed' ..style.right = '0' ..style.bottom = '0'
-      ..style.width = '0' ..style.height = '0' ..style.border = '0'
-      ..srcdoc = htmlDoc;
-    html.document.body!.append(iframe);
-    iframe.onLoad.listen((_) {
-      (iframe.contentWindow as dynamic)?.print();
-      Future.delayed(const Duration(seconds: 60), () => iframe.remove());
+    final iframe = html.IFrameElement();
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.onLoad.first.then((_) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        try {
+          js_util.callMethod(iframe.contentWindow!, 'print', const []);
+        } catch (_) {
+          try { (iframe.contentWindow as dynamic)?.print(); } catch (_) {}
+        }
+        Future.delayed(const Duration(seconds: 60), () => iframe.remove());
+      });
     });
+    html.document.body!.append(iframe);
+    iframe.srcdoc = htmlDoc;
   }
 }
 
