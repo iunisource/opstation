@@ -168,19 +168,38 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         posTxns = await client.from('pos_transactions').select('*')
             .eq('org_id', orgId).eq('customer_id', customerId);
       }
+      final posMap = <String, Map<String, dynamic>>{};
       for (final t in posTxns as List) {
+        final tid = t['id'];
+        if (tid is String) posMap[tid] = Map<String, dynamic>.from(t as Map);
+      }
+      for (final t in posTxns) {
         final ttotalRaw = (t['total'] as num?)?.toDouble() ?? 0;
         final ttype = (t['transaction_type'] as String?) ?? 'sale';
         if (ttype == 'expense' || ttotalRaw == 0) continue;
-        final vno = ((t['transaction_number'] ?? '') as String);
+        final vnoRaw = ((t['transaction_number'] ?? '') as String);
+        final tid = (t['id'] as String? ?? '');
+        final shortTid = tid.length > 8 ? tid.substring(tid.length - 8) : tid;
+        final vno = vnoRaw.isNotEmpty ? vnoRaw : ('POS-' + shortTid);
         final isReturn = ttype == 'return' || ttotalRaw < 0;
         final amt = ttotalRaw.abs();
+        String refTrxNo = '';
+        if (isReturn) {
+          for (final f in const ['reference_transaction_id', 'original_transaction_id', 'parent_transaction_id', 'ref_transaction_id', 'reference_id']) {
+            final refId = t[f];
+            if (refId is String && refId.isNotEmpty) {
+              final orig = posMap[refId];
+              if (orig != null) refTrxNo = (orig['transaction_number'] as String?) ?? '';
+              break;
+            }
+          }
+        }
         entries.add({
           'date': ((t['transacted_at'] ?? t['created_at'] ?? '') as String),
           'voucher': vno,
           'description': isReturn
-            ? (vno.isNotEmpty ? 'POS Return $vno' : 'POS Return')
-            : (vno.isNotEmpty ? 'POS $vno' : 'POS Sale'),
+            ? (refTrxNo.isNotEmpty ? 'POS Return (ref ' + refTrxNo + ')' : 'POS Return ' + vno)
+            : 'POS Sale ' + vno,
           'debit': isReturn ? 0.0 : amt,
           'credit': isReturn ? amt : 0.0,
           'type': isReturn ? 'POS Return' : 'POS Sale',
@@ -188,10 +207,30 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       }
     } catch (e) { errors.add('POS: $e'); }
 
+      // 3b. Sales Returns (SRN) -> Credit
+      try {
+        var srnQ = client.from('sales_returns').select('*')
+            .eq('org_id', orgId).eq('customer_id', customerId);
+        if (branchId != null) srnQ = srnQ.eq('branch_id', branchId);
+        final srns = await srnQ;
+        for (final sr in srns as List) {
+          final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount']) as num?)?.toDouble() ?? 0;
+          final vno = ((sr['return_number'] ?? sr['srn_number'] ?? sr['voucher_number'] ?? '') as String);
+          final date = ((sr['return_date'] ?? sr['voucher_date'] ?? sr['srn_date'] ?? sr['created_at'] ?? '') as String);
+          if (total > 0) {
+            entries.add({
+              'date': date, 'voucher': vno,
+              'description': vno.isNotEmpty ? 'Sales Return ' + vno : 'Sales Return',
+              'debit': 0.0, 'credit': total, 'type': 'Sales Return',
+            });
+          }
+        }
+      } catch (e) { errors.add('SRN: ' + e.toString()); }
+
     // 4. CRV -> Credit (customer paid us)
     try {
       final crvVouchers = await client.from('crv_vouchers')
-          .select('id, voucher_number, voucher_date, created_at').eq('org_id', orgId).eq('status', 'posted');
+          .select('*').eq('org_id', orgId).eq('status', 'posted');
       final crvIds = (crvVouchers as List).map((v) => v['id'] as String).toList();
       if (crvIds.isNotEmpty) {
         final crvLines = await client.from('crv_voucher_lines')
@@ -201,7 +240,13 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         for (final line in crvLines as List) {
           final v = crvMap[line['voucher_id'] as String]; if (v == null) continue;
           entries.add({
-            'date': v['voucher_date'] ?? v['created_at'] ?? '', 'voucher': v['voucher_number'] ?? '',
+            'date': (() {
+              for (final f in const ['voucher_date', 'posted_at', 'created_at', 'updated_at']) {
+                final val = v[f];
+                if (val is String && val.isNotEmpty) return val;
+              }
+              return '';
+            })(), 'voucher': v['voucher_number'] ?? '',
             'description': 'Receipt — ${line['description'] ?? v['voucher_number']}',
             'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
             'type': 'Receipt (CRV)',
@@ -213,7 +258,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     // 5. CPV -> Debit (we paid customer)
     try {
       final cpvVouchers = await client.from('cpv_vouchers')
-          .select('id, voucher_number, voucher_date, created_at').eq('org_id', orgId).eq('status', 'posted');
+          .select('*').eq('org_id', orgId).eq('status', 'posted');
       final cpvIds = (cpvVouchers as List).map((v) => v['id'] as String).toList();
       if (cpvIds.isNotEmpty) {
         final cpvLines = await client.from('cpv_voucher_lines')
@@ -223,7 +268,13 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         for (final line in cpvLines as List) {
           final v = cpvMap[line['voucher_id'] as String]; if (v == null) continue;
           entries.add({
-            'date': v['voucher_date'] ?? v['created_at'] ?? '', 'voucher': v['voucher_number'] ?? '',
+            'date': (() {
+              for (final f in const ['voucher_date', 'posted_at', 'created_at', 'updated_at']) {
+                final val = v[f];
+                if (val is String && val.isNotEmpty) return val;
+              }
+              return '';
+            })(), 'voucher': v['voucher_number'] ?? '',
             'description': 'Payment — ${line['description'] ?? v['voucher_number']}',
             'debit': (line['amount'] as num?)?.toDouble() ?? 0,
             'credit': 0.0, 'type': 'Payment (CPV)',
@@ -556,57 +607,67 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         final bal = e['display_balance'] as double;
         final dStr = debit > 0 ? 'Rs. ' + debit.toStringAsFixed(2) : '-';
         final cStr = credit > 0 ? 'Rs. ' + credit.toStringAsFixed(2) : '-';
-        rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="lp-badge">' + (e['type'] as String) + '</span></td><td class="lp-num lp-debit">' + dStr + '</td><td class="lp-num lp-credit">' + cStr + '</td><td class="lp-num lp-bold">Rs. ' + bal.toStringAsFixed(2) + '</td></tr>');
+        rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num">' + dStr + '</td><td class="num">' + cStr + '</td><td class="num bold">Rs. ' + bal.toStringAsFixed(2) + '</td></tr>');
       }
 
-      final bodyHtml = '<div class="lp-header"><div><h1>Customer Ledger</h1>'
-        '<div class="lp-info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
-        '<div class="lp-info"><strong>Branch:</strong> ' + branchName + '</div>'
-        + (periodStr.isNotEmpty ? '<div class="lp-info"><strong>Period:</strong> ' + periodStr + '</div>' : '') +
-        '</div><div style="text-align: right;"><div class="lp-info">Generated: ' + genTime + '</div></div></div>'
-        '<div class="lp-stats">'
-        '<div class="lp-stat"><div class="lp-stat-label">Total Debit</div><div class="lp-stat-value lp-debit">Rs. ' + td.toStringAsFixed(2) + '</div></div>'
-        '<div class="lp-stat"><div class="lp-stat-label">Total Credit</div><div class="lp-stat-value lp-credit">Rs. ' + tc.toStringAsFixed(2) + '</div></div>'
-        '<div class="lp-stat"><div class="lp-stat-label">Net Balance</div><div class="lp-stat-value" style="color: ' + balColor + ';">Rs. ' + netBal.toStringAsFixed(2) + '</div></div>'
+      final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Customer Ledger - ' + customerName + '</title>'
+        '<style>'
+        '@page { margin: 0.5cm; } '
+        'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; margin: 0; } '
+        '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
+        'h1 { font-size: 18px; margin: 0 0 4px 0; } '
+        '.info { font-size: 10px; margin: 2px 0; } '
+        '.stats { display: flex; gap: 10px; margin: 8px 0 12px 0; } '
+        '.stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; } '
+        '.stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; } '
+        '.stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; } '
+        '.debit { color: #1976d2; } .credit { color: #2e7d32; } '
+        '.bal { color: ' + balColor + '; } '
+        'table { width: 100%; border-collapse: collapse; } '
+        'th, td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; } '
+        'th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; } '
+        '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; } '
+        '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; } '
+        'tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; } '
+        '@media print { .no-print { display: none !important; } }'
+        '</style></head><body>'
+        '<div class="no-print" style="text-align: right; padding-bottom: 8px; border-bottom: 1px solid #ddd; margin-bottom: 8px;">'
+        '<button onclick="window.print()" style="padding: 6px 14px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Print / Save PDF</button>'
+        '<button onclick="window.close()" style="margin-left: 8px; padding: 6px 14px; background: #888; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Close</button>'
         '</div>'
-        '<table class="lp-table"><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="lp-num">Debit</th><th class="lp-num">Credit</th><th class="lp-num">Balance</th></tr></thead>'
+        '<div class="header"><div><h1>Customer Ledger</h1>'
+        '<div class="info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
+        '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
+        + (periodStr.isNotEmpty ? '<div class="info"><strong>Period:</strong> ' + periodStr + '</div>' : '') +
+        '</div><div style="text-align: right;"><div class="info">Generated: ' + genTime + '</div></div></div>'
+        '<div class="stats">'
+        '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + td.toStringAsFixed(2) + '</div></div>'
+        '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + tc.toStringAsFixed(2) + '</div></div>'
+        '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal">Rs. ' + netBal.toStringAsFixed(2) + '</div></div>'
+        '</div><table>'
+        '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
         '<tbody>' + rowsBuf.toString() + '</tbody>'
-        '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="lp-num lp-debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="lp-num lp-credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="lp-num" style="color: ' + balColor + ';">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
-        '</table>';
+        '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="num credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="num bal">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
+        '</table>'
+        '<script>window.onload = function() { setTimeout(function() { window.focus(); window.print(); }, 350); };</script>'
+        '</body></html>';
 
-      final printCss = '@media screen { #ledger-print-area { display: none !important; } } '
-        '@media print { '
-        '  @page { margin: 0.5cm; } '
-        '  body > *:not(#ledger-print-area) { display: none !important; } '
-        '  #ledger-print-area { display: block !important; position: absolute; left: 0; top: 0; width: 100%; font-family: Arial, sans-serif; font-size: 10px; color: #000; padding: 16px; background: #fff; } '
-        '  #ledger-print-area .lp-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
-        '  #ledger-print-area h1 { font-size: 18px; margin: 0 0 4px 0; } '
-        '  #ledger-print-area .lp-info { font-size: 10px; margin: 2px 0; } '
-        '  #ledger-print-area .lp-stats { display: flex; gap: 10px; margin: 8px 0 12px 0; } '
-        '  #ledger-print-area .lp-stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; } '
-        '  #ledger-print-area .lp-stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; } '
-        '  #ledger-print-area .lp-stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; } '
-        '  #ledger-print-area .lp-debit { color: #1976d2; } '
-        '  #ledger-print-area .lp-credit { color: #2e7d32; } '
-        '  #ledger-print-area .lp-table { width: 100%; border-collapse: collapse; } '
-        '  #ledger-print-area .lp-table th, #ledger-print-area .lp-table td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; } '
-        '  #ledger-print-area .lp-table th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; } '
-        '  #ledger-print-area .lp-num { text-align: right; white-space: nowrap; } '
-        '  #ledger-print-area .lp-bold { font-weight: 800; } '
-        '  #ledger-print-area .lp-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; } '
-        '  #ledger-print-area tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; } '
-        '}';
-
-      final div = html.DivElement()..id = 'ledger-print-area';
-      div.setInnerHtml(bodyHtml, treeSanitizer: html.NodeTreeSanitizer.trusted);
-      final styleEl = html.StyleElement()..text = printCss;
-      html.document.head!.append(styleEl);
-      html.document.body!.append(div);
-
-      Future.delayed(const Duration(milliseconds: 100), () {
-        html.window.print();
-        Future.delayed(const Duration(seconds: 3), () { div.remove(); styleEl.remove(); });
-      });
+      final win = html.window.open('', 'PrintLedger', 'width=900,height=700,scrollbars=1,toolbar=0,menubar=0,location=0');
+      if (win == null) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Pop-up blocked. Allow pop-ups for this site to print.'),
+          duration: Duration(seconds: 6),
+        ));
+        return;
+      }
+      try {
+        final doc = js_util.getProperty(win, 'document');
+        js_util.callMethod(doc, 'open', const []);
+        js_util.callMethod(doc, 'write', [htmlDoc]);
+        js_util.callMethod(doc, 'close', const []);
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print write failed: $e')));
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: $e')));
     }
