@@ -138,10 +138,11 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       for (final f in fields) {
         final val = v[f];
         if (val == null) continue;
-        if (val is String && val.isNotEmpty) return val;
-        if (val is DateTime) return val.toIso8601String();
-        final s = val.toString();
-        if (s.isNotEmpty && s != 'null') return s;
+        String? s;
+        if (val is String && val.isNotEmpty) s = val;
+        else if (val is DateTime) s = val.toIso8601String();
+        else { final t = val.toString(); if (t.isNotEmpty && t != 'null') s = t; }
+        if (s != null && DateTime.tryParse(s) != null) return s;
       }
       return '';
     }
@@ -221,6 +222,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
     // 3. Sale Return Invoices (SRI) -> Credit
     String? sriTable;
+    int sriRows = 0;
+    int sriAdded = 0;
     for (final tbl in const ['sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
         var q = client.from(tbl).select('*')
@@ -228,7 +231,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         if (branchId != null) q = q.eq('branch_id', branchId);
         final rows = await q;
         sriTable = tbl;
-        for (final sr in rows as List) {
+        sriRows = (rows as List).length;
+        for (final sr in rows) {
           final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount'] ?? sr['net_amount']) as num?)?.toDouble() ?? 0;
           final vno = ((sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? '') as String);
           final date = extractDate(sr as Map, const ['return_date', 'invoice_date', 'voucher_date', 'sri_date', 'srn_date', 'date', 'posted_at', 'created_at']);
@@ -238,6 +242,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
               'description': vno.isNotEmpty ? 'Sale Return ' + vno : 'Sale Return',
               'debit': 0.0, 'credit': total, 'type': 'Sale Return',
             });
+            sriAdded++;
           }
         }
         break;
@@ -245,6 +250,18 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     }
     if (sriTable == null) {
       errors.add('SRI: no matching table. Tried: sale_return_invoices, sales_returns, sale_returns, sri_vouchers, srn_vouchers, sri');
+    } else if (sriRows == 0) {
+      try {
+        final any = await client.from(sriTable).select('*').limit(1);
+        if ((any as List).isNotEmpty) {
+          final keys = (any.first as Map).keys.toList();
+          errors.add('SRI: "' + sriTable + '" has rows but 0 match org/customer/branch. Cols: ' + keys.join(', '));
+        } else {
+          errors.add('SRI: "' + sriTable + '" is empty');
+        }
+      } catch (e) { errors.add('SRI probe: ' + e.toString()); }
+    } else {
+      errors.add('SRI: "' + sriTable + '" returned ' + sriRows.toString() + ' rows, added ' + sriAdded.toString() + ' entries');
     }
 
     // 4. CRV -> Credit (customer paid us)
