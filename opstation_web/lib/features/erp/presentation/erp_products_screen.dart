@@ -1,3 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -18,6 +21,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   bool _loading = true;
   List<Map<String, dynamic>> _branches = [];
   final _searchCtrl = TextEditingController();
+  final Set<String> _selected = {};
 
   @override
   void initState() {
@@ -123,6 +127,69 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }, onConflict: 'org_id,branch_id,product_id');
       _showSnack('"${product['name']}" pushed to POS catalog for ${picked['name']}');
     } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _bulkPushToPOS(BuildContext context) async {
+    if (_branches.isEmpty) { _showSnack('No branches found'); return; }
+    final picked = await showDialog<Map<String, dynamic>?>(
+      context: context,
+      builder: (_) => _BranchPickerDialog(branches: _branches, productName: '${_selected.length} products'),
+    );
+    if (picked == null) return;
+    final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
+    final selected = _filtered.where((p) => _selected.contains(p['id'])).toList();
+    int success = 0; int failed = 0;
+    for (var i = 0; i < selected.length; i++) {
+      final product = selected[i];
+      try {
+        await Supabase.instance.client.from('pos_catalog').upsert({
+          'id': 'posc_${DateTime.now().millisecondsSinceEpoch}_$i',
+          'org_id': orgId,
+          'branch_id': picked['id'],
+          'product_id': product['id'],
+          'name': product['name'],
+          'sku': product['sku'],
+          'price': (product['selling_price'] as num?)?.toDouble() ?? 0,
+          'uom_id': product['base_uom_id'],
+          'is_active': true,
+        }, onConflict: 'org_id,branch_id,product_id');
+        success++;
+      } catch (_) { failed++; }
+    }
+    if (mounted) setState(() => _selected.clear());
+    _showSnack('Pushed $success product${success == 1 ? "" : "s"} to ${picked['name']} POS${failed > 0 ? " — $failed failed" : ""}');
+  }
+
+  void _showCsvImport(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => _CsvImportDialog(
+        uoms: _uoms,
+        existingSkus: _products.map((p) => (p['sku'] as String?) ?? '').where((s) => s.isNotEmpty).toSet(),
+        onImport: _doCsvImport,
+      ),
+    );
+  }
+
+  Future<void> _doCsvImport(List<Map<String, dynamic>> rows) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    int success = 0; int failed = 0;
+    for (var i = 0; i < rows.length; i++) {
+      try {
+        final id = 'prod_${DateTime.now().millisecondsSinceEpoch}_$i';
+        await Supabase.instance.client.from('products').insert({
+          ...rows[i],
+          'id': id,
+          'org_id': orgId,
+          'is_active': true,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+        success++;
+      } catch (_) { failed++; }
+    }
+    _showSnack('Imported $success product${success == 1 ? "" : "s"}${failed > 0 ? " — $failed failed" : ""}');
+    _load();
   }
 
   void _showDialog(BuildContext context, Map<String, dynamic>? product) {
@@ -330,6 +397,12 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             const Text('Products',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const Spacer(),
+            OutlinedButton.icon(
+              onPressed: () => _showCsvImport(context),
+              icon: const Icon(Icons.upload_file, size: 18),
+              label: const Text('Import CSV'),
+            ),
+            const SizedBox(width: 8),
             ElevatedButton.icon(
               onPressed: () => _showDialog(context, null),
               icon: const Icon(Icons.add, size: 18),
@@ -347,6 +420,35 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
               prefixIcon: Icon(Icons.search),
             ),
           ),
+          if (_selected.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+              ),
+              child: Row(children: [
+                Icon(Icons.check_circle, size: 16, color: AppTheme.primary),
+                const SizedBox(width: 8),
+                Text('${_selected.length} selected', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: () => setState(() => _selected.clear()),
+                  icon: const Icon(Icons.close, size: 14),
+                  label: const Text('Clear'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () => _bulkPushToPOS(context),
+                  icon: const Icon(Icons.point_of_sale, size: 16),
+                  label: const Text('Push selected to POS'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white),
+                ),
+              ]),
+            ),
+          ],
           const SizedBox(height: 16),
           if (_loading)
             const Center(child: CircularProgressIndicator())
@@ -368,14 +470,27 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                         borderRadius:
                             BorderRadius.vertical(top: Radius.circular(12)),
                       ),
-                      child: const Row(children: [
-                        Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      child: Row(children: [
+                        SizedBox(width: 40, child: Checkbox(
+                          tristate: true,
+                          value: _selected.isEmpty ? false : (_selected.length == _filtered.length ? true : null),
+                          onChanged: (v) {
+                            setState(() {
+                              if (v == true) {
+                                _selected.addAll(_filtered.map((p) => p['id'] as String));
+                              } else {
+                                _selected.clear();
+                              }
+                            });
+                          },
+                        )),
+                        const Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Sell Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        SizedBox(width: 80),
+                        SizedBox(width: 120),
                       ]),
                     ),
                     const Divider(height: 1),
@@ -398,6 +513,18 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 20, vertical: 12),
                               child: Row(children: [
+                                SizedBox(width: 40, child: Checkbox(
+                                  value: _selected.contains(p['id']),
+                                  onChanged: (v) {
+                                    setState(() {
+                                      if (v == true) {
+                                        _selected.add(p['id'] as String);
+                                      } else {
+                                        _selected.remove(p['id']);
+                                      }
+                                    });
+                                  },
+                                )),
                                 Expanded(
                                     flex: 3,
                                     child: Text(p['name'] as String? ?? '',
@@ -490,5 +617,209 @@ class _BranchPickerDialog extends StatelessWidget {
       ...branches.map((b) => ListTile(dense: true, leading: const Icon(Icons.storefront_outlined, size: 18, color: Colors.purple), title: Text(b['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600)), onTap: () => Navigator.pop(context, b))),
     ])),
     actions: [TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel'))],
+  );
+}
+
+
+class _CsvImportDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> uoms;
+  final Set<String> existingSkus;
+  final Future<void> Function(List<Map<String, dynamic>>) onImport;
+  const _CsvImportDialog({required this.uoms, required this.existingSkus, required this.onImport});
+  @override
+  State<_CsvImportDialog> createState() => _CsvImportDialogState();
+}
+
+class _CsvImportDialogState extends State<_CsvImportDialog> {
+  List<Map<String, dynamic>> _validRows = [];
+  List<String> _rowErrors = [];
+  int _totalParsed = 0;
+  bool _importing = false;
+  String? _fileName;
+  String? _fatalError;
+
+  void _downloadTemplate() {
+    const csv = 'name,sku,barcode,uom,product_type,main_group,group,sub_group,class,movement_category,selling_price,cost_price\n'
+        'Example Product A,SKU001,8901234567890,pcs,Stock Item,Lighting,Downlights,LED,A,Fast,210,150\n'
+        'Example Product B,SKU002,,box,Stock Item,Electricals,,,,Slow,1000,800\n';
+    final blob = html.Blob([csv], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)..setAttribute('download', 'products_template.csv')..click();
+    Future.delayed(const Duration(seconds: 2), () => html.Url.revokeObjectUrl(url));
+  }
+
+  Future<void> _pickFile() async {
+    final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
+    input.click();
+    await input.onChange.first;
+    if (input.files == null || input.files!.isEmpty) return;
+    final file = input.files!.first;
+    final reader = html.FileReader();
+    reader.readAsText(file);
+    await reader.onLoad.first;
+    final text = reader.result as String;
+    setState(() {
+      _fileName = file.name; _fatalError = null; _validRows = []; _rowErrors = [];
+    });
+    _parseAndValidate(text);
+  }
+
+  List<List<String>> _parseCsv(String text) {
+    final lines = <List<String>>[];
+    final fields = <String>[];
+    final current = StringBuffer();
+    bool inQuotes = false;
+    int i = 0;
+    while (i < text.length) {
+      final ch = text[i];
+      if (inQuotes) {
+        if (ch == '"') {
+          if (i + 1 < text.length && text[i + 1] == '"') { current.write('"'); i += 2; continue; }
+          inQuotes = false; i++; continue;
+        }
+        current.write(ch); i++;
+      } else {
+        if (ch == '"') { inQuotes = true; i++; continue; }
+        if (ch == ',') { fields.add(current.toString()); current.clear(); i++; continue; }
+        if (ch == '\n' || ch == '\r') {
+          fields.add(current.toString()); current.clear();
+          if (fields.any((f) => f.isNotEmpty)) lines.add(List.from(fields));
+          fields.clear();
+          if (ch == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
+          i++; continue;
+        }
+        current.write(ch); i++;
+      }
+    }
+    if (current.isNotEmpty || fields.isNotEmpty) {
+      fields.add(current.toString());
+      if (fields.any((f) => f.isNotEmpty)) lines.add(List.from(fields));
+    }
+    return lines;
+  }
+
+  void _parseAndValidate(String text) {
+    final rows = _parseCsv(text);
+    if (rows.isEmpty) { setState(() => _fatalError = 'CSV is empty'); return; }
+    final header = rows.first.map((s) => s.trim().toLowerCase()).toList();
+    if (!header.contains('name')) { setState(() => _fatalError = 'Required column "name" missing'); return; }
+    if (!header.contains('uom')) { setState(() => _fatalError = 'Required column "uom" missing'); return; }
+    int idx(String col) => header.indexOf(col);
+    final iName = idx('name'); final iSku = idx('sku'); final iBarcode = idx('barcode');
+    final iUom = idx('uom'); final iType = idx('product_type'); final iMain = idx('main_group');
+    final iGroup = idx('group'); final iSub = idx('sub_group'); final iClass = idx('class');
+    final iMov = idx('movement_category'); final iSell = idx('selling_price'); final iCost = idx('cost_price');
+
+    final uomByAbbr = {for (final u in widget.uoms) (u['abbreviation'] as String? ?? '').toLowerCase(): u['id'] as String};
+    final uomByName = {for (final u in widget.uoms) (u['name'] as String? ?? '').toLowerCase(): u['id'] as String};
+    final seenSkus = <String>{};
+    final valid = <Map<String, dynamic>>[];
+    final errors = <String>[];
+
+    for (var r = 1; r < rows.length; r++) {
+      final row = rows[r];
+      String get(int i) => (i >= 0 && i < row.length) ? row[i].trim() : '';
+      final name = get(iName);
+      if (name.isEmpty) { errors.add('Row ${r + 1}: name is required'); continue; }
+      final uomRaw = get(iUom).toLowerCase();
+      if (uomRaw.isEmpty) { errors.add('Row ${r + 1}: uom is required'); continue; }
+      final uomId = uomByAbbr[uomRaw] ?? uomByName[uomRaw];
+      if (uomId == null) { errors.add('Row ${r + 1}: unknown uom "$uomRaw"'); continue; }
+      final sku = iSku >= 0 ? get(iSku) : '';
+      if (sku.isNotEmpty && widget.existingSkus.contains(sku)) { errors.add('Row ${r + 1}: SKU "$sku" already exists, skipped'); continue; }
+      if (sku.isNotEmpty && seenSkus.contains(sku)) { errors.add('Row ${r + 1}: duplicate SKU "$sku" within file'); continue; }
+      if (sku.isNotEmpty) seenSkus.add(sku);
+      final sell = iSell >= 0 ? double.tryParse(get(iSell)) ?? 0 : 0;
+      final cost = iCost >= 0 ? double.tryParse(get(iCost)) ?? 0 : 0;
+      valid.add({
+        'name': name,
+        'sku': sku.isEmpty ? null : sku,
+        'barcode': iBarcode >= 0 && get(iBarcode).isNotEmpty ? get(iBarcode) : null,
+        'base_uom_id': uomId,
+        'product_type': iType >= 0 && get(iType).isNotEmpty ? get(iType) : null,
+        'product_main_group': iMain >= 0 && get(iMain).isNotEmpty ? get(iMain) : null,
+        'product_group': iGroup >= 0 && get(iGroup).isNotEmpty ? get(iGroup) : null,
+        'product_sub_group': iSub >= 0 && get(iSub).isNotEmpty ? get(iSub) : null,
+        'product_class': iClass >= 0 && get(iClass).isNotEmpty ? get(iClass) : null,
+        'product_movement_category': iMov >= 0 && get(iMov).isNotEmpty ? get(iMov) : null,
+        'selling_price': sell,
+        'cost_price': cost,
+      });
+    }
+    setState(() { _totalParsed = rows.length - 1; _validRows = valid; _rowErrors = errors; });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Import Products from CSV'),
+      content: SizedBox(
+        width: 640,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (_fileName == null) ...[
+            const Text('Upload a CSV with your products. The "name" and "uom" columns are required; everything else is optional.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            const SizedBox(height: 16),
+            Row(children: [
+              OutlinedButton.icon(onPressed: _downloadTemplate, icon: const Icon(Icons.download, size: 16), label: const Text('Download Template')),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(onPressed: _pickFile, icon: const Icon(Icons.attach_file, size: 16), label: const Text('Choose CSV File')),
+            ]),
+            const SizedBox(height: 14),
+            const Text('UOM matches by abbreviation (e.g. "pcs", "box") or full name.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            const Text('Duplicate SKUs (already in DB or repeated in file) are skipped.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ] else ...[
+            Row(children: [
+              const Icon(Icons.description_outlined, size: 16, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(child: Text(_fileName!, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+              TextButton(onPressed: _pickFile, child: const Text('Replace')),
+            ]),
+            const Divider(),
+            if (_fatalError != null)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.08), borderRadius: BorderRadius.circular(6)),
+                child: Text(_fatalError!, style: const TextStyle(color: AppTheme.danger, fontSize: 13, fontWeight: FontWeight.w600)),
+              )
+            else ...[
+              Row(children: [
+                _stat('Parsed', _totalParsed.toString(), AppTheme.textSecondary),
+                const SizedBox(width: 12),
+                _stat('Valid', _validRows.length.toString(), AppTheme.success),
+                const SizedBox(width: 12),
+                _stat('Skipped', _rowErrors.length.toString(), AppTheme.warning),
+              ]),
+              const SizedBox(height: 12),
+              if (_rowErrors.isNotEmpty) Container(
+                constraints: const BoxConstraints(maxHeight: 180),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: AppTheme.warning.withOpacity(0.06), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.warning.withOpacity(0.3))),
+                child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: _rowErrors.map((e) => Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Text(e, style: const TextStyle(fontSize: 11)))).toList())),
+              ),
+            ],
+          ],
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: _importing ? null : () => Navigator.pop(context), child: const Text('Cancel')),
+        if (_validRows.isNotEmpty) ElevatedButton(
+          onPressed: _importing ? null : () async {
+            setState(() => _importing = true);
+            await widget.onImport(_validRows);
+            if (mounted) Navigator.pop(context);
+          },
+          child: Text(_importing ? 'Importing...' : 'Import ${_validRows.length} rows'),
+        ),
+      ],
+    );
+  }
+
+  Widget _stat(String label, String val, Color color) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(6), border: Border.all(color: color.withOpacity(0.25))),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+      Text(val, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: color)),
+    ]),
   );
 }

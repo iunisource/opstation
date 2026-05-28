@@ -198,7 +198,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       } catch (_) { continue; }
     }
     if (priTable == null) {
-      errors.add('PRI: no matching table. Tried: purchase_return_invoices, purchase_returns, pri_vouchers, prn_vouchers, pri');
+      errors.add('PRI: no matching table. Tried: purchase_return_vouchers');
     } else if (priRows == 0) {
       try {
         final any = await client.from(priTable).select('*').limit(1);
