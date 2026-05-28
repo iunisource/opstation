@@ -161,7 +161,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           entries.add({
             'date': date, 'voucher': vno,
             'description': vno.isNotEmpty ? 'Sales Invoice ' + vno : 'Sales Invoice',
-            'debit': total, 'credit': 0.0, 'type': 'Sales Invoice',
+            'debit': total, 'credit': 0.0, 'id': si['id'] as String?, 'type': 'Sales Invoice',
           });
         }
       }
@@ -215,7 +215,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             : 'POS Sale ' + vno,
           'debit': isReturn ? 0.0 : amt,
           'credit': isReturn ? amt : 0.0,
-          'type': isReturn ? 'POS Return' : 'POS Sale',
+          'id': tid.isNotEmpty ? tid : null, 'type': isReturn ? 'POS Return' : 'POS Sale',
         });
       }
     } catch (e) { errors.add('POS: ' + e.toString()); }
@@ -242,7 +242,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             entries.add({
               'date': date, 'voucher': vno,
               'description': vno.isNotEmpty ? 'Sale Return ' + vno : 'Sale Return',
-              'debit': 0.0, 'credit': total, 'type': 'Sale Return',
+              'debit': 0.0, 'credit': total, 'id': sr['id'] as String?, 'type': 'Sale Return',
             });
             sriAdded++;
           }
@@ -273,9 +273,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         });
         if (numFields.isNotEmpty) errors.add('SRI numeric fields in row: ' + numFields.join(', '));
       }
-    } else {
-      errors.add('SRI: "' + sriTable + '" returned ' + sriRows.toString() + ' rows, added ' + sriAdded.toString() + ' entries');
-    }
+    }  // success — no banner needed
 
     // 4. CRV -> Credit (customer paid us)
     try {
@@ -297,7 +295,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             'voucher': (v['voucher_number'] as String?) ?? '',
             'description': 'Receipt — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
             'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
-            'type': 'Receipt (CRV)',
+            'id': v['id'] as String?, 'type': 'Receipt (CRV)',
           });
         }
         if (firstNoDate != null) {
@@ -328,7 +326,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             'voucher': (v['voucher_number'] as String?) ?? '',
             'description': 'Payment — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
             'debit': (line['amount'] as num?)?.toDouble() ?? 0,
-            'credit': 0.0, 'type': 'Payment (CPV)',
+            'credit': 0.0, 'id': v['id'] as String?, 'type': 'Payment (CPV)',
           });
         }
       }
@@ -545,7 +543,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
                           child: Row(children: [
                             SizedBox(width: 90, child: Text(date, style: const TextStyle(fontSize: 12))),
-                            SizedBox(width: 100, child: Text(e['voucher'] as String? ?? '', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                            SizedBox(width: 100, child: MouseRegion(cursor: SystemMouseCursors.click, child: GestureDetector(onTap: () => _openVoucher(e), child: Text(e['voucher'] as String? ?? '', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600, decoration: TextDecoration.underline), overflow: TextOverflow.ellipsis)))),
                             Expanded(child: Text(e['description'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
                             SizedBox(width: 80, child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
@@ -622,6 +620,169 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     html.document.body!.append(anchor);
     anchor.click();
     Future.delayed(const Duration(seconds: 5), () { anchor.remove(); html.Url.revokeObjectUrl(url); });
+  }
+
+  Future<void> _openVoucher(Map<String, dynamic> entry) async {
+    final id = entry['id'] as String?;
+    final type = entry['type'] as String;
+    if (id == null || id.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No voucher ID to open')));
+      return;
+    }
+    Map<String, dynamic>? voucher;
+    List<dynamic> lines = [];
+    String? err;
+    try {
+      final client = Supabase.instance.client;
+      switch (type) {
+        case 'Sales Invoice':
+          voucher = await client.from('sales_invoices').select('*, customers(shop_name, code)').eq('id', id).maybeSingle();
+          if (voucher != null) lines = await client.from('sales_invoice_items').select('*, products(name, sku)').eq('invoice_id', id);
+          break;
+        case 'Sale Return':
+          voucher = await client.from('sales_return_invoices').select('*, customers(shop_name, code)').eq('id', id).maybeSingle();
+          if (voucher != null) lines = await client.from('sales_return_invoice_items').select('*, products(name, sku)').eq('invoice_id', id);
+          break;
+        case 'POS Sale':
+        case 'POS Return':
+          voucher = await client.from('pos_transactions').select('*, customers(shop_name, code)').eq('id', id).maybeSingle();
+          if (voucher != null) lines = await client.from('pos_transaction_items').select('*, products(name, sku)').eq('transaction_id', id);
+          break;
+        case 'Receipt (CRV)':
+          voucher = await client.from('crv_vouchers').select('*').eq('id', id).maybeSingle();
+          if (voucher != null) lines = await client.from('crv_voucher_lines').select('*').eq('voucher_id', id);
+          break;
+        case 'Payment (CPV)':
+          voucher = await client.from('cpv_vouchers').select('*').eq('id', id).maybeSingle();
+          if (voucher != null) lines = await client.from('cpv_voucher_lines').select('*').eq('voucher_id', id);
+          break;
+      }
+    } catch (e) { err = e.toString(); }
+    if (!mounted) return;
+    final v = voucher;
+    if (v == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load: ' + (err ?? 'not found'))));
+      return;
+    }
+    await showDialog(context: context, builder: (ctx) => _buildVoucherDialog(ctx, type, v, lines));
+  }
+
+  Widget _buildVoucherDialog(BuildContext ctx, String type, Map<String, dynamic> v, List<dynamic> lines) {
+    final isPR = type == 'Receipt (CRV)' || type == 'Payment (CPV)';
+    final vNum = ((v['voucher_number'] ?? v['invoice_number'] ?? v['transaction_number'] ?? '') as String);
+    final dateStr = ((v['voucher_date'] ?? v['invoice_date'] ?? v['transacted_at'] ?? v['created_at'] ?? '') as String);
+    final dt = DateTime.tryParse(dateStr);
+    final dateFmt = dt != null ? DateFormat('d MMM yyyy').format(dt) : '-';
+    final cust = v['customers'];
+    final customerName = (cust is Map ? cust['shop_name'] as String? : null) ?? '';
+    final customerCode = (cust is Map ? cust['code'] as String? : null) ?? '';
+    double total = 0;
+    if (isPR) {
+      for (final ln in lines) { total += ((ln['amount']) as num?)?.toDouble() ?? 0; }
+    } else {
+      total = ((v['grand_total'] ?? v['total'] ?? v['total_amount'] ?? v['net_amount']) as num?)?.toDouble() ?? 0;
+    }
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 800, maxHeight: 700),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text(type, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(ctx, rootNavigator: true).pop()),
+              ]),
+              const SizedBox(height: 4),
+              Text(vNum, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 18, runSpacing: 6, children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.calendar_today, size: 13, color: AppTheme.textSecondary),
+                  const SizedBox(width: 5),
+                  Text(dateFmt, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+                if (customerName.isNotEmpty) Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.person, size: 13, color: AppTheme.textSecondary),
+                  const SizedBox(width: 5),
+                  Text(customerName + (customerCode.isNotEmpty ? ' (' + customerCode + ')' : ''), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+                if (v['status'] != null) Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFFE3F2FD), borderRadius: BorderRadius.circular(10)),
+                  child: Text((v['status'] as String).toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                ),
+              ]),
+              const SizedBox(height: 14),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+              Flexible(child: SingleChildScrollView(child: isPR ? _prLines(lines) : _prodLines(lines))),
+              const SizedBox(height: 8),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                const Text('Total: ', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                Text('Rs. ' + total.toStringAsFixed(2), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _prLines(List<dynamic> lines) {
+    if (lines.isEmpty) return const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No lines', style: TextStyle(color: AppTheme.textSecondary))));
+    return Column(children: [
+      Container(color: const Color(0xFFF5F5F5), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), child: Row(children: const [
+        Expanded(flex: 3, child: Text('Account / Party', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 3, child: Text('Description', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 2, child: Text('Amount', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+      ])),
+      ...lines.map((line) {
+        final amount = ((line['amount']) as num?)?.toDouble() ?? 0;
+        return Container(
+          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE)))),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(children: [
+            Expanded(flex: 3, child: Text((line['account_name'] as String?) ?? '', style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 3, child: Text((line['description'] as String?) ?? '', style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text('Rs. ' + amount.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+          ]),
+        );
+      }),
+    ]);
+  }
+
+  Widget _prodLines(List<dynamic> lines) {
+    if (lines.isEmpty) return const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No lines', style: TextStyle(color: AppTheme.textSecondary))));
+    return Column(children: [
+      Container(color: const Color(0xFFF5F5F5), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), child: Row(children: const [
+        Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 1, child: Text('Qty', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 2, child: Text('Price', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 2, child: Text('Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+      ])),
+      ...lines.map((line) {
+        final qty = ((line['quantity']) as num?)?.toDouble() ?? 0;
+        final price = ((line['unit_price'] ?? line['price']) as num?)?.toDouble() ?? 0;
+        final lineTotal = ((line['line_total'] ?? line['total'] ?? line['amount']) as num?)?.toDouble() ?? (qty * price);
+        final prod = line['products'];
+        final prodName = (prod is Map ? prod['name'] as String? : null) ?? (line['product_name'] as String?) ?? (line['description'] as String?) ?? '';
+        return Container(
+          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE)))),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(children: [
+            Expanded(flex: 4, child: Text(prodName, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 1, child: Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text('Rs. ' + price.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text('Rs. ' + lineTotal.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+          ]),
+        );
+      }),
+    ]);
   }
 
   void _printLedger() {
