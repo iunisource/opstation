@@ -1,3 +1,5 @@
+import 'dart:html' as html;
+// ignore_for_file: avoid_web_libraries_in_flutter
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -17,22 +19,37 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
   Map<String, dynamic>? _selectedProduct;
   List<Map<String, dynamic>> _movements = [];
   List<Map<String, dynamic>> _filteredMovements = [];
+  List<Map<String, dynamic>> _branches = [];
+  Set<String> _selectedBranchIds = {};
+  String _branchMode = 'current';
+
   bool _loading = false;
   bool _loadingProducts = true;
 
-  // Product picker filters
   String? _mainGroupFilter;
   String? _groupFilter;
   final _productSearchCtrl = TextEditingController();
-  // Movements search
+
   final _movementsSearchCtrl = TextEditingController();
+  String _typeFilter = 'All';
+  DateTime? _dateFrom;
+  DateTime? _dateTo;
+
+  Map<String, String> _voucherNumbers = {};
+  Map<String, String> _voucherSourceTables = {};
+
+  static const _availableTypes = [
+    'All', 'purchase', 'sale', 'pos', 'pos return', 'sale return',
+    'purchase return', 'transfer', 'adjustment',
+  ];
 
   @override
   void initState() {
     super.initState();
     _loadProducts();
+    _loadBranches();
     _productSearchCtrl.addListener(() => setState(() {}));
-    _movementsSearchCtrl.addListener(_filterMovements);
+    _movementsSearchCtrl.addListener(_applyFilters);
   }
 
   @override
@@ -43,9 +60,10 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
   }
 
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
   Future<void> _loadProducts() async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
+    final orgId = _orgId;
     if (orgId == null) { setState(() => _loadingProducts = false); return; }
     try {
       final products = await Supabase.instance.client
@@ -56,6 +74,40 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         _loadingProducts = false;
       });
     } catch (_) { setState(() => _loadingProducts = false); }
+  }
+
+  Future<void> _loadBranches() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final branches = await Supabase.instance.client
+          .from('branches').select('id, name').eq('org_id', orgId).order('name');
+      setState(() { _branches = List<Map<String, dynamic>>.from(branches); });
+    } catch (_) { }
+  }
+
+  List<String> _activeBranchIds() {
+    if (_branchMode == 'current') {
+      final bid = _branchId;
+      return bid != null ? [bid] : [];
+    } else if (_branchMode == 'all') {
+      return _branches.map((b) => b['id'] as String).toList();
+    } else {
+      return _selectedBranchIds.toList();
+    }
+  }
+
+  String _branchModeLabel() {
+    if (_branchMode == 'current') {
+      final b = ref.read(selectedBranchProvider);
+      return (b?['name'] as String?) ?? 'Current Branch';
+    } else if (_branchMode == 'all') {
+      return 'All Branches';
+    } else {
+      final names = _branches.where((b) => _selectedBranchIds.contains(b['id']))
+          .map((b) => b['name'] as String).toList();
+      return names.isEmpty ? 'Multi (none)' : names.join(', ');
+    }
   }
 
   List<Map<String, dynamic>> get _visibleProducts {
@@ -69,74 +121,104 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     }).toList();
   }
 
-  List<String> get _mainGroupOptions {
-    return _products
-        .map((p) => p['product_main_group'] as String? ?? '')
-        .where((s) => s.isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
-  }
+  List<String> get _mainGroupOptions => _products
+      .map((p) => p['product_main_group'] as String? ?? '')
+      .where((s) => s.isNotEmpty).toSet().toList()..sort();
 
-  List<String> get _groupOptions {
-    return _products
-        .where((p) => _mainGroupFilter == null || (p['product_main_group'] as String? ?? '') == _mainGroupFilter)
-        .map((p) => p['product_group'] as String? ?? '')
-        .where((s) => s.isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
-  }
+  List<String> get _groupOptions => _products
+      .where((p) => _mainGroupFilter == null || (p['product_main_group'] as String? ?? '') == _mainGroupFilter)
+      .map((p) => p['product_group'] as String? ?? '')
+      .where((s) => s.isNotEmpty).toSet().toList()..sort();
 
   Future<void> _loadMovements(String productId) async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
-    final branchId = _branchId;
+    final orgId = _orgId;
     if (orgId == null) return;
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true; _movements = []; _filteredMovements = [];
+      _voucherNumbers = {}; _voucherSourceTables = {};
+    });
+    final branchIds = _activeBranchIds();
     try {
-      final baseQuery = Supabase.instance.client
+      var query = Supabase.instance.client
           .from('inventory_movements')
           .select('*, uoms(abbreviation)')
           .eq('org_id', orgId)
           .eq('product_id', productId);
-      final movements = branchId != null
-          ? await baseQuery.eq('branch_id', branchId).order('moved_at')
-          : await baseQuery.order('moved_at');
+      if (branchIds.isNotEmpty) query = query.inFilter('branch_id', branchIds);
+      final movements = await query.order('moved_at', ascending: true);
 
       double runningQty = 0;
       final entries = (movements as List).map((m) {
         final qty = (m['quantity'] as num?)?.toDouble() ?? 0;
         runningQty += qty;
-        return {
-          ...Map<String, dynamic>.from(m),
-          'running_qty': runningQty,
-        };
+        return {...Map<String, dynamic>.from(m), 'running_qty': runningQty};
       }).toList();
 
-      setState(() {
-        _movements = entries;
-        _filteredMovements = entries;
-        _movementsSearchCtrl.clear();
-        _loading = false;
-      });
-    } catch (_) { setState(() => _loading = false); }
+      await _fetchVoucherNumbers(entries);
+      setState(() { _movements = entries; _loading = false; });
+      _applyFilters();
+    } catch (e) {
+      setState(() => _loading = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Load error: ' + e.toString())));
+    }
   }
 
-  void _filterMovements() {
-    final q = _movementsSearchCtrl.text.toLowerCase().trim();
-    setState(() {
-      if (q.isEmpty) {
-        _filteredMovements = _movements;
-      } else {
-        _filteredMovements = _movements.where((m) {
-          final type = (m['movement_type'] as String? ?? '').toLowerCase();
-          final notes = (m['notes'] as String? ?? m['reference_type'] as String? ?? '').toLowerCase();
-          final date = m['moved_at'] != null
-              ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()).toLowerCase() : '';
-          return type.contains(q) || notes.contains(q) || date.contains(q);
-        }).toList();
-      }
-    });
+  String _normalizeRefTable(String refType) {
+    final r = refType.toLowerCase();
+    if (r == 'pos_return' || r == 'pos_transaction' || r == 'pos_returns' || r == 'pos_transactions') return 'pos_transactions';
+    if (r == 'sales_invoice' || r == 'sales_invoices') return 'sales_invoices';
+    if (r == 'sales_return_invoice' || r == 'sales_return_invoices' || r == 'sale_return_invoice') return 'sales_return_invoices';
+    if (r == 'purchase_invoice' || r == 'purchase_invoices') return 'purchase_invoices';
+    if (r == 'purchase_return_invoice' || r == 'purchase_return_invoices') return 'purchase_return_invoices';
+    if (r == 'delivery_order' || r == 'delivery_orders') return 'delivery_orders';
+    if (r == 'grn' || r == 'goods_received_note' || r == 'goods_received_notes') return 'goods_received_notes';
+    if (r == 'stock_adjustment' || r == 'stock_adjustments') return 'stock_adjustments';
+    return refType;
+  }
+
+  Future<void> _fetchVoucherNumbers(List<Map<String, dynamic>> entries) async {
+    final client = Supabase.instance.client;
+    final byTable = <String, Set<String>>{};
+    final idToTable = <String, String>{};
+    for (final m in entries) {
+      final rt = m['reference_type'] as String?;
+      final id = m['reference_id'] as String?;
+      if (rt == null || id == null || id.isEmpty) continue;
+      final tbl = _normalizeRefTable(rt);
+      byTable.putIfAbsent(tbl, () => {}).add(id);
+      idToTable[id] = tbl;
+    }
+    final vMap = <String, String>{};
+    for (final entry in byTable.entries) {
+      final tbl = entry.key;
+      final ids = entry.value.toList();
+      try {
+        final rows = await client.from(tbl)
+            .select('id, voucher_number, invoice_number, transaction_number')
+            .inFilter('id', ids);
+        for (final r in rows as List) {
+          final id = r['id'] as String?;
+          if (id == null) continue;
+          final vno = (r['voucher_number'] ?? r['invoice_number'] ?? r['transaction_number'] ?? '') as String;
+          if (vno.isNotEmpty) vMap[id] = vno;
+        }
+      } catch (_) { }
+    }
+    setState(() { _voucherNumbers = vMap; _voucherSourceTables = idToTable; });
+  }
+
+  String _displayType(Map m) {
+    final type = ((m['movement_type'] as String?) ?? '').toLowerCase();
+    final ref = ((m['reference_type'] as String?) ?? '').toLowerCase();
+    final notes = ((m['notes'] as String?) ?? '').toLowerCase();
+    final combined = ref + ' ' + notes;
+    if (type == 'adjustment') {
+      if (combined.contains('sales_return') || combined.contains('sale_return')) return 'sale return';
+      if (combined.contains('pos_return')) return 'pos return';
+      if (combined.contains('purchase_return')) return 'purchase return';
+      return 'adjustment';
+    }
+    return type;
   }
 
   Color _typeColor(String type) {
@@ -144,42 +226,377 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       case 'purchase': return AppTheme.success;
       case 'sale': return AppTheme.danger;
       case 'pos': return Colors.orange;
+      case 'pos return': return Colors.deepOrange;
+      case 'sale return': return Colors.amber.shade800;
+      case 'purchase return': return Colors.teal;
       case 'transfer': return Colors.blue;
       case 'adjustment': return Colors.purple;
       default: return AppTheme.textSecondary;
     }
   }
 
+  void _applyFilters() {
+    final q = _movementsSearchCtrl.text.toLowerCase().trim();
+    setState(() {
+      _filteredMovements = _movements.where((m) {
+        if (_typeFilter != 'All' && _displayType(m) != _typeFilter) return false;
+        if (_dateFrom != null || _dateTo != null) {
+          final mAt = m['moved_at'] as String?;
+          if (mAt == null) return false;
+          final dt = DateTime.tryParse(mAt);
+          if (dt == null) return false;
+          if (_dateFrom != null && dt.isBefore(_dateFrom!)) return false;
+          if (_dateTo != null && dt.isAfter(_dateTo!.add(const Duration(days: 1)))) return false;
+        }
+        if (q.isNotEmpty) {
+          final type = _displayType(m).toLowerCase();
+          final notes = (m['notes'] as String? ?? '').toLowerCase();
+          final refType = (m['reference_type'] as String? ?? '').toLowerCase();
+          final refId = m['reference_id'] as String?;
+          final vno = refId != null ? (_voucherNumbers[refId] ?? '').toLowerCase() : '';
+          final dateStr = m['moved_at'] != null
+              ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()).toLowerCase() : '';
+          if (!(type.contains(q) || notes.contains(q) || refType.contains(q) || vno.contains(q) || dateStr.contains(q))) return false;
+        }
+        return true;
+      }).toList();
+    });
+  }
+
   void _clearSelection() {
     setState(() {
       _selectedProduct = null;
-      _movements = [];
-      _filteredMovements = [];
+      _movements = []; _filteredMovements = [];
       _movementsSearchCtrl.clear();
+      _typeFilter = 'All'; _dateFrom = null; _dateTo = null;
+      _voucherNumbers = {}; _voucherSourceTables = {};
     });
+  }
+
+  Future<void> _pickDateRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      initialDateRange: (_dateFrom != null && _dateTo != null)
+          ? DateTimeRange(start: _dateFrom!, end: _dateTo!) : null,
+    );
+    if (picked != null) {
+      setState(() { _dateFrom = picked.start; _dateTo = picked.end; });
+      _applyFilters();
+    }
+  }
+
+  void _clearDateRange() {
+    setState(() { _dateFrom = null; _dateTo = null; });
+    _applyFilters();
+  }
+
+  void _showBranchMultiSelect() {
+    if (_branches.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No branches loaded')));
+      return;
+    }
+    final tempSelected = Set<String>.from(_selectedBranchIds);
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
+        title: const Text('Select Branches'),
+        content: SizedBox(
+          width: 400,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: _branches.map((b) {
+              final id = b['id'] as String;
+              return CheckboxListTile(
+                dense: true,
+                title: Text(b['name'] as String? ?? ''),
+                value: tempSelected.contains(id),
+                onChanged: (v) => setLocal(() {
+                  if (v == true) { tempSelected.add(id); } else { tempSelected.remove(id); }
+                }),
+              );
+            }).toList()),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () {
+            setState(() {
+              _selectedBranchIds = tempSelected;
+              _branchMode = tempSelected.isEmpty ? 'current' : 'multi';
+            });
+            Navigator.of(ctx).pop();
+            if (_selectedProduct != null) _loadMovements(_selectedProduct!['id'] as String);
+          }, child: const Text('Apply')),
+        ],
+      )),
+    );
+  }
+
+  Future<void> _openVoucherFromMovement(Map<String, dynamic> m) async {
+    final refType = m['reference_type'] as String?;
+    final refId = m['reference_id'] as String?;
+    if (refType == null || refId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No reference to open')));
+      return;
+    }
+    final tbl = _normalizeRefTable(refType);
+    Map<String, dynamic>? voucher;
+    List<dynamic> lines = [];
+    String title = 'Voucher';
+    String? err;
+    try {
+      final client = Supabase.instance.client;
+      switch (tbl) {
+        case 'sales_invoices':
+          title = 'Sales Invoice';
+          voucher = await client.from('sales_invoices').select('*, customers(shop_name, code)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('sales_invoice_items').select('*, products(name, sku)').eq('invoice_id', refId);
+          break;
+        case 'sales_return_invoices':
+          title = 'Sales Return Invoice';
+          voucher = await client.from('sales_return_invoices').select('*, customers(shop_name, code)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('sales_return_invoice_items').select('*, products(name, sku)').eq('invoice_id', refId);
+          break;
+        case 'purchase_invoices':
+          title = 'Purchase Invoice';
+          voucher = await client.from('purchase_invoices').select('*, suppliers(name)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('purchase_invoice_items').select('*, products(name, sku)').eq('invoice_id', refId);
+          break;
+        case 'purchase_return_invoices':
+          title = 'Purchase Return Invoice';
+          voucher = await client.from('purchase_return_invoices').select('*, suppliers(name)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('purchase_return_invoice_items').select('*, products(name, sku)').eq('invoice_id', refId);
+          break;
+        case 'pos_transactions':
+          title = 'POS Transaction';
+          voucher = await client.from('pos_transactions').select('*, customers(shop_name, code)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('pos_transaction_items').select('*, products(name, sku)').eq('transaction_id', refId);
+          break;
+        case 'delivery_orders':
+          title = 'Delivery Order';
+          voucher = await client.from('delivery_orders').select('*, customers(shop_name, code)').eq('id', refId).maybeSingle();
+          if (voucher != null) {
+            for (final fk in const ['delivery_order_id', 'do_id', 'order_id']) {
+              try {
+                final l = await client.from('delivery_order_items').select('*, products(name, sku)').eq(fk, refId);
+                if ((l as List).isNotEmpty) { lines = l; break; }
+              } catch (_) { }
+            }
+          }
+          break;
+        case 'goods_received_notes':
+          title = 'Goods Received Note';
+          voucher = await client.from('goods_received_notes').select('*, suppliers(name)').eq('id', refId).maybeSingle();
+          if (voucher != null) {
+            for (final fk in const ['grn_id', 'gr_id', 'note_id']) {
+              try {
+                final l = await client.from('grn_items').select('*, products(name, sku)').eq(fk, refId);
+                if ((l as List).isNotEmpty) { lines = l; break; }
+              } catch (_) { }
+            }
+          }
+          break;
+        case 'stock_adjustments':
+          title = 'Stock Adjustment';
+          voucher = await client.from('stock_adjustments').select('*').eq('id', refId).maybeSingle();
+          if (voucher != null) {
+            try { lines = await client.from('stock_adjustment_items').select('*, products(name, sku)').eq('adjustment_id', refId); } catch (_) { }
+          }
+          break;
+        default:
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Unknown reference: ' + refType)));
+          return;
+      }
+    } catch (e) { err = e.toString(); }
+    if (!mounted) return;
+    final v = voucher;
+    if (v == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load: ' + (err ?? 'not found'))));
+      return;
+    }
+    await showDialog(context: context, builder: (ctx) => _buildVoucherDialog(ctx, title, v, lines));
+  }
+
+  Widget _buildVoucherDialog(BuildContext ctx, String title, Map<String, dynamic> v, List<dynamic> lines) {
+    final vNum = ((v['voucher_number'] ?? v['invoice_number'] ?? v['transaction_number'] ?? '') as String);
+    final dateStr = ((v['voucher_date'] ?? v['invoice_date'] ?? v['transacted_at'] ?? v['created_at'] ?? '') as String);
+    final dt = DateTime.tryParse(dateStr);
+    final dateFmt = dt != null ? DateFormat('d MMM yyyy').format(dt) : '-';
+    final cust = v['customers']; final supp = v['suppliers'];
+    final entityName = (cust is Map ? (cust['shop_name'] ?? cust['name']) as String? : null)
+                    ?? (supp is Map ? (supp['name'] ?? supp['shop_name']) as String? : null) ?? '';
+    final entityCode = (cust is Map ? cust['code'] as String? : null) ?? '';
+    final total = ((v['grand_total'] ?? v['total'] ?? v['total_amount'] ?? v['net_amount']) as num?)?.toDouble() ?? 0;
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 800, maxHeight: 700),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(ctx, rootNavigator: true).pop()),
+            ]),
+            const SizedBox(height: 4),
+            Text(vNum, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 18, runSpacing: 6, children: [
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.calendar_today, size: 13, color: AppTheme.textSecondary),
+                const SizedBox(width: 5),
+                Text(dateFmt, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ]),
+              if (entityName.isNotEmpty) Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.person, size: 13, color: AppTheme.textSecondary),
+                const SizedBox(width: 5),
+                Text(entityName + (entityCode.isNotEmpty ? ' (' + entityCode + ')' : ''), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ]),
+              if (v['status'] != null) Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(color: const Color(0xFFE3F2FD), borderRadius: BorderRadius.circular(10)),
+                child: Text((v['status'] as String).toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+              ),
+            ]),
+            const SizedBox(height: 14),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            Flexible(child: SingleChildScrollView(child: _voucherLines(lines))),
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            if (total > 0) Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              const Text('Total: ', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              Text('Rs. ' + total.toStringAsFixed(2), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _voucherLines(List<dynamic> lines) {
+    if (lines.isEmpty) return const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No lines', style: TextStyle(color: AppTheme.textSecondary))));
+    return Column(children: [
+      Container(color: const Color(0xFFF5F5F5), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), child: Row(children: const [
+        Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 1, child: Text('Qty', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 2, child: Text('Price', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 2, child: Text('Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+      ])),
+      ...lines.map((line) {
+        final qty = ((line['quantity']) as num?)?.toDouble() ?? 0;
+        final price = ((line['unit_price'] ?? line['price']) as num?)?.toDouble() ?? 0;
+        final lineTotal = ((line['line_total'] ?? line['total'] ?? line['amount']) as num?)?.toDouble() ?? (qty * price);
+        final prod = line['products'];
+        final prodName = (prod is Map ? prod['name'] as String? : null) ?? (line['product_name'] as String?) ?? '';
+        return Container(
+          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE)))),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(children: [
+            Expanded(flex: 4, child: Text(prodName, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 1, child: Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text(price > 0 ? 'Rs. ' + price.toStringAsFixed(2) : '-', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text(lineTotal > 0 ? 'Rs. ' + lineTotal.toStringAsFixed(2) : '-', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+          ]),
+        );
+      }),
+    ]);
+  }
+
+  void _printLedger() {
+    try {
+      if (_selectedProduct == null || _filteredMovements.isEmpty) return;
+      final p = _selectedProduct!;
+      final user = ref.read(currentUserProvider);
+      final branchName = _branchModeLabel();
+      final uomAbbr = p['uoms']?['abbreviation'] as String? ?? '';
+      final currentStock = _movements.isNotEmpty ? (_movements.last['running_qty'] as double) : 0.0;
+      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+      final genBy = user?.name ?? user?.email ?? 'Unknown';
+      final periodStr = (_dateFrom != null || _dateTo != null)
+          ? ((_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today'))
+          : '';
+      final rowsBuf = StringBuffer();
+      double totalIn = 0, totalOut = 0;
+      for (final m in _filteredMovements) {
+        final qty = (m['quantity'] as num?)?.toDouble() ?? 0;
+        if (qty > 0) totalIn += qty; else totalOut += -qty;
+        final runQty = m['running_qty'] as double;
+        final entryUom = m['uoms']?['abbreviation'] as String? ?? uomAbbr;
+        final date = m['moved_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
+        final type = _displayType(m);
+        final refId = m['reference_id'] as String?;
+        final vno = refId != null ? (_voucherNumbers[refId] ?? (m['reference_type'] as String? ?? '-')) : (m['notes'] as String? ?? '-');
+        final inStr = qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
+        final outStr = qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
+        final balStr = runQty.toStringAsFixed(runQty % 1 == 0 ? 0 : 2) + ' ' + entryUom;
+        rowsBuf.write('<tr><td>' + date + '</td><td><span class="badge">' + type + '</span></td><td>' + vno + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
+      }
+      final productName = (p['name'] as String?) ?? '';
+      final sku = (p['sku'] as String?) ?? '';
+      final mainGroup = (p['product_main_group'] as String?) ?? '';
+      final group = (p['product_group'] as String?) ?? '';
+      final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Inventory Ledger - ' + productName + '</title>'
+        '<style>'
+        '@page { margin: 0.5cm; } '
+        'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; margin: 0; } '
+        '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
+        'h1 { font-size: 18px; margin: 0 0 4px 0; } '
+        '.info { font-size: 10px; margin: 2px 0; } '
+        '.stats { display: flex; gap: 10px; margin: 8px 0 12px 0; } '
+        '.stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; } '
+        '.stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; } '
+        '.stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; } '
+        '.green { color: #2e7d32; } .red { color: #c62828; } '
+        'table { width: 100%; border-collapse: collapse; } '
+        'th, td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; } '
+        'th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; } '
+        '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; } '
+        '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; text-transform: lowercase; } '
+        '.footer { margin-top: 18px; padding-top: 6px; border-top: 1px solid #ddd; font-size: 8px; color: #888; text-align: right; } '
+        '</style></head><body>'
+        '<div class="header"><div><h1>Inventory Ledger</h1>'
+        '<div class="info"><strong>Product:</strong> ' + productName + (sku.isNotEmpty ? ' &middot; SKU: ' + sku : '') + '</div>'
+        + (mainGroup.isNotEmpty || group.isNotEmpty ? '<div class="info"><strong>Category:</strong> ' + mainGroup + (group.isNotEmpty ? ' &middot; ' + group : '') + '</div>' : '') +
+        '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
+        + (periodStr.isNotEmpty ? '<div class="info"><strong>Period:</strong> ' + periodStr + '</div>' : '') +
+        '</div></div>'
+        '<div class="stats">'
+        '<div class="stat"><div class="stat-label">Current Stock</div><div class="stat-value">' + (currentStock % 1 == 0 ? currentStock.toInt().toString() : currentStock.toString()) + ' ' + uomAbbr + '</div></div>'
+        '<div class="stat"><div class="stat-label">Total In</div><div class="stat-value green">+' + totalIn.toStringAsFixed(totalIn % 1 == 0 ? 0 : 2) + ' ' + uomAbbr + '</div></div>'
+        '<div class="stat"><div class="stat-label">Total Out</div><div class="stat-value red">-' + totalOut.toStringAsFixed(totalOut % 1 == 0 ? 0 : 2) + ' ' + uomAbbr + '</div></div>'
+        '<div class="stat"><div class="stat-label">Entries</div><div class="stat-value">' + _filteredMovements.length.toString() + '</div></div>'
+        '</div><table>'
+        '<thead><tr><th>Date</th><th>Type</th><th>Voucher / Notes</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th></tr></thead>'
+        '<tbody>' + rowsBuf.toString() + '</tbody>'
+        '</table>'
+        '<div class="footer">Generated by ' + genBy + ' &middot; ' + genTime + '</div>'
+        '</body></html>';
+      final blob = html.Blob([htmlDoc], 'text/html;charset=utf-8');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.window.open(url, '_blank');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: ' + e.toString())));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final branch = ref.watch(selectedBranchProvider);
-    final currentStock = _movements.isNotEmpty
-        ? (_movements.last['running_qty'] as double) : 0.0;
-
     return Container(
       color: AppTheme.background,
       padding: const EdgeInsets.all(32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Inventory Ledger', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
-        Text(branch == null ? 'Select a branch' : 'Branch: ${branch['name']}',
-            style: const TextStyle(color: AppTheme.textSecondary)),
+        Text('Branch: ' + _branchModeLabel(), style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 20),
         if (_loadingProducts)
           const Center(child: CircularProgressIndicator())
         else if (_selectedProduct == null)
           _buildPicker()
         else
-          _buildLedger(currentStock),
+          _buildLedger(),
       ]),
     );
   }
@@ -188,8 +605,29 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     final visible = _visibleProducts;
     return Expanded(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Filter row
-        Row(children: [
+        Wrap(spacing: 12, runSpacing: 8, children: [
+          SizedBox(
+            width: 220,
+            child: DropdownButtonFormField<String>(
+              value: _branchMode,
+              isDense: true,
+              decoration: const InputDecoration(labelText: 'Branch Scope', isDense: true),
+              items: const [
+                DropdownMenuItem(value: 'current', child: Text('Current Branch')),
+                DropdownMenuItem(value: 'all', child: Text('All Branches')),
+                DropdownMenuItem(value: 'multi', child: Text('Multi-select...')),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                if (v == 'multi') {
+                  _showBranchMultiSelect();
+                } else {
+                  setState(() { _branchMode = v; });
+                  if (_selectedProduct != null) _loadMovements(_selectedProduct!['id'] as String);
+                }
+              },
+            ),
+          ),
           SizedBox(
             width: 220,
             child: DropdownButtonFormField<String?>(
@@ -202,12 +640,10 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
               ],
               onChanged: (v) => setState(() {
                 _mainGroupFilter = v;
-                // Reset group if it's no longer valid
                 if (_groupFilter != null && !_groupOptions.contains(_groupFilter)) _groupFilter = null;
               }),
             ),
           ),
-          const SizedBox(width: 12),
           SizedBox(
             width: 220,
             child: DropdownButtonFormField<String?>(
@@ -221,7 +657,6 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
               onChanged: (v) => setState(() => _groupFilter = v),
             ),
           ),
-          const SizedBox(width: 12),
           SizedBox(
             width: 320,
             child: TextField(
@@ -235,17 +670,12 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           ),
         ]),
         const SizedBox(height: 12),
-        Text('${visible.length} of ${_products.length} products',
+        Text(visible.length.toString() + ' of ' + _products.length.toString() + ' products',
             style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         const SizedBox(height: 8),
-        // Always-visible product list (no need to type)
         Expanded(
           child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.border),
-            ),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
             child: visible.isEmpty
                 ? const Center(child: Text('No products match the filters.', style: TextStyle(color: AppTheme.textSecondary)))
                 : ListView.separated(
@@ -277,18 +707,14 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     );
   }
 
-  Widget _buildLedger(double currentStock) {
+  Widget _buildLedger() {
     final p = _selectedProduct!;
     final uomAbbr = p['uoms']?['abbreviation'] as String? ?? '';
+    final currentStock = _movements.isNotEmpty ? (_movements.last['running_qty'] as double) : 0.0;
     return Expanded(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Product header with back / clear
         Row(children: [
-          IconButton(
-            onPressed: _clearSelection,
-            icon: const Icon(Icons.arrow_back, size: 20),
-            tooltip: 'Back to products',
-          ),
+          IconButton(onPressed: _clearSelection, icon: const Icon(Icons.arrow_back, size: 20), tooltip: 'Back to products'),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(p['name'] as String? ?? '', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
@@ -301,16 +727,20 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             ]),
           ),
           if (_movements.isNotEmpty) ...[
+            OutlinedButton.icon(
+              onPressed: _printLedger,
+              icon: const Icon(Icons.print_outlined, size: 16),
+              label: const Text('Print / PDF'),
+              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary),
+            ),
+            const SizedBox(width: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Current Stock', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                Text(
-                  '${currentStock % 1 == 0 ? currentStock.toInt() : currentStock} $uomAbbr',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15,
-                      color: currentStock > 0 ? AppTheme.success : AppTheme.danger),
-                ),
+                Text((currentStock % 1 == 0 ? currentStock.toInt().toString() : currentStock.toString()) + ' ' + uomAbbr,
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: currentStock > 0 ? AppTheme.success : AppTheme.danger)),
               ]),
             ),
             const SizedBox(width: 12),
@@ -319,7 +749,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Total Movements', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                Text('${_movements.length}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                Text(_movements.length.toString(), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               ]),
             ),
           ],
@@ -330,24 +760,49 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         else if (_movements.isEmpty)
           const Expanded(child: Center(child: Text('No movements for this product.', style: TextStyle(color: AppTheme.textSecondary))))
         else ...[
-          // Movements search bar
-          SizedBox(
-            width: 420,
-            child: TextField(
-              controller: _movementsSearchCtrl,
-              decoration: InputDecoration(
-                labelText: 'Search entries (type, notes, date)',
-                prefixIcon: const Icon(Icons.search, size: 18),
-                isDense: true,
-                suffixIcon: _movementsSearchCtrl.text.isNotEmpty
-                    ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => _movementsSearchCtrl.clear())
-                    : null,
+          Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            SizedBox(
+              width: 320,
+              child: TextField(
+                controller: _movementsSearchCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Search entries',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  isDense: true,
+                  suffixIcon: _movementsSearchCtrl.text.isNotEmpty
+                      ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => _movementsSearchCtrl.clear())
+                      : null,
+                ),
               ),
             ),
-          ),
+            SizedBox(
+              width: 180,
+              child: DropdownButtonFormField<String>(
+                value: _typeFilter,
+                isDense: true,
+                decoration: const InputDecoration(labelText: 'Type', isDense: true),
+                items: _availableTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() { _typeFilter = v; });
+                  _applyFilters();
+                },
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: _pickDateRange,
+              icon: const Icon(Icons.calendar_today, size: 14),
+              label: Text((_dateFrom != null && _dateTo != null)
+                  ? DateFormat('d MMM yy').format(_dateFrom!) + ' - ' + DateFormat('d MMM yy').format(_dateTo!)
+                  : 'Date Range'),
+              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary),
+            ),
+            if (_dateFrom != null || _dateTo != null)
+              IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: _clearDateRange, tooltip: 'Clear date range'),
+          ]),
           const SizedBox(height: 6),
-          if (_movementsSearchCtrl.text.isNotEmpty)
-            Text('${_filteredMovements.length} of ${_movements.length} entries match',
+          if (_filteredMovements.length != _movements.length)
+            Text(_filteredMovements.length.toString() + ' of ' + _movements.length.toString() + ' entries match',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           const SizedBox(height: 8),
           Expanded(
@@ -360,7 +815,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                   child: const Row(children: [
                     Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 3, child: Text('Notes / Reference', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    Expanded(flex: 3, child: Text('Voucher / Notes', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('In', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Balance', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
@@ -380,8 +835,12 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                             final entryUom = m['uoms']?['abbreviation'] as String? ?? '';
                             final date = m['moved_at'] != null
                                 ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
-                            final type = m['movement_type'] as String? ?? '';
-                            final notes = m['notes'] as String? ?? m['reference_type'] as String? ?? '-';
+                            final type = _displayType(m);
+                            final refId = m['reference_id'] as String?;
+                            final refType = m['reference_type'] as String?;
+                            final vno = refId != null ? (_voucherNumbers[refId] ?? '') : '';
+                            final hasVoucher = vno.isNotEmpty && refType != null && refId != null;
+                            final displayRef = vno.isNotEmpty ? vno : ((m['notes'] as String? ?? '').isNotEmpty ? m['notes'] as String : (refType ?? '-'));
                             return Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                               child: Row(children: [
@@ -390,21 +849,25 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                                   alignment: Alignment.centerLeft,
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: _typeColor(type).withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
+                                    decoration: BoxDecoration(color: _typeColor(type).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
                                     child: Text(type, style: TextStyle(fontSize: 11, color: _typeColor(type), fontWeight: FontWeight.w600)),
                                   ),
                                 )),
-                                Expanded(flex: 3, child: Text(notes, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                                Expanded(flex: 2, child: Text(qty > 0 ? '+${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2)} $entryUom' : '-',
+                                Expanded(flex: 3, child: hasVoucher
+                                    ? MouseRegion(
+                                        cursor: SystemMouseCursors.click,
+                                        child: GestureDetector(
+                                          onTap: () => _openVoucherFromMovement(m),
+                                          child: Text(displayRef, style: const TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
+                                        ),
+                                      )
+                                    : Text(displayRef, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                                Expanded(flex: 2, child: Text(qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-',
                                     style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.success))),
-                                Expanded(flex: 2, child: Text(qty < 0 ? '${qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2)} $entryUom' : '-',
+                                Expanded(flex: 2, child: Text(qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-',
                                     style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.danger))),
-                                Expanded(flex: 2, child: Text('${runQty.toStringAsFixed(runQty % 1 == 0 ? 0 : 2)} $entryUom',
-                                    style: TextStyle(fontWeight: FontWeight.w700,
-                                        color: runQty > 0 ? AppTheme.success : AppTheme.danger))),
+                                Expanded(flex: 2, child: Text(runQty.toStringAsFixed(runQty % 1 == 0 ? 0 : 2) + ' ' + entryUom,
+                                    style: TextStyle(fontWeight: FontWeight.w700, color: runQty > 0 ? AppTheme.success : AppTheme.danger))),
                               ]),
                             );
                           }),
