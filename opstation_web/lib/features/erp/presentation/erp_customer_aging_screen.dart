@@ -100,7 +100,23 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       final list = List<Map<String, dynamic>>.from(invs)
         ..sort((a, b) => (a['voucher_date'] as String).compareTo(b['voucher_date'] as String));
 
+      // Seed rows with the full customer master list so zero-balance customers
+      // still appear (aging shows the entire roster, not just those with debt).
       final rows = <String, _AgingRow>{};
+      try {
+        final allCustomers = await client.from('customers')
+            .select('id, shop_name, code')
+            .eq('org_id', orgId)
+            .limit(20000);
+        for (final c in allCustomers as List) {
+          final m = c as Map;
+          final id = m['id'] as String;
+          rows[id] = _AgingRow(id, m['shop_name'] as String? ?? '(Unknown)', m['code'] as String?);
+        }
+      } catch (e) {
+        // ignore: avoid_print
+        print('[CustomerAging] customer master load: $e');
+      }
       for (final inv in list) {
         final cid = inv['customer_id'] as String?;
         if (cid == null) continue;
@@ -137,7 +153,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       }
 
       setState(() {
-        _rows = rows.values.where((r) => r.total > 0.005).toList();
+        _rows = rows.values.toList();
         _loading = false;
       });
     } catch (e) {
@@ -194,7 +210,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         detailRows.add([
           inv['voucher_number'] as String,
           DateFormat('d MMM yyyy').format(inv['voucher_date'] as DateTime),
-          '\$age',
+          age.toString(),
           bucket,
           fmt.format(inv['outstanding'] as double),
         ]);
@@ -338,7 +354,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : rows.isEmpty
-                    ? const Center(child: Text('No outstanding amounts.', style: TextStyle(color: AppTheme.textSecondary)))
+                    ? const Center(child: Text('No customers found.', style: TextStyle(color: AppTheme.textSecondary)))
                     : Column(children: [
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),

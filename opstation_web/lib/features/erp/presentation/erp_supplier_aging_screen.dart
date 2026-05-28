@@ -100,7 +100,23 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
       final list = List<Map<String, dynamic>>.from(invs)
         ..sort((a, b) => (a['voucher_date'] as String).compareTo(b['voucher_date'] as String));
 
+      // Seed rows with the full supplier master list so zero-balance suppliers
+      // still appear (aging shows the entire roster, not just those with debt).
       final rows = <String, _AgingRow>{};
+      try {
+        final allSuppliers = await client.from('suppliers')
+            .select('id, name')
+            .eq('org_id', orgId)
+            .limit(20000);
+        for (final s in allSuppliers as List) {
+          final m = s as Map;
+          final id = m['id'] as String;
+          rows[id] = _AgingRow(id, m['name'] as String? ?? '(Unknown)', null);
+        }
+      } catch (e) {
+        // ignore: avoid_print
+        print('[SupplierAging] supplier master load: $e');
+      }
       for (final inv in list) {
         final cid = inv['supplier_id'] as String?;
         if (cid == null) continue;
@@ -137,7 +153,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
       }
 
       setState(() {
-        _rows = rows.values.where((r) => r.total > 0.005).toList();
+        _rows = rows.values.toList();
         _loading = false;
       });
     } catch (e) {
@@ -194,7 +210,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
         detailRows.add([
           inv['voucher_number'] as String,
           DateFormat('d MMM yyyy').format(inv['voucher_date'] as DateTime),
-          '\$age',
+          age.toString(),
           bucket,
           fmt.format(inv['outstanding'] as double),
         ]);
@@ -338,7 +354,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : rows.isEmpty
-                    ? const Center(child: Text('No outstanding payables.', style: TextStyle(color: AppTheme.textSecondary)))
+                    ? const Center(child: Text('No suppliers found.', style: TextStyle(color: AppTheme.textSecondary)))
                     : Column(children: [
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),

@@ -198,7 +198,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       } catch (_) { continue; }
     }
     if (priTable == null) {
-      errors.add('PRI: no matching table. Tried: sale_return_invoices, sales_returns, sale_returns, sri_vouchers, srn_vouchers, sri');
+      errors.add('PRI: no matching table. Tried: purchase_return_invoices, purchase_returns, pri_vouchers, prn_vouchers, pri');
     } else if (priRows == 0) {
       try {
         final any = await client.from(priTable).select('*').limit(1);
@@ -241,7 +241,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             'date': date,
             'voucher': (v['voucher_number'] as String?) ?? '',
             'description': 'Receipt — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
-            'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
+            'debit': (line['amount'] as num?)?.toDouble() ?? 0, 'credit': 0.0,
             'id': v['id'] as String?, 'type': 'Receipt (CRV)',
           });
         }
