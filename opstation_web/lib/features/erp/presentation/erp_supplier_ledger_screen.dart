@@ -80,7 +80,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       int from = 0; const pageSize = 1000;
       while (true) {
         final page = await Supabase.instance.client.from('suppliers')
-            .select('id, name, code').eq('org_id', orgId)
+            .select('id, name').eq('org_id', orgId)
             .order('name').range(from, from + pageSize - 1);
         final list = List<Map<String, dynamic>>.from(page);
         all.addAll(list);
@@ -581,11 +581,11 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       final client = Supabase.instance.client;
       switch (type) {
         case 'Purchase Invoice':
-          voucher = await client.from('purchase_invoices').select('*, suppliers(name, code)').eq('id', id).maybeSingle();
+          voucher = await client.from('purchase_invoices').select('*, suppliers(name)').eq('id', id).maybeSingle();
           if (voucher != null) lines = await client.from('purchase_invoice_items').select('*, products(name, sku)').eq('invoice_id', id);
           break;
         case 'Purchase Return':
-          voucher = await client.from('purchase_return_invoices').select('*, suppliers(name, code)').eq('id', id).maybeSingle();
+          voucher = await client.from('purchase_return_invoices').select('*, suppliers(name)').eq('id', id).maybeSingle();
           if (voucher != null) lines = await client.from('purchase_return_invoice_items').select('*, products(name, sku)').eq('invoice_id', id);
           break;
         case 'Receipt (CRV)':
