@@ -225,7 +225,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     int sriRows = 0;
     int sriAdded = 0;
     Map? firstSriRow;
-    for (final tbl in const ['sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
+    for (final tbl in const ['sales_return_invoices', 'sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
         var q = client.from(tbl).select('*')
             .eq('org_id', orgId).eq('customer_id', customerId);
