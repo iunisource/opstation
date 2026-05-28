@@ -60,20 +60,40 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       if (branchId != null) q = q.eq('branch_id', branchId);
       final invs = await q.lte('voucher_date', DateFormat('yyyy-MM-dd').format(_asOf)).limit(20000);
 
-      // Pull receipts (payments) so we subtract from invoice totals. Receipts
-      // table is `receipt_vouchers` (per existing code).
-      var rq = client.from('receipt_vouchers')
-          .select('customer_id, amount, voucher_date')
-          .eq('org_id', orgId);
-      if (branchId != null) rq = rq.eq('branch_id', branchId);
-      final receipts = await rq.lte('voucher_date', DateFormat('yyyy-MM-dd').format(_asOf)).limit(20000);
-
-      // Aggregate receipts per customer (lifetime up to as-of date)
+      // Pull receipts from CRV vouchers (customer paid us). The CRV header
+      // carries date + status; the customer + amount live on crv_voucher_lines
+      // (account_type = 'customer'). Mirrors how the Customer Ledger reads CRV.
       final paidByCustomer = <String, double>{};
-      for (final r in receipts as List) {
-        final cid = (r as Map)['customer_id'] as String?;
-        if (cid == null) continue;
-        paidByCustomer[cid] = (paidByCustomer[cid] ?? 0) + ((r['amount'] as num?)?.toDouble() ?? 0);
+      try {
+        var cq = client.from('crv_vouchers')
+            .select('id, voucher_date, created_at')
+            .eq('org_id', orgId).eq('status', 'posted');
+        if (branchId != null) cq = cq.eq('branch_id', branchId);
+        final crvHeaders = await cq.limit(20000);
+        final asOfEnd = DateTime(_asOf.year, _asOf.month, _asOf.day, 23, 59, 59);
+        final crvIds = <String>[];
+        for (final v in crvHeaders as List) {
+          final m = v as Map;
+          final ed = DateTime.tryParse((m['voucher_date'] as String?) ?? '') ??
+                     DateTime.tryParse((m['created_at'] as String?) ?? '');
+          if (ed == null || !ed.isAfter(asOfEnd)) crvIds.add(m['id'] as String);
+        }
+        for (var i = 0; i < crvIds.length; i += 100) {
+          final end = (i + 100) > crvIds.length ? crvIds.length : (i + 100);
+          final chunk = crvIds.sublist(i, end);
+          final lines = await client.from('crv_voucher_lines')
+              .select('account_id, amount')
+              .eq('account_type', 'customer')
+              .inFilter('voucher_id', chunk);
+          for (final ln in lines as List) {
+            final cid = (ln as Map)['account_id'] as String?;
+            if (cid == null) continue;
+            paidByCustomer[cid] = (paidByCustomer[cid] ?? 0) + ((ln['amount'] as num?)?.toDouble() ?? 0);
+          }
+        }
+      } catch (e) {
+        // ignore: avoid_print
+        print('[CustomerAging] CRV receipts error: $e');
       }
 
       // Walk invoices oldest → newest, applying paid balance per customer.
@@ -161,6 +181,25 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
     final branch = ref.read(selectedBranchProvider);
     final rows = _filteredSorted;
     final fmt = NumberFormat('#,##0.00');
+    List<List<String>> detailRows = [];
+    String detailTitle = '';
+    if (rows.length == 1) {
+      final r = rows.first;
+      final invs = List<Map<String, dynamic>>.from(r.openInvoices)
+        ..sort((a, b) => (a['voucher_date'] as DateTime).compareTo(b['voucher_date'] as DateTime));
+      detailTitle = r.customerName;
+      for (final inv in invs) {
+        final age = inv['ageDays'] as int;
+        final bucket = age <= 30 ? '0-30' : age <= 60 ? '31-60' : age <= 90 ? '61-90' : age <= 120 ? '91-120' : '120+';
+        detailRows.add([
+          inv['voucher_number'] as String,
+          DateFormat('d MMM yyyy').format(inv['voucher_date'] as DateTime),
+          '\$age',
+          bucket,
+          fmt.format(inv['outstanding'] as double),
+        ]);
+      }
+    }
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4.landscape,
@@ -201,6 +240,19 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         pw.SizedBox(height: 10),
         pw.Text('Grand Total: ${fmt.format(rows.fold<double>(0, (s, r) => s + r.total))}',
             style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        if (detailRows.isNotEmpty) ...[
+          pw.SizedBox(height: 16),
+          pw.Text('Invoice Detail - ' + detailTitle + '  (oldest first)', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 6),
+          pw.Table.fromTextArray(
+            headers: const ['Voucher #', 'Date', 'Days Old', 'Bucket', 'Outstanding'],
+            data: detailRows,
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
+            cellStyle: const pw.TextStyle(fontSize: 9),
+            cellAlignments: const {2: pw.Alignment.centerRight, 4: pw.Alignment.centerRight},
+            headerDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFF1F5F9)),
+          ),
+        ],
       ],
     ));
     await Printing.layoutPdf(onLayout: (f) async => doc.save(), name: 'customer_aging_${DateFormat('yyyyMMdd').format(_asOf)}.pdf');
@@ -349,7 +401,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
     final fmt = NumberFormat('#,##0.00');
     final dateFmt = DateFormat('d MMM yyyy');
     final invs = List<Map<String, dynamic>>.from(row.openInvoices)
-      ..sort((a, b) => (b['voucher_date'] as DateTime).compareTo(a['voucher_date'] as DateTime));
+      ..sort((a, b) => (a['voucher_date'] as DateTime).compareTo(b['voucher_date'] as DateTime));
     final show = invs.length > 8 ? invs.sublist(0, 8) : invs;
     final remaining = invs.length - show.length;
     return Container(
