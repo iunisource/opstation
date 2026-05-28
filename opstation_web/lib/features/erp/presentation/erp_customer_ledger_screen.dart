@@ -224,6 +224,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     String? sriTable;
     int sriRows = 0;
     int sriAdded = 0;
+    Map? firstSriRow;
     for (final tbl in const ['sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
         var q = client.from(tbl).select('*')
@@ -232,9 +233,10 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         final rows = await q;
         sriTable = tbl;
         sriRows = (rows as List).length;
+        if (sriRows > 0) firstSriRow = rows.first as Map;
         for (final sr in rows) {
-          final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount'] ?? sr['net_amount']) as num?)?.toDouble() ?? 0;
-          final vno = ((sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? '') as String);
+          final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount'] ?? sr['net_amount'] ?? sr['return_total'] ?? sr['refund_amount'] ?? sr['value'] ?? sr['subtotal']) as num?)?.toDouble() ?? 0;
+          final vno = ((sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? sr['return_no'] ?? '') as String);
           final date = extractDate(sr as Map, const ['return_date', 'invoice_date', 'voucher_date', 'sri_date', 'srn_date', 'date', 'posted_at', 'created_at']);
           if (total > 0) {
             entries.add({
@@ -260,6 +262,17 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           errors.add('SRI: "' + sriTable + '" is empty');
         }
       } catch (e) { errors.add('SRI probe: ' + e.toString()); }
+    } else if (sriAdded == 0) {
+      final fsr = firstSriRow;
+      if (fsr != null) {
+        final keys = fsr.keys.toList();
+        errors.add('SRI: "' + sriTable + '" had ' + sriRows.toString() + ' rows but 0 had positive total. Columns: ' + keys.join(', '));
+        final numFields = <String>[];
+        fsr.forEach((k, v) {
+          if (v is num) numFields.add(k.toString() + '=' + v.toString());
+        });
+        if (numFields.isNotEmpty) errors.add('SRI numeric fields in row: ' + numFields.join(', '));
+      }
     } else {
       errors.add('SRI: "' + sriTable + '" returned ' + sriRows.toString() + ' rows, added ' + sriAdded.toString() + ' entries');
     }

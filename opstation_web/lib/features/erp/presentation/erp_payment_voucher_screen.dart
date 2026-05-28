@@ -22,6 +22,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   Map<String, dynamic>? _currentVoucher;
 
   final _voucherDateCtrl = TextEditingController();
+  DateTime _voucherDate = DateTime.now();
   String? _cashAccountId;
   String _cashAccountName = '';
   String _cashAccSearch = '';
@@ -44,7 +45,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
 
   @override void initState() {
     super.initState();
-    _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(DateTime.now());
+    _voucherDate = DateTime.now(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate);
     WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchers(); });
     _addLine();
   }
@@ -102,7 +103,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
 
   void _newVoucher() {
     for (final l in _lines) l.dispose();
-    setState(() { _currentVoucher = null; _cashAccountId = null; _cashAccountName = ''; _status = 'draft'; _lines = [_VLine()]; _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(DateTime.now()); });
+    setState(() { _currentVoucher = null; _cashAccountId = null; _cashAccountName = ''; _status = 'draft'; _lines = [_VLine()]; _voucherDate = DateTime.now(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); });
   }
 
   Future<void> _loadVoucher(Map<String, dynamic> v) async {
@@ -110,7 +111,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       final rows = await Supabase.instance.client.from('cpv_voucher_lines').select().eq('voucher_id', v['id'] as String).order('line_order');
       for (final l in _lines) l.dispose();
       final newLines = (rows as List).map((r) { final l = _VLine(); l.accountId = r['account_id'] as String?; l.accountName = r['account_name'] as String? ?? ''; l.accountType = r['account_type'] as String? ?? 'coa'; l.descCtrl.text = r['description'] as String? ?? ''; l.amtCtrl.text = (r['amount'] as num?)?.toStringAsFixed(2) ?? ''; return l; }).toList();
-      if (mounted) { setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDateCtrl.text = v['voucher_date'] as String? ?? ''; }); _loadAudit(v['id'] as String); }
+      if (mounted) { setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDate = (() { final s = (v['voucher_date'] as String?) ?? ''; final iso = DateTime.tryParse(s); if (iso != null) return iso; try { return DateFormat('dd MMM yyyy').parse(s); } catch (_) {} return DateTime.now(); })(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); }); _loadAudit(v['id'] as String); }
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -125,7 +126,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       final client = Supabase.instance.client;
       final total = validLines.fold<double>(0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
       final newStatus = post ? 'posted' : 'draft';
-      final dateStr = _voucherDateCtrl.text.trim();
+      final dateStr = DateFormat('yyyy-MM-dd').format(_voucherDate);
       if (_currentVoucher == null) {
         final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
         final vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
@@ -314,7 +315,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(16, 10, 16, 10), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))), child: Row(children: [
           SizedBox(width: 140, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Voucher No.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)), const SizedBox(height: 3), Text(_currentVoucher?['voucher_number'] as String? ?? '(auto)', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary))])),
           const SizedBox(width: 12),
-          SizedBox(width: 150, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Voucher Date *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)), const SizedBox(height: 3), TextField(controller: _voucherDateCtrl, enabled: !_isLocked, decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7)))])),
+          SizedBox(width: 150, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Voucher Date *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)), const SizedBox(height: 3), InkWell(onTap: _isLocked ? null : () async { final p = await showDatePicker(context: context, initialDate: _voucherDate, firstDate: DateTime(2020), lastDate: DateTime(2100)); if (p != null) setState(() { _voucherDate = p; _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(p); }); }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFBDBDBD)), borderRadius: BorderRadius.circular(4)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(DateFormat('dd MMM yyyy').format(_voucherDate), style: const TextStyle(fontSize: 13)), const Icon(Icons.calendar_today, size: 13, color: AppTheme.textSecondary)])))])),
           const SizedBox(width: 12),
           // Cash Account with proper dropdown
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
