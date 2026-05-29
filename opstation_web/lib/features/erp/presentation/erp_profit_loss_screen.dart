@@ -18,7 +18,8 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   bool _loading  = false;
   List<Map<String, dynamic>> _rows = [];
 
-  @override void initState() { super.initState(); _load(); }
+  @override void initState() { super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
   Future<void> _load() async {
     final orgId = ref.read(currentUserProvider)?.orgId;

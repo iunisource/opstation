@@ -18,7 +18,8 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   List<Map<String, dynamic>> _bsRows = [];
   double _netIncome = 0;
 
-  @override void initState() { super.initState(); _load(); }
+  @override void initState() { super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
   Future<void> _load() async {
     final orgId = ref.read(currentUserProvider)?.orgId;
@@ -33,9 +34,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         final params = <String, dynamic>{
           'p_org_id': orgId,
           'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf),
-        };
-        if (branchId != null) params['p_branch_id'] = branchId;
-        final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: params);
+        };        final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: params);
         bsRows = List<Map<String, dynamic>>.from(bsRes as List);
       } catch (e) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(
@@ -49,9 +48,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
           'p_org_id': orgId,
           'p_date_from': DateFormat('yyyy-MM-dd').format(DateTime(_asOf.year, 1, 1)),
           'p_date_to':   DateFormat('yyyy-MM-dd').format(_asOf),
-        };
-        if (branchId != null) params['p_branch_id'] = branchId;
-        final plRes = await Supabase.instance.client.rpc('rpc_profit_loss', params: params);
+        };        final plRes = await Supabase.instance.client.rpc('rpc_profit_loss', params: params);
         for (final r in plRes as List) {
           final net = (r['net'] as num? ?? 0).toDouble();
           ni += r['account_type'] == 'revenue' ? net : -net;
