@@ -22,9 +22,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
   Future<void> _load() async {
-    String? orgId = ref.read(currentUserProvider)?.orgId;
-    orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
-    if (orgId == null) { WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _load(); }); return; }
+    final orgId = 'org_1776963120723866';
     setState(() => _loading = true);
     try {
       final branch = ref.read(selectedBranchProvider);
