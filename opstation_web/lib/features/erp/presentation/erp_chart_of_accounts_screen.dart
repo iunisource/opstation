@@ -128,66 +128,126 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
 
   Future<void> _editAccount(Map<String, dynamic> acc) async {
     final nameCtrl = TextEditingController(text: acc['name'] as String? ?? '');
-    String? selectedType = acc['account_type'] as String?;
-    String? selectedGroup = acc['account_group'] as String?;
-    String? selectedParentId = acc['parent_id'] as String?;
     final level = acc['level'] as int;
+    String? selectedType = acc['account_type'] as String?;
+
+    // Walk up parent chain to find the root group (Assets/Capital/Liability/Income/Expense)
+    String findTopGroup() {
+      Map<String, dynamic> cur = acc;
+      while (true) {
+        if ((cur['level'] as int) == 1) return cur['account_group'] as String? ?? '';
+        final pid = cur['parent_id'] as String?;
+        if (pid == null) return cur['account_group'] as String? ?? '';
+        final parent = _accounts.firstWhere((a) => a['id'] == pid, orElse: () => {});
+        if (parent.isEmpty) return cur['account_group'] as String? ?? '';
+        cur = parent;
+      }
+    }
+
+    String? newGroup = level == 1 ? (acc['account_group'] as String?) : findTopGroup();
+    String? sel1Id, sel2Id;
+
+    if (level == 2) {
+      sel1Id = acc['parent_id'] as String?;
+    } else if (level >= 3) {
+      sel2Id = acc['parent_id'] as String?;
+      final l2 = _accounts.firstWhere((a) => a['id'] == sel2Id, orElse: () => {});
+      sel1Id = l2.isNotEmpty ? l2['parent_id'] as String? : null;
+    }
+
     final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
-      final parentItems = level == 2
-          ? _accounts.where((a) => a['level'] == 1 && a['account_group'] == selectedGroup).toList()
-          : level == 3
-              ? _accounts.where((a) => a['level'] == 2 && a['account_group'] == selectedGroup).toList()
-              : <Map<String, dynamic>>[];
+      final l1Items = _accounts.where((a) => a['level'] == 1 && a['account_group'] == newGroup).toList();
+      final l2Items = sel1Id != null
+          ? _accounts.where((a) => a['level'] == 2 && a['parent_id'] == sel1Id).toList()
+          : <Map<String, dynamic>>[];
+
       return AlertDialog(
         title: Text('Edit Account  ${acc["code"] ?? ""}'),
         content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: 'Account Name *')),
+          TextField(controller: nameCtrl, autofocus: true,
+              decoration: const InputDecoration(labelText: 'Account Name *')),
           const SizedBox(height: 12),
-          if (level == 1) DropdownButtonFormField<String?>(
-            value: selectedGroup,
+
+          // Account Group — dropdown for L1, read-only chip for L2+
+          if (level == 1) DropdownButtonFormField<String>(
+            value: newGroup,
             decoration: const InputDecoration(labelText: 'Account Group'),
-            items: ['Assets','Capital','Liability','Income','Expense'].map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-            onChanged: (v) => setS(() => selectedGroup = v),
+            items: ['Assets','Capital','Liability','Income','Expense']
+                .map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
+            onChanged: (v) => setS(() { newGroup = v; sel1Id = null; sel2Id = null; }),
           ) else Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)),
+            decoration: BoxDecoration(color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)),
             child: Row(children: [
               const Text('Account Group', style: TextStyle(fontSize: 11, color: Colors.grey)),
               const Spacer(),
-              Text(selectedGroup ?? '—', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(newGroup ?? '—', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             ]),
           ),
-          if (level > 1) ...[
+
+          // Level 1 parent picker (for L2 and L3 accounts)
+          if (level >= 2) ...[
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
-              value: parentItems.any((p) => p['id'] == selectedParentId) ? selectedParentId : null,
-              decoration: InputDecoration(labelText: 'Parent Account (Level ${level - 1})'),
-              items: parentItems.map((p) => DropdownMenuItem(value: p['id'] as String, child: Text('${p["code"] ?? ""} — ${p["name"] ?? ""}'))).toList(),
-              onChanged: (v) => setS(() => selectedParentId = v),
+              value: l1Items.any((a) => a['id'] == sel1Id) ? sel1Id : null,
+              decoration: const InputDecoration(labelText: 'Level 1 Parent'),
+              items: l1Items.map((a) => DropdownMenuItem(
+                value: a['id'] as String,
+                child: Text('${a["code"] ?? ""} — ${a["name"] ?? ""}'),
+              )).toList(),
+              onChanged: (v) => setS(() { sel1Id = v; sel2Id = null; }),
             ),
           ],
+
+          // Level 2 parent picker (for L3 accounts only)
+          if (level >= 3) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String?>(
+              value: l2Items.any((a) => a['id'] == sel2Id) ? sel2Id : null,
+              decoration: const InputDecoration(labelText: 'Level 2 Parent'),
+              items: l2Items.map((a) => DropdownMenuItem(
+                value: a['id'] as String,
+                child: Text('${a["code"] ?? ""} — ${a["name"] ?? ""}'),
+              )).toList(),
+              onChanged: (v) => setS(() => sel2Id = v),
+            ),
+          ],
+
           const SizedBox(height: 12),
           DropdownButtonFormField<String?>(
             value: selectedType,
             decoration: const InputDecoration(labelText: 'Account Type (GL)'),
-            items: [const DropdownMenuItem<String?>(value: null, child: Text('— None —')), ...['asset','liability','equity','revenue','expense'].map((t) => DropdownMenuItem(value: t, child: Text(t)))].toList(),
+            items: [
+              const DropdownMenuItem<String?>(value: null, child: Text('— None —')),
+              ...['asset','liability','equity','revenue','expense']
+                  .map((t) => DropdownMenuItem(value: t, child: Text(t))),
+            ],
             onChanged: (v) => setS(() => selectedType = v),
           ),
           const SizedBox(height: 8),
-          Text('Code: ${acc["code"] ?? "auto"}  (read-only)', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          Text('Code: ${acc["code"] ?? "auto"}  (read-only)',
+              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () { if (nameCtrl.text.trim().isNotEmpty) Navigator.pop(ctx, true); }, child: const Text('Save'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
+          ElevatedButton(
+            onPressed: () { if (nameCtrl.text.trim().isNotEmpty) Navigator.pop(ctx, true); },
+            child: const Text('Save'),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+          ),
         ],
       );
     }));
+
     if (ok != true || !mounted) return;
+    final newParentId = level == 1 ? null : level == 2 ? sel1Id : sel2Id;
     try {
       final updates = <String, dynamic>{'name': nameCtrl.text.trim(), 'account_type': selectedType};
-      if (level == 1) updates['account_group'] = selectedGroup;
-      if (level > 1 && selectedParentId != null) updates['parent_id'] = selectedParentId;
-      await Supabase.instance.client.from('chart_of_accounts').update(updates).eq('id', acc['id'] as String);
+      if (level == 1) updates['account_group'] = newGroup;
+      if (level > 1 && newParentId != null) updates['parent_id'] = newParentId;
+      await Supabase.instance.client.from('chart_of_accounts')
+          .update(updates).eq('id', acc['id'] as String);
       await _load(); _snack('Account updated');
     } catch (e) { _snack('Failed: $e'); }
     nameCtrl.dispose();
