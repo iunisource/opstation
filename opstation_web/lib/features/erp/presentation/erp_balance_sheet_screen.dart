@@ -27,24 +27,44 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     try {
       final branch = ref.read(selectedBranchProvider);
       final branchId = branch?['id'] as String?;
-      final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: {
-        'p_org_id': orgId, 'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf), 'p_branch_id': branchId,
-      });
-      final plRes = await Supabase.instance.client.rpc('rpc_profit_loss', params: {
-        'p_org_id': orgId,
-        'p_date_from': DateFormat('yyyy-MM-dd').format(DateTime(_asOf.year, 1, 1)),
-        'p_date_to':   DateFormat('yyyy-MM-dd').format(_asOf),
-        'p_branch_id': branchId,
-      });
-      double ni = 0;
-      for (final r in plRes as List) {
-        final net = (r['net'] as num? ?? 0).toDouble();
-        ni += r['account_type'] == 'revenue' ? net : -net;
+      // Balance sheet rows
+      List<Map<String, dynamic>> bsRows = [];
+      try {
+        final params = <String, dynamic>{
+          'p_org_id': orgId,
+          'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf),
+        };
+        if (branchId != null) params['p_branch_id'] = branchId;
+        final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: params);
+        bsRows = List<Map<String, dynamic>>.from(bsRes as List);
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Balance sheet error: \$e'), duration: const Duration(seconds: 6)));
       }
-      setState(() { _bsRows = List<Map<String, dynamic>>.from(bsRes as List); _netIncome = ni; _loading = false; });
+
+      // Net income from P&L
+      double ni = 0;
+      try {
+        final params = <String, dynamic>{
+          'p_org_id': orgId,
+          'p_date_from': DateFormat('yyyy-MM-dd').format(DateTime(_asOf.year, 1, 1)),
+          'p_date_to':   DateFormat('yyyy-MM-dd').format(_asOf),
+        };
+        if (branchId != null) params['p_branch_id'] = branchId;
+        final plRes = await Supabase.instance.client.rpc('rpc_profit_loss', params: params);
+        for (final r in plRes as List) {
+          final net = (r['net'] as num? ?? 0).toDouble();
+          ni += r['account_type'] == 'revenue' ? net : -net;
+        }
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('P&L error: \$e'), duration: const Duration(seconds: 6)));
+      }
+
+      setState(() { _bsRows = bsRows; _netIncome = ni; _loading = false; });
     } catch (e) {
       setState(() => _loading = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: \$e')));
     }
   }
 
