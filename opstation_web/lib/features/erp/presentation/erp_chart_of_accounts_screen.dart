@@ -29,7 +29,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
   String _search = '';
 
   static const _groups = ['Assets', 'Capital', 'Liability', 'Income', 'Expense'];
-  static const _accountTypes = ['BANK', 'CASH IN HAND', 'CUSTOMER', 'EMPLOYEE', 'EXPENSE', 'FIXED ASSETS', 'G/L ACCOUNT', 'PURCHASES', 'SALES', 'SUPPLIER'];
+  static const _accountTypes = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
@@ -148,12 +148,20 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
             decoration: const InputDecoration(labelText: 'Account Group'),
             items: ['Assets','Capital','Liability','Income','Expense'].map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
             onChanged: (v) => setS(() => selectedGroup = v),
+          ) else Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)),
+            child: Row(children: [
+              const Text('Account Group', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const Spacer(),
+              Text(selectedGroup ?? '—', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ]),
           ),
           if (level > 1) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
               value: parentItems.any((p) => p['id'] == selectedParentId) ? selectedParentId : null,
-              decoration: InputDecoration(labelText: 'Parent (Level ${level - 1})'),
+              decoration: InputDecoration(labelText: 'Parent Account (Level ${level - 1})'),
               items: parentItems.map((p) => DropdownMenuItem(value: p['id'] as String, child: Text('${p["code"] ?? ""} — ${p["name"] ?? ""}'))).toList(),
               onChanged: (v) => setS(() => selectedParentId = v),
             ),
@@ -161,8 +169,8 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
           const SizedBox(height: 12),
           DropdownButtonFormField<String?>(
             value: selectedType,
-            decoration: const InputDecoration(labelText: 'Account Type'),
-            items: [const DropdownMenuItem<String?>(value: null, child: Text('— None —')), ...['BANK','CASH IN HAND','CUSTOMER','EMPLOYEE','EXPENSE','FIXED ASSETS','G/L ACCOUNT','PURCHASES','SALES','SUPPLIER'].map((t) => DropdownMenuItem(value: t, child: Text(t)))].toList(),
+            decoration: const InputDecoration(labelText: 'Account Type (GL)'),
+            items: [const DropdownMenuItem<String?>(value: null, child: Text('— None —')), ...['asset','liability','equity','revenue','expense'].map((t) => DropdownMenuItem(value: t, child: Text(t)))].toList(),
             onChanged: (v) => setS(() => selectedType = v),
           ),
           const SizedBox(height: 8),
@@ -208,6 +216,15 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     }
   }
 
+  bool _hasDescendantMatch(String nodeId, String q) {
+    for (final child in _accounts.where((a) => a['parent_id'] == nodeId)) {
+      if ((child['name'] as String).toLowerCase().contains(q)) return true;
+      if ((child['code'] as String? ?? '').toLowerCase().contains(q)) return true;
+      if (_hasDescendantMatch(child['id'] as String, q)) return true;
+    }
+    return false;
+  }
+
   List<Widget> _buildTree(List<Map<String, dynamic>> nodes, {int indent = 0}) {
     final result = <Widget>[];
     for (final node in nodes) {
@@ -223,15 +240,17 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       final expanded = _treeExpanded[id] ?? false;
       final color = _groupColor(group);
       final q = _search.toLowerCase();
-      if (q.isNotEmpty && !name.toLowerCase().contains(q) && !code.toLowerCase().contains(q) &&
-          !children.any((c) => (c['name'] as String).toLowerCase().contains(q))) continue;
+      final selfMatch = q.isEmpty || name.toLowerCase().contains(q) || code.toLowerCase().contains(q);
+      final descMatch = q.isNotEmpty && _hasDescendantMatch(id, q);
+      if (q.isNotEmpty && !selfMatch && !descMatch) continue;
+      final isEffExpanded = (descMatch && q.isNotEmpty) || expanded;
       result.add(InkWell(
         onTap: hasChildren ? () => setState(() => _treeExpanded[id] = !expanded) : null,
         child: Container(
           padding: EdgeInsets.only(left: 12.0 + indent * 18, right: 12, top: 7, bottom: 7),
           decoration: BoxDecoration(color: !active ? Colors.grey.shade50 : null, border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.3)))),
           child: Row(children: [
-            SizedBox(width: 18, child: hasChildren ? Icon(expanded ? Icons.expand_more : Icons.chevron_right, size: 14, color: color) : const SizedBox()),
+            SizedBox(width: 18, child: hasChildren ? Icon(isEffExpanded ? Icons.expand_more : Icons.chevron_right, size: 14, color: color) : const SizedBox()),
             const SizedBox(width: 4),
             Container(width: 3, height: 24, decoration: BoxDecoration(color: color.withOpacity(0.7), borderRadius: BorderRadius.circular(2))),
             const SizedBox(width: 8),
@@ -246,7 +265,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
           ]),
         ),
       ));
-      if (expanded && hasChildren) result.addAll(_buildTree(children, indent: indent + 1));
+      if (isEffExpanded && hasChildren) result.addAll(_buildTree(children, indent: indent + 1));
     }
     return result;
   }
