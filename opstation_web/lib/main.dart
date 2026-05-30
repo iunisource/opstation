@@ -27,6 +27,10 @@ Future<void> main() async {
       await Supabase.initialize(
         url: 'https://xgptodkasmytddmdnbtb.supabase.co',
         anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhncHRvZGthc215dGRkbWRuYnRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NzA5MjUsImV4cCI6MjA5MjI0NjkyNX0.pc1VsvsvtnkBHyRzuXzzuspSTJRqU_BQgQulMQ9UCac',
+        authOptions: const FlutterAuthClientOptions(
+          authFlowType: AuthFlowType.pkce,
+          autoRefreshToken: true,
+        ),
       );
       html.document.addEventListener('contextmenu', (e) => e.preventDefault());
       runApp(const ProviderScope(child: OpstationWebApp()));

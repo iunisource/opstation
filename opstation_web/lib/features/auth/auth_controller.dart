@@ -48,21 +48,70 @@ class WebUser {
 class AuthController extends AsyncNotifier<WebUser?> {
   @override
   Future<WebUser?> build() async {
+    // Listen for auth events — handles token refresh, forced sign-out, etc.
+    final sub = Supabase.instance.client.auth.onAuthStateChange.listen((data) async {
+      switch (data.event) {
+        case AuthChangeEvent.tokenRefreshed:
+          // Token silently refreshed — no UI action needed
+          break;
+        case AuthChangeEvent.signedOut:
+        case AuthChangeEvent.userDeleted:
+          // Session ended (expired refresh token, revoked, etc.) — kick to login
+          final p = await SharedPreferences.getInstance();
+          await p.remove(_kSessionKey);
+          if (state.value != null) state = const AsyncData(null);
+          break;
+        default:
+          break;
+      }
+    });
+    ref.onDispose(() => sub.cancel());
+
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_kSessionKey);
     if (raw == null) return null;
+
     try {
-      // Verify we still have a live Supabase session — if it expired
-      // while the browser was closed, force the user back to login so
-      // RLS-scoped requests don't silently return empty results.
-      if (Supabase.instance.client.auth.currentSession == null) {
+      var session = Supabase.instance.client.auth.currentSession;
+
+      if (session == null) {
         await prefs.remove(_kSessionKey);
         return null;
       }
+
+      // If the JWT is expired or within 5 minutes of expiry, force a refresh
+      // now so the first RLS-scoped request doesn't fail.
+      final expAt  = session.expiresAt;
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if (expAt != null && expAt - nowSec < 300) {
+        try {
+          final res = await Supabase.instance.client.auth.refreshSession();
+          if (res.session == null) {
+            await prefs.remove(_kSessionKey);
+            return null;
+          }
+        } catch (_) {
+          await prefs.remove(_kSessionKey);
+          return null;
+        }
+      }
+
       return WebUser.fromJson(jsonDecode(raw));
     } catch (_) {
       await prefs.remove(_kSessionKey);
       return null;
+    }
+  }
+
+  /// Called by screens when an RLS error (42501) is detected mid-session.
+  /// Attempts a silent refresh; if that fails, forces re-login.
+  Future<bool> tryRefresh() async {
+    try {
+      final res = await Supabase.instance.client.auth.refreshSession();
+      return res.session != null;
+    } catch (_) {
+      await signOut();
+      return false;
     }
   }
 
