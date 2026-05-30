@@ -38,6 +38,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   List<Map<String, dynamic>> _allAccounts = [];
   bool _loadingMaster = true;
   bool _saving = false;
+  OverlayEntry? _ctxOverlay;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -46,10 +47,10 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   @override void initState() {
     super.initState();
     _voucherDate = DateTime.now(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate);
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchers(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); });
     _addLine();
   }
-  @override void dispose() { _voucherDateCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
+  @override void dispose() { _ctxOverlay?.remove(); _voucherDateCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -110,6 +111,56 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       case 'expense':   return 'Expense Account';
       default:          return 'COA';
     }
+  }
+
+
+  Future<void> _loadVouchersAndAutoSelect() async {
+    await _loadVouchers();
+    if (!mounted) return;
+    final href = html.window.location.href;
+    final qIdx = href.indexOf('?');
+    if (qIdx == -1) return;
+    final params = Uri.splitQueryString(href.substring(qIdx + 1));
+    final targetId = params['id'];
+    if (targetId != null) {
+      final matches = _vouchers.where((v) => v['voucher_number'] == targetId).toList();
+      if (matches.isNotEmpty) _loadVoucher(matches.first);
+    }
+  }
+
+  void _showCtxMenu(Offset pos, Map<String, dynamic> v) {
+    _ctxOverlay?.remove();
+    _ctxOverlay = OverlayEntry(builder: (_) => Stack(children: [
+      Positioned.fill(child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () { _ctxOverlay?.remove(); _ctxOverlay = null; },
+        onSecondaryTap: () { _ctxOverlay?.remove(); _ctxOverlay = null; },
+      )),
+      Positioned(left: pos.dx, top: pos.dy, child: Material(
+        elevation: 8, borderRadius: BorderRadius.circular(8),
+        child: IntrinsicWidth(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          InkWell(
+            onTap: () {
+              final vNum = v['voucher_number'] as String? ?? '';
+              final href = html.window.location.href;
+              final hashIdx = href.indexOf('#');
+              final origin = hashIdx != -1 ? href.substring(0, hashIdx) : href;
+              html.window.open('${origin}#/erp/payment-vouchers?id=${vNum}', '_blank');
+              _ctxOverlay?.remove(); _ctxOverlay = null;
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.open_in_new, size: 15, color: AppTheme.textSecondary),
+                const SizedBox(width: 10),
+                const Text('Open in new tab', style: TextStyle(fontSize: 13)),
+              ]),
+            ),
+          ),
+        ])),
+      )),
+    ]));
+    Overlay.of(context).insert(_ctxOverlay!);
   }
 
   void _newVoucher() {
@@ -288,11 +339,11 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
           Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 4), child: TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 14), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 8)), onChanged: (v) => setState(() => _listSearch = v))),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2)) : filtered.isEmpty ? const Center(child: Text('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))) : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
             final v = filtered[i]; final sel = _currentVoucher?['id'] == v['id']; final posted = v['status'] == 'posted';
-            return InkWell(onTap: () => _loadVoucher(v), child: Container(color: sel ? AppTheme.primary.withOpacity(0.07) : null, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            return GestureDetector(onSecondaryTapDown: (d) => _showCtxMenu(d.globalPosition, v), child: InkWell(onTap: () => _loadVoucher(v), child: Container(color: sel ? AppTheme.primary.withOpacity(0.07) : null, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [Expanded(child: Text(v['voucher_number'] as String? ?? 'Draft', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))), Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: (posted ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(posted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, color: posted ? Colors.green : Colors.orange, fontWeight: FontWeight.w700)))]),
               Text(v['cash_account_name'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
               Text('Rs. ${(v['total_amount'] as num?)?.toStringAsFixed(2) ?? '0.00'}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sel ? AppTheme.primary : AppTheme.textPrimary)),
-            ])));
+            ]))));
           })),
         ],
       ])),
