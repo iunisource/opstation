@@ -36,7 +36,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   String _typeFilter = 'All';
   final _entrySearchCtrl = TextEditingController();
 
-  static const _types = ['All', 'Purchase Invoice', 'Purchase Return', 'Receipt (CRV)', 'Payment (CPV)'];
+  static const _types = ['All', 'Purchase Invoice', 'Purchase Return', 'Receipt (CRV)', 'Payment (CPV)', 'Journal (JV)'];
 
   @override
   void initState() {
@@ -278,6 +278,32 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         }
       }
     } catch (e) { errors.add('CPV: ' + e.toString()); }
+
+    // 6. Journal Vouchers (JV) touching this party (posted only)
+    try {
+      final jvHeaders = await client.from('journal_entries')
+          .select('id, entry_number, entry_date, description, posted_at, created_at, status')
+          .eq('org_id', orgId).eq('reference_type', 'jv').eq('status', 'posted');
+      final jvMap = {for (final v in jvHeaders as List) v['id'] as String: v};
+      if (jvMap.isNotEmpty) {
+        final jvLines = await client.from('journal_lines')
+            .select('entry_id, debit, credit, description, party_id, account_type')
+            .eq('party_id', supplierId).eq('account_type', 'supplier').inFilter('entry_id', jvMap.keys.toList());
+        for (final line in jvLines as List) {
+          final v = jvMap[line['entry_id'] as String]; if (v == null) continue;
+          final date = extractDate(v as Map, const ['entry_date', 'posted_at', 'created_at']);
+          final vno = (v['entry_number'] as String?) ?? '';
+          final lineDesc = (line['description'] as String?) ?? '';
+          entries.add({
+            'date': date, 'voucher': vno,
+            'description': 'Journal — ' + (lineDesc.isNotEmpty ? lineDesc : (v['description'] as String? ?? vno)),
+            'debit': (line['debit'] as num?)?.toDouble() ?? 0,
+            'credit': (line['credit'] as num?)?.toDouble() ?? 0,
+            'id': v['id'] as String?, 'type': 'Journal (JV)',
+          });
+        }
+      }
+    } catch (e) { errors.add('JV: ' + e.toString()); }
 
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
@@ -528,6 +554,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       case 'Purchase Return': return Colors.amber.shade800;
       case 'Receipt (CRV)': return Colors.green;
       case 'Payment (CPV)': return Colors.orange;
+      case 'Journal (JV)': return Colors.teal;
       default: return AppTheme.textSecondary;
     }
   }
@@ -572,6 +599,13 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     final type = entry['type'] as String;
     if (id == null || id.isEmpty) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No voucher ID to open')));
+      return;
+    }
+    if (type == 'Journal (JV)') {
+      final vno = entry['voucher'] as String? ?? '';
+      final href = html.window.location.href; final hIdx = href.indexOf('#');
+      final origin = hIdx != -1 ? href.substring(0, hIdx) : href;
+      html.window.open(origin + '#/financials/journal-vouchers?id=' + vno, '_blank');
       return;
     }
     Map<String, dynamic>? voucher;
