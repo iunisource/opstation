@@ -59,7 +59,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     try {
       final client = Supabase.instance.client;
       final results = await Future.wait([
-        client.from('chart_of_accounts').select('id, code, name, account_type').eq('org_id', orgId).order('code'),
+        client.from('chart_of_accounts').select('id, code, name, account_type, account_group, level').eq('org_id', orgId).eq('is_active', true).order('code'),
         client.from('suppliers').select('id, name').eq('org_id', orgId).order('name'),
         client.from('customers').select('id, shop_name').eq('org_id', orgId).order('shop_name'),
       ]);
@@ -67,7 +67,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       final sup = List<Map<String, dynamic>>.from(results[1] as List);
       final cus = List<Map<String, dynamic>>.from(results[2] as List);
       final all = <Map<String, dynamic>>[
-        ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': a['account_type'] ?? 'COA', 'type': 'coa'}),
+        ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
         ...sup.map((s) => {'id': s['id'], 'label': '${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}', 'sub': 'Supplier', 'type': 'supplier'}),
         ...cus.map((c) => {'id': c['id'], 'label': '${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name']}', 'sub': 'Customer', 'type': 'customer'}),
       ];
@@ -99,7 +99,18 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     return _allAccounts.where((a) => (a['label'] as String).toLowerCase().contains(ql) || (a['sub'] as String).toLowerCase().contains(ql)).take(30).toList();
   }
 
-  List<Map<String, dynamic>> get _cashAccounts => _coaList.where((a) => ['BANK', 'CASH IN HAND'].contains(a['account_type'])).map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'type': a['account_type'] as String}).toList();
+  List<Map<String, dynamic>> get _cashAccounts => _coaList.where((a) => (a['level'] as int? ?? 0) == 3 && (a['account_group'] == 'Current Assets')).map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'type': a['account_type'] as String? ?? ''}).toList();
+
+  static String _typeLabel(dynamic t) {
+    switch (t) {
+      case 'asset':     return 'Asset Account';
+      case 'liability': return 'Liability Account';
+      case 'equity':    return 'Equity Account';
+      case 'revenue':   return 'Revenue Account';
+      case 'expense':   return 'Expense Account';
+      default:          return 'COA';
+    }
+  }
 
   void _newVoucher() {
     for (final l in _lines) l.dispose();
