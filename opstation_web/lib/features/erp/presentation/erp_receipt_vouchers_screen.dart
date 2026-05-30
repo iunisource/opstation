@@ -213,34 +213,42 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
 
 
   Future<void> _postCrvToGL(String orgId, String bid, String dateStr, List<_VLine> lines, double total) async {
+    final cashCoaId = _cashAccountId;
+    if (cashCoaId == null || cashCoaId.isEmpty) { _snack('GL error: no cash account'); return; }
+      final arId       = 'coa_' + orgId + '_1210';
+      final incentiveId = 'coa_' + orgId + '_4310';
+    final vid    = _currentVoucher?['id']            as String? ?? '';
+    final vNum   = _currentVoucher?['voucher_number'] as String? ?? '';
+    final eId    = 'je_crv_' + vid;
+    final client = Supabase.instance.client;
     try {
-      final cashCoaId = _cashAccountId!;
-      final arId        = 'coa_${orgId}_1210';
-      final incentiveId  = 'coa_${orgId}_4310';
-      final vid  = _currentVoucher?['id']            as String? ?? '';
-      final vNum = _currentVoucher?['voucher_number'] as String? ?? '';
-      final glLines = <Map<String, dynamic>>[
-        {'account_id': cashCoaId, 'debit': total, 'credit': 0.0},
-      ];
-      for (final l in lines) {
-        final amt   = double.tryParse(l.amtCtrl.text) ?? 0.0;
-        final accId = l.accountType == 'customer' ? arId
-                    : l.accountType == 'supplier' ? incentiveId
-                    : (l.accountId ?? arId);
-        glLines.add({'account_id': accId, 'debit': 0.0, 'credit': amt});
-      }
-      await Supabase.instance.client.rpc('gl_post_je', params: {
-        'p_org_id': orgId, 'p_branch_id': bid,
-        'p_entry_date': dateStr,
-        'p_reference_type': 'crv',
-        'p_reference_id': vid,
-        'p_reference_number': vNum,
-        'p_description': 'Cash Receipt: ${vNum}',
-        'p_lines': glLines,
+      await client.from('journal_entries').upsert({
+        'id': eId, 'org_id': orgId, 'branch_id': bid,
+        'entry_number': 'CRV-' + vNum,
+        'entry_date': dateStr,
+        'description': 'Cash Receipt: ' + vNum,
+        'reference_type': 'crv', 'reference_id': vid,
+        'reference_number': vNum,
+        'status': 'posted', 'is_system_generated': true,
+        'created_at': DateTime.now().toIso8601String(),
+        'posted_at': DateTime.now().toIso8601String(),
       });
-    } catch (e) {
-      _snack('GL posting error: $e');
-    }
+      await client.from('journal_lines').delete().eq('entry_id', eId);
+      await client.from('journal_lines').insert({
+        'id': eId + '_0', 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
+        'account_id': cashCoaId, 'debit': total, 'credit': 0.0, 'line_order': 0,
+      });
+      for (var i = 0; i < lines.length; i++) {
+        final l = lines[i];
+        final amt   = double.tryParse(l.amtCtrl.text) ?? 0.0;
+        if (amt == 0) continue;
+        final accId = l.accountType == 'customer' ? arId : l.accountType == 'supplier' ? incentiveId : (l.accountId ?? arId);
+        await client.from('journal_lines').insert({
+          'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
+          'account_id': accId, 'debit': 0.0, 'credit': amt, 'line_order': i + 1,
+        });
+      }
+    } catch (e) { _snack('GL error: ' + e.toString()); }
   }
 
   Future<void> _delete() async {
