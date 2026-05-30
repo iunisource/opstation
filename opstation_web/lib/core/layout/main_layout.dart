@@ -157,7 +157,8 @@ class _TopNav extends ConsumerWidget {
     ];
 
     final financialItems = <Widget>[
-      _menuItem(context, 'Chart of Accounts', Icons.account_tree_outlined, '/erp/chart-of-accounts', location),
+      _menuItem(context, 'Chart of Accounts',  Icons.account_tree_outlined,    '/erp/chart-of-accounts',          location),
+      _menuItem(context, 'Journal Vouchers',   Icons.edit_note_outlined,          '/financials/journal-vouchers',    location),
       _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
       _menuItem(context, 'Receipt Vouchers', Icons.payments_outlined,     '/erp/receipt-vouchers',      location),
       _menuItem(context, 'Trial Balance',    Icons.account_balance_outlined, '/financials/trial-balance',  location),

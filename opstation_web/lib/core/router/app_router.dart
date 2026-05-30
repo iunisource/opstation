@@ -1,4 +1,5 @@
 import '../../features/erp/presentation/erp_trial_balance_screen.dart';
+import '../../features/erp/presentation/erp_journal_voucher_screen.dart';
 import '../../features/erp/presentation/erp_profit_loss_screen.dart';
 import '../../features/erp/presentation/erp_balance_sheet_screen.dart';
 import 'package:flutter/material.dart';
@@ -157,7 +158,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVoucherScreen()),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => const ErpReceiptVouchersScreen()),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => const ErpSupplierLedgerScreen()),
-                GoRoute(path: '/financials/trial-balance',  builder: (_, __) => const ErpTrialBalanceScreen()),
+                GoRoute(path: '/financials/journal-vouchers', builder: (_, __) => const ErpJournalVoucherScreen()),
+        GoRoute(path: '/financials/trial-balance',  builder: (_, __) => const ErpTrialBalanceScreen()),
       GoRoute(path: '/financials/profit-loss',     builder: (_, __) => const ErpProfitLossScreen()),
       GoRoute(path: '/financials/balance-sheet',   builder: (_, __) => const ErpBalanceSheetScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
