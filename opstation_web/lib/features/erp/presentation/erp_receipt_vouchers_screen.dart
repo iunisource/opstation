@@ -58,15 +58,11 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     final orgId = _orgId;
     if (orgId == null) { await Future.delayed(const Duration(milliseconds: 500)); if (mounted) _loadMaster(); return; }
     try {
-      final client = Supabase.instance.client;
-      final results = await Future.wait([
-        client.from('chart_of_accounts').select('id, code, name, account_type, account_group, level').eq('org_id', orgId).eq('is_active', true).order('code'),
-        client.from('suppliers').select('id, name').eq('org_id', orgId).order('name').limit(10000),
-        client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(10000),
-      ]);
-      final coa = List<Map<String, dynamic>>.from(results[0] as List);
-      final sup = List<Map<String, dynamic>>.from(results[1] as List);
-      final cus = List<Map<String, dynamic>>.from(results[2] as List);
+      final res  = await Supabase.instance.client.rpc('get_voucher_master', params: {'p_org_id': orgId});
+      final data = res as Map<String, dynamic>;
+      final coa  = List<Map<String, dynamic>>.from((data['coa']       as List?) ?? []);
+      final sup  = List<Map<String, dynamic>>.from((data['suppliers'] as List?) ?? []);
+      final cus  = List<Map<String, dynamic>>.from((data['customers'] as List?) ?? []);
       final all = <Map<String, dynamic>>[
         ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
         ...sup.map((s) => {'id': s['id'], 'label': '${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}', 'sub': 'Supplier', 'type': 'supplier'}),
