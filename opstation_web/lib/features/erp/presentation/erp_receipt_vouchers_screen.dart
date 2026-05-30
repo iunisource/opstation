@@ -60,8 +60,8 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       final client = Supabase.instance.client;
       final results = await Future.wait([
         client.from('chart_of_accounts').select('id, code, name, account_type, account_group, level').eq('org_id', orgId).eq('is_active', true).order('code'),
-        client.from('suppliers').select('id, name').eq('org_id', orgId).order('name'),
-        client.from('customers').select('id, shop_name').eq('org_id', orgId).order('shop_name'),
+        client.from('suppliers').select('id, name').eq('org_id', orgId).order('name').limit(10000),
+        client.from('customers').select('id, shop_name').eq('org_id', orgId).order('shop_name').limit(10000),
       ]);
       final coa = List<Map<String, dynamic>>.from(results[0] as List);
       final sup = List<Map<String, dynamic>>.from(results[1] as List);
