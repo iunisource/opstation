@@ -209,9 +209,37 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
         _snack(post ? 'Voucher posted ✓' : 'Saved');
       }
+      if (post && orgId != null) await _postCrvToGL(orgId!, bid, dateStr, validLines, total);
       await _loadVouchers();
     } catch (e) { _snack('Failed: $e'); }
     setState(() => _saving = false);
+  }
+
+
+  Future<void> _postCrvToGL(String orgId, String bid, String dateStr, List<_VLine> lines, double total) async {
+    try {
+      final cashCoaId    = _cashAccountId!;
+      final arId         = 'coa_\${orgId}_1210';
+      final incentiveId  = 'coa_\${orgId}_4310';
+      final vid  = _currentVoucher?['id']            as String? ?? '';
+      final vNum = _currentVoucher?['voucher_number'] as String? ?? '';
+      final glLines = <Map<String, dynamic>>[
+        {'account_id': cashCoaId, 'debit': total, 'credit': 0.0},
+      ];
+      for (final l in lines) {
+        final amt   = double.tryParse(l.amtCtrl.text) ?? 0.0;
+        final accId = l.accountType == 'customer' ? arId
+                    : l.accountType == 'supplier' ? incentiveId
+                    : l.accountId ?? arId;
+        glLines.add({'account_id': accId, 'debit': 0.0, 'credit': amt});
+      }
+      await Supabase.instance.client.rpc('gl_post_je', params: {
+        'org_id': orgId, 'branch_id': bid, 'entry_date': dateStr,
+        'reference_type': 'crv', 'reference_id': vid,
+        'reference_number': vNum, 'description': 'Cash Receipt: \$vNum',
+        'lines': glLines,
+      });
+    } catch (e) { debugPrint('CRV GL error: \$e'); }
   }
 
   Future<void> _delete() async {
