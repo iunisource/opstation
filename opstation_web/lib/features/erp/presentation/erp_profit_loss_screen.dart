@@ -22,7 +22,9 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
   Future<void> _load() async {
-    final orgId = 'org_1776963120723866';
+    String? orgId = ref.read(currentUserProvider)?.orgId;
+    orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
+    if (orgId == null) { WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _load(); }); return; }
     setState(() => _loading = true);
     try {
       final branch = ref.read(selectedBranchProvider);
@@ -32,7 +34,15 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
         'p_date_to':   DateFormat('yyyy-MM-dd').format(_to),
         'p_branch_id': branch?['id'],
       });
-      setState(() { _rows = List<Map<String, dynamic>>.from(res as List); _loading = false; });
+      final rawList = res as List;
+      debugPrint('=== P&L RPC rows: \${rawList.length}');
+      if (rawList.isNotEmpty) {
+        final first = rawList.first as Map<String, dynamic>;
+        debugPrint('=== first row: \$first');
+        final netVal = first['net'];
+        debugPrint('=== net type: ${netVal.runtimeType} value: $netVal');
+      }
+      setState(() { _rows = List<Map<String, dynamic>>.from(rawList); _loading = false; });
     } catch (e) {
       setState(() => _loading = false);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));

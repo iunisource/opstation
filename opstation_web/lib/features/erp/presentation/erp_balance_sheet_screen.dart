@@ -22,7 +22,9 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
   Future<void> _load() async {
-    final orgId = 'org_1776963120723866';
+    String? orgId = ref.read(currentUserProvider)?.orgId;
+    orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
+    if (orgId == null) { WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _load(); }); return; }
     setState(() => _loading = true);
     try {
       final branch = ref.read(selectedBranchProvider);
