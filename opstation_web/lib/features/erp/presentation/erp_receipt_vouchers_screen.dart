@@ -214,9 +214,9 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
 
   Future<void> _postCrvToGL(String orgId, String bid, String dateStr, List<_VLine> lines, double total) async {
     try {
-      final cashCoaId    = _cashAccountId!;
-      final arId         = 'coa_\${orgId}_1210';
-      final incentiveId  = 'coa_\${orgId}_4310';
+      final cashCoaId = _cashAccountId!;
+      final arId        = 'coa_${orgId}_1210';
+      final incentiveId  = 'coa_${orgId}_4310';
       final vid  = _currentVoucher?['id']            as String? ?? '';
       final vNum = _currentVoucher?['voucher_number'] as String? ?? '';
       final glLines = <Map<String, dynamic>>[
@@ -226,16 +226,21 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         final amt   = double.tryParse(l.amtCtrl.text) ?? 0.0;
         final accId = l.accountType == 'customer' ? arId
                     : l.accountType == 'supplier' ? incentiveId
-                    : l.accountId ?? arId;
+                    : (l.accountId ?? arId);
         glLines.add({'account_id': accId, 'debit': 0.0, 'credit': amt});
       }
       await Supabase.instance.client.rpc('gl_post_je', params: {
-        'org_id': orgId, 'branch_id': bid, 'entry_date': dateStr,
-        'reference_type': 'crv', 'reference_id': vid,
-        'reference_number': vNum, 'description': 'Cash Receipt: \$vNum',
-        'lines': glLines,
+        'p_org_id': orgId, 'p_branch_id': bid,
+        'p_entry_date': dateStr,
+        'p_reference_type': 'crv',
+        'p_reference_id': vid,
+        'p_reference_number': vNum,
+        'p_description': 'Cash Receipt: ${vNum}',
+        'p_lines': glLines,
       });
-    } catch (e) { debugPrint('CRV GL error: \$e'); }
+    } catch (e) {
+      _snack('GL posting error: $e');
+    }
   }
 
   Future<void> _delete() async {
