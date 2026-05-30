@@ -62,7 +62,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       final results = await Future.wait([
         client.from('chart_of_accounts').select('id, code, name, account_type, account_group, level').eq('org_id', orgId).eq('is_active', true).order('code'),
         client.from('suppliers').select('id, name').eq('org_id', orgId).order('name').limit(10000),
-        client.from('customers').select('id, shop_name').eq('org_id', orgId).order('shop_name').limit(10000),
+        client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(10000),
       ]);
       final coa = List<Map<String, dynamic>>.from(results[0] as List);
       final sup = List<Map<String, dynamic>>.from(results[1] as List);
@@ -70,7 +70,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       final all = <Map<String, dynamic>>[
         ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
         ...sup.map((s) => {'id': s['id'], 'label': '${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}', 'sub': 'Supplier', 'type': 'supplier'}),
-        ...cus.map((c) => {'id': c['id'], 'label': '${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name']}', 'sub': 'Customer', 'type': 'customer'}),
+        ...cus.map((c) => {'id': c['id'], 'label': '${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}', 'sub': 'Customer', 'type': 'customer'}),
       ];
       if (mounted) setState(() { _coaList = coa; _supplierList = sup; _customerList = cus; _allAccounts = all; _loadingMaster = false; });
     } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loadingMaster = false); } }
@@ -95,9 +95,12 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
   double get _total => _lines.fold(0.0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
 
   List<Map<String, dynamic>> _filterAccounts(String q) {
-    if (q.isEmpty) return _allAccounts.take(30).toList();
+    if (q.isEmpty) return _allAccounts.take(50).toList();
     final ql = q.toLowerCase();
-    return _allAccounts.where((a) => (a['label'] as String).toLowerCase().contains(ql) || (a['sub'] as String).toLowerCase().contains(ql)).take(30).toList();
+    return _allAccounts.where((a) =>
+      (a['label'] as String).toLowerCase().contains(ql) ||
+      (a['sub'] as String).toLowerCase().contains(ql)
+    ).take(200).toList();
   }
 
   List<Map<String, dynamic>> get _cashAccounts => _coaList.where((a) => (a['level'] as int? ?? 0) == 3 && (a['account_group'] == 'Current Assets')).map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'type': a['account_type'] as String? ?? ''}).toList();
