@@ -156,6 +156,15 @@ class _TopNav extends ConsumerWidget {
       ],
     ];
 
+    final manufacturingItems = <Widget>[
+      _menuItem(context, 'Product Assembly (BOM)',    Icons.account_tree_outlined,            '/manufacturing/product-assembly',           location),
+      _menuItem(context, 'Production Voucher',         Icons.precision_manufacturing_outlined, '/manufacturing/production-voucher',         location),
+      _menuItem(context, 'Production Inverse Voucher', Icons.undo_outlined,                    '/manufacturing/production-inverse-voucher', location),
+      _menuItem(context, 'Damage Stock Voucher',       Icons.report_gmailerrorred_outlined,    '/manufacturing/damage-stock-voucher',       location),
+      _menuItem(context, 'Claim Processing Voucher',   Icons.assignment_return_outlined,       '/manufacturing/claim-processing-voucher',   location),
+      _menuItem(context, 'Production Waste Report',    Icons.recycling_outlined,               '/manufacturing/production-waste-report',    location),
+    ];
+
     final financialItems = <Widget>[
       _menuItem(context, 'Chart of Accounts',  Icons.account_tree_outlined,    '/erp/chart-of-accounts',          location),
       _menuItem(context, 'Journal Vouchers',   Icons.edit_note_outlined,          '/financials/journal-vouchers',    location),
@@ -175,7 +184,7 @@ class _TopNav extends ConsumerWidget {
     // Legacy combined list (still used for isNotEmpty guards)
     final erpMenuItems = <Widget>[
       ...inventoryItems, ...purchaseItems, ...salesItems, ...posItems,
-      ...ledgerItems, ...financialItems, ...erpAdminItems,
+      ...ledgerItems, ...financialItems, ...manufacturingItems, ...erpAdminItems,
     ];
 
     List<Widget> splitErpMenus() => [
@@ -202,6 +211,12 @@ class _TopNav extends ConsumerWidget {
           ['/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
            '/erp/customer-aging', '/erp/supplier-aging'],
           ledgerItems),
+      if (manufacturingItems.isNotEmpty)
+        _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
+          ['/manufacturing/product-assembly', '/manufacturing/production-voucher',
+           '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
+           '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report'],
+          manufacturingItems),
       if (financialItems.isNotEmpty)
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
           ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers'],

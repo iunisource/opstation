@@ -3,6 +3,12 @@ import '../../features/erp/presentation/erp_journal_voucher_screen.dart';
 import '../../features/erp/presentation/erp_account_activity_screen.dart';
 import '../../features/erp/presentation/erp_profit_loss_screen.dart';
 import '../../features/erp/presentation/erp_balance_sheet_screen.dart';
+import '../../features/erp/presentation/erp_product_assembly_screen.dart';
+import '../../features/erp/presentation/erp_production_voucher_screen.dart';
+import '../../features/erp/presentation/erp_production_inverse_voucher_screen.dart';
+import '../../features/erp/presentation/erp_damage_stock_voucher_screen.dart';
+import '../../features/erp/presentation/erp_claim_processing_voucher_screen.dart';
+import '../../features/erp/presentation/erp_production_waste_report_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -164,6 +170,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
         GoRoute(path: '/financials/account-activity', builder: (_, __) => const ErpAccountActivityScreen()),
       GoRoute(path: '/financials/profit-loss',     builder: (_, __) => const ErpProfitLossScreen()),
       GoRoute(path: '/financials/balance-sheet',   builder: (_, __) => const ErpBalanceSheetScreen()),
+      GoRoute(path: '/manufacturing/product-assembly', builder: (_, __) => const ErpProductAssemblyScreen()),
+      GoRoute(path: '/manufacturing/production-voucher', builder: (_, __) => const ErpProductionVoucherScreen()),
+      GoRoute(path: '/manufacturing/production-inverse-voucher', builder: (_, __) => const ErpProductionInverseVoucherScreen()),
+      GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => const ErpDamageStockVoucherScreen()),
+      GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => const ErpClaimProcessingVoucherScreen()),
+      GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => const ErpProductionWasteReportScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),
           GoRoute(path: '/erp/pos-config', builder: (_, __) => const ErpPosConfigScreen()),
