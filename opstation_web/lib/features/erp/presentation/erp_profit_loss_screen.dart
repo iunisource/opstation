@@ -1,4 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
 import 'package:flutter/material.dart';
+import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -53,6 +55,56 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
       rows.fold(0.0, (s, r) => s + _n(r['net']));
 
 
+  void _print() {
+    final fmt = NumberFormat('#,##0.00');
+    final revenue = _rows.where((r) => r['account_type'] == 'revenue').toList();
+    final cogs    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] == 'Cost of Goods Sold').toList();
+    final opex    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] != 'Cost of Goods Sold').toList();
+    final totalRevenue = _sum(revenue);
+    final totalCogs = _sum(cogs);
+    final grossProfit = totalRevenue - totalCogs;
+    final totalOpex = _sum(opex);
+    final netIncome = grossProfit - totalOpex;
+    final branch = ref.read(selectedBranchProvider);
+    final branchName = (branch?['name'] as String?) ?? 'All Branches';
+    final period = DateFormat('d MMM yyyy').format(_from) + ' to ' + DateFormat('d MMM yyyy').format(_to);
+
+    String fmtNet(double v) => v < 0 ? '(' + fmt.format(v.abs()) + ')' : fmt.format(v);
+    String secRows(List<Map<String, dynamic>> rows) {
+      final b = StringBuffer();
+      for (final r in rows) {
+        b.write('<tr><td>' + (r['code'] ?? '').toString() + '</td><td>' + (r['name'] ?? '').toString() + '</td><td class="num">' + fmtNet(_n(r['net'])) + '</td></tr>');
+      }
+      return b.toString();
+    }
+    String section(String title, List<Map<String, dynamic>> rows, double total) {
+      if (rows.isEmpty) return '';
+      return '<tr class="hd"><td colspan="3">' + title + '</td></tr>' + secRows(rows) +
+        '<tr class="sub"><td colspan="2">Total ' + title + '</td><td class="num">' + fmt.format(total) + '</td></tr>';
+    }
+
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Profit and Loss</title><style>'
+      'body{font-family:Arial,sans-serif;padding:18px;color:#000;font-size:11px}h1{font-size:20px;margin:0 0 2px}'
+      '.info{font-size:11px;margin:1px 0;color:#444}table{width:100%;border-collapse:collapse;margin-top:14px}'
+      'td{padding:4px 8px;border-bottom:1px solid #eee;font-size:10.5px}.num{text-align:right;white-space:nowrap}'
+      '.hd td{font-weight:800;background:#f0f4ff;border-top:1px solid #ccc}.sub td{font-weight:700;border-top:1px solid #999}'
+      '.gp td{font-weight:800;background:#eef}.net td{font-weight:800;font-size:13px;background:#f5f5f5;border-top:2px solid #000}'
+      '@page{margin:0.6cm}</style></head><body>'
+      '<div class="no-print" style="margin-bottom:12px"><button onclick="window.print()">Print</button></div>'
+      '<h1>Profit and Loss</h1>'
+      '<div class="info"><b>Period:</b> ' + period + '</div>'
+      '<div class="info"><b>Branch:</b> ' + branchName + '</div>'
+      '<table><tbody>'
+      + section('REVENUE', revenue, totalRevenue)
+      + section('COST OF GOODS SOLD', cogs, totalCogs)
+      + '<tr class="gp"><td colspan="2">GROSS PROFIT</td><td class="num">' + fmt.format(grossProfit) + '</td></tr>'
+      + section('OPERATING EXPENSES', opex, totalOpex)
+      + '<tr class="net"><td colspan="2">' + (netIncome >= 0 ? 'NET INCOME' : 'NET LOSS') + '</td><td class="num">' + fmt.format(netIncome.abs()) + '</td></tr>'
+      + '</tbody></table></body></html>';
+    final blob = html.Blob([doc], 'text/html;charset=utf-8');
+    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+  }
+
   static double _n(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
@@ -79,6 +131,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Expanded(child: Text('Profit & Loss', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800))),
+          IconButton(onPressed: (_loading || _rows.isEmpty) ? null : _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
         ]),
         const SizedBox(height: 4),

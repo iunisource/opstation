@@ -1,4 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
 import 'package:flutter/material.dart';
+import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -67,6 +69,58 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   }
 
 
+  void _print() {
+    final fmt = NumberFormat('#,##0.00');
+    final assets = _bsRows.where((r) => r['account_type'] == 'asset').toList();
+    final liabs  = _bsRows.where((r) => r['account_type'] == 'liability').toList();
+    final equity = _bsRows.where((r) => r['account_type'] == 'equity').toList();
+    double sumBal(List<Map<String, dynamic>> rows) => rows.fold(0.0, (s, r) => s + _n(r['balance']));
+    final totalAssets = sumBal(assets);
+    final totalLiabs  = sumBal(liabs);
+    final totalEquity = sumBal(equity) + _netIncome;
+    final balanced = (totalAssets - (totalLiabs + totalEquity)).abs() < 0.01;
+    final branch = ref.read(selectedBranchProvider);
+    final branchName = (branch?['name'] as String?) ?? 'All Branches';
+    final asOf = DateFormat('d MMM yyyy').format(_asOf);
+
+    String secRows(List<Map<String, dynamic>> rows) {
+      final b = StringBuffer();
+      for (final r in rows) {
+        b.write('<tr><td>' + (r['code'] ?? '').toString() + '</td><td>' + (r['name'] ?? '').toString() + '</td><td class="num">' + fmt.format(_n(r['balance'])) + '</td></tr>');
+      }
+      return b.toString();
+    }
+
+    final equityExtra = _netIncome.abs() > 0.005
+      ? '<tr><td>P&L</td><td><i>Current Year Profit / Loss</i></td><td class="num">' + (_netIncome < 0 ? '(' + fmt.format(_netIncome.abs()) + ')' : fmt.format(_netIncome)) + '</td></tr>'
+      : '';
+
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Balance Sheet</title><style>'
+      'body{font-family:Arial,sans-serif;padding:18px;color:#000;font-size:11px}h1{font-size:20px;margin:0 0 2px}'
+      '.info{font-size:11px;margin:1px 0;color:#444}.cols{display:flex;gap:24px;margin-top:14px}.col{flex:1}'
+      'h2{font-size:13px;margin:0 0 6px;border-bottom:2px solid #000;padding-bottom:3px}'
+      'table{width:100%;border-collapse:collapse}td{padding:3px 6px;border-bottom:1px solid #eee;font-size:10.5px}'
+      '.num{text-align:right;white-space:nowrap}tfoot td{font-weight:800;border-top:2px solid #000;border-bottom:none;background:#f5f5f5}'
+      '.chk{margin-top:14px;font-weight:700}@page{margin:0.6cm}</style></head><body>'
+      '<div class="no-print" style="margin-bottom:12px"><button onclick="window.print()">Print</button></div>'
+      '<h1>Balance Sheet</h1>'
+      '<div class="info"><b>As of:</b> ' + asOf + '</div>'
+      '<div class="info"><b>Branch:</b> ' + branchName + '</div>'
+      '<div class="cols">'
+      '<div class="col"><h2>ASSETS</h2><table><tbody>' + secRows(assets) + '</tbody>'
+      '<tfoot><tr><td colspan="2">TOTAL ASSETS</td><td class="num">' + fmt.format(totalAssets) + '</td></tr></tfoot></table></div>'
+      '<div class="col"><h2>LIABILITIES</h2><table><tbody>' + secRows(liabs) + '</tbody>'
+      '<tfoot><tr><td colspan="2">TOTAL LIABILITIES</td><td class="num">' + fmt.format(totalLiabs) + '</td></tr></tfoot></table>'
+      '<h2 style="margin-top:14px">EQUITY</h2><table><tbody>' + secRows(equity) + equityExtra + '</tbody>'
+      '<tfoot><tr><td colspan="2">TOTAL EQUITY</td><td class="num">' + fmt.format(totalEquity) + '</td></tr>'
+      '<tr><td colspan="2">TOTAL LIABILITIES + EQUITY</td><td class="num">' + fmt.format(totalLiabs + totalEquity) + '</td></tr></tfoot></table></div>'
+      '</div>'
+      '<div class="chk">' + (balanced ? 'Balanced' : 'Out of balance by ' + fmt.format((totalAssets - totalLiabs - totalEquity).abs())) + '</div>'
+      '</body></html>';
+    final blob = html.Blob([doc], 'text/html;charset=utf-8');
+    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+  }
+
   static double _n(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
@@ -94,6 +148,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Expanded(child: Text('Balance Sheet', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800))),
+          IconButton(onPressed: (_loading || _bsRows.isEmpty) ? null : _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
         ]),
         const SizedBox(height: 4),
