@@ -162,6 +162,7 @@ class _TopNav extends ConsumerWidget {
       _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
       _menuItem(context, 'Receipt Vouchers', Icons.payments_outlined,     '/erp/receipt-vouchers',      location),
       _menuItem(context, 'Trial Balance',    Icons.account_balance_outlined, '/financials/trial-balance',  location),
+      _menuItem(context, 'Account Activity', Icons.receipt_long_outlined, '/financials/account-activity', location),
       _menuItem(context, 'Profit & Loss',    Icons.trending_up_outlined,     '/financials/profit-loss',    location),
       _menuItem(context, 'Balance Sheet',    Icons.balance_outlined,         '/financials/balance-sheet',  location),
     ];

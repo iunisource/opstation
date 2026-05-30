@@ -39,6 +39,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   List<Map<String,dynamic>> _auditTrail = [];
   bool _loadingMaster = true, _saving = false;
   String? _pendingFocusId;
+  int _auditSeq = 0;
 
   String? get _orgId    => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -313,7 +314,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     final userName = ref.read(currentUserProvider)?.name ?? '';
     try {
       await Supabase.instance.client.from('jv_audit_trail').insert({
-        'id': 'aud_${DateTime.now().microsecondsSinceEpoch}',
+        'id': 'aud_${action}_${DateTime.now().microsecondsSinceEpoch}_${_auditSeq++}',
         'entry_id': _current!['id'] as String,
         'action': action,
         'performed_by': userId,
