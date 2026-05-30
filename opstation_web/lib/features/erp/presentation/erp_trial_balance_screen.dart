@@ -62,12 +62,12 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
           headers: ['Code','Account','Open Dr','Open Cr','Period Dr','Period Cr','Close Dr','Close Cr'],
           data: [for (final r in _rows) [
             r['code']??'', r['name']??'',
-            fmt.format((r['opening_dr'] as num?? 0).toDouble()),
-            fmt.format((r['opening_cr'] as num?? 0).toDouble()),
+            fmt.format(_n(r['opening_dr'])),
+            fmt.format(_n(r['opening_cr'])),
             fmt.format((r['period_dr']  as num?? 0).toDouble()),
             fmt.format((r['period_cr']  as num?? 0).toDouble()),
-            fmt.format((r['closing_dr'] as num?? 0).toDouble()),
-            fmt.format((r['closing_cr'] as num?? 0).toDouble()),
+            fmt.format(_n(r['closing_dr'])),
+            fmt.format(_n(r['closing_cr'])),
           ]],
           headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7),
           cellStyle: const pw.TextStyle(fontSize: 7),
@@ -79,6 +79,12 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     await Printing.layoutPdf(onLayout: (_) async => doc.save(), name: 'trial_balance.pdf');
   }
 
+
+  static double _n(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
   @override
   Widget build(BuildContext context) {
     ref.listen(selectedBranchProvider, (_, __) => _load());

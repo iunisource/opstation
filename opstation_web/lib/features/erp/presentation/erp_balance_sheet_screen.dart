@@ -64,6 +64,12 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     }
   }
 
+
+  static double _n(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
   @override
   Widget build(BuildContext context) {
     ref.listen(selectedBranchProvider, (_, __) => _load());
@@ -75,7 +81,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     final equity  = _bsRows.where((r) => r['account_type'] == 'equity').toList();
 
     double sumBal(List<Map<String, dynamic>> rows) =>
-        rows.fold(0.0, (s, r) => s + (r['balance'] as num? ?? 0).toDouble());
+        rows.fold(0.0, (s, r) => s + _n(r['balance']));
     final totalAssets = sumBal(assets);
     final totalLiabs  = sumBal(liabs);
     final totalEquity = sumBal(equity) + _netIncome;
@@ -160,7 +166,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
           child: Row(children: [
             SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
             Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
-            Text(fmt.format((r['balance'] as num?? 0).toDouble()), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            Text(fmt.format(_n(r['balance'])), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ])),
       if (netIncome != null && netIncome!.abs() > 0.005)
         Padding(padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),

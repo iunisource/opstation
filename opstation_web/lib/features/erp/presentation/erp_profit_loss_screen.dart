@@ -40,8 +40,14 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   }
 
   double _sum(List<Map<String, dynamic>> rows) =>
-      rows.fold(0.0, (s, r) => s + (r['net'] as num? ?? 0).toDouble());
+      rows.fold(0.0, (s, r) => s + _n(r['net']));
 
+
+  static double _n(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
   @override
   Widget build(BuildContext context) {
     ref.listen(selectedBranchProvider, (_, __) => _load());
@@ -130,7 +136,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
           child: Row(children: [
             SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
             Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
-            Text(_fmtNet(fmt, (r['net'] as num?? 0).toDouble()),
+            Text(_fmtNet(fmt, _n(r['net'])),
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                     color: (r['net'] as num?? 0) < 0 ? AppTheme.danger : null)),
           ])),
