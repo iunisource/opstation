@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -457,22 +459,47 @@ Widget _navMenu(
   );
 }
 
+void _openInNewTab(BuildContext context, String path, Offset pos) {
+  final href = html.window.location.href;
+  final hashIdx = href.indexOf('#');
+  final origin = hashIdx != -1 ? href.substring(0, hashIdx) : href;
+  final url = '${origin}#${path}';
+  showMenu(
+    context: context,
+    position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx + 1, pos.dy + 1),
+    color: Colors.white,
+    items: [
+      PopupMenuItem(
+        onTap: () => html.window.open(url, '_blank'),
+        child: Row(children: [
+          const Icon(Icons.open_in_new, size: 15, color: Colors.grey),
+          const SizedBox(width: 10),
+          const Text('Open in new tab', style: TextStyle(fontSize: 13)),
+        ]),
+      ),
+    ],
+  );
+}
+
 Widget _menuItem(BuildContext context, String label, IconData icon, String path, String location) {
   final isActive = location == path;
-  return MenuItemButton(
-    style: ButtonStyle(
-      backgroundColor: WidgetStateProperty.resolveWith((states) {
-        if (isActive) return AppTheme.primary.withOpacity(0.2);
-        if (states.contains(WidgetState.hovered)) return Colors.white.withOpacity(0.08);
-        return Colors.transparent;
-      }),
-      foregroundColor: WidgetStatePropertyAll(isActive ? Colors.white : Colors.white70),
-      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-      minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
+  return GestureDetector(
+    onSecondaryTapDown: (d) => _openInNewTab(context, path, d.globalPosition),
+    child: MenuItemButton(
+      style: ButtonStyle(
+        backgroundColor: WidgetStateProperty.resolveWith((states) {
+          if (isActive) return AppTheme.primary.withOpacity(0.2);
+          if (states.contains(WidgetState.hovered)) return Colors.white.withOpacity(0.08);
+          return Colors.transparent;
+        }),
+        foregroundColor: WidgetStatePropertyAll(isActive ? Colors.white : Colors.white70),
+        padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+        minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
+      ),
+      leadingIcon: Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white54),
+      onPressed: () => GoRouter.of(context).go(path),
+      child: Text(label, style: TextStyle(fontSize: 13, fontWeight: isActive ? FontWeight.w600 : FontWeight.w400)),
     ),
-    leadingIcon: Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white54),
-    onPressed: () => GoRouter.of(context).go(path),
-    child: Text(label, style: TextStyle(fontSize: 13, fontWeight: isActive ? FontWeight.w600 : FontWeight.w400)),
   );
 }
 

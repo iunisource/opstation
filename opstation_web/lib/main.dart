@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,6 +28,7 @@ Future<void> main() async {
         url: 'https://xgptodkasmytddmdnbtb.supabase.co',
         anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhncHRvZGthc215dGRkbWRuYnRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NzA5MjUsImV4cCI6MjA5MjI0NjkyNX0.pc1VsvsvtnkBHyRzuXzzuspSTJRqU_BQgQulMQ9UCac',
       );
+      html.document.addEventListener('contextmenu', (e) => e.preventDefault());
       runApp(const ProviderScope(child: OpstationWebApp()));
     },
   );
