@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -9,8 +10,9 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
 class _JvLine {
-  final String id = 'jvl_${DateTime.now().microsecondsSinceEpoch}';
-  String? accountId; String accountName = '';
+  static int _seq = 0;
+  final String id = 'jvl_${DateTime.now().microsecondsSinceEpoch}_${_seq++}';
+  String? accountId; String accountName = ''; String accountType = 'coa';
   final TextEditingController descCtrl   = TextEditingController();
   final TextEditingController debitCtrl  = TextEditingController();
   final TextEditingController creditCtrl = TextEditingController();
@@ -30,7 +32,13 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   Map<String,dynamic>? _current; DateTime _date = DateTime.now();
   final _dateCtrl = TextEditingController(); final _narCtrl = TextEditingController();
   String _status = 'draft'; List<_JvLine> _lines = [];
-  List<Map<String,dynamic>> _coaList = []; bool _loadingMaster = true, _saving = false;
+  List<Map<String,dynamic>> _coaList = [];
+  List<Map<String,dynamic>> _supplierList = [];
+  List<Map<String,dynamic>> _customerList = [];
+  List<Map<String,dynamic>> _allAccounts = [];
+  List<Map<String,dynamic>> _auditTrail = [];
+  bool _loadingMaster = true, _saving = false;
+  String? _pendingFocusId;
 
   String? get _orgId    => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -43,11 +51,22 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   @override void initState() {
     super.initState();
     _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date);
+    _lines = [_JvLine(), _JvLine()];
     WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); });
-    _addLine(); _addLine();
   }
   @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  static String _typeLabel(dynamic t) {
+    switch (t) {
+      case 'asset':     return 'Asset Account';
+      case 'liability': return 'Liability Account';
+      case 'equity':    return 'Equity Account';
+      case 'revenue':   return 'Revenue Account';
+      case 'expense':   return 'Expense Account';
+      default:          return 'COA';
+    }
+  }
 
   Future<void> _loadMaster() async {
     final orgId = _orgId;
@@ -55,9 +74,39 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     try {
       final res  = await Supabase.instance.client.rpc('get_voucher_master', params: {'p_org_id': orgId});
       final data = res as Map<String,dynamic>;
-      final coa  = List<Map<String,dynamic>>.from((data['coa'] as List?) ?? []);
-      if (mounted) setState(() { _coaList = coa; _loadingMaster = false; });
-    } catch (e) { if (mounted) setState(() => _loadingMaster = false); }
+      final coa  = List<Map<String,dynamic>>.from((data['coa']       as List?) ?? []);
+      final sup  = List<Map<String,dynamic>>.from((data['suppliers'] as List?) ?? []);
+      final cus  = List<Map<String,dynamic>>.from((data['customers'] as List?) ?? []);
+      final all = <Map<String,dynamic>>[
+        ...coa.where((a) => (a['level'] as int? ?? 0) == 3).map((a) => {
+          'id': a['id'],
+          'label': "${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}",
+          'sub': _typeLabel(a['account_type']),
+          'account_type': a['account_type'],
+          'type': 'coa',
+        }),
+        ...sup.map((s) => {
+          'id': s['id'],
+          'label': "${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}",
+          'sub': 'Supplier', 'type': 'supplier',
+        }),
+        ...cus.map((c) => {
+          'id': c['id'],
+          'label': "${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}",
+          'sub': 'Customer', 'type': 'customer',
+        }),
+      ];
+      if (mounted) setState(() { _coaList = coa; _supplierList = sup; _customerList = cus; _allAccounts = all; _loadingMaster = false; });
+    } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loadingMaster = false); } }
+  }
+
+  List<Map<String,dynamic>> _filterAccounts(String q) {
+    if (q.isEmpty) return _allAccounts.take(50).toList();
+    final ql = q.toLowerCase();
+    return _allAccounts.where((a) =>
+      (a['label'] as String? ?? '').toLowerCase().contains(ql) ||
+      (a['sub']   as String? ?? '').toLowerCase().contains(ql)
+    ).take(200).toList();
   }
 
   Future<void> _loadVouchers() async {
@@ -101,12 +150,16 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     Overlay.of(context).insert(_ctxOverlay!);
   }
 
-  void _addLine() => setState(() => _lines.add(_JvLine()));
+  void _addLine() {
+    final nl = _JvLine();
+    setState(() { _lines.add(nl); _pendingFocusId = nl.id; });
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) setState(() => _pendingFocusId = null); });
+  }
   void _removeLine(int i) { setState(() { _lines[i].dispose(); _lines.removeAt(i); }); if (_lines.length < 2) _addLine(); }
   void _newVoucher() {
     for (final l in _lines) l.dispose();
     setState(() { _current = null; _status = 'draft'; _lines = [_JvLine(), _JvLine()];
-      _date = DateTime.now(); _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date); _narCtrl.clear(); });
+      _auditTrail = []; _date = DateTime.now(); _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date); _narCtrl.clear(); });
   }
 
   Future<void> _loadVoucher(Map<String,dynamic> v) async {
@@ -114,9 +167,22 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       final rows = await Supabase.instance.client.from('journal_lines').select().eq('entry_id', v['id'] as String).order('line_order');
       for (final l in _lines) l.dispose();
       final newLines = (rows as List).map((r) {
-        final l = _JvLine(); l.accountId = r['account_id'] as String?;
-        final coa = _coaList.firstWhere((a) => a['id'] == l.accountId, orElse: () => {});
-        l.accountName = coa.isNotEmpty ? '${coa['code'] ?? ''} — ${coa['name'] ?? ''}' : (l.accountId ?? '');
+        final l = _JvLine();
+        l.accountType = r['account_type'] as String? ?? 'coa';
+        final pid = r['party_id'] as String?;
+        final savedAccId = r['account_id'] as String?;
+        if ((l.accountType == 'supplier' || l.accountType == 'customer') && pid != null) {
+          l.accountId = pid;            // restore the picker selection to the actual party
+        } else {
+          l.accountId = savedAccId;
+        }
+        final savedName = r['account_name'] as String?;
+        if (savedName != null && savedName.isNotEmpty) {
+          l.accountName = savedName;
+        } else {
+          final m = _allAccounts.firstWhere((a) => a['id'] == l.accountId, orElse: () => {});
+          l.accountName = m.isNotEmpty ? (m['label'] as String? ?? '') : (l.accountId ?? '');
+        }
         l.descCtrl.text = r['description'] as String? ?? '';
         final dr = (r['debit']  as num? ?? 0).toDouble(); final cr = (r['credit'] as num? ?? 0).toDouble();
         if (dr > 0) l.debitCtrl.text  = dr.toStringAsFixed(2);
@@ -128,6 +194,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         _lines = newLines.isEmpty ? [_JvLine(), _JvLine()] : newLines;
         _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d);
         _narCtrl.text = v['description'] as String? ?? ''; });
+      _loadAudit(v['id'] as String);
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -137,14 +204,17 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     if (post && !_balanced) { _snack('Debits must equal credits to post'); return; }
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return; }
     final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id ?? '';
+    final apId = 'coa_' + orgId + '_2110';   // Accounts Payable control account
+    final arId = 'coa_' + orgId + '_1210';   // Accounts Receivable control account
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
       final dateStr = DateFormat('yyyy-MM-dd').format(_date);
       final newSt   = post ? 'posted' : 'draft';
       final nar     = _narCtrl.text.trim();
+      final wasNew  = _current == null;
       String eId, eNum;
-      if (_current == null) {
+      if (wasNew) {
         final cnt = await client.from('journal_entries').select('id').eq('org_id', orgId).eq('reference_type', 'jv');
         final seq  = ((cnt as List).length + 1).toString().padLeft(4, '0');
         eNum = 'JV-' + DateTime.now().year.toString() + '-' + seq;
@@ -168,15 +238,25 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       await client.from('journal_lines').delete().eq('entry_id', eId);
       for (var i = 0; i < valid.length; i++) {
         final l = valid[i];
+        final isParty = l.accountType == 'supplier' || l.accountType == 'customer';
+        final glAcc   = l.accountType == 'supplier' ? apId
+                      : l.accountType == 'customer' ? arId
+                      : l.accountId;
         await client.from('journal_lines').insert({
           'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
-          'account_id': l.accountId, 'debit': l.debit, 'credit': l.credit,
+          'account_id': glAcc,
+          'account_type': l.accountType,
+          'account_name': l.accountName,
+          'party_id': isParty ? l.accountId : null,
+          'debit': l.debit, 'credit': l.credit,
           'description': l.descCtrl.text.trim(), 'line_order': i+1,
           'created_at': DateTime.now().toIso8601String(),
         });
       }
       final updated = await client.from('journal_entries').select().eq('id', eId).single();
       if (mounted) setState(() { _current = updated; _status = newSt; });
+      if (wasNew) _logAudit('created', notes: 'Total Dr: ' + _totalDr.toStringAsFixed(2) + '  •  ' + valid.length.toString() + ' lines');
+      if (post)   _logAudit('posted',  notes: 'Total Dr: ' + _totalDr.toStringAsFixed(2) + '  •  ' + valid.length.toString() + ' lines');
       _snack(post ? 'JV ' + eNum + ' posted ✓' : 'Draft saved');
       await _loadVouchers();
     } catch (e) { _snack('Save failed: ' + e.toString()); }
@@ -189,7 +269,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       title: const Text('Delete Journal Voucher?'),
       content: const Text('This removes all GL lines and cannot be undone.'),
       actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red))],
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text('Delete'))],
     ));
     if (ok != true) return;
     try {
@@ -200,11 +280,122 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     } catch (e) { _snack('Delete failed: ' + e.toString()); }
   }
 
-  List<Map<String,dynamic>> _filterCoa(String q) {
-    final l3 = _coaList.where((a) => (a['level'] as int? ?? 0) == 3).toList();
-    if (q.isEmpty) return l3.take(30).toList();
-    final ql = q.toLowerCase();
-    return l3.where((a) => (a['name'] as String? ?? '').toLowerCase().contains(ql) || (a['code'] as String? ?? '').toLowerCase().contains(ql)).take(50).toList();
+  Future<void> _unlockVoucher() async {
+    if (_current == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Unlock Voucher?'),
+      content: const Text('This will set the voucher back to Draft and allow editing.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange), child: const Text('Unlock')),
+      ],
+    ));
+    if (ok != true || !mounted) return;
+    try {
+      await Supabase.instance.client.from('journal_entries').update({'status': 'draft'}).eq('id', _current!['id'] as String);
+      setState(() { _status = 'draft'; _current = {..._current!, 'status': 'draft'}; });
+      _logAudit('unlocked', notes: 'Voucher reopened for editing');
+      _snack('Voucher unlocked for editing');
+    } catch (e) { _snack('Failed: ' + e.toString()); }
+  }
+
+  // ── Audit trail ────────────────────────────────────────────────
+  Future<void> _loadAudit(String entryId) async {
+    try {
+      final rows = await Supabase.instance.client.from('jv_audit_trail').select().eq('entry_id', entryId).order('performed_at');
+      if (mounted) setState(() => _auditTrail = List<Map<String,dynamic>>.from(rows));
+    } catch (_) {}
+  }
+
+  Future<void> _logAudit(String action, {String? notes}) async {
+    if (_current == null) return;
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name ?? '';
+    try {
+      await Supabase.instance.client.from('jv_audit_trail').insert({
+        'id': 'aud_${DateTime.now().microsecondsSinceEpoch}',
+        'entry_id': _current!['id'] as String,
+        'action': action,
+        'performed_by': userId,
+        'performed_by_name': userName,
+        'performed_at': DateTime.now().toIso8601String(),
+        'notes': notes,
+      });
+      await _loadAudit(_current!['id'] as String);
+    } catch (e) { _snack('Audit log error: $e'); }
+  }
+
+  void _showAuditTrail() {
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Audit Trail'),
+      content: SizedBox(width: 420, child: _auditTrail.isEmpty
+          ? const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('No audit records yet.', style: TextStyle(color: AppTheme.textSecondary)))
+          : ListView.separated(
+              shrinkWrap: true,
+              itemCount: _auditTrail.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final e = _auditTrail[i];
+                final raw = e['performed_at'] as String? ?? '';
+                final at = raw.length >= 16 ? raw.substring(0, 16).replaceAll('T', ' ') : raw;
+                final who = e['performed_by_name'] as String? ?? 'Unknown';
+                final notes = e['notes'] as String? ?? '';
+                return ListTile(
+                  dense: true,
+                  leading: Icon(_auditIcon(e['action'] as String? ?? ''), size: 18, color: _auditColor(e['action'] as String? ?? '')),
+                  title: Text((e['action'] as String? ?? '').toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  subtitle: Text('$who  •  $at${notes.isNotEmpty ? '\n$notes' : ''}', style: const TextStyle(fontSize: 11)),
+                  isThreeLine: notes.isNotEmpty,
+                );
+              },
+            )),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+    ));
+  }
+
+  IconData _auditIcon(String action) {
+    if (action == 'created') return Icons.add_circle_outline;
+    if (action == 'posted') return Icons.lock_outline;
+    if (action == 'unlocked') return Icons.lock_open_outlined;
+    return Icons.info_outline;
+  }
+  Color _auditColor(String action) {
+    if (action == 'created') return Colors.blue;
+    if (action == 'posted') return Colors.green;
+    if (action == 'unlocked') return Colors.orange;
+    return Colors.grey;
+  }
+
+  void _print() {
+    if (_current == null) { _snack('Save the voucher first'); return; }
+    final lines = _lines.where((l) => l.accountId != null && (l.debit + l.credit) > 0).toList();
+    final rawPostedAt = _current!['posted_at'] as String?;
+    final postedInfo = rawPostedAt != null
+        ? rawPostedAt.replaceAll('T', ' ').substring(0, rawPostedAt.length > 16 ? 16 : rawPostedAt.length)
+        : '_______________';
+    final htmlStr = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Journal Voucher</title><style>
+      body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db;margin-bottom:4px}
+      table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #ddd;padding:8px;text-align:left}
+      th{background:#f0f4ff;font-weight:600}.total{font-weight:700}.num{text-align:right}
+      .meta td{border:none;font-size:11px;padding:1px 10px 1px 0}
+      .footer{margin-top:40px;display:flex;justify-content:space-between;font-size:12px}
+      @media print{.no-print{display:none}@page{margin:0}body{padding:15mm 20mm}}
+    </style></head><body>
+    <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">Print</button></div>
+    <h2>Journal Voucher</h2>
+    <table class="meta" style="border:none;margin-bottom:5px"><tr>
+      <td><b>Voucher#:</b> ${_current!['entry_number'] ?? ''}</td>
+      <td><b>Date:</b> ${DateFormat('dd MMM yyyy').format(_date)}</td>
+      <td><b>Status:</b> ${_status.toUpperCase()}</td>
+    </tr><tr><td colspan="3"><b>Narration:</b> ${_narCtrl.text}</td></tr></table>
+    <table><thead><tr><th style="width:30px">#</th><th>Account</th><th>Description</th><th class="num" style="width:120px">Debit</th><th class="num" style="width:120px">Credit</th></tr></thead><tbody>
+    ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td class="num">${e.value.debit > 0 ? e.value.debit.toStringAsFixed(2) : ''}</td><td class="num">${e.value.credit > 0 ? e.value.credit.toStringAsFixed(2) : ''}</td></tr>').join()}
+    </tbody><tfoot><tr><td colspan="3" class="total num">Total:</td><td class="total num">${_totalDr.toStringAsFixed(2)}</td><td class="total num">${_totalCr.toStringAsFixed(2)}</td></tr></tfoot></table>
+    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Posted: $postedInfo</div></div>
+    </body></html>''';
+    final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
   }
 
   @override Widget build(BuildContext context) {
@@ -219,7 +410,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
           Container(padding: const EdgeInsets.fromLTRB(10,10,10,8),
-            decoration: BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+            decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
             child: Column(children: [
               Row(children: [
                 const Expanded(child: Text('Journal Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
@@ -256,7 +447,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
 
       Expanded(child: Column(children: [
         Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+          decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
             IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
             const SizedBox(width: 8),
@@ -264,7 +455,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
               Text(_current?['entry_number'] as String? ?? 'New Journal Voucher', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
               if (_current != null) Text(_isLocked ? '🔒 Posted & Locked' : '✏️ Draft', style: TextStyle(fontSize: 10, color: _isLocked ? Colors.green : Colors.orange, fontWeight: FontWeight.w600)),
             ])),
-            if (_current != null && !_isLocked) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18), onPressed: _delete, tooltip: 'Delete'),
+            if (_current != null) IconButton(icon: const Icon(Icons.history_outlined, size: 20), onPressed: _showAuditTrail, tooltip: 'Audit Trail'),
+            if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _print, tooltip: 'Print'),
+            if (_current != null) IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
             const SizedBox(width: 8),
             if (!_isLocked) ...[
               OutlinedButton(onPressed: _saving ? null : () => _save(post: false), child: const Text('Save Draft', style: TextStyle(fontSize: 12))),
@@ -275,6 +468,13 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
                 onPressed: (_canPost && !_saving) ? () => _save(post: true) : null),
             ],
+            if (_isLocked) Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.3))),
+                child: const Row(children: [Icon(Icons.lock, size: 14, color: Colors.green), SizedBox(width: 4), Text('Posted', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: 13))])),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(icon: const Icon(Icons.lock_open_outlined, size: 14), label: const Text('Unlock', style: TextStyle(fontSize: 12)), onPressed: _unlockVoucher,
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.orange, side: const BorderSide(color: Colors.orange), padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
+            ]),
           ])),
         Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
@@ -305,12 +505,13 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             ])),
           ]),
           const SizedBox(height: 20),
+          if (_loadingMaster) const Padding(padding: EdgeInsets.only(bottom: 10), child: Row(children: [SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 8), Text('Loading accounts...', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))])),
           Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)), child: Column(children: [
             Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
+              decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(10))),
               child: const Row(children: [
                 SizedBox(width: 30, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-                Expanded(flex: 5, child: Text('Account', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+                Expanded(flex: 5, child: Text('Account / Party', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
                 SizedBox(width: 8),
                 Expanded(flex: 3, child: Text('Description', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
                 SizedBox(width: 8),
@@ -319,13 +520,21 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 SizedBox(width: 120, child: Text('Credit (Cr)', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
                 SizedBox(width: 30),
               ])),
-            for (var i = 0; i < _lines.length; i++) _buildLine(i, fmt),
+            for (var i = 0; i < _lines.length; i++) _JvLineWidget(
+              key: ValueKey('jvline_${_lines[i].id}'),
+              line: _lines[i], lineNum: i + 1,
+              filterFn: _filterAccounts, locked: _isLocked,
+              autoFocus: _lines[i].id == _pendingFocusId,
+              onRemove: () => _removeLine(i),
+              onNextLine: i == _lines.length - 1 ? _addLine : () {},
+              onChanged: () => setState(() {}),
+            ),
             if (!_isLocked) Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add Line', style: TextStyle(fontSize: 12)), onPressed: _addLine)),
             Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: _balanced && _totalDr > 0 ? Colors.green.withOpacity(0.05) : (_totalDr > 0 ? Colors.red.withOpacity(0.04) : AppTheme.background),
-                border: Border(top: BorderSide(color: AppTheme.border)),
+                border: const Border(top: BorderSide(color: AppTheme.border)),
                 borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10))),
               child: Row(children: [
                 const Expanded(child: SizedBox()),
@@ -338,7 +547,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                   Text(fmt.format(_totalCr), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800))])),
                 SizedBox(width: 46, child: Center(child: _totalDr > 0
                   ? (_balanced ? const Tooltip(message: 'Balanced', child: Icon(Icons.check_circle, color: Colors.green, size: 20))
-                      : Tooltip(message: 'Unbalanced', child: Icon(Icons.error, color: Colors.red, size: 20)))
+                      : const Tooltip(message: 'Unbalanced', child: Icon(Icons.error, color: Colors.red, size: 20)))
                   : const SizedBox())),
               ])),
           ])),
@@ -354,85 +563,119 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       ])),
     ]));
   }
+}
 
-  Widget _buildLine(int i, NumberFormat fmt) {
-    final l = _lines[i];
+class _JvLineWidget extends StatefulWidget {
+  final _JvLine line; final int lineNum;
+  final List<Map<String,dynamic>> Function(String) filterFn;
+  final bool locked; final bool autoFocus;
+  final VoidCallback onRemove, onNextLine, onChanged;
+  const _JvLineWidget({super.key, required this.line, required this.lineNum, required this.filterFn,
+    required this.locked, required this.onRemove, required this.onNextLine, required this.onChanged, this.autoFocus = false});
+  @override State<_JvLineWidget> createState() => _JvLineWidgetState();
+}
+
+class _JvLineWidgetState extends State<_JvLineWidget> {
+  bool _showDrop = false; String _q = '';
+  final _accFocus = FocusNode(); final _descFocus = FocusNode();
+  final _debitFocus = FocusNode(); final _creditFocus = FocusNode();
+  final _accCtrl = TextEditingController();
+
+  @override void initState() {
+    super.initState();
+    _accCtrl.text = widget.line.accountName;
+    _accFocus.addListener(() { if (!_accFocus.hasFocus) Future.delayed(const Duration(milliseconds: 160), () { if (mounted && !_accFocus.hasFocus) setState(() => _showDrop = false); }); });
+    if (widget.autoFocus) WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _accFocus.requestFocus(); });
+  }
+  @override void dispose() { _accFocus.dispose(); _descFocus.dispose(); _debitFocus.dispose(); _creditFocus.dispose(); _accCtrl.dispose(); super.dispose(); }
+
+  Color _typeColor(String t) {
+    switch (t) {
+      case 'supplier': return Colors.blue;
+      case 'customer': return Colors.purple;
+      case 'asset': return Colors.blue;
+      case 'liability': return Colors.red;
+      case 'equity': return Colors.purple;
+      case 'revenue': return Colors.green;
+      case 'expense': return Colors.orange;
+      default: return AppTheme.primary;
+    }
+  }
+
+  void _pick(Map<String,dynamic> a) {
+    widget.line.accountId = a['id'] as String?;
+    widget.line.accountName = a['label'] as String? ?? '';
+    widget.line.accountType = a['type'] as String? ?? 'coa';
+    _accCtrl.text = widget.line.accountName;
+    setState(() { _showDrop = false; _q = ''; });
+    widget.onChanged();
+    _descFocus.requestFocus();
+  }
+
+  @override Widget build(BuildContext context) {
+    final filtered = widget.filterFn(_q);
+    final l = widget.line;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 30, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${i+1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
-        Expanded(flex: 5, child: _JvAccPicker(key: ValueKey(l.id), line: l, filterFn: _filterCoa, enabled: !_isLocked,
-          onPick: (a) => setState(() { l.accountId = a['id'] as String?; l.accountName = (a['code'] ?? '') + ' — ' + (a['name'] ?? ''); }))),
+        SizedBox(width: 30, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${widget.lineNum}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
+        Expanded(flex: 5, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(controller: _accCtrl, focusNode: _accFocus, enabled: !widget.locked,
+            decoration: InputDecoration(hintText: 'Search account, supplier, customer...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              border: OutlineInputBorder(borderSide: BorderSide(color: l.accountId != null ? Colors.green : const Color(0xFFE0E0E0))),
+              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: l.accountId != null ? Colors.green : const Color(0xFFE0E0E0))),
+              suffixIcon: l.accountId != null ? const Icon(Icons.check_circle, size: 14, color: Colors.green) : null),
+            style: const TextStyle(fontSize: 12),
+            onChanged: (v) { setState(() { _q = v; _showDrop = true; }); if (v != l.accountName) { l.accountId = null; l.accountName = v; l.accountType = 'coa'; widget.onChanged(); } },
+            onTap: () => setState(() { _q = _accCtrl.text == l.accountName ? '' : _accCtrl.text; _showDrop = true; }),
+            onSubmitted: (_) { if (filtered.isNotEmpty) _pick(filtered.first); }),
+          if (_showDrop && filtered.isNotEmpty) Container(constraints: const BoxConstraints(maxHeight: 200), margin: const EdgeInsets.only(top: 2),
+            decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)]),
+            child: ListView(shrinkWrap: true, children: filtered.map((a) {
+              final t = a['type'] as String? ?? 'coa';
+              final c = _typeColor(t == 'coa' ? (a['account_type'] as String? ?? '') : t);
+              return InkWell(onTap: () => _pick(a), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), child: Row(children: [
+                Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
+                  child: Text(a['sub'] as String? ?? t, style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))),
+                const SizedBox(width: 6),
+                Expanded(child: Text(a['label'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+              ])));
+            }).toList())),
+        ])),
         const SizedBox(width: 8),
-        Expanded(flex: 3, child: TextField(controller: l.descCtrl, enabled: !_isLocked,
+        Expanded(flex: 3, child: TextField(controller: l.descCtrl, focusNode: _descFocus, enabled: !widget.locked,
           decoration: const InputDecoration(hintText: 'Note', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7),
             border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
             enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-          style: const TextStyle(fontSize: 12))),
+          style: const TextStyle(fontSize: 12), textInputAction: TextInputAction.next,
+          onSubmitted: (_) => _debitFocus.requestFocus())),
         const SizedBox(width: 8),
-        SizedBox(width: 120, child: TextField(controller: l.debitCtrl, enabled: !_isLocked, textAlign: TextAlign.right,
+        SizedBox(width: 120, child: TextField(controller: l.debitCtrl, focusNode: _debitFocus, enabled: !widget.locked, textAlign: TextAlign.right,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
           decoration: InputDecoration(hintText: '—', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
             filled: l.debit > 0, fillColor: Colors.blue.withOpacity(0.04),
             border: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
             enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: l.debit > 0 ? Colors.blue.shade300 : const Color(0xFFE0E0E0)))),
           style: const TextStyle(fontSize: 12),
-          onChanged: (v) { if (v.isNotEmpty && (double.tryParse(v) ?? 0) > 0) l.creditCtrl.clear(); setState(() {}); })),
+          onChanged: (v) { if (v.isNotEmpty && (double.tryParse(v) ?? 0) > 0) l.creditCtrl.clear(); widget.onChanged(); },
+          onSubmitted: (_) => widget.onNextLine())),
         const SizedBox(width: 8),
-        SizedBox(width: 120, child: TextField(controller: l.creditCtrl, enabled: !_isLocked, textAlign: TextAlign.right,
+        SizedBox(width: 120, child: TextField(controller: l.creditCtrl, focusNode: _creditFocus, enabled: !widget.locked, textAlign: TextAlign.right,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
           decoration: InputDecoration(hintText: '—', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
             filled: l.credit > 0, fillColor: Colors.orange.withOpacity(0.04),
             border: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
             enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: l.credit > 0 ? Colors.orange.shade300 : const Color(0xFFE0E0E0)))),
           style: const TextStyle(fontSize: 12),
-          onChanged: (v) { if (v.isNotEmpty && (double.tryParse(v) ?? 0) > 0) l.debitCtrl.clear(); setState(() {}); })),
-        SizedBox(width: 30, child: _isLocked ? const SizedBox() : IconButton(
-          icon: const Icon(Icons.close, size: 14, color: Colors.red), onPressed: () => _removeLine(i),
+          onChanged: (v) { if (v.isNotEmpty && (double.tryParse(v) ?? 0) > 0) l.debitCtrl.clear(); widget.onChanged(); },
+          onSubmitted: (_) => widget.onNextLine())),
+        SizedBox(width: 30, child: widget.locked ? const SizedBox() : IconButton(
+          icon: const Icon(Icons.close, size: 14, color: Colors.red), onPressed: widget.onRemove,
           padding: EdgeInsets.zero, visualDensity: VisualDensity.compact)),
       ]),
     );
   }
-}
-
-class _JvAccPicker extends StatefulWidget {
-  final _JvLine line; final List<Map<String,dynamic>> Function(String) filterFn;
-  final bool enabled; final void Function(Map<String,dynamic>) onPick;
-  const _JvAccPicker({super.key, required this.line, required this.filterFn, required this.enabled, required this.onPick});
-  @override State<_JvAccPicker> createState() => _JvAccPickerState();
-}
-
-class _JvAccPickerState extends State<_JvAccPicker> {
-  final _ctrl = TextEditingController(); final _focus = FocusNode();
-  bool _open = false; List<Map<String,dynamic>> _res = [];
-  @override void initState() { super.initState(); _ctrl.text = widget.line.accountName;
-    _focus.addListener(() { if (!_focus.hasFocus) Future.delayed(const Duration(milliseconds: 180), () { if (mounted) setState(() => _open = false); }); }); }
-  @override void dispose() { _ctrl.dispose(); _focus.dispose(); super.dispose(); }
-  Color _tc(String t) { switch(t) { case 'asset': return Colors.blue; case 'liability': return Colors.red; case 'equity': return Colors.purple; case 'revenue': return Colors.green; case 'expense': return Colors.orange; default: return Colors.grey; } }
-  @override Widget build(BuildContext ctx) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-    TextField(controller: _ctrl, focusNode: _focus, enabled: widget.enabled,
-      decoration: InputDecoration(hintText: 'Search account...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-        border: OutlineInputBorder(borderSide: BorderSide(color: widget.line.accountId != null ? Colors.green : const Color(0xFFE0E0E0))),
-        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: widget.line.accountId != null ? Colors.green : const Color(0xFFE0E0E0))),
-        suffixIcon: widget.line.accountId != null ? const Icon(Icons.check_circle, size: 14, color: Colors.green) : null),
-      style: const TextStyle(fontSize: 12),
-      onChanged: (v) { setState(() { _res = widget.filterFn(v); _open = true; if (v != widget.line.accountName) { widget.line.accountId = null; widget.line.accountName = v; } }); },
-      onTap: () => setState(() { _res = widget.filterFn(_ctrl.text); _open = true; })),
-    if (_open && _res.isNotEmpty) Container(constraints: const BoxConstraints(maxHeight: 200), margin: const EdgeInsets.only(top: 2),
-      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)]),
-      child: ListView(shrinkWrap: true, children: _res.map((a) {
-        final tc = _tc(a['account_type'] as String? ?? '');
-        return InkWell(onTap: () { widget.onPick(a); _ctrl.text = (a['code'] ?? '') + ' — ' + (a['name'] ?? ''); setState(() => _open = false); _focus.unfocus(); },
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), child: Row(children: [
-            Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: tc.withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
-              child: Text(a['account_type'] as String? ?? '', style: TextStyle(fontSize: 9, color: tc, fontWeight: FontWeight.w700))),
-            const SizedBox(width: 6),
-            Text(a['code'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 4),
-            Expanded(child: Text(a['name'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
-          ])));
-      }).toList())),
-  ]);
 }
