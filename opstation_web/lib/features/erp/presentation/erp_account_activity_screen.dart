@@ -1,8 +1,10 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:excel/excel.dart' as xlsx;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
@@ -40,7 +42,8 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   Map<String, dynamic>? get _sidebarBranch => ref.read(selectedBranchProvider);
-  String? get _effectiveBranchId => _accumulated ? null : _sidebarBranch?['id'] as String?;
+  bool get _isAdminTier { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.superAdmin || r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  String? get _effectiveBranchId => _isAdminTier ? (_accumulated ? null : _sidebarBranch?['id'] as String?) : (_sidebarBranch?['id'] as String?);
 
   @override
   void initState() {
@@ -69,7 +72,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       final res = await Supabase.instance.client.rpc('get_voucher_master', params: {'p_org_id': orgId});
       final data = res as Map<String, dynamic>;
       final coa = List<Map<String, dynamic>>.from((data['coa'] as List?) ?? []);
-      final items = coa.where((a) => (a['level'] as int? ?? 0) == 3).map((a) => {
+      final items = coa.where((a) => !coa.any((b) => b['parent_id'] == a['id'])).map((a) => {
         'id': a['id'],
         'code': a['code'],
         'name': a['name'],
@@ -164,9 +167,9 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
   void _print() {
     if (!_loaded || _account == null) return;
     final fmt = NumberFormat('#,##0.00');
-    final branch = _accumulated ? 'Accumulated (All Branches)' : ((_sidebarBranch?['name'] as String?) ?? '-');
+    final branch = _effectiveBranchId == null ? 'Accumulated (All Branches)' : ((_sidebarBranch?['name'] as String?) ?? '-');
     final rows = StringBuffer();
-    rows.write('<tr><td colspan="4"><b>Opening Balance</b></td><td class="num bold">' + _bal(_opening) + '</td></tr>');
+    rows.write('<tr><td colspan="5"><b>Opening Balance</b></td><td class="num bold">' + _bal(_opening) + '</td></tr>');
     for (final e in _entries) {
       final ds = (e['entry_date'] as String?) ?? '';
       final dt = DateTime.tryParse(ds);
@@ -174,12 +177,12 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       final dr = (e['debit'] as num?)?.toDouble() ?? 0;
       final cr = (e['credit'] as num?)?.toDouble() ?? 0;
       final bal = (e['balance'] as num?)?.toDouble() ?? 0;
-      rows.write('<tr><td>' + date + '</td><td>' + ((e['entry_number'] as String?) ?? '') + '</td><td>' + ((e['description'] as String?) ?? '') + '</td><td class="num">' + (dr > 0 ? fmt.format(dr) : '') + ' / ' + (cr > 0 ? fmt.format(cr) : '') + '</td><td class="num bold">' + _bal(bal) + '</td></tr>');
+      rows.write('<tr><td>' + date + '</td><td>' + ((e['entry_number'] as String?) ?? '') + '</td><td>' + ((e['description'] as String?) ?? '') + '</td><td class="num">' + (dr > 0 ? fmt.format(dr) : '') + '</td><td class="num">' + (cr > 0 ? fmt.format(cr) : '') + '</td><td class="num bold">' + _bal(bal) + '</td></tr>');
     }
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Account Activity</title><style>'
-      'body{font-family:Arial,sans-serif;padding:16px;font-size:11px;color:#000}h1{font-size:18px;margin:0 0 4px}'
+      'body{font-family:Arial,sans-serif;padding:16px;font-size:11px;color:#000;-webkit-user-select:text;user-select:text}h1{font-size:18px;margin:0 0 4px}'
       '.info{font-size:11px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:10px}'
-      'th,td{border-bottom:1px solid #ddd;padding:5px 7px;text-align:left;font-size:10px}'
+      'th,td{border:1px solid #999;padding:5px 7px;text-align:left;font-size:10px}'
       'th{background:#f0f4ff;font-weight:700;border-bottom:1.5px solid #000}.num{text-align:right;white-space:nowrap}.bold{font-weight:800}'
       'tfoot td{font-weight:800;background:#f5f5f5;border-top:2px solid #000}@page{margin:0.5cm}</style></head><body>'
       '<div class="no-print" style="margin-bottom:10px"><button onclick="window.print()">Print</button></div>'
@@ -187,9 +190,9 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       '<div class="info"><b>Account:</b> ' + (_account!['label'] as String? ?? '') + '</div>'
       '<div class="info"><b>Period:</b> ' + DateFormat('d MMM yyyy').format(_dateFrom) + ' to ' + DateFormat('d MMM yyyy').format(_dateTo) + '</div>'
       '<div class="info"><b>Branch:</b> ' + branch + '</div>'
-      '<table><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th class="num">Dr / Cr</th><th class="num">Balance</th></tr></thead>'
+      '<table><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
       '<tbody>' + rows.toString() + '</tbody>'
-      '<tfoot><tr><td colspan="3">Closing — Dr ' + fmt.format(_periodDr) + ' · Cr ' + fmt.format(_periodCr) + '</td><td class="num">' + fmt.format(_periodDr) + ' / ' + fmt.format(_periodCr) + '</td><td class="num">' + _bal(_closing) + '</td></tr></tfoot>'
+      '<tfoot><tr><td colspan="3">Closing</td><td class="num">' + fmt.format(_periodDr) + '</td><td class="num">' + fmt.format(_periodCr) + '</td><td class="num">' + _bal(_closing) + '</td></tr></tfoot>'
       '</table></body></html>';
     final blob = html.Blob([doc], 'text/html;charset=utf-8');
     html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
@@ -208,9 +211,13 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
         Row(children: [
           const Text('Account Activity Report', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
           const Spacer(),
-          if (_loaded && _entries.isNotEmpty)
+          if (_loaded && _entries.isNotEmpty) Row(children: [
+            OutlinedButton.icon(icon: const Icon(Icons.table_view_outlined, size: 16), label: const Text('Excel', style: TextStyle(fontSize: 12)),
+              onPressed: _exportExcel, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10))),
+            const SizedBox(width: 8),
             OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
               onPressed: _print, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10))),
+          ]),
         ]),
         const SizedBox(height: 16),
 
@@ -253,16 +260,17 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                 const SizedBox(height: 4),
                 InkWell(onTap: () async {
                   final picked = await showDateRangePicker(context: context, firstDate: DateTime(2018), lastDate: DateTime(2100),
-                    initialDateRange: DateTimeRange(start: _dateFrom, end: _dateTo));
+                    initialDateRange: DateTimeRange(start: _dateFrom, end: _dateTo),
+                    builder: (context, child) => Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420, maxHeight: 600), child: child)));
                   if (picked != null) setState(() { _dateFrom = picked.start; _dateTo = picked.end; });
                 }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                   decoration: BoxDecoration(border: Border.all(color: const Color(0xFFBDBDBD)), borderRadius: BorderRadius.circular(6)),
                   child: Row(children: [const Icon(Icons.date_range, size: 14, color: AppTheme.textSecondary), const SizedBox(width: 8),
                     Text(DateFormat('dd/MM/yyyy').format(_dateFrom) + ' - ' + DateFormat('dd/MM/yyyy').format(_dateTo), style: const TextStyle(fontSize: 12))]))),
               ])),
-              const SizedBox(width: 16),
+              if (_isAdminTier) const SizedBox(width: 16),
               // Branch
-              SizedBox(width: 220, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (_isAdminTier) SizedBox(width: 220, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Branch', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
@@ -297,16 +305,17 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
         // ── Report ────────────────────────────────────────────────
         if (_loaded) ...[
-          Row(children: [
-            _stat('Opening', _bal(_opening), AppTheme.textPrimary),
-            const SizedBox(width: 10),
-            _stat('Period Debit', 'Rs. ${fmt.format(_periodDr)}', AppTheme.primary),
-            const SizedBox(width: 10),
-            _stat('Period Credit', 'Rs. ${fmt.format(_periodCr)}', Colors.green.shade700),
-            const SizedBox(width: 10),
-            _stat('Closing', _bal(_closing), _closing >= 0 ? AppTheme.danger : Colors.green.shade700, bold: true),
-          ]),
-          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+            child: Wrap(spacing: 22, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              _chip('Opening', _bal(_opening), AppTheme.textPrimary),
+              _chip('Debit', 'Rs. ${fmt.format(_periodDr)}', AppTheme.primary),
+              _chip('Credit', 'Rs. ${fmt.format(_periodCr)}', Colors.green.shade700),
+              _chip('Closing', _bal(_closing), _closing >= 0 ? AppTheme.danger : Colors.green.shade700),
+            ]),
+          ),
+          const SizedBox(height: 10),
           if (_detailed) Expanded(child: Container(
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
             child: Column(children: [
@@ -341,15 +350,15 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                       final dr = (e['debit'] as num?)?.toDouble() ?? 0;
                       final cr = (e['credit'] as num?)?.toDouble() ?? 0;
                       final bal = (e['balance'] as num?)?.toDouble() ?? 0;
-                      return Container(color: i.isEven ? null : Colors.grey.shade50, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                      return InkWell(onTap: () => _openVoucher(e), child: Container(color: i.isEven ? null : Colors.grey.shade50, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
                         child: Row(children: [
                           SizedBox(width: 90, child: Text(date, style: const TextStyle(fontSize: 12))),
-                          SizedBox(width: 130, child: Text((e['entry_number'] as String?) ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                          SizedBox(width: 130, child: Text((e['entry_number'] as String?) ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600, decoration: TextDecoration.underline), overflow: TextOverflow.ellipsis)),
                           Expanded(child: Text((e['description'] as String?) ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
                           SizedBox(width: 110, child: Text(dr > 0 ? fmt.format(dr) : '-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: dr > 0 ? AppTheme.primary : Colors.black26))),
                           SizedBox(width: 110, child: Text(cr > 0 ? fmt.format(cr) : '-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cr > 0 ? Colors.green.shade700 : Colors.black26))),
                           SizedBox(width: 130, child: Text(_bal(bal), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
-                        ]));
+                        ])));
                     })),
               Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(bottom: Radius.circular(10)), border: Border(top: BorderSide(color: AppTheme.border))),
@@ -369,6 +378,140 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
         ]))),
       ]),
     );
+  }
+
+  void _exportExcel() {
+    if (!_loaded || _account == null) return;
+    final fmt = NumberFormat('#,##0.00');
+    final book = xlsx.Excel.createExcel();
+    const sheetName = 'Account Activity';
+    final sheet = book[sheetName];
+    book.setDefaultSheet(sheetName);
+    if (book.sheets.containsKey('Sheet1')) book.delete('Sheet1');
+
+    final branch = _effectiveBranchId == null ? 'Accumulated (All Branches)' : ((_sidebarBranch?['name'] as String?) ?? '-');
+    sheet.appendRow([xlsx.TextCellValue('Account Activity Report')]);
+    sheet.appendRow([xlsx.TextCellValue('Account:'), xlsx.TextCellValue(_account!['label'] as String? ?? '')]);
+    sheet.appendRow([xlsx.TextCellValue('Period:'), xlsx.TextCellValue(DateFormat('d MMM yyyy').format(_dateFrom) + ' to ' + DateFormat('d MMM yyyy').format(_dateTo))]);
+    sheet.appendRow([xlsx.TextCellValue('Branch:'), xlsx.TextCellValue(branch)]);
+    sheet.appendRow([]);
+    sheet.appendRow([
+      xlsx.TextCellValue('Date'), xlsx.TextCellValue('Voucher'), xlsx.TextCellValue('Description'),
+      xlsx.TextCellValue('Debit'), xlsx.TextCellValue('Credit'), xlsx.TextCellValue('Balance'),
+    ]);
+    sheet.appendRow([
+      xlsx.TextCellValue(''), xlsx.TextCellValue(''), xlsx.TextCellValue('Opening Balance'),
+      xlsx.TextCellValue(''), xlsx.TextCellValue(''), xlsx.TextCellValue(_bal(_opening)),
+    ]);
+    for (final e in _entries) {
+      final ds = (e['entry_date'] as String?) ?? '';
+      final dt = DateTime.tryParse(ds);
+      final date = dt != null ? DateFormat('d MMM yy').format(dt) : ds;
+      final dr = (e['debit'] as num?)?.toDouble() ?? 0;
+      final cr = (e['credit'] as num?)?.toDouble() ?? 0;
+      final bal = (e['balance'] as num?)?.toDouble() ?? 0;
+      sheet.appendRow([
+        xlsx.TextCellValue(date),
+        xlsx.TextCellValue((e['entry_number'] as String?) ?? ''),
+        xlsx.TextCellValue((e['description'] as String?) ?? ''),
+        dr > 0 ? xlsx.DoubleCellValue(dr) : xlsx.TextCellValue(''),
+        cr > 0 ? xlsx.DoubleCellValue(cr) : xlsx.TextCellValue(''),
+        xlsx.TextCellValue(_bal(bal)),
+      ]);
+    }
+    sheet.appendRow([
+      xlsx.TextCellValue(''), xlsx.TextCellValue(''), xlsx.TextCellValue('Closing (${_entries.length} transactions)'),
+      xlsx.DoubleCellValue(_periodDr), xlsx.DoubleCellValue(_periodCr), xlsx.TextCellValue(_bal(_closing)),
+    ]);
+
+    final bytes = book.encode();
+    if (bytes == null) return;
+    final blob = html.Blob([Uint8List.fromList(bytes)], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final safe = (_account!['label'] as String? ?? 'account').replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    html.AnchorElement(href: url)..setAttribute('download', 'account_activity_$safe.xlsx')..click();
+    html.Url.revokeObjectUrl(url);
+  }
+
+  Widget _chip(String label, String value, Color color) => Row(mainAxisSize: MainAxisSize.min, children: [
+    Text('$label: ', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+    Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+  ]);
+
+  String _acctName(String? id) {
+    final a = _accounts.firstWhere((x) => x['id'] == id, orElse: () => const <String, dynamic>{});
+    return (a['label'] as String?) ?? (id ?? '-');
+  }
+
+  Future<void> _openVoucher(Map<String, dynamic> e) async {
+    final orgId = _orgId;
+    final entryNo = (e['entry_number'] as String?) ?? '';
+    if (orgId == null || entryNo.isEmpty) return;
+    try {
+      final client = Supabase.instance.client;
+      final hdr = await client.from('journal_entries')
+          .select('id, entry_date, entry_number, reference_type, reference_number, description, status')
+          .eq('org_id', orgId).eq('entry_number', entryNo).limit(1);
+      if ((hdr as List).isEmpty) { _snack('Voucher not found'); return; }
+      final h = Map<String, dynamic>.from(hdr.first as Map);
+      final linesRes = await client.from('journal_lines')
+          .select('account_id, debit, credit, description')
+          .eq('entry_id', h['id'] as String);
+      final lines = List<Map<String, dynamic>>.from(linesRes as List);
+      if (!mounted) return;
+      showDialog(context: context, builder: (_) => _voucherDialog(h, lines));
+    } catch (err) { _snack('Open failed: $err'); }
+  }
+
+  Widget _voucherDialog(Map<String, dynamic> h, List<Map<String, dynamic>> lines) {
+    final fmt = NumberFormat('#,##0.00');
+    final ds = (h['entry_date'] as String?) ?? '';
+    final dt = DateTime.tryParse(ds);
+    final date = dt != null ? DateFormat('d MMM yyyy').format(dt) : ds;
+    final refType = (h['reference_type'] as String?) ?? '';
+    final refNum = (h['reference_number'] as String?) ?? '';
+    final sub = [date, if (refType.isNotEmpty) refType, if (refNum.isNotEmpty) refNum].join('  ·  ');
+    double tdr = 0, tcr = 0;
+    for (final l in lines) { tdr += (l['debit'] as num?)?.toDouble() ?? 0; tcr += (l['credit'] as num?)?.toDouble() ?? 0; }
+    return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 560, maxHeight: 600),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(padding: const EdgeInsets.all(16), decoration: const BoxDecoration(color: AppTheme.background),
+          child: Row(children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text((h['entry_number'] as String?) ?? 'Voucher', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text(sub, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ])),
+            IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => Navigator.pop(context)),
+          ])),
+        if (((h['description'] as String?) ?? '').isNotEmpty)
+          Padding(padding: const EdgeInsets.fromLTRB(16, 10, 16, 0), child: Text(h['description'] as String, style: const TextStyle(fontSize: 12))),
+        const SizedBox(height: 10),
+        const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
+          Expanded(child: Text('Account', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+          SizedBox(width: 110, child: Text('Debit', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+          SizedBox(width: 110, child: Text('Credit', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+        ])),
+        const Divider(height: 12),
+        Flexible(child: ListView.separated(shrinkWrap: true, itemCount: lines.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (_, i) {
+            final l = lines[i];
+            final dr = (l['debit'] as num?)?.toDouble() ?? 0;
+            final cr = (l['credit'] as num?)?.toDouble() ?? 0;
+            return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7), child: Row(children: [
+              Expanded(child: Text(_acctName(l['account_id'] as String?), style: const TextStyle(fontSize: 12))),
+              SizedBox(width: 110, child: Text(dr > 0 ? fmt.format(dr) : '', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.primary))),
+              SizedBox(width: 110, child: Text(cr > 0 ? fmt.format(cr) : '', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: Colors.green.shade700))),
+            ]));
+          })),
+        const Divider(height: 1),
+        Padding(padding: const EdgeInsets.all(16), child: Row(children: [
+          const Expanded(child: Text('Total', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
+          SizedBox(width: 110, child: Text(fmt.format(tdr), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.primary))),
+          SizedBox(width: 110, child: Text(fmt.format(tcr), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.green.shade700))),
+        ])),
+      ])));
   }
 
   Widget _radio(String label, bool selected, VoidCallback onTap) => InkWell(onTap: onTap, child: Row(mainAxisSize: MainAxisSize.min, children: [
