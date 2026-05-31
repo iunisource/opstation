@@ -241,6 +241,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     final maEmailCtrl = TextEditingController(text: master?['email'] ?? '');
     final maPasswordCtrl = TextEditingController();
     bool obscure = true;
+    bool saving = false;
 
     showDialog(
       context: context,
@@ -354,7 +355,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () async {
+              onPressed: saving ? null : () async {
                 if (orgNameCtrl.text.trim().isEmpty ||
                     maNameCtrl.text.trim().isEmpty ||
                     maEmailCtrl.text.trim().isEmpty) {
@@ -380,6 +381,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                   }
                   maxUsers = parsed;
                 }
+                setS(() => saving = true);
                 try {
                   await _saveOrg(
                     isEdit: isEdit,
@@ -393,18 +395,37 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     maPassword: maPasswordCtrl.text,
                   );
                   if (dCtx.mounted) {
+                    ScaffoldMessenger.of(dCtx)
+                      ..clearSnackBars()
+                      ..showSnackBar(SnackBar(
+                        content: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.check_circle, color: Colors.white, size: 18),
+                          const SizedBox(width: 10),
+                          Text(isEdit ? 'Organization updated' : 'Organization created'),
+                        ]),
+                        duration: const Duration(milliseconds: 1800),
+                        behavior: SnackBarBehavior.floating,
+                        backgroundColor: AppTheme.success,
+                      ));
                     Navigator.of(dCtx, rootNavigator: true).pop();
                   }
                   _load();
                 } catch (e) {
                   if (dCtx.mounted) {
+                    setS(() => saving = false);
                     ScaffoldMessenger.of(dCtx).showSnackBar(
                       SnackBar(content: Text('Save failed: $e')),
                     );
                   }
                 }
               },
-              child: Text(isEdit ? 'Save' : 'Create'),
+              child: saving
+                  ? const SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : Text(isEdit ? 'Save' : 'Create'),
             ),
           ],
         ),
@@ -448,12 +469,38 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                 value: states[e.key] ?? false,
                 onChanged: (val) async {
                   setS(() => states[e.key] = val);
-                  await client.from('org_modules').upsert({
-                    'org_id': orgId,
-                    'module': e.key,
-                    'is_enabled': val,
-                    'updated_at': DateTime.now().toUtc().toIso8601String(),
-                  }, onConflict: 'org_id,module');
+                  try {
+                    await client.from('org_modules').upsert({
+                      'org_id': orgId,
+                      'module': e.key,
+                      'is_enabled': val,
+                      'updated_at': DateTime.now().toUtc().toIso8601String(),
+                    }, onConflict: 'org_id,module');
+                    if (dCtx.mounted) {
+                      ScaffoldMessenger.of(dCtx)
+                        ..clearSnackBars()
+                        ..showSnackBar(SnackBar(
+                          content: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Icon(val ? Icons.check_circle : Icons.remove_circle,
+                                color: Colors.white, size: 18),
+                            const SizedBox(width: 10),
+                            Text('${e.value} ${val ? 'enabled' : 'disabled'}'),
+                          ]),
+                          duration: const Duration(milliseconds: 1200),
+                          behavior: SnackBarBehavior.floating,
+                          width: 280,
+                          backgroundColor:
+                              val ? AppTheme.success : AppTheme.textSecondary,
+                        ));
+                    }
+                  } catch (err) {
+                    if (dCtx.mounted) {
+                      setS(() => states[e.key] = !val);
+                      ScaffoldMessenger.of(dCtx).showSnackBar(
+                        SnackBar(content: Text('Failed: $err')),
+                      );
+                    }
+                  }
                 },
               )).toList(),
             ),

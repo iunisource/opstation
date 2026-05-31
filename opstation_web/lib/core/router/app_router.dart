@@ -34,6 +34,8 @@ import '../../features/superadmin/presentation/orgs_screen.dart';
 import '../../features/live_map/presentation/live_map_screen.dart';
 import '../../features/compliance/presentation/compliance_screen.dart';
 import '../layout/main_layout.dart';
+import '../permissions/access_control.dart';
+import '../permissions/permission_registry.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart';
 import '../../features/erp/presentation/erp_payment_voucher_screen.dart';
 import '../../features/erp/presentation/erp_products_screen.dart';
@@ -50,6 +52,7 @@ import '../../features/erp/presentation/erp_chart_of_accounts_screen.dart';
 import '../../features/erp/presentation/erp_suppliers_screen.dart';
 import '../../features/erp/presentation/erp_product_classifications_screen.dart';
 import '../../features/erp/presentation/erp_users_screen.dart';
+import '../../features/erp/presentation/erp_home_screen.dart';
 import '../../features/erp/presentation/erp_opening_stock_screen.dart';
 import '../../features/erp/presentation/erp_stock_transfers_screen.dart';
 import '../../features/erp/presentation/erp_payment_vouchers_screen.dart';
@@ -73,6 +76,7 @@ import '../../features/erp/presentation/erp_purchase_return_vouchers_screen.dart
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
     _ref.listen(authControllerProvider, (_, __) => notifyListeners());
+    _ref.listen(accessProvider, (_, __) => notifyListeners());
   }
   final Ref _ref;
 }
@@ -97,11 +101,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       if (!loggedIn && !onLogin) return '/login';
       if (loggedIn) {
         final role = user.role;
+        final access = ref.read(accessSyncProvider);
         String home() {
           if (role == WebUserRole.superAdmin) return '/orgs';
           if (role == WebUserRole.dispatchManager) return '/deliveries';
           if (role == WebUserRole.accountant) return '/orders';
-          if (role == WebUserRole.erpUser) return '/erp/products';
+          if (role == WebUserRole.erpUser) return '/erp/home';
           return '/dashboard';
         }
         bool allowed() {
@@ -117,7 +122,15 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             return loc == '/orders' || loc.startsWith('/orders/');
           }
           if (role == WebUserRole.erpUser) {
-            return loc.startsWith('/erp/');
+            final inErp = loc.startsWith('/erp/') ||
+                loc.startsWith('/financials/') ||
+                loc.startsWith('/manufacturing/');
+            if (!inErp) return false;
+            if (loc == '/erp/no-access') return true;
+            if (access == null) return true;
+            final it = kRouteToPerm[loc];
+            if (it == null) return true;
+            return access.canAccessRoute(loc);
           }
           // admin / masterAdmin — everything except super admin's /orgs
           return loc != '/orgs';
@@ -160,6 +173,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => const ErpProductClassificationsScreen()),
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
+          GoRoute(path: '/erp/home', builder: (_, __) => const ErpHomeScreen()),
+          GoRoute(path: '/erp/no-access', builder: (_, __) => const _NoAccessScreen()),
           GoRoute(path: '/erp/opening-stock', builder: (_, __) => const ErpOpeningStockScreen()),
           GoRoute(path: '/erp/stock-transfers', builder: (_, __) => const ErpStockTransfersScreen()),
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVoucherScreen()),
@@ -206,3 +221,25 @@ final webRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+
+class _NoAccessScreen extends StatelessWidget {
+  const _NoAccessScreen();
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(40),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.lock_outline, size: 48, color: Colors.grey),
+          SizedBox(height: 16),
+          Text('No access yet',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          SizedBox(height: 8),
+          Text('You do not have permission for any module yet. Ask an administrator to grant access.',
+              textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+        ]),
+      ),
+    );
+  }
+}

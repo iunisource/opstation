@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/permissions/access_control.dart';
 
 class _JvLine {
   static int _seq = 0;
@@ -79,7 +80,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       final sup  = List<Map<String,dynamic>>.from((data['suppliers'] as List?) ?? []);
       final cus  = List<Map<String,dynamic>>.from((data['customers'] as List?) ?? []);
       final all = <Map<String,dynamic>>[
-        ...coa.where((a) => (a['level'] as int? ?? 0) == 3).map((a) => {
+        ...coa.where((a) => !coa.any((b) => b['parent_id'] == a['id'])).map((a) => {
           'id': a['id'],
           'label': "${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}",
           'sub': _typeLabel(a['account_type']),
@@ -401,6 +402,12 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
 
   @override Widget build(BuildContext context) {
     final fmt = NumberFormat('#,##0.00');
+    final access = ref.watch(accessSyncProvider);
+    final canAdd = access?.canAddDoc('jv') ?? false;
+    final canEdit = access?.canEditDoc('jv') ?? false;
+    final canDeleteJv = access?.canDelete() ?? false;
+    final canWrite = _current == null ? canAdd : (canAdd || canEdit);
+    final editable = !_isLocked && canWrite;
     final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
       final q = _listSearch.toLowerCase();
       return (v['entry_number'] as String? ?? '').toLowerCase().contains(q) || (v['description'] as String? ?? '').toLowerCase().contains(q);
@@ -415,7 +422,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             child: Column(children: [
               Row(children: [
                 const Expanded(child: Text('Journal Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
-                ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
+                if (canAdd) ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero),
                   onPressed: _newVoucher),
               ]),
@@ -458,9 +465,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             ])),
             if (_current != null) IconButton(icon: const Icon(Icons.history_outlined, size: 20), onPressed: _showAuditTrail, tooltip: 'Audit Trail'),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _print, tooltip: 'Print'),
-            if (_current != null) IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
+            if (_current != null && canDeleteJv) IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
             const SizedBox(width: 8),
-            if (!_isLocked) ...[
+            if (!_isLocked && canWrite) ...[
               OutlinedButton(onPressed: _saving ? null : () => _save(post: false), child: const Text('Save Draft', style: TextStyle(fontSize: 12))),
               const SizedBox(width: 8),
               ElevatedButton.icon(
@@ -472,8 +479,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             if (_isLocked) Row(mainAxisSize: MainAxisSize.min, children: [
               Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.3))),
                 child: const Row(children: [Icon(Icons.lock, size: 14, color: Colors.green), SizedBox(width: 4), Text('Posted', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: 13))])),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(icon: const Icon(Icons.lock_open_outlined, size: 14), label: const Text('Unlock', style: TextStyle(fontSize: 12)), onPressed: _unlockVoucher,
+              if (canEdit) const SizedBox(width: 8),
+              if (canEdit) OutlinedButton.icon(icon: const Icon(Icons.lock_open_outlined, size: 14), label: const Text('Unlock', style: TextStyle(fontSize: 12)), onPressed: _unlockVoucher,
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.orange, side: const BorderSide(color: Colors.orange), padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
             ]),
           ])),
@@ -488,7 +495,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             SizedBox(width: 170, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Date *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
-              InkWell(onTap: _isLocked ? null : () async {
+              InkWell(onTap: !editable ? null : () async {
                 final d = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime(2100));
                 if (d != null) setState(() { _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d); });
               }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -499,7 +506,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Narration', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
-              TextField(controller: _narCtrl, enabled: !_isLocked,
+              TextField(controller: _narCtrl, enabled: editable,
                 decoration: InputDecoration(hintText: 'Enter narration...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFBDBDBD))),
                   enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFFBDBDBD))))),
@@ -524,13 +531,13 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             for (var i = 0; i < _lines.length; i++) _JvLineWidget(
               key: ValueKey('jvline_${_lines[i].id}'),
               line: _lines[i], lineNum: i + 1,
-              filterFn: _filterAccounts, locked: _isLocked,
+              filterFn: _filterAccounts, locked: !editable,
               autoFocus: _lines[i].id == _pendingFocusId,
               onRemove: () => _removeLine(i),
               onNextLine: i == _lines.length - 1 ? _addLine : () {},
               onChanged: () => setState(() {}),
             ),
-            if (!_isLocked) Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            if (editable) Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add Line', style: TextStyle(fontSize: 12)), onPressed: _addLine)),
             Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(

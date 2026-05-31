@@ -230,6 +230,13 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
               style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ])),
         actions: [
+          TextButton(
+            onPressed: () async {
+              final done = await _deleteAccount(acc);
+              if (done && mounted) Navigator.pop(ctx, false);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () { if (nameCtrl.text.trim().isNotEmpty) Navigator.pop(ctx, true); },
@@ -258,11 +265,43 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     _nameCtrl.clear();
   }
 
-  Future<void> _toggleActive(Map<String, dynamic> acc) async {
+  // Delete an account, but only if it is safe to do so: it must have no
+  // sub-accounts and must not be referenced by any posting line.
+  Future<bool> _deleteAccount(Map<String, dynamic> acc) async {
+    final id = acc['id'] as String;
+    if (_accounts.any((a) => a['parent_id'] == id)) {
+      _snack('Cannot delete: this account has sub-accounts. Delete those first.');
+      return false;
+    }
     try {
-      await Supabase.instance.client.from('chart_of_accounts').update({'is_active': !(acc['is_active'] as bool? ?? true)}).eq('id', acc['id'] as String);
+      for (final tbl in ['journal_lines', 'cpv_voucher_lines', 'crv_voucher_lines']) {
+        final used = await Supabase.instance.client
+            .from(tbl).select('account_id').eq('account_id', id).limit(1);
+        if ((used as List).isNotEmpty) {
+          _snack('Cannot delete: this account is used in transactions.');
+          return false;
+        }
+      }
+    } catch (e) { _snack('Delete check failed: $e'); return false; }
+    final yes = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
+      title: const Text('Delete account?'),
+      content: Text('Permanently delete "${acc['name']}"? This cannot be undone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(c, true),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          child: const Text('Delete'),
+        ),
+      ],
+    ));
+    if (yes != true) return false;
+    try {
+      await Supabase.instance.client.from('chart_of_accounts').delete().eq('id', id);
       await _load();
-    } catch (e) { _snack('Failed: $e'); }
+      _snack('Account deleted');
+      return true;
+    } catch (e) { _snack('Delete failed: $e'); return false; }
   }
 
   Color _groupColor(String group) {
@@ -321,7 +360,6 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
               if (type != null) Text(type, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600)),
             ])),
             IconButton(icon: const Icon(Icons.edit_outlined, size: 15), onPressed: () => _editAccount(node), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact, tooltip: 'Edit'),
-            Switch.adaptive(value: active, onChanged: (_) => _toggleActive(node), materialTapTargetSize: MaterialTapTargetSize.shrinkWrap),
           ]),
         ),
       ));
@@ -337,36 +375,8 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     final l3 = _sel2 != null ? _getLevel(3, group: _selectedGroup, parentId: _sel2!['id'] as String) : <Map<String, dynamic>>[];
 
     return Container(color: AppTheme.background, child: Row(children: [
-      // ── LEFT TREE ──────────────────────────────────────────────────
-      Container(width: 380, decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
-        Container(padding: const EdgeInsets.fromLTRB(14, 14, 14, 8), decoration: BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            const Expanded(child: Text('Accounts', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
-            Text('${_accounts.length} total', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-          ]),
-          const SizedBox(height: 8),
-          TextField(decoration: const InputDecoration(hintText: 'Search accounts...', prefixIcon: Icon(Icons.search, size: 15), isDense: true), onChanged: (v) => setState(() => _search = v)),
-        ])),
-        Expanded(child: _loading ? const Center(child: CircularProgressIndicator())
-          : ListView(children: [
-            for (final group in _groups) ...[
-              InkWell(
-                onTap: () => setState(() => _treeExpanded['_g_$group'] = !(_treeExpanded['_g_$group'] ?? true)),
-                child: Container(color: _groupColor(group).withOpacity(0.07), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9), child: Row(children: [
-                  Container(width: 9, height: 9, decoration: BoxDecoration(color: _groupColor(group), shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(group, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _groupColor(group)))),
-                  Text('${_accounts.where((a) => a['account_group'] == group).length}', style: TextStyle(fontSize: 10, color: _groupColor(group))),
-                  const SizedBox(width: 4),
-                  Icon((_treeExpanded['_g_$group'] ?? true) ? Icons.expand_less : Icons.expand_more, size: 14, color: _groupColor(group)),
-                ])),
-              ),
-              if (_treeExpanded['_g_$group'] ?? true) ..._buildTree(_accounts.where((a) => a['account_group'] == group && a['level'] == 1).toList()),
-            ],
-          ])),
-      ])),
-      // ── RIGHT FORM ────────────────────────────────────────────────
-      Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // ── LEFT: ADD / EDIT FORM (compact) ──────────────────
+      SizedBox(width: 460, child: Container(decoration: const BoxDecoration(color: AppTheme.background, border: Border(right: BorderSide(color: AppTheme.border))), child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.account_balance_outlined, color: AppTheme.primary, size: 20)),
           const SizedBox(width: 12),
@@ -459,6 +469,34 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
             OutlinedButton(onPressed: _resetForm, child: const Text('Reset')),
           ]),
         ])),
+      ])))),
+      // ── RIGHT: ACCOUNT NAVIGATION (spacious) ─────────────
+      Expanded(child: Container(decoration: const BoxDecoration(color: Colors.white), child: Column(children: [
+        Container(padding: const EdgeInsets.fromLTRB(14, 14, 14, 8), decoration: BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Expanded(child: Text('Accounts', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+            Text('${_accounts.length} total', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ]),
+          const SizedBox(height: 8),
+          TextField(decoration: const InputDecoration(hintText: 'Search accounts...', prefixIcon: Icon(Icons.search, size: 15), isDense: true), onChanged: (v) => setState(() => _search = v)),
+        ])),
+        Expanded(child: _loading ? const Center(child: CircularProgressIndicator())
+          : ListView(children: [
+            for (final group in _groups) ...[
+              InkWell(
+                onTap: () => setState(() => _treeExpanded['_g_$group'] = !(_treeExpanded['_g_$group'] ?? true)),
+                child: Container(color: _groupColor(group).withOpacity(0.07), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9), child: Row(children: [
+                  Container(width: 9, height: 9, decoration: BoxDecoration(color: _groupColor(group), shape: BoxShape.circle)),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(group, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _groupColor(group)))),
+                  Text('${_accounts.where((a) => a['account_group'] == group).length}', style: TextStyle(fontSize: 10, color: _groupColor(group))),
+                  const SizedBox(width: 4),
+                  Icon((_treeExpanded['_g_$group'] ?? true) ? Icons.expand_less : Icons.expand_more, size: 14, color: _groupColor(group)),
+                ])),
+              ),
+              if (_treeExpanded['_g_$group'] ?? true) ..._buildTree(_accounts.where((a) => a['account_group'] == group && a['level'] == 1).toList()),
+            ],
+          ])),
       ]))),
     ]));
   }

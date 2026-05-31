@@ -99,7 +99,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     ).take(200).toList();
   }
 
-  List<Map<String, dynamic>> get _cashAccounts => _coaList.where((a) => (a['level'] as int? ?? 0) == 3 && (a['account_group'] == 'Current Assets')).map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'type': a['account_type'] as String? ?? ''}).toList();
+  List<Map<String, dynamic>> get _cashAccounts => _coaList.where((a) => !_coaList.any((b) => b['parent_id'] == a['id']) && (a['account_group'] == 'Current Assets')).map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'type': a['account_type'] as String? ?? ''}).toList();
 
   static String _typeLabel(dynamic t) {
     switch (t) {

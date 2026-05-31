@@ -2,61 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/permissions/permission_registry.dart';
 import '../../auth/auth_controller.dart';
-
-const _modulePermissions = {
-  'inventory': {
-    'label': 'Inventory',
-    'icon': Icons.inventory_2_outlined,
-    'permissions': {
-      'inventory.view': 'View products & stock',
-      'inventory.manage_products': 'Add / edit products',
-      'inventory.adjust_stock': 'Adjust stock levels',
-      'inventory.opening_stock': 'Set opening stock',
-      'inventory.stock_transfer': 'Create stock transfers',
-    },
-  },
-  'purchase': {
-    'label': 'Purchase',
-    'icon': Icons.shopping_cart_outlined,
-    'permissions': {
-      'purchase.view': 'View purchase orders',
-      'purchase.create': 'Create purchase orders',
-      'purchase.receive': 'Receive goods',
-      'purchase.manage_suppliers': 'Manage suppliers',
-      'purchase.payment': 'Create payment vouchers',
-    },
-  },
-  'sales': {
-    'label': 'Sales',
-    'icon': Icons.receipt_long_outlined,
-    'permissions': {
-      'sales.view': 'View sales orders',
-      'sales.create': 'Create sales orders',
-      'sales.confirm': 'Confirm orders',
-      'sales.deliver': 'Mark as delivered',
-      'sales.receipt': 'Create receipt vouchers',
-    },
-  },
-  'pos': {
-    'label': 'POS',
-    'icon': Icons.storefront_outlined,
-    'permissions': {
-      'pos.open_session': 'Open / close sessions',
-      'pos.transact': 'Process transactions',
-      'pos.view_reports': 'View session reports',
-    },
-  },
-  'reports': {
-    'label': 'Reports & Ledgers',
-    'icon': Icons.analytics_outlined,
-    'permissions': {
-      'reports.inventory': 'Inventory ledger',
-      'reports.supplier': 'Supplier ledger',
-      'reports.customer': 'Customer ledger',
-    },
-  },
-};
 
 class ErpUsersScreen extends ConsumerStatefulWidget {
   const ErpUsersScreen({super.key});
@@ -85,7 +32,6 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
           .eq('org_id', orgId)
           .eq('role', 'erpUser')
           .order('name');
-      // Load branch assignments for each user
       final userIds = (users as List).map((u) => u['id'] as String).toList();
       Map<String, List<String>> branchMap = {};
       if (userIds.isNotEmpty) {
@@ -129,7 +75,158 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
           .eq('id', user['id']);
       _showSnack(newVal ? 'User activated' : 'User deactivated');
       _load();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) {
+      _showSnack('Failed: $e');
+    }
+  }
+
+  // ── Permission editor widgets ───────────────────────────────────────────
+
+  Widget _miniCheck(String label, bool value, void Function(bool) onChanged) {
+    return InkWell(
+      onTap: () => onChanged(!value),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: Checkbox(
+              value: value,
+              onChanged: (v) => onChanged(v ?? false),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+          const SizedBox(width: 2),
+          Text(label, style: const TextStyle(fontSize: 12)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _permModuleTile(
+    PermModule mod,
+    Set<String> sel,
+    Set<String> expanded,
+    void Function(void Function()) setS,
+  ) {
+    final keys = mod.allKeys;
+    final grantedCount = keys.where(sel.contains).length;
+    final allOn = keys.isNotEmpty && keys.every(sel.contains);
+    final isExp = expanded.contains(mod.key);
+
+    return Column(children: [
+      InkWell(
+        onTap: () => setS(() {
+          if (isExp) {
+            expanded.remove(mod.key);
+          } else {
+            expanded.add(mod.key);
+          }
+        }),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(children: [
+            Icon(mod.icon,
+                size: 18,
+                color: grantedCount > 0 ? AppTheme.primary : AppTheme.textSecondary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(mod.label,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: grantedCount > 0 ? AppTheme.primary : Colors.black87)),
+            ),
+            if (grantedCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Text('$grantedCount',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              ),
+            Tooltip(
+              message: allOn ? 'Clear all in module' : 'Grant all in module',
+              child: Switch(
+                value: allOn,
+                onChanged: (v) => setS(() {
+                  if (v) {
+                    sel.addAll(keys);
+                    expanded.add(mod.key);
+                  } else {
+                    sel.removeAll(keys);
+                  }
+                }),
+              ),
+            ),
+            Icon(isExp ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                size: 18, color: AppTheme.textSecondary),
+          ]),
+        ),
+      ),
+      if (isExp) ...[
+        const Divider(height: 1),
+        // Column headers
+        Padding(
+          padding: const EdgeInsets.fromLTRB(40, 4, 12, 2),
+          child: Row(children: const [
+            Expanded(child: SizedBox()),
+            SizedBox(width: 64, child: Text('Add', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 64, child: Text('Edit', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+          ]),
+        ),
+        ...mod.items.map((it) => Padding(
+              padding: const EdgeInsets.fromLTRB(40, 0, 12, 0),
+              child: Row(children: [
+                Expanded(
+                  child: Text(it.label,
+                      style: const TextStyle(fontSize: 12.5)),
+                ),
+                if (it.kind == PermKind.doc) ...[
+                  SizedBox(
+                    width: 64,
+                    child: Center(
+                      child: _miniCheck('', sel.contains(it.addKey), (v) => setS(() {
+                        if (v) {
+                          sel.add(it.addKey);
+                        } else {
+                          sel.remove(it.addKey);
+                        }
+                      })),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 64,
+                    child: Center(
+                      child: _miniCheck('', sel.contains(it.editKey), (v) => setS(() {
+                        if (v) {
+                          sel.add(it.editKey);
+                        } else {
+                          sel.remove(it.editKey);
+                        }
+                      })),
+                    ),
+                  ),
+                ] else
+                  SizedBox(
+                    width: 128,
+                    child: Center(
+                      child: _miniCheck('Show', sel.contains(it.viewKey), (v) => setS(() {
+                        if (v) {
+                          sel.add(it.viewKey);
+                        } else {
+                          sel.remove(it.viewKey);
+                        }
+                      })),
+                    ),
+                  ),
+              ]),
+            )),
+        const SizedBox(height: 6),
+        const Divider(height: 1),
+      ],
+      if (mod.key != kPermissionRegistry.last.key) const Divider(height: 1),
+    ]);
   }
 
   void _showDialog(BuildContext context, Map<String, dynamic>? user) async {
@@ -137,7 +234,6 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
     if (orgId == null) return;
     final client = Supabase.instance.client;
 
-    // Load branches and current assignments
     final branches = await client
         .from('branches')
         .select()
@@ -153,13 +249,17 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
           .from('erp_user_branches')
           .select('branch_id')
           .eq('user_id', user['id']);
-      currentBranches = (existingBranches as List).map((b) => b['branch_id'] as String).toList();
+      currentBranches =
+          (existingBranches as List).map((b) => b['branch_id'] as String).toList();
 
       final existingPerms = await client
           .from('user_permissions')
           .select('permission')
           .eq('user_id', user['id']);
-      currentPermissions = (existingPerms as List).map((p) => p['permission'] as String).toSet();
+      currentPermissions = (existingPerms as List)
+          .map((p) => p['permission'] as String)
+          .where(kAllPermKeys.contains) // drop legacy keys
+          .toSet();
     }
 
     if (!mounted) return;
@@ -177,16 +277,18 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
         builder: (ctx, setS) => AlertDialog(
           title: Text(user == null ? 'Add ERP User' : 'Edit ERP User'),
           content: SizedBox(
-            width: 600,
+            width: 620,
             child: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                // Basic info
-                const Align(alignment: Alignment.centerLeft,
-                    child: Text('Basic Info', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Basic Info',
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 8),
                 TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Full Name *')),
                 const SizedBox(height: 12),
-                TextField(controller: emailCtrl, decoration: const InputDecoration(labelText: 'Email *'),
+                TextField(controller: emailCtrl,
+                    decoration: const InputDecoration(labelText: 'Email *'),
                     keyboardType: TextInputType.emailAddress,
                     enabled: user == null),
                 const SizedBox(height: 12),
@@ -198,16 +300,17 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
 
                 // Branch assignment
                 const Align(alignment: Alignment.centerLeft,
-                    child: Text('Branch Access', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                    child: Text('Branch Access',
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 4),
                 const Align(alignment: Alignment.centerLeft,
-                    child: Text('Select branches this user can access', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                    child: Text('Branches this user can operate in',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
-                    border: Border.all(color: AppTheme.border),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                      border: Border.all(color: AppTheme.border),
+                      borderRadius: BorderRadius.circular(8)),
                   child: Column(
                     children: (branches as List).map((b) {
                       final bid = b['id'] as String;
@@ -216,8 +319,11 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                         title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
                         value: selectedBranches.contains(bid),
                         onChanged: (v) => setS(() {
-                          if (v == true) selectedBranches.add(bid);
-                          else selectedBranches.remove(bid);
+                          if (v == true) {
+                            selectedBranches.add(bid);
+                          } else {
+                            selectedBranches.remove(bid);
+                          }
                         }),
                       );
                     }).toList(),
@@ -225,80 +331,24 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                 ),
                 const SizedBox(height: 20),
 
-                // Module permissions
+                // Permissions
                 const Align(alignment: Alignment.centerLeft,
-                    child: Text('Permissions', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                    child: Text('Permissions',
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 4),
                 const Align(alignment: Alignment.centerLeft,
-                    child: Text('Enable modules and set granular access', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                    child: Text('Add / Edit per voucher · Show per report. Delete is restricted to admins.',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
-                    border: Border.all(color: AppTheme.border),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                      border: Border.all(color: AppTheme.border),
+                      borderRadius: BorderRadius.circular(8)),
                   child: Column(
-                    children: _modulePermissions.entries.map((module) {
-                      final moduleKey = module.key;
-                      final moduleData = module.value;
-                      final moduleLabel = moduleData['label'] as String;
-                      final moduleIcon = moduleData['icon'] as IconData;
-                      final permissions = moduleData['permissions'] as Map<String, String>;
-                      final moduleEnabled = permissions.keys.any((p) => selectedPerms.contains(p));
-                      final isExpanded = expandedModules.contains(moduleKey);
-
-                      return Column(children: [
-                        InkWell(
-                          onTap: () => setS(() {
-                            if (isExpanded) expandedModules.remove(moduleKey);
-                            else expandedModules.add(moduleKey);
-                          }),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            child: Row(children: [
-                              Icon(moduleIcon, size: 18, color: moduleEnabled ? AppTheme.primary : AppTheme.textSecondary),
-                              const SizedBox(width: 10),
-                              Expanded(child: Text(moduleLabel,
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      color: moduleEnabled ? AppTheme.primary : Colors.black87))),
-                              Switch(
-                                value: moduleEnabled,
-                                onChanged: (v) => setS(() {
-                                  if (v) {
-                                    selectedPerms.addAll(permissions.keys);
-                                    expandedModules.add(moduleKey);
-                                  } else {
-                                    selectedPerms.removeAll(permissions.keys);
-                                    expandedModules.remove(moduleKey);
-                                  }
-                                }),
-                              ),
-                              Icon(isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                                  size: 18, color: AppTheme.textSecondary),
-                            ]),
-                          ),
-                        ),
-                        if (isExpanded) ...[
-                          const Divider(height: 1),
-                          ...permissions.entries.map((perm) => Padding(
-                            padding: const EdgeInsets.only(left: 40),
-                            child: CheckboxListTile(
-                              dense: true,
-                              title: Text(perm.value, style: const TextStyle(fontSize: 12)),
-                              value: selectedPerms.contains(perm.key),
-                              onChanged: (v) => setS(() {
-                                if (v == true) selectedPerms.add(perm.key);
-                                else selectedPerms.remove(perm.key);
-                              }),
-                            ),
-                          )),
-                          const Divider(height: 1),
-                        ],
-                        if (module.key != _modulePermissions.keys.last)
-                          const Divider(height: 1),
-                      ]);
-                    }).toList(),
+                    children: [
+                      for (final mod in kPermissionRegistry)
+                        _permModuleTile(mod, selectedPerms, expandedModules, setS),
+                    ],
                   ),
                 ),
               ]),
@@ -329,7 +379,6 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                 try {
                   String userId;
                   if (user == null) {
-                    // Create via Edge Function
                     final res = await client.functions.invoke('create-team-user', body: {
                       'name': nameCtrl.text.trim(),
                       'email': emailCtrl.text.trim().toLowerCase(),
@@ -344,43 +393,75 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                     userId = data['userId'] as String;
                   } else {
                     userId = user['id'] as String;
-                    final updates = <String, dynamic>{'name': nameCtrl.text.trim()};
-                    await client.from('users').update(updates).eq('id', userId);
-                    if (passCtrl.text.length >= 6) {
-                      // TODO: update password via Edge Function in v1.1
-                    }
+                    await client.from('users').update({'name': nameCtrl.text.trim()}).eq('id', userId);
                   }
 
-                  // Save branch assignments
-                  await client.from('erp_user_branches').delete().eq('user_id', userId);
-                  for (final bid in selectedBranches) {
+                  // Branch assignments — diff against existing (avoids the
+                  // unique-constraint collision when a delete is RLS-blocked,
+                  // and only touches rows that actually changed).
+                  final existBr = await client
+                      .from('erp_user_branches')
+                      .select('branch_id')
+                      .eq('user_id', userId);
+                  final existingBranchIds = {
+                    for (final r in existBr as List) r['branch_id'] as String
+                  };
+                  final toAddBr = selectedBranches.difference(existingBranchIds);
+                  final toRemoveBr = existingBranchIds.difference(selectedBranches);
+                  int bseq = 0;
+                  for (final bid in toAddBr) {
                     await client.from('erp_user_branches').insert({
-                      'id': 'eub_${DateTime.now().millisecondsSinceEpoch}_${bid.substring(0, 4)}',
+                      'id': 'eub_${DateTime.now().microsecondsSinceEpoch}_${bseq++}',
                       'org_id': orgId,
                       'user_id': userId,
                       'branch_id': bid,
                     });
                   }
+                  for (final bid in toRemoveBr) {
+                    await client
+                        .from('erp_user_branches')
+                        .delete()
+                        .eq('user_id', userId)
+                        .eq('branch_id', bid);
+                  }
 
-                  // Save permissions
-                  await client.from('user_permissions').delete().eq('user_id', userId);
+                  // Permissions — same diff approach. Removing keys that are no
+                  // longer selected also purges any stale legacy keys.
+                  final existPm = await client
+                      .from('user_permissions')
+                      .select('permission')
+                      .eq('user_id', userId);
+                  final existingPerms = {
+                    for (final r in existPm as List) r['permission'] as String
+                  };
+                  final toAddPm = selectedPerms.difference(existingPerms);
+                  final toRemovePm = existingPerms.difference(selectedPerms);
                   final grantedBy = ref.read(currentUserProvider)?.id;
-                  for (final perm in selectedPerms) {
+                  int pseq = 0;
+                  for (final perm in toAddPm) {
                     await client.from('user_permissions').insert({
-                      'id': 'up_${DateTime.now().millisecondsSinceEpoch}_${perm.replaceAll('.', '_')}',
+                      'id': 'up_${DateTime.now().microsecondsSinceEpoch}_${pseq++}',
                       'org_id': orgId,
                       'user_id': userId,
                       'permission': perm,
                       'granted_by': grantedBy,
                     });
                   }
+                  for (final perm in toRemovePm) {
+                    await client
+                        .from('user_permissions')
+                        .delete()
+                        .eq('user_id', userId)
+                        .eq('permission', perm);
+                  }
 
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                   _showSnack(user == null ? 'ERP user created' : 'ERP user updated');
                   _load();
                 } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
-                      SnackBar(content: Text('Failed: $e')));
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  }
                 }
               },
               child: Text(user == null ? 'Create' : 'Save'),
@@ -450,13 +531,10 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                                 child: Row(children: [
-                                  Expanded(flex: 3, child: Text(u['name'] as String? ?? '',
-                                      style: const TextStyle(fontWeight: FontWeight.w600))),
-                                  Expanded(flex: 3, child: Text(u['email'] as String? ?? '',
-                                      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
+                                  Expanded(flex: 3, child: Text(u['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600))),
+                                  Expanded(flex: 3, child: Text(u['email'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                                   Expanded(flex: 3, child: Text(branches.isEmpty ? 'No branches' : branches,
-                                      style: TextStyle(fontSize: 13,
-                                          color: branches.isEmpty ? AppTheme.danger : AppTheme.textSecondary))),
+                                      style: TextStyle(fontSize: 13, color: branches.isEmpty ? AppTheme.danger : AppTheme.textSecondary))),
                                   Expanded(flex: 1, child: Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                     decoration: BoxDecoration(
@@ -464,18 +542,12 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Text(isActive ? 'Active' : 'Inactive',
-                                        style: TextStyle(
-                                            color: isActive ? AppTheme.success : AppTheme.danger,
-                                            fontSize: 12, fontWeight: FontWeight.w600)),
+                                        style: TextStyle(color: isActive ? AppTheme.success : AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w600)),
                                   )),
                                   SizedBox(width: 80, child: Row(children: [
+                                    IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, u)),
                                     IconButton(
-                                        icon: const Icon(Icons.edit_outlined, size: 18),
-                                        onPressed: () => _showDialog(context, u)),
-                                    IconButton(
-                                      icon: Icon(
-                                          isActive ? Icons.block : Icons.check_circle_outline,
-                                          size: 18,
+                                      icon: Icon(isActive ? Icons.block : Icons.check_circle_outline, size: 18,
                                           color: isActive ? AppTheme.danger : AppTheme.success),
                                       onPressed: () => _toggleActive(u),
                                     ),
