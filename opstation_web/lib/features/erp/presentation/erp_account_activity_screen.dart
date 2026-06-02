@@ -29,6 +29,8 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
   final _accFocus = FocusNode();
   bool _showAccDrop = false;
   String _accQuery = '';
+  String _txnQuery = '';
+  final _txnSearchCtrl = TextEditingController();
 
   late DateTime _dateFrom;
   late DateTime _dateTo;
@@ -61,7 +63,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
   }
 
   @override
-  void dispose() { _accCtrl.dispose(); _accFocus.dispose(); super.dispose(); }
+  void dispose() { _accCtrl.dispose(); _accFocus.dispose(); _txnSearchCtrl.dispose(); super.dispose(); }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -136,7 +138,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
   void _reset() {
     final now = DateTime.now();
     setState(() {
-      _account = null; _accCtrl.clear(); _entries = []; _loaded = false; _opening = 0;
+      _account = null; _accCtrl.clear(); _entries = []; _loaded = false; _opening = 0; _txnQuery = ''; _txnSearchCtrl.clear();
       _accumulated = true; _detailed = true;
       _dateFrom = now.month >= 7 ? DateTime(now.year, 7, 1) : DateTime(now.year - 1, 7, 1);
       _dateTo = now;
@@ -203,6 +205,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
     final fmt = NumberFormat('#,##0.00');
     final accFiltered = _filterAccounts(_accQuery);
     final branchName = (_sidebarBranch?['name'] as String?) ?? 'Current Branch';
+    final shown = _txnQuery.isEmpty ? _entries : _entries.where((e) => (((e['entry_number'] as String?) ?? '').toLowerCase().contains(_txnQuery) || ((e['description'] as String?) ?? '').toLowerCase().contains(_txnQuery))).toList();
 
     return Container(
       color: AppTheme.background,
@@ -228,7 +231,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Account picker
-              SizedBox(width: 360, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 300, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Account *', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 TextField(controller: _accCtrl, focusNode: _accFocus,
@@ -255,7 +258,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
               ])),
               const SizedBox(width: 16),
               // Date range
-              SizedBox(width: 230, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 200, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('As On', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 InkWell(onTap: () async {
@@ -270,7 +273,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
               ])),
               if (_isAdminTier) const SizedBox(width: 16),
               // Branch
-              if (_isAdminTier) SizedBox(width: 220, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (_isAdminTier) SizedBox(width: 190, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Branch', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
@@ -284,20 +287,18 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                     onChanged: (v) => setState(() => _accumulated = v ?? true),
                   ))),
               ])),
-            ]),
-            const SizedBox(height: 14),
-            Row(children: [
-              ElevatedButton(onPressed: _loading ? null : _loadReport,
+              const SizedBox(width: 16),
+              Padding(padding: const EdgeInsets.only(top: 19), child: ElevatedButton(onPressed: _loading ? null : _loadReport,
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
-                child: _loading ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Load Report')),
+                child: _loading ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Load Report'))),
               const SizedBox(width: 10),
-              OutlinedButton(onPressed: _reset, child: const Text('Reset')),
+              Padding(padding: const EdgeInsets.only(top: 19), child: OutlinedButton(onPressed: _reset, child: const Text('Reset'))),
               const Spacer(),
-              Row(children: [
+              Padding(padding: const EdgeInsets.only(top: 24), child: Row(children: [
                 _radio('Summary', !_detailed, () => setState(() => _detailed = false)),
                 const SizedBox(width: 14),
                 _radio('Detailed', _detailed, () => setState(() => _detailed = true)),
-              ]),
+              ])),
             ]),
           ]),
         ),
@@ -308,11 +309,22 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-            child: Wrap(spacing: 22, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-              _chip('Opening', _bal(_opening), AppTheme.textPrimary),
-              _chip('Debit', 'Rs. ${fmt.format(_periodDr)}', AppTheme.primary),
-              _chip('Credit', 'Rs. ${fmt.format(_periodCr)}', Colors.green.shade700),
-              _chip('Closing', _bal(_closing), _closing >= 0 ? AppTheme.danger : Colors.green.shade700),
+            child: Row(children: [
+              Expanded(child: Wrap(spacing: 22, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                _chip('Opening', _bal(_opening), AppTheme.textPrimary),
+                _chip('Debit', 'Rs. ${fmt.format(_periodDr)}', AppTheme.primary),
+                _chip('Credit', 'Rs. ${fmt.format(_periodCr)}', Colors.green.shade700),
+                _chip('Closing', _bal(_closing), _closing >= 0 ? AppTheme.danger : Colors.green.shade700),
+              ])),
+              const SizedBox(width: 12),
+              SizedBox(width: 240, child: TextField(
+                controller: _txnSearchCtrl,
+                decoration: const InputDecoration(hintText: 'Search transactions...', isDense: true,
+                  prefixIcon: Icon(Icons.search, size: 16), border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8)),
+                style: const TextStyle(fontSize: 12),
+                onChanged: (v) => setState(() => _txnQuery = v.toLowerCase()),
+              )),
             ]),
           ),
           const SizedBox(height: 10),
@@ -340,11 +352,11 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                   SizedBox(width: 130, child: Text(_bal(_opening), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
                 ])),
               const Divider(height: 1),
-              Expanded(child: _entries.isEmpty
-                ? const Center(child: Text('No transactions in this period.', style: TextStyle(color: AppTheme.textSecondary)))
-                : ListView.separated(itemCount: _entries.length, separatorBuilder: (_, __) => const Divider(height: 1, color: AppTheme.border),
+              Expanded(child: shown.isEmpty
+                ? Center(child: Text(_txnQuery.isEmpty ? 'No transactions in this period.' : 'No matching transactions.', style: const TextStyle(color: AppTheme.textSecondary)))
+                : ListView.separated(itemCount: shown.length, separatorBuilder: (_, __) => const Divider(height: 1, color: AppTheme.border),
                     itemBuilder: (_, i) {
-                      final e = _entries[i];
+                      final e = shown[i];
                       final ds = (e['entry_date'] as String?) ?? '';
                       final dt = DateTime.tryParse(ds); final date = dt != null ? DateFormat('d MMM yy').format(dt) : ds;
                       final dr = (e['debit'] as num?)?.toDouble() ?? 0;
@@ -364,7 +376,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                 decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(bottom: Radius.circular(10)), border: Border(top: BorderSide(color: AppTheme.border))),
                 child: Row(children: [
                   const SizedBox(width: 90), const SizedBox(width: 130),
-                  Expanded(child: Text('${_entries.length} transactions', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+                  Expanded(child: Text('${shown.length}${_txnQuery.isEmpty ? '' : ' of ${_entries.length}'} transactions', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
                   SizedBox(width: 110, child: Text(fmt.format(_periodDr), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.primary))),
                   SizedBox(width: 110, child: Text(fmt.format(_periodCr), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.green.shade700))),
                   SizedBox(width: 130, child: Text(_bal(_closing), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800))),
