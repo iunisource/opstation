@@ -1,3 +1,4 @@
+import '../../features/inventory/erp_stock_adjustment_screen.dart';
 import '../../features/erp/presentation/erp_trial_balance_screen.dart';
 import '../../features/erp/presentation/erp_journal_voucher_screen.dart';
 import '../../features/erp/presentation/erp_account_activity_screen.dart';
@@ -177,6 +178,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/no-access', builder: (_, __) => const _NoAccessScreen()),
           GoRoute(path: '/erp/opening-stock', builder: (_, __) => const ErpOpeningStockScreen()),
           GoRoute(path: '/erp/stock-transfers', builder: (_, __) => const ErpStockTransfersScreen()),
+          GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => const ErpStockAdjustmentScreen()),
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVoucherScreen()),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => const ErpReceiptVouchersScreen()),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => const ErpSupplierLedgerScreen()),

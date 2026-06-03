@@ -88,9 +88,9 @@ class _ErpStockAdjustmentScreenState
     super.dispose();
   }
 
-  String get _orgId => ref.read(currentUserProvider)!.orgId; // >>> WIRE 1
-  String? get _branchId => ref.read(selectedBranchProvider); // >>> WIRE 1
-  String get _userId => ref.read(currentUserProvider)!.id;   // >>> WIRE 1
+  String get _orgId => ref.read(currentUserProvider)!.orgId!;
+  String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
+  String get _userId => ref.read(currentUserProvider)!.id;
 
   Future<void> _loadProducts() async {
     try {
