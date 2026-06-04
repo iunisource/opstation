@@ -847,18 +847,18 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       final sis = await Supabase.instance.client.from('sales_invoices').select('id, voucher_number, is_voided').eq('do_id', _detail['id']);
       final active = (sis as List).where((s) => s['is_voided'] != true).toList();
       if (active.isNotEmpty) {
-        _showSnack('Cannot delete: Sales Invoice ${active.first['voucher_number']} exists. Void it first.');
+        _showSnack('Cannot void: Sales Invoice ${active.first['voucher_number']} exists. Void it first.');
         return;
       }
     } catch (e) { _showSnack('Failed to check: $e'); return; }
 
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Delivery Order?'),
-      content: Text('Permanently delete ${_detail['voucher_number']}? Stock will be added back. This cannot be undone.'),
+      title: const Text('Void Delivery Order?'),
+      content: Text('Void ${_detail['voucher_number']}? Stock will be added back and the delivery\'s accounting reversed. An audit trail is kept; this cannot be undone.'),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Keep')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void')),
       ],
     ));
     if (confirm != true) return;
@@ -868,7 +868,16 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     final userId = ref.read(currentUserProvider)?.id;
 
     try {
-      // Reverse stock + restore SO qty_delivered for each line
+      // Void the DO -> DB trigger reverses the transit GL (Cr 1320 / Dr 1330)
+      // and restores the consumed cost layers. Operational restores follow.
+      await Supabase.instance.client.from('delivery_orders').update({
+        'is_voided': true,
+        'voided_at': DateTime.now().toUtc().toIso8601String(),
+        'voided_by': userId,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+
+      // Restore legacy on-hand + SO qty_delivered for each line
       for (final item in _items) {
         final pid = item['product_id'] as String;
         final delivered = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
@@ -891,7 +900,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${pid.substring(0, 4)}',
           'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': item['uom_id'],
           'quantity': delivered, 'movement_type': 'adjustment',
-          'reference_id': _detail['id'], 'reference_type': 'delivery_order_deleted',
+          'reference_id': _detail['id'], 'reference_type': 'delivery_order_voided',
           'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
         });
 
@@ -931,14 +940,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       );
       if (bankErr != null) _showSnack('Bank # failed: $bankErr');
 
-      await _logAudit(_detail['id'] as String, 'DO', 'deleted', 'Voucher $vNum deleted by admin, stock reversed');
-      await Supabase.instance.client.from('delivery_order_items').delete().eq('delivery_order_id', _detail['id']);
-      await Supabase.instance.client.from('delivery_orders').delete().eq('id', _detail['id']);
-
-      _showSnack('Deleted — stock restored');
-      setState(() { _selectedId = null; _detail = {}; _items = []; _soItems = []; _linkedSo = {}; });
+      await _logAudit(_detail['id'] as String, 'DO', 'voided', 'Voucher $vNum voided -- GL & stock reversed');
+      _showSnack('Voided — stock and accounting reversed');
       await _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+      await _loadDetail(_detail['id'] as String);
+    } catch (e) { _showSnack('Could not void: $e'); }
   }
 
   Future<void> _printDO() async {
@@ -1340,11 +1346,18 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                                     Text(o['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                                      child: Text(status, style: TextStyle(color: _statusColor(status), fontSize: 10, fontWeight: FontWeight.w600)),
-                                    ),
+                                    if (o['is_voided'] == true)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                        child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 10, fontWeight: FontWeight.w700)),
+                                      )
+                                    else
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                        child: Text(status, style: TextStyle(color: _statusColor(status), fontSize: 10, fontWeight: FontWeight.w600)),
+                                      ),
                                   ]),
                                   Text('SO: ${o['sales_orders']?['voucher_number'] ?? '-'}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                                   Text(o['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -1371,6 +1384,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   Widget _buildDetail() {
     final status = _detail['status'] as String? ?? 'saved';
     final isInvoiced = status == 'invoiced';
+    final isVoided = _detail['is_voided'] == true;
     final pendingSoItems = _soItems.where((i) {
       final ordered = (i['quantity'] as num?)?.toDouble() ?? 0;
       final delivered = (i['qty_delivered'] as num?)?.toDouble() ?? 0;
@@ -1391,12 +1405,20 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           const SizedBox(width: 12),
           _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
           if (_isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
+          if (isVoided) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w700)),
+            ),
+          ],
           const Spacer(),
-          if (!_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
+          if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
             ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Save Delivery Order')),
             const SizedBox(width: 8),
           ],
-          if (!isInvoiced && _items.isNotEmpty) ...[
+          if (!isVoided && !isInvoiced && _items.isNotEmpty) ...[
             ElevatedButton(
               onPressed: _createInvoice,
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
@@ -1404,7 +1426,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             ),
             const SizedBox(width: 8),
           ],
-          if (!isInvoiced)
+          if (!isVoided && !isInvoiced)
             IconButton(
               icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
               tooltip: _isLocked ? 'Unlock' : 'Lock',
@@ -1415,10 +1437,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             tooltip: 'Print / PDF',
             onPressed: _printDO,
           ),
-          if (_canDelete)
+          if (_canDelete && !isVoided)
             IconButton(
-              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
-              tooltip: 'Delete',
+              icon: const Icon(Icons.block, color: AppTheme.danger),
+              tooltip: 'Void',
               onPressed: _deleteDO,
             ),
         ]),
