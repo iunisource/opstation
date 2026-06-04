@@ -1190,7 +1190,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
       _showSnack('Delivery saved — stock deducted');
       await _loadList();
-      _loadDetail(_detail['id'] as String);
+      await _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
