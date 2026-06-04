@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -384,7 +385,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     final latCtrl = TextEditingController(text: customer?['latitude']?.toString() ?? '');
     final lngCtrl = TextEditingController(text: customer?['longitude']?.toString() ?? '');
     final creditLimitCtrl = TextEditingController(text: customer?['credit_limit']?.toString() ?? '');
-    final ntnCtrl = TextEditingController(text: customer?['ntn'] ?? '');
+    final ntnCtrl = TextEditingController(text: customer?['ntn_gst'] ?? '');
     String? category = customer?['category'] as String?;
        String? group = customer?['group_name'] as String?;
        // Build dropdown lists that include any orphan values from the
@@ -448,14 +449,15 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   ),
                 ]),
                 const SizedBox(height: 16),
-                // Credit & Tax
+                // Credit Limit
                 const Align(alignment: Alignment.centerLeft,
-                  child: Text('Credit & Tax', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                  child: Text('Credit Limit', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 8),
                 Row(children: [
                   Expanded(child: TextField(controller: creditLimitCtrl,
                       decoration: const InputDecoration(labelText: 'Credit Limit (optional)', hintText: 'Leave blank for no limit'),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true))),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))])),
                   const SizedBox(width: 12),
                   Expanded(child: TextField(controller: ntnCtrl,
                       decoration: const InputDecoration(labelText: 'NTN'))),
@@ -466,29 +468,6 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   child: Text('Address', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 8),
                 TextField(controller: addressCtrl, decoration: const InputDecoration(labelText: 'Street Address'), maxLines: 2),
-                const SizedBox(height: 16),
-                // Branch assignment
-                if ((allBranches as List).isNotEmpty)
-                  StatefulBuilder(builder: (ctx2, setSB) => Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Align(alignment: Alignment.centerLeft,
-                        child: Text('Branch Assignment', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
-                      const SizedBox(height: 6),
-                      Container(
-                        decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
-                        child: Column(children: (allBranches as List).map((b) => CheckboxListTile(
-                          dense: true,
-                          title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
-                          value: selectedBranches.contains(b['id'] as String),
-                          onChanged: (v) => setSB(() {
-                            if (v == true) selectedBranches.add(b['id'] as String);
-                            else selectedBranches.remove(b['id'] as String);
-                          }),
-                        )).toList()),
-                      ),
-                    ],
-                  )),
                 const SizedBox(height: 16),
                 // Branch assignment
                 if ((allBranches as List).isNotEmpty)
@@ -577,7 +556,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   'latitude': lat,
                   'longitude': lng,
                   'credit_limit': creditLimitCtrl.text.trim().isEmpty ? null : double.tryParse(creditLimitCtrl.text.trim()),
-                  'ntn': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
+                  'ntn_gst': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
                   'org_id': orgId,
                   'is_active': true,
                 };
