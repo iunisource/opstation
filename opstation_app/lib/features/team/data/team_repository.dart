@@ -55,8 +55,9 @@ class TeamRepository {
     // Super admin has no orgId — always visible to themselves.
     // Other users: filter to the current org only.
     if (_orgId != null) {
+      // Exact-org match only. The old `u.orgId.isNull()` allowance let any
+      // null-org row show in every org's team (the cross-org team leak).
       q.where((u) =>
-          u.orgId.isNull() |
           u.orgId.equals(_orgId!) |
           u.role.equals(UserRole.superAdmin.name));
     }

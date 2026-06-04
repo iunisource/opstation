@@ -842,11 +842,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   }
 
   Future<void> _deleteDO() async {
-    // Cascade check: no SI for this DO
+    // Cascade check: a non-voided SI for this DO blocks deletion
     try {
-      final sis = await Supabase.instance.client.from('sales_invoices').select('id, voucher_number').eq('do_id', _detail['id']);
-      if ((sis as List).isNotEmpty) {
-        _showSnack('Cannot delete: Sales Invoice ${sis.first['voucher_number']} exists. Delete the invoice first.');
+      final sis = await Supabase.instance.client.from('sales_invoices').select('id, voucher_number, is_voided').eq('do_id', _detail['id']);
+      final active = (sis as List).where((s) => s['is_voided'] != true).toList();
+      if (active.isNotEmpty) {
+        _showSnack('Cannot delete: Sales Invoice ${active.first['voucher_number']} exists. Void it first.');
         return;
       }
     } catch (e) { _showSnack('Failed to check: $e'); return; }
@@ -1678,27 +1679,29 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
   }
 
-  Future<void> _deleteSI() async {
+  Future<void> _cancelSI() async {
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Sales Invoice?'),
-      content: Text('Permanently delete ${_detail['voucher_number']}? The DO will be available for re-invoicing. This cannot be undone.'),
+      title: const Text('Cancel / Void Sales Invoice?'),
+      content: Text('Void ${_detail['voucher_number']}? Its accounting entries will be reversed, stock movements undone, and the Delivery Order released for re-invoicing. An audit trail is kept; this cannot be undone.'),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Keep')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void')),
       ],
     ));
     if (confirm != true) return;
 
     try {
       final vNum = _detail['voucher_number'] as String? ?? '';
+      // 1) void the invoice -> DB trigger reverses GL and restores stock
+      await Supabase.instance.client.from('sales_invoices').update({
+        'is_voided': true,
+        'voided_at': DateTime.now().toUtc().toIso8601String(),
+        'voided_by': ref.read(currentUserProvider)?.id,
+      }).eq('id', _detail['id']);
+
+      // 2) release the DO so it can be invoiced again
       final doId = _detail['do_id'] as String?;
-
-      await _logAudit(_detail['id'] as String, 'deleted', 'Voucher $vNum deleted by admin');
-      await Supabase.instance.client.from('sales_invoice_items').delete().eq('invoice_id', _detail['id']);
-      await Supabase.instance.client.from('sales_invoices').delete().eq('id', _detail['id']);
-
-      // Revert DO status so a new invoice can be created
       if (doId != null) {
         await Supabase.instance.client.from('delivery_orders').update({
           'status': 'saved',
@@ -1706,18 +1709,13 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         }).eq('id', doId);
       }
 
-      // Bank voucher number — surface failures.
-      final bankErr = await _bankCancelledVoucherNumber(
-        orgId: _orgId,
-        branchId: _detail['branch_id'] as String?,
-        voucherNumber: vNum,
-      );
-      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
-
-      _showSnack('Deleted — DO restored to saved');
-      setState(() { _selectedId = null; _detail = {}; _items = []; });
+      await _logAudit(_detail['id'] as String, 'cancelled', 'Voucher $vNum voided -- GL & stock reversed, DO released');
+      _showSnack('Voided -- accounting reversed, DO available again');
       await _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+      _loadDetail(_detail['id'] as String);
+    } catch (e) {
+      _showSnack('Could not void: $e');
+    }
   }
 
   Future<void> _printSI() async {
@@ -1871,6 +1869,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                             final inv = _filteredInvoices[i];
                             final isSelected = inv['id'] == _selectedId;
                             final isLocked = inv['is_locked'] as bool? ?? false;
+                            final isVoided = inv['is_voided'] as bool? ?? false;
                             return InkWell(
                               onTap: () => _loadDetail(inv['id'] as String),
                               child: Container(
@@ -1881,7 +1880,16 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                     Text(inv['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
-                                    isLocked
+                                    isVoided
+                                        ? Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                                              Icon(Icons.block, size: 10, color: AppTheme.danger),
+                                              SizedBox(width: 3),
+                                              Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 9, fontWeight: FontWeight.w700)),
+                                            ]))
+                                        : isLocked
                                         ? Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                             decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
@@ -1955,11 +1963,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             tooltip: 'Print / PDF',
             onPressed: _printSI,
           ),
-          if (_canDelete)
-            IconButton(
-              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
-              tooltip: 'Delete',
-              onPressed: _deleteSI,
+          if (_canDelete && !(_detail['is_voided'] as bool? ?? false))
+            TextButton.icon(
+              icon: const Icon(Icons.block, size: 18, color: AppTheme.danger),
+              label: const Text('Cancel / Void', style: TextStyle(color: AppTheme.danger)),
+              onPressed: _cancelSI,
+            ),
+          if (_detail['is_voided'] as bool? ?? false)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w700)),
             ),
         ]),
       ),

@@ -58,6 +58,17 @@ class SupabasePullService {
     debugPrint('PULL: orgs=\${data.orgs.length} users=\${data.users.length} customers=\${data.customers.length} routes=\${data.routes.length} trips=\${data.trips.length} visits=\${data.visits.length}');
     await _db.transaction(() async {
       await _pullOrgs(data.orgs);
+      // Per-org set-replace: refresh ONLY this org's users (catches
+      // server-side removals) without touching other orgs' rows. Upsert
+      // alone never deletes, so removed users would linger; a wholesale
+      // delete is the opposite mistake — it wipes every OTHER org off the
+      // device. Scoping the delete to `orgId` keeps each org independent.
+      // Guarded: a pull that returned no users must never wipe the org.
+      // (data.users also carries the null-org superadmin, which this
+      // org-scoped delete never matches.)
+      if (data.users.isNotEmpty) {
+        await (_db.delete(_db.users)..where((u) => u.orgId.equals(orgId))).go();
+      }
       await _pullUsers(data.users);
       await _pullCustomers(data.customers);
       await _pullRoutes(data.routes);

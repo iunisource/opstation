@@ -5,6 +5,7 @@ import '../../audit/data/audit_repository.dart';
 import '../../auth/providers/auth_controller.dart' show supabaseAuthServiceProvider;
 import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../auth/models/auth_user.dart' as app;
 import '../data/team_repository.dart';
 import '../models/team_user.dart';
 
@@ -80,29 +81,42 @@ class TeamState {
 class TeamController extends AsyncNotifier<TeamState> {
   TeamRepository get _repo => ref.read(teamRepositoryProvider);
 
-  /// Current user's org ID — null for super admin (sees all).
+  /// Current user's org ID — used when CREATING users so they inherit the
+  /// admin's org. Null for super admin. (Display scoping is _scopeToOrg.)
   String? get _orgId =>
       ref.read(authControllerProvider).valueOrNull?.organizationId;
 
-  List<TeamUser> _scopeToOrg(List<TeamUser> all) {
-    final orgId = _orgId;
-    if (orgId == null) return all; // super admin sees everyone
-    // Exclude superadmin from org-level team lists
+  /// Scope the full local user list to what the current viewer may see.
+  ///   • auth not resolved yet (null): show NOTHING. During login
+  ///     valueOrNull is briefly null; returning the full list in that window
+  ///     was the real cross-org leak — the team dumped every device-local
+  ///     user regardless of org until auth caught up.
+  ///   • super admin: sees everyone.
+  ///   • org user: exact-org match only — a null-org or other-org row can
+  ///     never appear in another org's team.
+  List<TeamUser> _scopeToOrg(List<TeamUser> all, app.AuthUser? auth) {
+    if (auth == null) return const [];
+    if (auth.role == UserRole.superAdmin) return all;
+    final orgId = auth.organizationId;
+    if (orgId == null) return const [];
     return all
-        .where((u) =>
-            u.role != UserRole.superAdmin &&
-            (u.orgId == null || u.orgId == orgId))
+        .where((u) => u.role != UserRole.superAdmin && u.orgId == orgId)
         .toList();
   }
 
   @override
   Future<TeamState> build() async {
-    final all = _scopeToOrg(await _repo.all(includeInactive: true));
+    // WATCH (not read) auth: the instant login resolves the user/org this
+    // controller re-runs and re-scopes. Reading would freeze the empty
+    // null-auth result taken during the login window.
+    final auth = ref.watch(authControllerProvider).valueOrNull;
+    final all = _scopeToOrg(await _repo.all(includeInactive: true), auth);
     return TeamState(all: all);
   }
 
   Future<void> refresh() async {
-    final all = _scopeToOrg(await _repo.all(includeInactive: true));
+    final auth = ref.read(authControllerProvider).valueOrNull;
+    final all = _scopeToOrg(await _repo.all(includeInactive: true), auth);
     final current = state.valueOrNull;
     state = AsyncData((current ?? const TeamState()).copyWith(all: all));
   }
