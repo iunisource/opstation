@@ -696,14 +696,51 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select a branch first')));
       return;
     }
-    var poQuery = Supabase.instance.client
+    // POs open for a NEW GRN: status ordered/partially_received, remaining qty > 0,
+    // and no pending GRN (one already created whose received qty isn't confirmed yet).
+    final client = Supabase.instance.client;
+    final poRows = List<Map<String, dynamic>>.from(await client
         .from('purchase_orders')
         .select('id, voucher_number, supplier_id, suppliers(name)')
-        .eq('org_id', orgId).eq('status', 'ordered');
-    final pos = await poQuery.eq('branch_id', branchId);
+        .eq('org_id', orgId).eq('branch_id', branchId)
+        .inFilter('status', ['ordered', 'partially_received']));
     if (!mounted) return;
-    if ((pos as List).isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No ordered POs available')));
+    final List<Map<String, dynamic>> pos = [];
+    if (poRows.isNotEmpty) {
+      final poIds = poRows.map((p) => p['id'] as String).toList();
+      final itemRows = List<Map<String, dynamic>>.from(await client
+          .from('purchase_order_items')
+          .select('purchase_order_id, quantity_ordered, qty_received')
+          .inFilter('purchase_order_id', poIds));
+      final remaining = <String, double>{};
+      for (final it in itemRows) {
+        final pid = it['purchase_order_id'] as String;
+        final ord = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
+        final rcv = (it['qty_received'] as num?)?.toDouble() ?? 0;
+        remaining[pid] = (remaining[pid] ?? 0) + (ord - rcv);
+      }
+      final grnRows = List<Map<String, dynamic>>.from(await client
+          .from('purchase_grns').select('id, po_id')
+          .inFilter('po_id', poIds).neq('status', 'cancelled'));
+      final pendingPos = <String>{};
+      if (grnRows.isNotEmpty) {
+        final grnIds = grnRows.map((g) => g['id'] as String).toList();
+        final grnItemRows = List<Map<String, dynamic>>.from(await client
+            .from('purchase_grn_items').select('grn_id').inFilter('grn_id', grnIds));
+        final withItems = grnItemRows.map((r) => r['grn_id'] as String).toSet();
+        for (final g in grnRows) {
+          if (!withItems.contains(g['id'] as String)) pendingPos.add(g['po_id'] as String);
+        }
+      }
+      for (final p in poRows) {
+        final pid = p['id'] as String;
+        final rem = remaining[pid] ?? 0;
+        if (rem > 0.0001 && !pendingPos.contains(pid)) pos.add({...p, '_remaining': rem});
+      }
+    }
+    if (pos.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No POs available for a new GRN (all received, or pending an unconfirmed GRN)')));
       return;
     }
     String? poId;
@@ -718,9 +755,13 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
               value: poId,
               decoration: const InputDecoration(labelText: 'Purchase Order *'),
               hint: const Text('Select PO'),
-              items: pos.map((p) => DropdownMenuItem(
+              items: pos.map((p) {
+                final rem = (p['_remaining'] as num?)?.toDouble() ?? 0;
+                final remStr = rem == rem.roundToDouble() ? rem.toInt().toString() : rem.toStringAsFixed(2);
+                return DropdownMenuItem(
                   value: p['id'] as String,
-                  child: Text('${p['voucher_number']} — ${p['suppliers']?['name'] ?? '-'}'))).toList(),
+                  child: Text('${p['voucher_number']} — ${p['suppliers']?['name'] ?? '-'}  ·  $remStr left'));
+              }).toList(),
               onChanged: (v) => setS(() => poId = v),
             ),
             const SizedBox(height: 12),
@@ -1163,13 +1204,27 @@ class _GrnDetailScreenState extends ConsumerState<GrnDetailScreen> {
                     'reference_id': widget.grnId, 'reference_type': 'purchase_grn',
                     'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
                   });
+                  final poItemRow = await Supabase.instance.client.from('purchase_order_items')
+                      .select('qty_received').eq('id', itemId).single();
                   await Supabase.instance.client.from('purchase_order_items').update({
-                    'quantity_received': receivedQty,
+                    'qty_received': ((poItemRow['qty_received'] as num?)?.toDouble() ?? 0) + receivedQty,
                   }).eq('id', itemId);
                 }
+                // PO status from remaining qty (supports partial receipts across GRNs)
+                final poId = _grn['po_id'] as String;
+                final remRows = await Supabase.instance.client.from('purchase_order_items')
+                    .select('quantity_ordered, qty_received').eq('purchase_order_id', poId);
+                bool allRcvd = true; bool anyRcvd = false;
+                for (final pi in remRows as List) {
+                  final ord = ((pi['quantity_ordered'] as num?)?.toDouble() ?? 0);
+                  final rcv = ((pi['qty_received'] as num?)?.toDouble() ?? 0);
+                  if (rcv > 0) anyRcvd = true;
+                  if (rcv < ord) allRcvd = false;
+                }
                 await Supabase.instance.client.from('purchase_orders').update({
-                  'status': 'received', 'updated_at': DateTime.now().toUtc().toIso8601String(),
-                }).eq('id', _grn['po_id'] as String);
+                  'status': allRcvd ? 'received' : (anyRcvd ? 'partially_received' : 'ordered'),
+                  'updated_at': DateTime.now().toUtc().toIso8601String(),
+                }).eq('id', poId);
                 if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
                 _showSnack('Items received — stock updated');
                 _load();
