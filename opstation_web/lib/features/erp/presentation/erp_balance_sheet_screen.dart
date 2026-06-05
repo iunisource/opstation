@@ -19,6 +19,9 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   bool _loading    = false;
   List<Map<String, dynamic>> _bsRows = [];
   double _netIncome = 0;
+  // level-4 detail grouped by level-3 parent code
+  Map<String, List<Map<String, dynamic>>> _children = {};
+  final Set<String> _expanded = {};
 
   @override void initState() { super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
@@ -37,11 +40,12 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         final params = <String, dynamic>{
           'p_org_id': orgId,
           'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf),
-        };        final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: params);
+        };
+        final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: params);
         bsRows = List<Map<String, dynamic>>.from(bsRes as List);
       } catch (e) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Balance sheet error: \$e'), duration: const Duration(seconds: 6)));
+          SnackBar(content: Text('Balance sheet error: $e'), duration: const Duration(seconds: 6)));
       }
 
       // Net income from P&L
@@ -51,20 +55,36 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
           'p_org_id': orgId,
           'p_date_from': DateFormat('yyyy-MM-dd').format(DateTime(_asOf.year, 1, 1)),
           'p_date_to':   DateFormat('yyyy-MM-dd').format(_asOf),
-        };        final plRes = await Supabase.instance.client.rpc('rpc_profit_loss', params: params);
+        };
+        final plRes = await Supabase.instance.client.rpc('rpc_profit_loss', params: params);
         for (final r in plRes as List) {
           final net = (r['net'] as num? ?? 0).toDouble();
           ni += r['account_type'] == 'revenue' ? net : -net;
         }
       } catch (e) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('P&L error: \$e'), duration: const Duration(seconds: 6)));
+          SnackBar(content: Text('P&L error: $e'), duration: const Duration(seconds: 6)));
       }
 
-      setState(() { _bsRows = bsRows; _netIncome = ni; _loading = false; });
+      // level-4 detail for drill-down (same all-branch scope as the summary above)
+      final children = <String, List<Map<String, dynamic>>>{};
+      try {
+        final dRes = await Supabase.instance.client.rpc('rpc_balance_sheet_detail', params: <String, dynamic>{
+          'p_org_id': orgId,
+          'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf),
+        });
+        for (final d in List<Map<String, dynamic>>.from(dRes as List)) {
+          (children[(d['parent_code'] ?? '') as String] ??= []).add(d);
+        }
+      } catch (_) {}
+
+      setState(() {
+        _bsRows = bsRows; _netIncome = ni; _children = children;
+        _expanded.clear(); _loading = false;
+      });
     } catch (e) {
       setState(() => _loading = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: \$e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
@@ -214,20 +234,24 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         ])),
     ]);
 
-  Widget _section(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color, {double? netIncome}) =>
-    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  Widget _section(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color, {double? netIncome}) {
+    final rowWidgets = <Widget>[];
+    for (final r in rows) {
+      final code = (r['code'] ?? '') as String;
+      final kids = _children[code] ?? const [];
+      rowWidgets.add(_bsRow(fmt, r, kids.isNotEmpty, code));
+      if (kids.isNotEmpty && _expanded.contains(code)) {
+        for (final k in kids) rowWidgets.add(_bsChildRow(fmt, k));
+      }
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(padding: const EdgeInsets.only(bottom: 8),
         child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: color))),
-      for (final r in rows)
-        Padding(padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-          child: Row(children: [
-            SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-            Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
-            Text(fmt.format(_n(r['balance'])), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          ])),
+      ...rowWidgets,
       if (netIncome != null && netIncome!.abs() > 0.005)
         Padding(padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
           child: Row(children: [
+            const SizedBox(width: 18),
             const SizedBox(width: 48, child: Text('P&L', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
             const Expanded(child: Text('Current Year Profit / Loss', style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic))),
             Text(netIncome! < 0 ? '(${fmt.format(netIncome!.abs())})' : fmt.format(netIncome!),
@@ -242,6 +266,44 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         ])),
       const SizedBox(height: 8),
     ]);
+  }
+
+  Widget _bsRow(NumberFormat fmt, Map r, bool hasChildren, String code) {
+    final expanded = _expanded.contains(code);
+    final inner = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+      child: Row(children: [
+        SizedBox(width: 18, child: hasChildren
+          ? Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 16, color: AppTheme.textSecondary)
+          : null),
+        SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
+        Text(fmt.format(_n(r['balance'])), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      ]),
+    );
+    if (!hasChildren) return inner;
+    return InkWell(
+      onTap: () => setState(() {
+        if (expanded) { _expanded.remove(code); } else { _expanded.add(code); }
+      }),
+      child: inner,
+    );
+  }
+
+  Widget _bsChildRow(NumberFormat fmt, Map r) => Container(
+    color: AppTheme.background.withOpacity(0.35),
+    padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+    child: Row(children: [
+      const SizedBox(width: 18),
+      SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+      Expanded(child: Padding(padding: const EdgeInsets.only(left: 16), child: Row(children: [
+        const Icon(Icons.subdirectory_arrow_right, size: 12, color: AppTheme.textSecondary),
+        const SizedBox(width: 4),
+        Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 11))),
+      ]))),
+      Text(fmt.format(_n(r['balance'])), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500)),
+    ]),
+  );
 
   Widget _card(String label, String value, Color color) => Expanded(child: Container(
     padding: const EdgeInsets.all(12),

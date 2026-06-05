@@ -19,6 +19,9 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   DateTime _to   = DateTime.now();
   bool _loading  = false;
   List<Map<String, dynamic>> _rows = [];
+  // level-4 detail grouped by level-3 parent code
+  Map<String, List<Map<String, dynamic>>> _children = {};
+  final Set<String> _expanded = {};
 
   @override void initState() { super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
@@ -30,21 +33,37 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     setState(() => _loading = true);
     try {
       final branch = ref.read(selectedBranchProvider);
-      final res = await Supabase.instance.client.rpc('rpc_profit_loss', params: {
+      final params = {
         'p_org_id': orgId,
         'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
         'p_date_to':   DateFormat('yyyy-MM-dd').format(_to),
         'p_branch_id': branch?['id'],
-      });
+      };
+      final client = Supabase.instance.client;
+      final res = await client.rpc('rpc_profit_loss', params: params);
       final rawList = res as List;
-      debugPrint('=== P&L RPC rows: \${rawList.length}');
+      debugPrint('=== P&L RPC rows: ${rawList.length}');
       if (rawList.isNotEmpty) {
         final first = rawList.first as Map<String, dynamic>;
-        debugPrint('=== first row: \$first');
+        debugPrint('=== first row: $first');
         final netVal = first['net'];
         debugPrint('=== net type: ${netVal.runtimeType} value: $netVal');
       }
-      setState(() { _rows = List<Map<String, dynamic>>.from(rawList); _loading = false; });
+
+      // Detail is additive: a missing/failed RPC just yields the flat view.
+      List detail = [];
+      try { detail = await client.rpc('rpc_profit_loss_detail', params: params) as List; } catch (_) {}
+      final children = <String, List<Map<String, dynamic>>>{};
+      for (final d in List<Map<String, dynamic>>.from(detail)) {
+        (children[(d['parent_code'] ?? '') as String] ??= []).add(d);
+      }
+
+      setState(() {
+        _rows = List<Map<String, dynamic>>.from(rawList);
+        _children = children;
+        _expanded.clear();
+        _loading = false;
+      });
     } catch (e) {
       setState(() => _loading = false);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -191,18 +210,19 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
 
   Widget _section(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color) {
     if (rows.isEmpty) return const SizedBox.shrink();
+    final rowWidgets = <Widget>[];
+    for (final r in rows) {
+      final code = (r['code'] ?? '') as String;
+      final kids = _children[code] ?? const [];
+      rowWidgets.add(_plRow(fmt, r, kids.isNotEmpty, code));
+      if (kids.isNotEmpty && _expanded.contains(code)) {
+        for (final k in kids) rowWidgets.add(_plChildRow(fmt, k));
+      }
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(padding: const EdgeInsets.only(top: 8, bottom: 4),
         child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: color))),
-      for (final r in rows)
-        Padding(padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
-          child: Row(children: [
-            SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-            Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
-            Text(_fmtNet(fmt, _n(r['net'])),
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                    color: (r['net'] as num?? 0) < 0 ? AppTheme.danger : null)),
-          ])),
+      ...rowWidgets,
       const Divider(),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(children: [
@@ -212,6 +232,46 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
       const SizedBox(height: 8),
     ]);
   }
+
+  Widget _plRow(NumberFormat fmt, Map r, bool hasChildren, String code) {
+    final expanded = _expanded.contains(code);
+    final inner = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
+      child: Row(children: [
+        SizedBox(width: 18, child: hasChildren
+          ? Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 16, color: AppTheme.textSecondary)
+          : null),
+        SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
+        Text(_fmtNet(fmt, _n(r['net'])),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: _n(r['net']) < 0 ? AppTheme.danger : null)),
+      ]),
+    );
+    if (!hasChildren) return inner;
+    return InkWell(
+      onTap: () => setState(() {
+        if (expanded) { _expanded.remove(code); } else { _expanded.add(code); }
+      }),
+      child: inner,
+    );
+  }
+
+  Widget _plChildRow(NumberFormat fmt, Map r) => Container(
+    color: AppTheme.background.withOpacity(0.35),
+    padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+    child: Row(children: [
+      const SizedBox(width: 18),
+      SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+      Expanded(child: Padding(padding: const EdgeInsets.only(left: 16), child: Row(children: [
+        const Icon(Icons.subdirectory_arrow_right, size: 12, color: AppTheme.textSecondary),
+        const SizedBox(width: 4),
+        Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 11))),
+      ]))),
+      Text(_fmtNet(fmt, _n(r['net'])),
+          style: TextStyle(fontSize: 11, color: _n(r['net']) < 0 ? AppTheme.danger : null)),
+    ]),
+  );
 
   Widget _subtotal(NumberFormat fmt, String label, double value, Color color) => Container(
     margin: const EdgeInsets.symmetric(vertical: 8),
