@@ -53,116 +53,81 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
     if (orgId == null) { setState(() => _loading = false); return; }
     try {
       final client = Supabase.instance.client;
-      final branchId = _branchId;
-      var q = client.from('sales_invoices')
-          .select('id, voucher_number, voucher_date, grand_total, customer_id, customers(shop_name, code)')
-          .eq('org_id', orgId);
-      if (branchId != null) q = q.eq('branch_id', branchId);
-      final invs = await q.lte('voucher_date', DateFormat('yyyy-MM-dd').format(_asOf)).limit(20000);
+      final asOfStr = DateFormat('yyyy-MM-dd').format(_asOf);
+      // All-branches so the grand total ties to the Balance Sheet (1210),
+      // which is not branch-filtered. (Pass p_branch_id only if you also
+      // branch-filter the Balance Sheet.)
+      final params = {'p_org_id': orgId, 'p_as_of': asOfStr};
 
-      // Pull receipts from CRV vouchers (customer paid us). The CRV header
-      // carries date + status; the customer + amount live on crv_voucher_lines
-      // (account_type = 'customer'). Mirrors how the Customer Ledger reads CRV.
-      final paidByCustomer = <String, double>{};
+      // Customer master for names/codes.
+      final names = <String, String>{};
+      final codes = <String, String?>{};
       try {
-        var cq = client.from('crv_vouchers')
-            .select('id, voucher_date, created_at')
-            .eq('org_id', orgId).eq('status', 'posted');
-        if (branchId != null) cq = cq.eq('branch_id', branchId);
-        final crvHeaders = await cq.limit(20000);
-        final asOfEnd = DateTime(_asOf.year, _asOf.month, _asOf.day, 23, 59, 59);
-        final crvIds = <String>[];
-        for (final v in crvHeaders as List) {
-          final m = v as Map;
-          final ed = DateTime.tryParse((m['voucher_date'] as String?) ?? '') ??
-                     DateTime.tryParse((m['created_at'] as String?) ?? '');
-          if (ed == null || !ed.isAfter(asOfEnd)) crvIds.add(m['id'] as String);
+        final cs = await client.from('customers')
+            .select('id, shop_name, code').eq('org_id', orgId).limit(20000);
+        for (final c in cs as List) {
+          final m = c as Map;
+          names[m['id'] as String] = (m['shop_name'] as String?) ?? '(Unknown)';
+          codes[m['id'] as String] = m['code'] as String?;
         }
-        for (var i = 0; i < crvIds.length; i += 100) {
-          final end = (i + 100) > crvIds.length ? crvIds.length : (i + 100);
-          final chunk = crvIds.sublist(i, end);
-          final lines = await client.from('crv_voucher_lines')
-              .select('account_id, amount')
-              .eq('account_type', 'customer')
-              .inFilter('voucher_id', chunk);
-          for (final ln in lines as List) {
-            final cid = (ln as Map)['account_id'] as String?;
-            if (cid == null) continue;
-            paidByCustomer[cid] = (paidByCustomer[cid] ?? 0) + ((ln['amount'] as num?)?.toDouble() ?? 0);
+      } catch (e) { /* names are best-effort */ }
+
+      // Aggregate buckets + GL-true net per customer (ties to 1210).
+      final agg = await client.rpc('rpc_customer_aging', params: params) as List;
+
+      // Open GL lines per customer for the drill-down (best-effort).
+      final detailByCust = <String, List<Map<String, dynamic>>>{};
+      try {
+        final det = await client.rpc('rpc_customer_aging_detail', params: params) as List;
+        for (final d in det) {
+          final m = d as Map;
+          final key = (m['customer_id'] as String?) ?? '__unallocated__';
+          (detailByCust[key] ??= []).add({
+            'voucher_number': (m['reference_number'] as String?) ?? '-',
+            'voucher_date': DateTime.tryParse('${m['ref_date']}') ?? _asOf,
+            'outstanding': (m['open_amt'] as num?)?.toDouble() ?? 0,
+            'ageDays': (m['age_days'] as num?)?.toInt() ?? 0,
+          });
+        }
+      } catch (e) { /* detail is optional */ }
+
+      final rows = <_AgingRow>[];
+      for (final a in agg) {
+        final m = a as Map;
+        final cid = m['customer_id'] as String?;
+        final key = cid ?? '__unallocated__';
+        final name = cid == null
+            ? 'Unallocated (no customer)'
+            : (names[cid] ?? '(Unknown)');
+        final row = _AgingRow(cid ?? key, name, cid == null ? null : codes[cid]);
+        final b1 = (m['b1'] as num?)?.toDouble() ?? 0;
+        final b2 = (m['b2'] as num?)?.toDouble() ?? 0;
+        final b3 = (m['b3'] as num?)?.toDouble() ?? 0;
+        final b4 = (m['b4'] as num?)?.toDouble() ?? 0;
+        final net = (m['total'] as num?)?.toDouble() ?? 0;
+        // total is a getter (sum of buckets). Fold the GL net into `current`
+        // so the row total equals the true 1210 balance, including credit
+        // (overpaid) balances which carry no open debits.
+        row.current = net - b1 - b2 - b3 - b4;
+        row.bucket1 = b1; row.bucket2 = b2; row.bucket3 = b3; row.bucket4 = b4;
+        final lines = detailByCust[key] ?? const <Map<String, dynamic>>[];
+        row.openInvoices.addAll(lines);
+        row.invoiceCount = lines.length;
+        for (final ln in lines) {
+          final dt = ln['voucher_date'] as DateTime;
+          if (row.oldestInvoiceDate == null || dt.isBefore(row.oldestInvoiceDate!)) {
+            row.oldestInvoiceDate = dt;
           }
         }
-      } catch (e) {
-        // ignore: avoid_print
-        print('[CustomerAging] CRV receipts error: $e');
+        rows.add(row);
       }
-
-      // Walk invoices oldest → newest, applying paid balance per customer.
-      final list = List<Map<String, dynamic>>.from(invs)
-        ..sort((a, b) => (a['voucher_date'] as String).compareTo(b['voucher_date'] as String));
-
-      // Seed rows with the full customer master list so zero-balance customers
-      // still appear (aging shows the entire roster, not just those with debt).
-      final rows = <String, _AgingRow>{};
-      try {
-        final allCustomers = await client.from('customers')
-            .select('id, shop_name, code')
-            .eq('org_id', orgId)
-            .limit(20000);
-        for (final c in allCustomers as List) {
-          final m = c as Map;
-          final id = m['id'] as String;
-          rows[id] = _AgingRow(id, m['shop_name'] as String? ?? '(Unknown)', m['code'] as String?);
-        }
-      } catch (e) {
-        // ignore: avoid_print
-        print('[CustomerAging] customer master load: $e');
-      }
-      for (final inv in list) {
-        final cid = inv['customer_id'] as String?;
-        if (cid == null) continue;
-        final cust = inv['customers'] as Map?;
-        final name = cust?['shop_name'] as String? ?? '(Unknown)';
-        final code = cust?['code'] as String?;
-        final row = rows.putIfAbsent(cid, () => _AgingRow(cid, name, code));
-
-        final total = (inv['grand_total'] as num?)?.toDouble() ?? 0;
-        // Apply available receipt credit (FIFO across invoices)
-        final available = paidByCustomer[cid] ?? 0;
-        final applied = available >= total ? total : available;
-        paidByCustomer[cid] = available - applied;
-        final outstanding = total - applied;
-        if (outstanding <= 0.005) continue;
-
-        final invDate = DateTime.parse(inv['voucher_date'] as String);
-        final ageDays = _asOf.difference(invDate).inDays;
-        if (ageDays <= 30) row.current += outstanding;
-        else if (ageDays <= 60) row.bucket1 += outstanding;
-        else if (ageDays <= 90) row.bucket2 += outstanding;
-        else if (ageDays <= 120) row.bucket3 += outstanding;
-        else row.bucket4 += outstanding;
-        row.openInvoices.add({
-          'voucher_number': inv['voucher_number'] as String? ?? '-',
-          'voucher_date': invDate,
-          'outstanding': outstanding,
-          'ageDays': ageDays,
-        });
-        row.invoiceCount += 1;
-        if (row.oldestInvoiceDate == null || invDate.isBefore(row.oldestInvoiceDate!)) {
-          row.oldestInvoiceDate = invDate;
-        }
-      }
-
-      setState(() {
-        _rows = rows.values.toList();
-        _loading = false;
-      });
+      setState(() { _rows = rows; _loading = false; });
     } catch (e) {
       // ignore: avoid_print
       print('[CustomerAging] load error: $e');
       setState(() => _loading = false);
     }
   }
-
   List<_AgingRow> get _filteredSorted {
     final q = _search.toLowerCase().trim();
     var list = _rows.where((r) {

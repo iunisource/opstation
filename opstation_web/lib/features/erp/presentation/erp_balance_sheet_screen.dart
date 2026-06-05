@@ -18,7 +18,6 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   DateTime _asOf   = DateTime.now();
   bool _loading    = false;
   List<Map<String, dynamic>> _bsRows = [];
-  double _netIncome = 0;
   // level-4 detail grouped by level-3 parent code
   Map<String, List<Map<String, dynamic>>> _children = {};
   final Set<String> _expanded = {};
@@ -26,47 +25,29 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   @override void initState() { super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
+  // Display value: assets stay debit-positive; liabilities & equity are flipped
+  // to credit-positive so the statement reads conventionally (and balances).
+  static double _disp(String? type, double bal) => (type == 'asset') ? bal : -bal;
+
   Future<void> _load() async {
     String? orgId = ref.read(currentUserProvider)?.orgId;
     orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
     if (orgId == null) { WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _load(); }); return; }
     setState(() => _loading = true);
     try {
-      final branch = ref.read(selectedBranchProvider);
-      final branchId = branch?['id'] as String?;
-      // Balance sheet rows
       List<Map<String, dynamic>> bsRows = [];
       try {
-        final params = <String, dynamic>{
+        final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: <String, dynamic>{
           'p_org_id': orgId,
           'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf),
-        };
-        final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: params);
+        });
         bsRows = List<Map<String, dynamic>>.from(bsRes as List);
       } catch (e) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Balance sheet error: $e'), duration: const Duration(seconds: 6)));
       }
 
-      // Net income from P&L
-      double ni = 0;
-      try {
-        final params = <String, dynamic>{
-          'p_org_id': orgId,
-          'p_date_from': DateFormat('yyyy-MM-dd').format(DateTime(_asOf.year, 1, 1)),
-          'p_date_to':   DateFormat('yyyy-MM-dd').format(_asOf),
-        };
-        final plRes = await Supabase.instance.client.rpc('rpc_profit_loss', params: params);
-        for (final r in plRes as List) {
-          final net = (r['net'] as num? ?? 0).toDouble();
-          ni += r['account_type'] == 'revenue' ? net : -net;
-        }
-      } catch (e) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('P&L error: $e'), duration: const Duration(seconds: 6)));
-      }
-
-      // level-4 detail for drill-down (same all-branch scope as the summary above)
+      // level-4 detail for drill-down (same all-branch scope as the summary)
       final children = <String, List<Map<String, dynamic>>>{};
       try {
         final dRes = await Supabase.instance.client.rpc('rpc_balance_sheet_detail', params: <String, dynamic>{
@@ -79,7 +60,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
       } catch (_) {}
 
       setState(() {
-        _bsRows = bsRows; _netIncome = ni; _children = children;
+        _bsRows = bsRows; _children = children;
         _expanded.clear(); _loading = false;
       });
     } catch (e) {
@@ -94,10 +75,11 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     final assets = _bsRows.where((r) => r['account_type'] == 'asset').toList();
     final liabs  = _bsRows.where((r) => r['account_type'] == 'liability').toList();
     final equity = _bsRows.where((r) => r['account_type'] == 'equity').toList();
-    double sumBal(List<Map<String, dynamic>> rows) => rows.fold(0.0, (s, r) => s + _n(r['balance']));
-    final totalAssets = sumBal(assets);
-    final totalLiabs  = sumBal(liabs);
-    final totalEquity = sumBal(equity) + _netIncome;
+    double sumDisp(List<Map<String, dynamic>> rows) =>
+        rows.fold(0.0, (s, r) => s + _disp(r['account_type'] as String?, _n(r['balance'])));
+    final totalAssets = sumDisp(assets);
+    final totalLiabs  = sumDisp(liabs);
+    final totalEquity = sumDisp(equity);
     final balanced = (totalAssets - (totalLiabs + totalEquity)).abs() < 0.01;
     final branch = ref.read(selectedBranchProvider);
     final branchName = (branch?['name'] as String?) ?? 'All Branches';
@@ -106,14 +88,12 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     String secRows(List<Map<String, dynamic>> rows) {
       final b = StringBuffer();
       for (final r in rows) {
-        b.write('<tr><td>' + (r['code'] ?? '').toString() + '</td><td>' + (r['name'] ?? '').toString() + '</td><td class="num">' + fmt.format(_n(r['balance'])) + '</td></tr>');
+        final v = _disp(r['account_type'] as String?, _n(r['balance']));
+        final vs = v < 0 ? '(' + fmt.format(v.abs()) + ')' : fmt.format(v);
+        b.write('<tr><td>' + (r['code'] ?? '').toString() + '</td><td>' + (r['name'] ?? '').toString() + '</td><td class="num">' + vs + '</td></tr>');
       }
       return b.toString();
     }
-
-    final equityExtra = _netIncome.abs() > 0.005
-      ? '<tr><td>P&L</td><td><i>Current Year Profit / Loss</i></td><td class="num">' + (_netIncome < 0 ? '(' + fmt.format(_netIncome.abs()) + ')' : fmt.format(_netIncome)) + '</td></tr>'
-      : '';
 
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Balance Sheet</title><style>'
       'body{font-family:Arial,sans-serif;padding:18px;color:#000;font-size:11px}h1{font-size:20px;margin:0 0 2px}'
@@ -131,7 +111,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
       '<tfoot><tr><td colspan="2">TOTAL ASSETS</td><td class="num">' + fmt.format(totalAssets) + '</td></tr></tfoot></table></div>'
       '<div class="col"><h2>LIABILITIES</h2><table><tbody>' + secRows(liabs) + '</tbody>'
       '<tfoot><tr><td colspan="2">TOTAL LIABILITIES</td><td class="num">' + fmt.format(totalLiabs) + '</td></tr></tfoot></table>'
-      '<h2 style="margin-top:14px">EQUITY</h2><table><tbody>' + secRows(equity) + equityExtra + '</tbody>'
+      '<h2 style="margin-top:14px">EQUITY</h2><table><tbody>' + secRows(equity) + '</tbody>'
       '<tfoot><tr><td colspan="2">TOTAL EQUITY</td><td class="num">' + fmt.format(totalEquity) + '</td></tr>'
       '<tr><td colspan="2">TOTAL LIABILITIES + EQUITY</td><td class="num">' + fmt.format(totalLiabs + totalEquity) + '</td></tr></tfoot></table></div>'
       '</div>'
@@ -156,11 +136,11 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     final liabs   = _bsRows.where((r) => r['account_type'] == 'liability').toList();
     final equity  = _bsRows.where((r) => r['account_type'] == 'equity').toList();
 
-    double sumBal(List<Map<String, dynamic>> rows) =>
-        rows.fold(0.0, (s, r) => s + _n(r['balance']));
-    final totalAssets = sumBal(assets);
-    final totalLiabs  = sumBal(liabs);
-    final totalEquity = sumBal(equity) + _netIncome;
+    double sumDisp(List<Map<String, dynamic>> rows) =>
+        rows.fold(0.0, (s, r) => s + _disp(r['account_type'] as String?, _n(r['balance'])));
+    final totalAssets = sumDisp(assets);
+    final totalLiabs  = sumDisp(liabs);
+    final totalEquity = sumDisp(equity);
     final balanced    = (totalAssets - (totalLiabs + totalEquity)).abs() < 0.01;
 
     return Container(
@@ -207,7 +187,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
                 Expanded(child: ListView(padding: const EdgeInsets.all(20), children: [
                   _section(fmt, 'LIABILITIES', liabs, totalLiabs, AppTheme.danger),
                   const SizedBox(height: 12),
-                  _section(fmt, 'EQUITY', equity, totalEquity, AppTheme.success, netIncome: _netIncome),
+                  _section(fmt, 'EQUITY', equity, totalEquity, AppTheme.success),
                   const Divider(thickness: 2),
                   Padding(padding: const EdgeInsets.symmetric(vertical: 8),
                     child: Row(children: [
@@ -234,30 +214,22 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         ])),
     ]);
 
-  Widget _section(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color, {double? netIncome}) {
+  Widget _section(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color) {
+    // Section sign: assets shown as-is, liabilities/equity flipped to positive.
+    final negate = rows.isNotEmpty && (rows.first['account_type'] != 'asset');
     final rowWidgets = <Widget>[];
     for (final r in rows) {
       final code = (r['code'] ?? '') as String;
       final kids = _children[code] ?? const [];
-      rowWidgets.add(_bsRow(fmt, r, kids.isNotEmpty, code));
+      rowWidgets.add(_bsRow(fmt, r, kids.isNotEmpty, code, negate));
       if (kids.isNotEmpty && _expanded.contains(code)) {
-        for (final k in kids) rowWidgets.add(_bsChildRow(fmt, k));
+        for (final k in kids) rowWidgets.add(_bsChildRow(fmt, k, negate));
       }
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(padding: const EdgeInsets.only(bottom: 8),
         child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: color))),
       ...rowWidgets,
-      if (netIncome != null && netIncome!.abs() > 0.005)
-        Padding(padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-          child: Row(children: [
-            const SizedBox(width: 18),
-            const SizedBox(width: 48, child: Text('P&L', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-            const Expanded(child: Text('Current Year Profit / Loss', style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic))),
-            Text(netIncome! < 0 ? '(${fmt.format(netIncome!.abs())})' : fmt.format(netIncome!),
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                    color: netIncome! >= 0 ? AppTheme.success : AppTheme.danger)),
-          ])),
       const Divider(),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
         child: Row(children: [
@@ -268,8 +240,13 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     ]);
   }
 
-  Widget _bsRow(NumberFormat fmt, Map r, bool hasChildren, String code) {
+  // Render a value, parenthesising negatives (abnormal-side balances).
+  String _bsFmt(NumberFormat fmt, double v) => v < 0 ? '(${fmt.format(v.abs())})' : fmt.format(v);
+
+  Widget _bsRow(NumberFormat fmt, Map r, bool hasChildren, String code, bool negate) {
     final expanded = _expanded.contains(code);
+    final raw = _n(r['balance']);
+    final v = negate ? -raw : raw;
     final inner = Padding(
       padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
       child: Row(children: [
@@ -278,7 +255,8 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
           : null),
         SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
         Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
-        Text(fmt.format(_n(r['balance'])), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        Text(_bsFmt(fmt, v),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: v < 0 ? AppTheme.danger : null)),
       ]),
     );
     if (!hasChildren) return inner;
@@ -290,20 +268,25 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     );
   }
 
-  Widget _bsChildRow(NumberFormat fmt, Map r) => Container(
-    color: AppTheme.background.withOpacity(0.35),
-    padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-    child: Row(children: [
-      const SizedBox(width: 18),
-      SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
-      Expanded(child: Padding(padding: const EdgeInsets.only(left: 16), child: Row(children: [
-        const Icon(Icons.subdirectory_arrow_right, size: 12, color: AppTheme.textSecondary),
-        const SizedBox(width: 4),
-        Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 11))),
-      ]))),
-      Text(fmt.format(_n(r['balance'])), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500)),
-    ]),
-  );
+  Widget _bsChildRow(NumberFormat fmt, Map r, bool negate) {
+    final raw = _n(r['balance']);
+    final v = negate ? -raw : raw;
+    return Container(
+      color: AppTheme.background.withOpacity(0.35),
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+      child: Row(children: [
+        const SizedBox(width: 18),
+        SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+        Expanded(child: Padding(padding: const EdgeInsets.only(left: 16), child: Row(children: [
+          const Icon(Icons.subdirectory_arrow_right, size: 12, color: AppTheme.textSecondary),
+          const SizedBox(width: 4),
+          Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 11))),
+        ]))),
+        Text(_bsFmt(fmt, v),
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: v < 0 ? AppTheme.danger : null)),
+      ]),
+    );
+  }
 
   Widget _card(String label, String value, Color color) => Expanded(child: Container(
     padding: const EdgeInsets.all(12),
