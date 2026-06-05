@@ -103,9 +103,24 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           .eq('org_id', orgId).eq('branch_id', branchId)
           .inFilter('status', ['ordered', 'partially_received'])
           .order('voucher_date', ascending: false);
-      if ((pos as List).isEmpty) { _showSnack('No confirmed POs available. Confirm a PO first.'); return; }
+      var available = List<Map<String, dynamic>>.from(pos as List);
+      // Hide POs that already have an open (draft) GRN — one open receipt per PO at a time.
+      // A PO reappears (with remaining qty) once that GRN's receipt is confirmed, or if the draft is deleted.
+      if (available.isNotEmpty) {
+        final draftGrns = await Supabase.instance.client.from('purchase_grns')
+            .select('po_id')
+            .eq('org_id', orgId).eq('branch_id', branchId)
+            .eq('status', 'draft');
+        final blocked = <String>{
+          for (final g in (draftGrns as List)) if (g['po_id'] != null) g['po_id'] as String
+        };
+        if (blocked.isNotEmpty) {
+          available = available.where((p) => !blocked.contains(p['id'] as String)).toList();
+        }
+      }
+      if (available.isEmpty) { _showSnack('No POs open for a new GRN (all received, or pending an unconfirmed GRN).'); return; }
       final picked = await showDialog<Map<String, dynamic>?>(context: context,
-          builder: (_) => _PoPickerDialog(pos: List<Map<String, dynamic>>.from(pos)));
+          builder: (_) => _PoPickerDialog(pos: available));
       if (picked == null) return;
       await _createGrnFromPo(picked);
     } catch (e) { _showSnack('Failed: $e'); }
