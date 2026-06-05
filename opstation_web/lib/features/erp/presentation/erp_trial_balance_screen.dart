@@ -20,6 +20,10 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
   DateTime _to   = DateTime.now();
   bool _loading  = false;
   List<Map<String, dynamic>> _rows = [];
+  // level-4 detail rows grouped by their level-3 parent code
+  Map<String, List<Map<String, dynamic>>> _children = {};
+  // which level-3 codes are currently expanded
+  final Set<String> _expanded = {};
 
   @override void initState() { super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
@@ -31,13 +35,30 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     setState(() => _loading = true);
     try {
       final branch = ref.read(selectedBranchProvider);
-      final res = await Supabase.instance.client.rpc('rpc_trial_balance', params: {
+      final params = {
         'p_org_id': orgId,
         'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
         'p_date_to':   DateFormat('yyyy-MM-dd').format(_to),
         'p_branch_id': branch?['id'],
+      };
+      final client = Supabase.instance.client;
+      final res = await client.rpc('rpc_trial_balance', params: params);
+
+      // Detail is additive: if the RPC is missing or errors, the report still
+      // renders as a flat level-3 summary (graceful degradation).
+      List detail = [];
+      try { detail = await client.rpc('rpc_trial_balance_detail', params: params) as List; } catch (_) {}
+      final children = <String, List<Map<String, dynamic>>>{};
+      for (final d in List<Map<String, dynamic>>.from(detail)) {
+        (children[(d['parent_code'] ?? '') as String] ??= []).add(d);
+      }
+
+      setState(() {
+        _rows = List<Map<String, dynamic>>.from(res as List);
+        _children = children;
+        _expanded.clear();
+        _loading = false;
       });
-      setState(() { _rows = List<Map<String, dynamic>>.from(res as List); _loading = false; });
     } catch (e) {
       setState(() => _loading = false);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -87,6 +108,21 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     if (v is num) return v.toDouble();
     return double.tryParse(v.toString()) ?? 0.0;
   }
+
+  // Flatten summary + expanded children into a single render list.
+  List<_Line> _display() {
+    final out = <_Line>[];
+    for (final r in _rows) {
+      final code = (r['code'] ?? '') as String;
+      final kids = _children[code] ?? const [];
+      out.add(_Line(r, hasChildren: kids.isNotEmpty, code: code));
+      if (kids.isNotEmpty && _expanded.contains(code)) {
+        for (final k in kids) out.add(_Line(k, isChild: true));
+      }
+    }
+    return out;
+  }
+
   @override
   Widget build(BuildContext context) {
     ref.listen(selectedBranchProvider, (_, __) => _load());
@@ -95,6 +131,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     double tDr = _rows.fold(0.0, (s, r) => s + (r['closing_dr'] as num? ?? 0));
     double tCr = _rows.fold(0.0, (s, r) => s + (r['closing_cr'] as num? ?? 0));
     final balanced = (tDr - tCr).abs() < 0.01;
+    final lines = _display();
 
     return Container(
       color: AppTheme.background, padding: const EdgeInsets.all(32),
@@ -133,11 +170,11 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
                 _hdr(),
                 const Divider(height: 1),
                 Expanded(child: ListView.separated(
-                  itemCount: _rows.length + 1,
+                  itemCount: lines.length + 1,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (_, i) {
-                    if (i == _rows.length) return _totals(fmt, tDr, tCr);
-                    return _row(fmt, _rows[i]);
+                    if (i == lines.length) return _totals(fmt, tDr, tCr);
+                    return _line(fmt, lines[i]);
                   },
                 )),
               ]),
@@ -162,6 +199,8 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
     child: Row(children: [
       const SizedBox(width: 56, child: Text('Code', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
+      // 22px lead reserves space for the expand chevron so the header aligns with rows.
+      const SizedBox(width: 22),
       const Expanded(flex: 3, child: Text('Account', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
       for (final l in ['Open Dr','Open Cr','Period Dr','Period Cr','Close Dr','Close Cr'])
         Expanded(child: Text(l, textAlign: TextAlign.right,
@@ -169,24 +208,60 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     ]),
   );
 
-  Widget _row(NumberFormat fmt, Map r) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    child: Row(children: [
-      SizedBox(width: 56, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-      Expanded(flex: 3, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(r['name']??'', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-        Text(r['account_group']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
-      ])),
-      for (final k in ['opening_dr','opening_cr','period_dr','period_cr','closing_dr','closing_cr'])
-        Expanded(child: _amt(fmt, r[k])),
-    ]),
-  );
+  Widget _line(NumberFormat fmt, _Line ln) {
+    final r = ln.row;
+    if (ln.isChild) {
+      return Container(
+        color: AppTheme.background.withOpacity(0.35),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Row(children: [
+          SizedBox(width: 56, child: Text(r['code']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+          const SizedBox(width: 22),
+          Expanded(flex: 3, child: Padding(
+            padding: const EdgeInsets.only(left: 20),
+            child: Row(children: [
+              const Icon(Icons.subdirectory_arrow_right, size: 13, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 11))),
+            ]),
+          )),
+          for (final k in ['opening_dr','opening_cr','period_dr','period_cr','closing_dr','closing_cr'])
+            Expanded(child: _amt(fmt, r[k])),
+        ]),
+      );
+    }
+
+    final expanded = _expanded.contains(ln.code);
+    final inner = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(children: [
+        SizedBox(width: 56, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        SizedBox(width: 22, child: ln.hasChildren
+          ? Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 18, color: AppTheme.textSecondary)
+          : null),
+        Expanded(flex: 3, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(r['name']??'', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(r['account_group']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+        ])),
+        for (final k in ['opening_dr','opening_cr','period_dr','period_cr','closing_dr','closing_cr'])
+          Expanded(child: _amt(fmt, r[k])),
+      ]),
+    );
+    if (!ln.hasChildren) return inner;
+    return InkWell(
+      onTap: () => setState(() {
+        if (expanded) { _expanded.remove(ln.code); } else { _expanded.add(ln.code); }
+      }),
+      child: inner,
+    );
+  }
 
   Widget _totals(NumberFormat fmt, double dr, double cr) => Container(
     color: AppTheme.background,
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
     child: Row(children: [
       const SizedBox(width: 56),
+      const SizedBox(width: 22),
       const Expanded(flex: 3, child: Text('TOTALS', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12))),
       for (final v in [
         _rows.fold(0.0, (s, r) => s + (r['opening_dr'] as num?? 0)),
@@ -214,4 +289,13 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
       Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
     ]),
   );
+}
+
+// A single render line: either a level-3 summary (parent) or a level-4 detail (child).
+class _Line {
+  final Map row;
+  final bool isChild;
+  final bool hasChildren;
+  final String code;
+  _Line(this.row, {this.isChild = false, this.hasChildren = false, this.code = ''});
 }
