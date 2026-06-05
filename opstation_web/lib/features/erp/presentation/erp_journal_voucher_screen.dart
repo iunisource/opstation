@@ -403,6 +403,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   @override Widget build(BuildContext context) {
     final fmt = NumberFormat('#,##0.00');
     final access = ref.watch(accessSyncProvider);
+    final accessReady = access != null && access.role != null;
     final canAdd = access?.canAddDoc('jv') ?? false;
     final canEdit = access?.canEditDoc('jv') ?? false;
     final canDeleteJv = access?.canDelete() ?? false;
@@ -422,7 +423,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             child: Column(children: [
               Row(children: [
                 const Expanded(child: Text('Journal Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
-                if (canAdd) ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
+                if (!accessReady) const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                else if (canAdd) ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero),
                   onPressed: _newVoucher),
               ]),
@@ -484,7 +486,13 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.orange, side: const BorderSide(color: Colors.orange), padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8))),
             ]),
           ])),
-        Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: !accessReady
+          ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(height: 10),
+              Text('Checking access...', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ]))
+          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             SizedBox(width: 160, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Voucher No.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
