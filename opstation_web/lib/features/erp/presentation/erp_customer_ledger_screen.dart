@@ -791,9 +791,16 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
               const Divider(height: 1),
               const SizedBox(height: 8),
               Builder(builder: (_) {
-                final subtotal = ((v['subtotal']) as num?)?.toDouble();
-                final discount = ((v['discount_total'] ?? v['discount']) as num?)?.toDouble() ?? 0;
-                final showBreakdown = !isPR && subtotal != null && discount > 0;
+                double subtotal = 0;
+                if (!isPR) {
+                  for (final ln in lines) {
+                    final q = ((ln['qty'] ?? ln['quantity'] ?? ln['qty_delivered'] ?? ln['qty_received']) as num?)?.toDouble() ?? 0;
+                    final p = ((ln['unit_price'] ?? ln['price'] ?? ln['unit_cost']) as num?)?.toDouble() ?? 0;
+                    subtotal += q * p;
+                  }
+                }
+                final discount = subtotal - total;
+                final showBreakdown = !isPR && discount > 0.01;
                 const lbl = TextStyle(fontSize: 13, color: AppTheme.textSecondary);
                 Widget ln(String l, String val, {bool strong = false}) => Padding(
                       padding: const EdgeInsets.only(top: 2),
@@ -848,12 +855,23 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
         Expanded(flex: 1, child: Text('Qty', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
         Expanded(flex: 2, child: Text('Price', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 2, child: Text('Disc', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
         Expanded(flex: 2, child: Text('Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
       ])),
       ...lines.map((line) {
         final qty = ((line['qty'] ?? line['quantity'] ?? line['qty_delivered'] ?? line['qty_received']) as num?)?.toDouble() ?? 0;
         final price = ((line['unit_price'] ?? line['price'] ?? line['unit_cost']) as num?)?.toDouble() ?? 0;
-        final lineTotal = ((line['line_total'] ?? line['total'] ?? line['amount']) as num?)?.toDouble() ?? (qty * price);
+        final gross = qty * price;
+        final storedTotal = (line['line_total'] ?? line['total'] ?? line['amount']) as num?;
+        double lineTotal;
+        if (storedTotal != null) {
+          lineTotal = storedTotal.toDouble();
+        } else {
+          final dt = line['discount_type'] as String?;
+          final draw = ((line['discount']) as num?)?.toDouble() ?? 0;
+          lineTotal = gross - (dt == 'percent' ? gross * draw / 100 : draw);
+        }
+        final lineDisc = gross - lineTotal;
         final prod = line['products'];
         final prodName = (prod is Map ? prod['name'] as String? : null) ?? (line['product_name'] as String?) ?? (line['description'] as String?) ?? '';
         return Container(
@@ -863,6 +881,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             Expanded(flex: 4, child: Text(prodName, style: const TextStyle(fontSize: 12))),
             Expanded(flex: 1, child: Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
             Expanded(flex: 2, child: Text('Rs. ' + price.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text(lineDisc.abs() < 0.01 ? '—' : 'Rs. ' + lineDisc.toStringAsFixed(2), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: lineDisc.abs() < 0.01 ? AppTheme.textSecondary : AppTheme.danger))),
             Expanded(flex: 2, child: Text('Rs. ' + lineTotal.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
           ]),
         );
