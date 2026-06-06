@@ -205,6 +205,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           await Supabase.instance.client.from('inventory_stock').insert({
             'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
             'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': qty,
+            'uom_id': it['uom_id'],
           });
         } else {
           await Supabase.instance.client.from('inventory_stock').update({
