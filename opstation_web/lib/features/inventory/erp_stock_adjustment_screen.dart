@@ -4,19 +4,18 @@
 //   • No branch selector: branch is inherited from the global header
 //     (selectedBranchProvider), same as your other inventory screens.
 //   • In Qty / Out Qty columns. Stored as a single signed `quantity`
-//     (In => +, Out => -). The DB posting function/trigger handles the GL.
-//   • Save = draft (is_locked false). Post = is_locked true => the
-//     `adj_autopost` trigger posts Dr/Cr Inventory vs 5150 automatically.
-//
-// INTEGRATION POINTS (4) are marked with `// >>> WIRE:` — adjust the import
-// paths / provider names / table names to match your codebase, then it drops in.
+//     (In => +, Out => -). The DB posting trigger handles the GL.
+//   • Save = draft (is_locked false). Post = is_locked true => the DB
+//     trigger posts the GL automatically.
+//   • Side drawer lists all saved vouchers; click to load. New starts a
+//     blank one. Drafts can be deleted; posted vouchers are locked
+//     (reverse via Void once that path is wired to trg_void_on_flag).
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// >>> WIRE 1: point these at your actual providers.
 import '../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../auth/auth_controller.dart';        // exposes currentUserProvider (WebUser: id, orgId)
 
@@ -57,8 +56,9 @@ class _ErpStockAdjustmentScreenState
   // header
   DateTime _date = DateTime.now();
   final TextEditingController _remarks = TextEditingController();
-  String? _voucherId; // set after first save
+  String? _voucherId; // set after first save / on load
   String? _voucherNumber;
+  String _status = 'draft';
   bool _isLocked = false;
 
   // lines
@@ -66,18 +66,28 @@ class _ErpStockAdjustmentScreenState
 
   // product picker
   List<Map<String, dynamic>> _products = [];
+  Map<String, Map<String, dynamic>> _prodById = {};
   String? _pickProductId;
   final TextEditingController _pickIn = TextEditingController();
   final TextEditingController _pickOut = TextEditingController();
 
-  bool _loading = true;
+  // saved-voucher list (side drawer)
+  List<Map<String, dynamic>> _vouchers = [];
+  bool _loadingList = true;
+  String _listSearch = '';
+  bool _drawerOpen = true;
+
+  bool _loading = true; // products loading
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
     // orgId may be null at initState; defer until the first frame.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadProducts());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadProducts();
+      _loadVouchers();
+    });
   }
 
   @override
@@ -91,22 +101,104 @@ class _ErpStockAdjustmentScreenState
   String get _orgId => ref.read(currentUserProvider)!.orgId!;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   String get _userId => ref.read(currentUserProvider)!.id;
+  bool get _isDraft => !_isLocked && _status != 'posted';
 
   Future<void> _loadProducts() async {
     try {
-      // >>> WIRE 2: confirm your products table/columns + uom source.
-      // Expecting products(id, name, uom_id, is_active, org_id).
+      // products(id, name, base_uom_id, is_active, org_id)
       final rows = await _supa
           .from('products')
-          .select('id, name, uom_id')
+          .select('id, name, base_uom_id')
           .eq('org_id', _orgId)
           .eq('is_active', true)
           .order('name');
       _products = List<Map<String, dynamic>>.from(rows);
+      _prodById = {for (final p in _products) p['id'] as String: p};
     } catch (e) {
       if (mounted) _toast('Could not load products: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadVouchers() async {
+    if (mounted) setState(() => _loadingList = true);
+    try {
+      final rows = await _supa
+          .from('stock_adjustment_vouchers')
+          .select()
+          .eq('org_id', _orgId)
+          .order('created_at', ascending: false)
+          .limit(300);
+      if (mounted) {
+        setState(() {
+          _vouchers = List<Map<String, dynamic>>.from(rows);
+          _loadingList = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loadingList = false);
+    }
+  }
+
+  void _newVoucher() {
+    setState(() {
+      _voucherId = null;
+      _voucherNumber = null;
+      _status = 'draft';
+      _isLocked = false;
+      _date = DateTime.now();
+      _remarks.clear();
+      _lines.clear();
+      _pickProductId = null;
+      _pickIn.clear();
+      _pickOut.clear();
+    });
+  }
+
+  Future<void> _loadVoucher(Map<String, dynamic> v) async {
+    try {
+      final items = await _supa
+          .from('stock_adjustment_voucher_items')
+          .select()
+          .eq('voucher_id', v['id'] as String)
+          .order('id');
+      final newLines = <_AdjLine>[];
+      for (final r in (items as List)) {
+        final pid = r['product_id'] as String?;
+        if (pid == null) continue;
+        final prod = _prodById[pid];
+        final qty = (r['quantity'] as num? ?? 0).toDouble();
+        newLines.add(_AdjLine(
+          productId: pid,
+          productName: (prod?['name'] ?? pid) as String,
+          uomId: (r['uom_id'] ?? prod?['base_uom_id']) as String?,
+          uomName: ((r['uom_id'] ?? prod?['base_uom_id']) ?? '') as String,
+          inQty: qty > 0 ? qty : 0,
+          outQty: qty < 0 ? -qty : 0,
+          note: r['notes'] as String?,
+        ));
+      }
+      final ds = v['voucher_date'] as String?;
+      final locked = (v['is_locked'] == true) || (v['status'] == 'posted');
+      if (mounted) {
+        setState(() {
+          _voucherId = v['id'] as String?;
+          _voucherNumber = v['voucher_number'] as String?;
+          _status = v['status'] as String? ?? 'draft';
+          _isLocked = locked;
+          _date = ds != null ? (DateTime.tryParse(ds) ?? DateTime.now()) : DateTime.now();
+          _remarks.text = v['remarks'] as String? ?? '';
+          _lines
+            ..clear()
+            ..addAll(newLines);
+          _pickProductId = null;
+          _pickIn.clear();
+          _pickOut.clear();
+        });
+      }
+    } catch (e) {
+      _toast('Load failed: $e');
     }
   }
 
@@ -130,8 +222,8 @@ class _ErpStockAdjustmentScreenState
       _lines.add(_AdjLine(
         productId: p['id'] as String,
         productName: (p['name'] ?? '') as String,
-        uomId: p['uom_id'] as String?,
-        uomName: (p['uom_id'] ?? '') as String, // >>> WIRE 2: map to a uom name if you have one
+        uomId: p['base_uom_id'] as String?,
+        uomName: (p['base_uom_id'] ?? '') as String,
         inQty: inQ,
         outQty: outQ,
       ));
@@ -156,10 +248,7 @@ class _ErpStockAdjustmentScreenState
     }
     setState(() => _saving = true);
     try {
-      final id = _voucherId ??
-          'sav_${DateTime.now().millisecondsSinceEpoch}';
-
-      // >>> WIRE 3: replace with your voucher_sequences service if you have one.
+      final id = _voucherId ?? 'sav_${DateTime.now().millisecondsSinceEpoch}';
       final number = _voucherNumber ?? await _nextVoucherNumber();
 
       // upsert header
@@ -197,18 +286,16 @@ class _ErpStockAdjustmentScreenState
       setState(() {
         _voucherId = id;
         _voucherNumber = number;
+        _status = lock ? 'posted' : 'draft';
       });
 
       if (lock) {
-        // Flip is_locked false->true. The adj_autopost trigger posts the GL.
-        await _supa
-            .from('stock_adjustment_vouchers')
-            .update({
-              'is_locked': true,
-              'locked_by': _userId,
-              'locked_at': DateTime.now().toUtc().toIso8601String(),
-            })
-            .eq('id', id);
+        // Flip is_locked false->true. The DB trigger posts the GL.
+        await _supa.from('stock_adjustment_vouchers').update({
+          'is_locked': true,
+          'locked_by': _userId,
+          'locked_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', id);
 
         // Optional: surface what the trigger posted.
         final log = await _supa
@@ -219,12 +306,11 @@ class _ErpStockAdjustmentScreenState
             .limit(1)
             .maybeSingle();
         setState(() => _isLocked = true);
-        _toast(log == null
-            ? 'Posted'
-            : '${log['status']}: ${log['message']}');
+        _toast(log == null ? 'Posted' : '${log['status']}: ${log['message']}');
       } else {
         _toast('Saved draft $number');
       }
+      await _loadVouchers();
     } catch (e) {
       _toast('Save failed: $e');
     } finally {
@@ -232,7 +318,42 @@ class _ErpStockAdjustmentScreenState
     }
   }
 
-  // >>> WIRE 3: simple fallback numbering; swap for your voucher_sequences logic.
+  Future<void> _delete() async {
+    if (_voucherId == null) return;
+    if (_isLocked || _status == 'posted') {
+      _toast('Posted vouchers cannot be deleted — reverse via Void');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete draft?'),
+        content: const Text(
+            'This draft adjustment voucher and its lines will be permanently deleted. (Drafts have not posted, so nothing in the GL is affected.)'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(c, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final id = _voucherId!;
+      await _supa.from('stock_adjustment_voucher_items').delete().eq('voucher_id', id);
+      await _supa.from('stock_adjustment_vouchers').delete().eq('id', id);
+      _toast('Draft deleted');
+      _newVoucher();
+      await _loadVouchers();
+    } catch (e) {
+      _toast('Delete failed: $e');
+    }
+  }
+
+  // simple fallback numbering
   Future<String> _nextVoucherNumber() async {
     final rows = await _supa
         .from('stock_adjustment_vouchers')
@@ -252,12 +373,146 @@ class _ErpStockAdjustmentScreenState
 
   void _toast(String m) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(m)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
   @override
   Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFFF7F7F8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_drawerOpen) _buildDrawer(),
+          Expanded(child: _buildContent()),
+        ],
+      ),
+    );
+  }
+
+  // ── side drawer: saved vouchers ───────────────────────────────────
+  Widget _buildDrawer() {
+    final filtered = _listSearch.isEmpty
+        ? _vouchers
+        : _vouchers.where((v) {
+            final q = _listSearch.toLowerCase();
+            return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
+                (v['remarks'] as String? ?? '').toLowerCase().contains(q);
+          }).toList();
+
+    return Container(
+      width: 300,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(right: BorderSide(color: Color(0xFFE0E0E0))),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Color(0xFFE0E0E0))),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('Adjustment Vouchers',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    ),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.add, size: 14),
+                      label: const Text('New', style: TextStyle(fontSize: 11)),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                      ),
+                      onPressed: _newVoucher,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  decoration: const InputDecoration(
+                    hintText: 'Search...',
+                    prefixIcon: Icon(Icons.search, size: 15),
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (v) => setState(() => _listSearch = v),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _loadingList
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : filtered.isEmpty
+                    ? const Center(
+                        child: Text('No vouchers yet',
+                            style: TextStyle(fontSize: 12, color: Colors.black54)))
+                    : ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (_, i) {
+                          final v = filtered[i];
+                          final sel = _voucherId == v['id'];
+                          final posted = (v['status'] as String? ?? 'draft') == 'posted' ||
+                              v['is_locked'] == true;
+                          return InkWell(
+                            onTap: () => _loadVoucher(v),
+                            child: Container(
+                              color: sel ? const Color(0x113366FF) : null,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(v['voucher_number'] as String? ?? '(draft)',
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                color: sel ? const Color(0xFF3366FF) : Colors.black87)),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: (posted ? Colors.green : Colors.orange).withOpacity(0.13),
+                                          borderRadius: BorderRadius.circular(3),
+                                        ),
+                                        child: Text(posted ? 'Posted' : 'Draft',
+                                            style: TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.w700,
+                                                color: posted ? Colors.green.shade700 : Colors.orange.shade800)),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(v['remarks'] as String? ?? '',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: sel ? const Color(0xFF3366FF) : Colors.black54)),
+                                  Text('${v['voucher_date'] ?? ''}',
+                                      style: const TextStyle(fontSize: 10, color: Colors.black45)),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── main content ──────────────────────────────────────────────────
+  Widget _buildContent() {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -269,9 +524,30 @@ class _ErpStockAdjustmentScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Stock Adjustment Voucher',
-              style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: 16),
+          // ── top bar ──────────────────────────────────────────────
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 20),
+                onPressed: () => setState(() => _drawerOpen = !_drawerOpen),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                tooltip: _drawerOpen ? 'Hide list' : 'Show list',
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(_voucherNumber == null ? 'Stock Adjustment Voucher' : 'Adjustment $_voucherNumber',
+                    style: Theme.of(context).textTheme.headlineSmall),
+              ),
+              if (_isDraft && _voucherId != null)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
+                  tooltip: 'Delete draft',
+                  onPressed: _delete,
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
 
           // ── header row ──────────────────────────────────────────────
           Wrap(
@@ -280,11 +556,20 @@ class _ErpStockAdjustmentScreenState
             crossAxisAlignment: WrapCrossAlignment.end,
             children: [
               _field(
+                'Branch',
+                SizedBox(
+                  width: 200,
+                  child: Text(
+                    (ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
+              _field(
                 'Voucher No.',
                 SizedBox(
                   width: 140,
-                  child: Text(_voucherNumber ?? '(auto)',
-                      style: const TextStyle(fontSize: 16)),
+                  child: Text(_voucherNumber ?? '(auto)', style: const TextStyle(fontSize: 16)),
                 ),
               ),
               _field(
@@ -312,16 +597,12 @@ class _ErpStockAdjustmentScreenState
                   child: TextField(
                     controller: _remarks,
                     enabled: !_isLocked,
-                    decoration: const InputDecoration(
-                        hintText: 'Remarks', isDense: true),
+                    decoration: const InputDecoration(hintText: 'Remarks', isDense: true),
                   ),
                 ),
               ),
               if (_isLocked)
-                const Chip(
-                  label: Text('POSTED'),
-                  backgroundColor: Color(0xFFDFF5E1),
-                ),
+                const Chip(label: Text('POSTED'), backgroundColor: Color(0xFFDFF5E1)),
             ],
           ),
           const Divider(height: 32),
@@ -336,14 +617,12 @@ class _ErpStockAdjustmentScreenState
                   child: DropdownButtonFormField<String>(
                     value: _pickProductId,
                     isExpanded: true,
-                    decoration: const InputDecoration(
-                        labelText: 'Product', isDense: true),
+                    decoration: const InputDecoration(labelText: 'Product', isDense: true),
                     items: [
                       for (final p in _products)
                         DropdownMenuItem(
                           value: p['id'] as String,
-                          child: Text((p['name'] ?? '') as String,
-                              overflow: TextOverflow.ellipsis),
+                          child: Text((p['name'] ?? '') as String, overflow: TextOverflow.ellipsis),
                         ),
                     ],
                     onChanged: (v) => setState(() => _pickProductId = v),
@@ -354,11 +633,8 @@ class _ErpStockAdjustmentScreenState
                   child: TextField(
                     controller: _pickIn,
                     keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
-                    ],
-                    decoration:
-                        const InputDecoration(labelText: 'In Qty', isDense: true),
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                    decoration: const InputDecoration(labelText: 'In Qty', isDense: true),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -366,11 +642,8 @@ class _ErpStockAdjustmentScreenState
                   child: TextField(
                     controller: _pickOut,
                     keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
-                    ],
-                    decoration: const InputDecoration(
-                        labelText: 'Out Qty', isDense: true),
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                    decoration: const InputDecoration(labelText: 'Out Qty', isDense: true),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -440,10 +713,7 @@ class _ErpStockAdjustmentScreenState
               FilledButton(
                 onPressed: _saving ? null : () => _confirmPost(),
                 child: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Text('Post (lock)'),
               ),
             ]),
@@ -460,12 +730,8 @@ class _ErpStockAdjustmentScreenState
         content: const Text(
             'Posting locks the voucher and writes the GL entry (Inventory vs 5150). This cannot be undone from here.'),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(c, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(c, true),
-              child: const Text('Post')),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Post')),
         ],
       ),
     );
@@ -475,9 +741,7 @@ class _ErpStockAdjustmentScreenState
   Widget _field(String label, Widget child) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 4),
           child,
         ],
@@ -490,9 +754,7 @@ class _Th extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.all(8),
-        child: Text(t,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.bold)),
+        child: Text(t, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       );
 }
 
