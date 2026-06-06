@@ -252,7 +252,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                         Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
                           child: Text((a['account_group'] as String? ?? a['account_type'] as String? ?? ''), style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))),
                         const SizedBox(width: 6),
-                        Expanded(child: Text(a['label'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+                        Expanded(child: Tooltip(message: a['label'] as String? ?? '', waitDuration: const Duration(milliseconds: 400), child: Text(a['label'] as String? ?? '', style: const TextStyle(fontSize: 12), softWrap: true, maxLines: 2, overflow: TextOverflow.ellipsis))),
                       ])));
                   }).toList())),
               ])),
