@@ -61,6 +61,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   String _status = 'draft';
   List<_PComp> _components = [];
   List<_POh> _overheads = [];
+  List<Map<String, dynamic>> _baseComps = [];
+  List<Map<String, dynamic>> _baseOh = [];
   bool _saving = false;
   bool _posting = false;
 
@@ -165,7 +167,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
       _outputQtyCtrl.text = '1'; _notesCtrl.clear();
-      _components = []; _overheads = [];
+      _components = []; _overheads = []; _baseComps = []; _baseOh = [];
     });
   }
 
@@ -206,6 +208,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _components = newComps; _overheads = newOh;
       });
+      _fetchBase();
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -219,35 +222,42 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       _bomBaseQty = (bom['output_qty'] as num? ?? 1).toDouble();
       if (_bomBaseQty <= 0) _bomBaseQty = 1;
     });
-    _reloadFromBom();
+    _loadBomBase();
   }
 
-  Future<void> _reloadFromBom() async {
-    if (_bomId == null) { _snack('Pick a BOM first'); return; }
+  Future<void> _fetchBase() async {
+    if (_bomId == null) return;
     try {
       final client = Supabase.instance.client;
       final comps = await client.from('bom_components').select().eq('bom_id', _bomId!).order('line_order');
       final ohs = await client.from('bom_overheads').select().eq('bom_id', _bomId!).order('line_order');
-      final scale = _bomBaseQty > 0 ? (_outQty / _bomBaseQty) : 1;
-      for (final l in _components) l.dispose();
-      for (final l in _overheads) l.dispose();
-      final newComps = (comps as List).map((r) {
-        final l = _PComp();
-        l.productId = r['product_id'] as String?;
-        l.productLabel = _prodLabel[l.productId] ?? (l.productId ?? '');
-        final q = (r['quantity'] as num? ?? 0).toDouble() * scale;
-        if (q != 0) l.qtyCtrl.text = _trim(double.parse(q.toStringAsFixed(4)));
-        return l;
-      }).toList();
-      final newOh = (ohs as List).map((r) {
-        final l = _POh(costType: (r['cost_type'] as String?) ?? 'overhead');
-        l.descCtrl.text = (r['description'] as String?) ?? '';
-        final a = (r['amount'] as num? ?? 0).toDouble() * scale;
-        if (a != 0) l.amountCtrl.text = _trim(double.parse(a.toStringAsFixed(2)));
-        return l;
-      }).toList();
-      if (mounted) setState(() { _components = newComps; _overheads = newOh; });
+      _baseComps = List<Map<String, dynamic>>.from(comps as List);
+      _baseOh = List<Map<String, dynamic>>.from(ohs as List);
     } catch (e) { _snack('BOM load error: $e'); }
+  }
+
+  Future<void> _loadBomBase() async { await _fetchBase(); _rescale(); }
+
+  void _rescale() {
+    final scale = _bomBaseQty > 0 ? (_outQty / _bomBaseQty) : 1;
+    for (final l in _components) l.dispose();
+    for (final l in _overheads) l.dispose();
+    final nc = _baseComps.map((b) {
+      final l = _PComp();
+      l.productId = b['product_id'] as String?;
+      l.productLabel = _prodLabel[l.productId] ?? (l.productId ?? '');
+      final q = (b['quantity'] as num? ?? 0).toDouble() * scale;
+      if (q != 0) l.qtyCtrl.text = _trim(double.parse(q.toStringAsFixed(4)));
+      return l;
+    }).toList();
+    final no = _baseOh.map((b) {
+      final l = _POh(costType: (b['cost_type'] as String?) ?? 'overhead');
+      l.descCtrl.text = (b['description'] as String?) ?? '';
+      final a = (b['amount'] as num? ?? 0).toDouble() * scale;
+      if (a != 0) l.amountCtrl.text = _trim(double.parse(a.toStringAsFixed(2)));
+      return l;
+    }).toList();
+    if (mounted) setState(() { _components = nc; _overheads = no; });
   }
 
   // ---------- cost preview ----------
@@ -363,8 +373,6 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     } catch (e) { _snack('Delete failed: $e'); }
   }
 
-  void _addOverhead() => setState(() => _overheads.add(_POh()));
-  void _removeOverhead(int i) => setState(() { _overheads[i].dispose(); _overheads.removeAt(i); });
 
   // ---------- UI ----------
   @override
@@ -498,7 +506,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     keyboardType: const TextInputType.numberWithOptions(decimal: true),
     inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
     decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
-    onChanged: (_) => setState(() {}));
+    onChanged: (_) => _rescale());
 
   Widget _summaryCard() {
     final posted = !_isDraft;
@@ -540,8 +548,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             const SizedBox(width: 8),
             const Text('Components (consumed)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            const Expanded(child: Text('Pre-filled from the BOM, scaled to Output Qty. Edit to match actual usage.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-            if (_isDraft && _bomId != null) TextButton.icon(icon: const Icon(Icons.refresh, size: 14), label: const Text('Reload from BOM', style: TextStyle(fontSize: 11)), onPressed: _reloadFromBom),
+            const Expanded(child: Text('Derived from the BOM, scaled to Output Qty. Locked to the recipe.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           ])),
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
@@ -559,19 +566,9 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               SizedBox(width: 26, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
-              Expanded(child: _isDraft
-                ? _ProductField(key: ValueKey(_components[i].id), initialLabel: _components[i].productLabel, filterFn: _filterProducts,
-                    onPick: (p) => setState(() { _components[i].productId = p['id'] as String?; _components[i].productLabel = p['label'] as String? ?? ''; }))
-                : Padding(padding: const EdgeInsets.only(top: 8), child: Text(_components[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+              Expanded(child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_components[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
               const SizedBox(width: 12),
-              SizedBox(width: 110, child: _isDraft
-                ? TextField(controller: _components[i].qtyCtrl, textAlign: TextAlign.right,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-                      border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-                    style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}))
-                : Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
+              SizedBox(width: 110, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
               const SizedBox(width: 12),
               SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
                 _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
@@ -607,43 +604,17 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             SizedBox(width: 30),
           ])),
         for (var i = 0; i < _overheads.length; i++)
-          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
             decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
             child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               SizedBox(width: 26, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-              SizedBox(width: 130, child: _isDraft
-                ? DropdownButtonFormField<String>(
-                    value: _overheads[i].costType, isDense: true,
-                    decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-                      border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-                    style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
-                    items: const [
-                      DropdownMenuItem(value: 'labor', child: Text('Labor', style: TextStyle(fontSize: 12))),
-                      DropdownMenuItem(value: 'overhead', child: Text('Overhead', style: TextStyle(fontSize: 12))),
-                    ],
-                    onChanged: (v) => setState(() => _overheads[i].costType = v ?? 'overhead'))
-                : Padding(padding: const EdgeInsets.only(top: 2), child: Text(_overheads[i].costType == 'labor' ? 'Labor' : 'Overhead', style: const TextStyle(fontSize: 12)))),
+              SizedBox(width: 130, child: Text(_overheads[i].costType == 'labor' ? 'Labor' : 'Overhead', style: const TextStyle(fontSize: 12))),
               const SizedBox(width: 12),
-              Expanded(child: _isDraft
-                ? TextField(controller: _overheads[i].descCtrl,
-                    decoration: const InputDecoration(hintText: 'e.g. Direct labor, machine time', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-                      border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-                    style: const TextStyle(fontSize: 12))
-                : Text(_overheads[i].descCtrl.text, style: const TextStyle(fontSize: 12))),
+              Expanded(child: Text(_overheads[i].descCtrl.text, style: const TextStyle(fontSize: 12))),
               const SizedBox(width: 12),
-              SizedBox(width: 130, child: _isDraft
-                ? TextField(controller: _overheads[i].amountCtrl, textAlign: TextAlign.right,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-                      border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-                    style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}))
-                : Text(_money(_overheads[i].amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-              SizedBox(width: 30, child: _isDraft ? IconButton(icon: const Icon(Icons.close, size: 14, color: Colors.red), onPressed: () => _removeOverhead(i), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact) : const SizedBox()),
+              SizedBox(width: 130, child: Text(_money(_overheads[i].amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              const SizedBox(width: 30),
             ])),
-        if (_isDraft) Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Align(alignment: Alignment.centerLeft,
-            child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add line', style: TextStyle(fontSize: 12)), onPressed: _addOverhead))),
       ]),
     );
   }

@@ -45,6 +45,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   final _notesCtrl = TextEditingController();
   String _status = 'draft';
   List<_RComp> _components = [];
+  List<Map<String, dynamic>> _baseComps = [];
   List<Map<String, dynamic>> _fgLayers = [];
   bool _saving = false;
   bool _posting = false;
@@ -148,7 +149,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
       _inputQtyCtrl.text = '1'; _notesCtrl.clear();
-      _components = []; _fgLayers = [];
+      _components = []; _fgLayers = []; _baseComps = [];
     });
   }
 
@@ -180,6 +181,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _components = newComps;
       });
+      _fetchBase();
       _loadFgLayers();
     } catch (e) { _snack('Load error: $e'); }
   }
@@ -194,27 +196,32 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       _bomBaseQty = (bom['output_qty'] as num? ?? 1).toDouble();
       if (_bomBaseQty <= 0) _bomBaseQty = 1;
     });
-    _reloadFromBom();
+    _loadBomBase();
     _loadFgLayers();
   }
 
-  Future<void> _reloadFromBom() async {
-    if (_bomId == null) { _snack('Pick a BOM first'); return; }
+  Future<void> _fetchBase() async {
+    if (_bomId == null) return;
     try {
-      final client = Supabase.instance.client;
-      final comps = await client.from('bom_components').select().eq('bom_id', _bomId!).order('line_order');
-      final scale = _bomBaseQty > 0 ? (_inQty / _bomBaseQty) : 1;
-      for (final l in _components) l.dispose();
-      final newComps = (comps as List).map((r) {
-        final l = _RComp();
-        l.productId = r['product_id'] as String?;
-        l.productLabel = _prodLabel[l.productId] ?? (l.productId ?? '');
-        final q = (r['quantity'] as num? ?? 0).toDouble() * scale;
-        if (q != 0) l.qtyCtrl.text = _trim(double.parse(q.toStringAsFixed(4)));
-        return l;
-      }).toList();
-      if (mounted) setState(() => _components = newComps);
+      final comps = await Supabase.instance.client.from('bom_components').select().eq('bom_id', _bomId!).order('line_order');
+      _baseComps = List<Map<String, dynamic>>.from(comps as List);
     } catch (e) { _snack('BOM load error: $e'); }
+  }
+
+  Future<void> _loadBomBase() async { await _fetchBase(); _rescale(); }
+
+  void _rescale() {
+    final scale = _bomBaseQty > 0 ? (_inQty / _bomBaseQty) : 1;
+    for (final l in _components) l.dispose();
+    final nc = _baseComps.map((b) {
+      final l = _RComp();
+      l.productId = b['product_id'] as String?;
+      l.productLabel = _prodLabel[l.productId] ?? (l.productId ?? '');
+      final q = (b['quantity'] as num? ?? 0).toDouble() * scale;
+      if (q != 0) l.qtyCtrl.text = _trim(double.parse(q.toStringAsFixed(4)));
+      return l;
+    }).toList();
+    if (mounted) setState(() => _components = nc);
   }
 
   // ---------- finished-good FIFO cost (for an accurate estimate) ----------
@@ -479,7 +486,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     keyboardType: const TextInputType.numberWithOptions(decimal: true),
     inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
     decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
-    onChanged: (_) => setState(() {}));
+    onChanged: (_) => _rescale());
 
   Widget _summaryCard() {
     final posted = !_isDraft;
@@ -521,8 +528,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
             const SizedBox(width: 8),
             const Text('Recovered Components (returned to stock)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            const Expanded(child: Text('Pre-filled from the BOM, scaled to qty. Edit to match what the teardown actually recovers.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-            if (_isDraft && _bomId != null) TextButton.icon(icon: const Icon(Icons.refresh, size: 14), label: const Text('Reload from BOM', style: TextStyle(fontSize: 11)), onPressed: _reloadFromBom),
+            const Expanded(child: Text('Derived from the BOM, scaled to quantity. Locked to the recipe.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           ])),
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
@@ -540,19 +546,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
             decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               SizedBox(width: 26, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
-              Expanded(child: _isDraft
-                ? _ProductField(key: ValueKey(_components[i].id), initialLabel: _components[i].productLabel, filterFn: _filterProducts,
-                    onPick: (p) => setState(() { _components[i].productId = p['id'] as String?; _components[i].productLabel = p['label'] as String? ?? ''; }))
-                : Padding(padding: const EdgeInsets.only(top: 8), child: Text(_components[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+              Expanded(child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_components[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
               const SizedBox(width: 12),
-              SizedBox(width: 110, child: _isDraft
-                ? TextField(controller: _components[i].qtyCtrl, textAlign: TextAlign.right,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-                      border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-                    style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}))
-                : Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
+              SizedBox(width: 110, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
               const SizedBox(width: 12),
               SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
                 _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
