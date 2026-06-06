@@ -246,6 +246,9 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         await client.from('journal_lines').insert({
           'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
           'account_id': accId, 'debit': 0.0, 'credit': amt, 'line_order': i + 1,
+          // Attribute the receivable/party leg so it nets against the customer
+          // (or supplier) in the ledger & aging. GL-account lines stay null.
+          'party_id': (l.accountType == 'customer' || l.accountType == 'supplier') ? l.accountId : null,
         });
       }
     } catch (e) { _snack('GL error: ' + e.toString()); }

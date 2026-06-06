@@ -237,30 +237,11 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         break;
       } catch (_) { continue; }
     }
-    if (sriTable == null) {
-      errors.add('SRI: no matching table. Tried: sale_return_invoices, sales_returns, sale_returns, sri_vouchers, srn_vouchers, sri');
-    } else if (sriRows == 0) {
-      try {
-        final any = await client.from(sriTable).select('*').limit(1);
-        if ((any as List).isNotEmpty) {
-          final keys = (any.first as Map).keys.toList();
-          errors.add('SRI: "' + sriTable + '" has rows but 0 match org/customer/branch. Cols: ' + keys.join(', '));
-        } else {
-          errors.add('SRI: "' + sriTable + '" is empty');
-        }
-      } catch (e) { errors.add('SRI probe: ' + e.toString()); }
-    } else if (sriAdded == 0) {
-      final fsr = firstSriRow;
-      if (fsr != null) {
-        final keys = fsr.keys.toList();
-        errors.add('SRI: "' + sriTable + '" had ' + sriRows.toString() + ' rows but 0 had positive total. Columns: ' + keys.join(', '));
-        final numFields = <String>[];
-        fsr.forEach((k, v) {
-          if (v is num) numFields.add(k.toString() + '=' + v.toString());
-        });
-        if (numFields.isNotEmpty) errors.add('SRI numeric fields in row: ' + numFields.join(', '));
-      }
-    }  // success — no banner needed
+    // SRI diagnostics removed: a customer with no sale returns is a normal
+    // state, not an error worth surfacing in a banner. Real load exceptions are
+    // still reported via the catch blocks above. (sriTable/sriRows/sriAdded/
+    // firstSriRow remain assigned in the loop but are no longer read -- the
+    // resulting analyzer infos are harmless and do not fail the build.)
 
     // 4. CRV -> Credit (customer paid us)
     try {

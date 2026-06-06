@@ -246,6 +246,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         await client.from('journal_lines').insert({
           'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
           'account_id': accId, 'debit': amt, 'credit': 0.0, 'line_order': i + 1,
+          // Attribute the payable/party leg so it nets against the supplier
+          // (or customer) in the ledger & aging. GL-account lines stay null.
+          'party_id': (l.accountType == 'customer' || l.accountType == 'supplier') ? l.accountId : null,
         });
       }
     } catch (e) { _snack('GL error: ' + e.toString()); }
