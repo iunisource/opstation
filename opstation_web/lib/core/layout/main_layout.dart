@@ -126,6 +126,7 @@ class _TopNav extends ConsumerWidget {
         if (show('/erp/product-classifications')) _menuItem(context, 'Product Classifications', Icons.label_outline, '/erp/product-classifications', location),
         if (show('/erp/opening-stock')) _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
         if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location),
+        if (show('/erp/stock-adjustment')) _menuItem(context, 'Stock Adjustment', Icons.tune_outlined, '/erp/stock-adjustment', location),
       ],
     ];
 
@@ -216,7 +217,7 @@ class _TopNav extends ConsumerWidget {
       if (_hasItems(inventoryItems))
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
           ['/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock',
-           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers'],
+           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment'],
           _trimDividers(inventoryItems)),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
