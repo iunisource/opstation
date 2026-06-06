@@ -129,8 +129,8 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
 <p class="meta">Period: $dateRange &nbsp;|&nbsp; Generated: ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())} &nbsp;|&nbsp; ${data.length} entries</p>
 </div>
 <h3 style="font-size:13px;margin-bottom:8px">Expense Details</h3>
-<table><thead><tr><th>Date & Time</th><th>Branch</th><th>Category</th><th>Note</th><th>Cashier</th><th>Amount</th></tr></thead>
-<tbody>$rows<tr class="total-row"><td colspan="5">TOTAL</td><td class="amt">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table>
+<table><thead><tr><th>Date & Time</th><th>Session</th><th>Branch</th><th>Category</th><th>Note</th><th>Cashier</th><th>Amount</th></tr></thead>
+<tbody>$rows<tr class="total-row"><td colspan="6">TOTAL</td><td class="amt">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table>
 ${print ? '<script>window.print()</script>' : ''}
 </body></html>''';
 
