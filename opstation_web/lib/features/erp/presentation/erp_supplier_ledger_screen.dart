@@ -638,10 +638,42 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load: ' + (err ?? 'not found'))));
       return;
     }
-    await showDialog(context: context, builder: (ctx) => _buildVoucherDialog(ctx, type, v, lines));
+    // Related-document cross-refs + creator name.
+    final refs = <String, String>{};
+    String? creator;
+    try {
+      final client = Supabase.instance.client;
+      final cb = v['created_by'] as String?;
+      if (cb != null && cb.isNotEmpty) {
+        final u = await client.from('users').select('name').eq('id', cb).maybeSingle();
+        creator = u?['name'] as String?;
+      }
+      if (type == 'Purchase Invoice') {
+        final poId = v['po_id'] as String?;
+        if (poId != null && poId.isNotEmpty) {
+          final r = await client.from('purchase_orders').select('voucher_number').eq('id', poId).maybeSingle();
+          final n = r?['voucher_number'] as String?;
+          if (n != null && n.isNotEmpty) refs['PO'] = n;
+        }
+        final grnId = v['grn_id'] as String?;
+        if (grnId != null && grnId.isNotEmpty) {
+          final r = await client.from('purchase_grns').select('voucher_number').eq('id', grnId).maybeSingle();
+          final n = r?['voucher_number'] as String?;
+          if (n != null && n.isNotEmpty) refs['GRN'] = n;
+        }
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    await showDialog(context: context, builder: (ctx) => _buildVoucherDialog(ctx, type, v, lines, refs, creator));
   }
 
-  Widget _buildVoucherDialog(BuildContext ctx, String type, Map<String, dynamic> v, List<dynamic> lines) {
+  Widget _metaChip(IconData icon, String text) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 13, color: AppTheme.textSecondary),
+        const SizedBox(width: 5),
+        Text(text, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      ]);
+
+  Widget _buildVoucherDialog(BuildContext ctx, String type, Map<String, dynamic> v, List<dynamic> lines, Map<String, String> refs, String? creator) {
     final isPR = type == 'Receipt (CRV)' || type == 'Payment (CPV)';
     final vNum = ((v['voucher_number'] ?? v['invoice_number'] ?? v['transaction_number'] ?? '') as String);
     final dateStr = ((v['voucher_date'] ?? v['invoice_date'] ?? v['transacted_at'] ?? v['created_at'] ?? '') as String);
@@ -688,6 +720,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                   decoration: BoxDecoration(color: const Color(0xFFE3F2FD), borderRadius: BorderRadius.circular(10)),
                   child: Text((v['status'] as String).toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.primary)),
                 ),
+                for (final e in refs.entries) _metaChip(Icons.link, e.key + ': ' + e.value),
+                if (creator != null && creator.isNotEmpty) _metaChip(Icons.badge_outlined, 'By ' + creator),
               ]),
               const SizedBox(height: 14),
               const Divider(height: 1),
@@ -696,10 +730,34 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               const SizedBox(height: 8),
               const Divider(height: 1),
               const SizedBox(height: 8),
-              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                const Text('Total: ', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                Text('Rs. ' + total.toStringAsFixed(2), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
-              ]),
+              Builder(builder: (_) {
+                double subtotal = 0;
+                if (!isPR) {
+                  for (final ln in lines) {
+                    final q = ((ln['qty'] ?? ln['quantity'] ?? ln['qty_delivered'] ?? ln['qty_received']) as num?)?.toDouble() ?? 0;
+                    final p = ((ln['unit_price'] ?? ln['price'] ?? ln['unit_cost']) as num?)?.toDouble() ?? 0;
+                    subtotal += q * p;
+                  }
+                }
+                final discount = subtotal - total;
+                final showBreakdown = !isPR && discount > 0.01;
+                const lbl = TextStyle(fontSize: 13, color: AppTheme.textSecondary);
+                Widget ln(String l, String val, {bool strong = false}) => Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                        Text(l, style: strong ? const TextStyle(fontSize: 15, fontWeight: FontWeight.w600) : lbl),
+                        const SizedBox(width: 8),
+                        Text('Rs. ' + val, style: strong
+                            ? const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)
+                            : lbl),
+                      ]),
+                    );
+                return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                  if (showBreakdown) ln('Subtotal:', subtotal.toStringAsFixed(2)),
+                  if (showBreakdown) ln('Discount:', '-' + discount.toStringAsFixed(2)),
+                  ln('Total:', total.toStringAsFixed(2), strong: true),
+                ]);
+              }),
             ],
           ),
         ),
@@ -737,12 +795,23 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
         Expanded(flex: 1, child: Text('Qty', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
         Expanded(flex: 2, child: Text('Price', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+        Expanded(flex: 2, child: Text('Disc', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
         Expanded(flex: 2, child: Text('Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
       ])),
       ...lines.map((line) {
-        final qty = ((line['quantity']) as num?)?.toDouble() ?? 0;
-        final price = ((line['unit_price'] ?? line['price']) as num?)?.toDouble() ?? 0;
-        final lineTotal = ((line['line_total'] ?? line['total'] ?? line['amount']) as num?)?.toDouble() ?? (qty * price);
+        final qty = ((line['qty'] ?? line['quantity'] ?? line['qty_delivered'] ?? line['qty_received']) as num?)?.toDouble() ?? 0;
+        final price = ((line['unit_price'] ?? line['price'] ?? line['unit_cost']) as num?)?.toDouble() ?? 0;
+        final gross = qty * price;
+        final storedTotal = (line['line_total'] ?? line['total'] ?? line['amount']) as num?;
+        double lineTotal;
+        if (storedTotal != null) {
+          lineTotal = storedTotal.toDouble();
+        } else {
+          final dt = line['discount_type'] as String?;
+          final draw = ((line['discount']) as num?)?.toDouble() ?? 0;
+          lineTotal = gross - (dt == 'percent' ? gross * draw / 100 : draw);
+        }
+        final lineDisc = gross - lineTotal;
         final prod = line['products'];
         final prodName = (prod is Map ? prod['name'] as String? : null) ?? (line['product_name'] as String?) ?? (line['description'] as String?) ?? '';
         return Container(
@@ -752,6 +821,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             Expanded(flex: 4, child: Text(prodName, style: const TextStyle(fontSize: 12))),
             Expanded(flex: 1, child: Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
             Expanded(flex: 2, child: Text('Rs. ' + price.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text(lineDisc.abs() < 0.01 ? '—' : 'Rs. ' + lineDisc.toStringAsFixed(2), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: lineDisc.abs() < 0.01 ? AppTheme.textSecondary : AppTheme.danger))),
             Expanded(flex: 2, child: Text('Rs. ' + lineTotal.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
           ]),
         );
