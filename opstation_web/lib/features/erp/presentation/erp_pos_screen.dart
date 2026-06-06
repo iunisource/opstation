@@ -56,15 +56,82 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
           .order('name');
       final activeList = (sessions as List).where((s) =>
           s['status'] == 'open' && s['opened_by'] == userId).toList();
+      Map<String, dynamic>? active =
+          activeList.isNotEmpty ? Map<String, dynamic>.from(activeList.first) : null;
+      // Auto-close a session left open from a previous day (date rollover).
+      bool autoClosed = false;
+      if (active != null && active['opened_at'] != null) {
+        final openedLocal = DateTime.parse(active['opened_at'] as String).toLocal();
+        final now = DateTime.now();
+        final openedDay = DateTime(openedLocal.year, openedLocal.month, openedLocal.day);
+        final today = DateTime(now.year, now.month, now.day);
+        if (openedDay.isBefore(today)) {
+          await _autoCloseSession(active!);
+          autoClosed = true;
+          for (final s in sessions) {
+            if (s['id'] == active!['id']) {
+              s['status'] = 'closed';
+              s['closed_at'] = DateTime.now().toUtc().toIso8601String();
+            }
+          }
+          active = null;
+        }
+      }
       setState(() {
         _sessions = List<Map<String, dynamic>>.from(sessions);
         _branches = List<Map<String, dynamic>>.from(branches);
-        _activeSession = activeList.isNotEmpty ? activeList.first : null;
+        _activeSession = active;
         _loading = false;
       });
+      if (autoClosed) _showSnack("Previous day's session was auto-closed.");
     } catch (_) {
       setState(() => _loading = false);
     }
+  }
+
+  // Closes a stale (previous-day) session with an auto-computed expected cash.
+  Future<void> _autoCloseSession(Map<String, dynamic> session) async {
+    try {
+      final client = Supabase.instance.client;
+      final sid = session['id'];
+      double cashSales = 0, cashRefunds = 0, cashExpenses = 0;
+      final txns = await client
+          .from('pos_transactions')
+          .select('total, amount_paid, payment_method, transaction_type')
+          .eq('session_id', sid);
+      for (final t in txns as List) {
+        final pm = ((t['payment_method'] as String?) ?? 'cash').toLowerCase();
+        if (pm != 'cash') continue;
+        final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
+        final type = (t['transaction_type'] as String?) ?? 'sale';
+        if (type == 'return') {
+          cashRefunds += tot;
+        } else {
+          final paid = (t['amount_paid'] as num?)?.toDouble();
+          cashSales += (paid != null && paid < tot) ? paid : tot;
+        }
+      }
+      try {
+        final exps = await client
+            .from('pos_expenses')
+            .select('amount')
+            .eq('session_id', sid);
+        for (final e in exps as List) {
+          cashExpenses += (e['amount'] as num?)?.toDouble() ?? 0;
+        }
+      } catch (_) {}
+      final opening = (session['opening_cash'] as num?)?.toDouble() ?? 0;
+      final expected = opening + cashSales - cashRefunds - cashExpenses;
+      final existingNotes = (session['notes'] as String?) ?? '';
+      await client.from('pos_sessions').update({
+        'status': 'closed',
+        'closed_at': DateTime.now().toUtc().toIso8601String(),
+        'closing_cash': expected,
+        'closed_by': ref.read(currentUserProvider)?.id,
+        'notes': (existingNotes.isEmpty ? '' : '$existingNotes\n') +
+            'Auto-closed on date change (expected cash auto-computed).',
+      }).eq('id', sid);
+    } catch (_) {}
   }
 
   void _showSnack(String msg) {
@@ -842,15 +909,55 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   }
 
   Future<void> _closeSession() async {
-    final cashCtrl = TextEditingController(text: '0');
+    final opening = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
+    double cashSales = 0, cashRefunds = 0, cashExpenses = 0;
+    for (final t in _transactions) {
+      final pm = ((t['payment_method'] as String?) ?? 'cash').toLowerCase();
+      if (pm != 'cash') continue;
+      final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
+      final type = (t['transaction_type'] as String?) ?? 'sale';
+      if (type == 'return') {
+        cashRefunds += tot;
+      } else {
+        final paid = (t['amount_paid'] as num?)?.toDouble();
+        cashSales += (paid != null && paid < tot) ? paid : tot;
+      }
+    }
+    for (final e in _expenses) {
+      cashExpenses += (e['amount'] as num?)?.toDouble() ?? 0;
+    }
+    final expectedClose = opening + cashSales - cashRefunds - cashExpenses;
+    final cashCtrl = TextEditingController(text: expectedClose.toStringAsFixed(2));
     final notesCtrl = TextEditingController();
+    Widget ccRow(String label, double val, {bool bold = false}) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(label, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w400, color: bold ? AppTheme.textPrimary : AppTheme.textSecondary)),
+        Text('Rs. ${val.toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, color: bold ? AppTheme.primary : AppTheme.textPrimary)),
+      ]),
+    );
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Close Session'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
+      content: SizedBox(width: 320, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ccRow('Opening cash', opening),
+            ccRow('+ Cash sales', cashSales),
+            ccRow('- Cash refunds', -cashRefunds),
+            ccRow('- Cash expenses', -cashExpenses),
+            const Divider(height: 14),
+            ccRow('Expected closing cash', expectedClose, bold: true),
+          ]),
+        ),
+        const SizedBox(height: 4),
+        const Align(alignment: Alignment.centerLeft, child: Text('Auto-filled - edit to the actual counted cash if it differs.', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontStyle: FontStyle.italic))),
+        const SizedBox(height: 8),
         TextField(controller: cashCtrl, decoration: const InputDecoration(labelText: 'Closing Cash', prefixText: 'Rs. '), keyboardType: const TextInputType.numberWithOptions(decimal: true), autofocus: true),
         const SizedBox(height: 12),
         TextField(controller: notesCtrl, decoration: const InputDecoration(labelText: 'Notes (optional)'), maxLines: 2),
-      ]),
+      ])),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Close Session'))],
     ));
