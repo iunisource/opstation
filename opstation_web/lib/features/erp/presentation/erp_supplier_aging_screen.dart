@@ -54,22 +54,33 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
     try {
       final client = Supabase.instance.client;
       final branchId = _branchId;
-      var q = client.from('purchase_invoices')
-          .select('id, voucher_number, voucher_date, grand_total, supplier_id, suppliers(name)')
-          .eq('org_id', orgId);
-      if (branchId != null) q = q.eq('branch_id', branchId);
-      final invs = await q.lte('voucher_date', DateFormat('yyyy-MM-dd').format(_asOf)).limit(20000);
+      final asOfStr = DateFormat('yyyy-MM-dd').format(_asOf);
+      final List invs = [];
+      for (int from = 0; ; from += 1000) {
+        var q = client.from('purchase_invoices')
+            .select('id, voucher_number, voucher_date, grand_total, supplier_id, suppliers(name)')
+            .eq('org_id', orgId);
+        if (branchId != null) q = q.eq('branch_id', branchId);
+        final page = List.from(await q.lte('voucher_date', asOfStr).range(from, from + 999));
+        invs.addAll(page);
+        if (page.length < 1000 || from > 200000) break;
+      }
 
       // Pull payments from CPV vouchers (we paid the supplier). The CPV header
       // carries date + status; the supplier + amount live on cpv_voucher_lines
       // (account_type = 'supplier'). Mirrors how the Supplier Ledger reads CPV.
       final paidBySupplier = <String, double>{};
       try {
-        var cq = client.from('cpv_vouchers')
-            .select('id, voucher_date, created_at')
-            .eq('org_id', orgId).eq('status', 'posted');
-        if (branchId != null) cq = cq.eq('branch_id', branchId);
-        final cpvHeaders = await cq.limit(20000);
+        final List cpvHeaders = [];
+        for (int from = 0; ; from += 1000) {
+          var cq = client.from('cpv_vouchers')
+              .select('id, voucher_date, created_at')
+              .eq('org_id', orgId).eq('status', 'posted');
+          if (branchId != null) cq = cq.eq('branch_id', branchId);
+          final page = List.from(await cq.range(from, from + 999));
+          cpvHeaders.addAll(page);
+          if (page.length < 1000 || from > 200000) break;
+        }
         final asOfEnd = DateTime(_asOf.year, _asOf.month, _asOf.day, 23, 59, 59);
         final cpvIds = <String>[];
         for (final v in cpvHeaders as List) {
@@ -104,10 +115,15 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
       // still appear (aging shows the entire roster, not just those with debt).
       final rows = <String, _AgingRow>{};
       try {
-        final allSuppliers = await client.from('suppliers')
-            .select('id, name')
-            .eq('org_id', orgId)
-            .limit(20000);
+        final List allSuppliers = [];
+        for (int from = 0; ; from += 1000) {
+          final page = List.from(await client.from('suppliers')
+              .select('id, name')
+              .eq('org_id', orgId)
+              .range(from, from + 999));
+          allSuppliers.addAll(page);
+          if (page.length < 1000 || from > 200000) break;
+        }
         for (final s in allSuppliers as List) {
           final m = s as Map;
           final id = m['id'] as String;
