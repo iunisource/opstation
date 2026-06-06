@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart';
 
 class _RComp {
   static int _seq = 0;
@@ -29,7 +30,6 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   bool _loadingProducts = true;
 
   List<Map<String, dynamic>> _boms = [];
-  List<Map<String, dynamic>> _branches = [];
 
   List<Map<String, dynamic>> _vouchers = [];
   bool _loadingList = true;
@@ -37,7 +37,6 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   bool _drawerOpen = true;
 
   Map<String, dynamic>? _current;
-  String? _branchId;
   DateTime _date = DateTime.now();
   String? _bomId; String _bomLabel = '';
   String? _fgId; String _fgLabel = '';
@@ -46,10 +45,12 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   final _notesCtrl = TextEditingController();
   String _status = 'draft';
   List<_RComp> _components = [];
+  List<Map<String, dynamic>> _fgLayers = [];
   bool _saving = false;
   bool _posting = false;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isDraft => _status != 'posted';
   double get _inQty => double.tryParse(_inputQtyCtrl.text) ?? 0;
 
@@ -57,7 +58,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadProducts(); _loadBoms(); _loadBranches(); _loadVouchers();
+      _loadProducts(); _loadBoms(); _loadVouchers();
     });
   }
 
@@ -129,16 +130,6 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     }).toList();
   }
 
-  Future<void> _loadBranches() async {
-    final orgId = _orgId; if (orgId == null) return;
-    try {
-      final rows = await Supabase.instance.client.from('branches')
-          .select().eq('org_id', orgId).eq('is_active', true).order('name');
-      final list = List<Map<String, dynamic>>.from(rows);
-      if (mounted) setState(() { _branches = list; _branchId ??= (list.isNotEmpty ? list.first['id'] as String? : null); });
-    } catch (_) {}
-  }
-
   Future<void> _loadVouchers() async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _loadingList = true);
@@ -157,8 +148,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
       _inputQtyCtrl.text = '1'; _notesCtrl.clear();
-      _branchId = _branches.isNotEmpty ? _branches.first['id'] as String? : null;
-      _components = [];
+      _components = []; _fgLayers = [];
     });
   }
 
@@ -180,7 +170,6 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       if (mounted) setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
-        _branchId = v['branch_id'] as String?;
         final ds = v['voucher_date'] as String?;
         _date = ds != null ? DateTime.tryParse(ds) ?? DateTime.now() : DateTime.now();
         _bomId = v['bom_id'] as String?;
@@ -191,6 +180,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _components = newComps;
       });
+      _loadFgLayers();
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -205,6 +195,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       if (_bomBaseQty <= 0) _bomBaseQty = 1;
     });
     _reloadFromBom();
+    _loadFgLayers();
   }
 
   Future<void> _reloadFromBom() async {
@@ -226,16 +217,45 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     } catch (e) { _snack('BOM load error: $e'); }
   }
 
+  // ---------- finished-good FIFO cost (for an accurate estimate) ----------
+  Future<void> _loadFgLayers() async {
+    _fgLayers = [];
+    final orgId = _orgId; final fg = _fgId;
+    if (orgId == null || fg == null) { if (mounted) setState(() {}); return; }
+    try {
+      final base = Supabase.instance.client.from('inventory_cost_layers')
+          .select('qty_remaining, unit_cost, layer_date, seq')
+          .eq('org_id', orgId).eq('product_id', fg).gt('qty_remaining', 0);
+      final rows = _branchId != null
+          ? await base.eq('branch_id', _branchId!).order('layer_date').order('seq')
+          : await base.order('layer_date').order('seq');
+      if (mounted) setState(() => _fgLayers = List<Map<String, dynamic>>.from(rows));
+    } catch (_) { if (mounted) setState(() {}); }
+  }
+
+  double _fifoFgCost(double qty) {
+    double need = qty, cost = 0, last = 0;
+    for (final l in _fgLayers) {
+      if (need <= 0) break;
+      final avail = (l['qty_remaining'] as num?)?.toDouble() ?? 0;
+      final uc = (l['unit_cost'] as num?)?.toDouble() ?? 0;
+      final take = need < avail ? need : avail;
+      cost += take * uc; need -= take; last = uc;
+    }
+    if (need > 0) { cost += need * (last != 0 ? last : (_prodCost[_fgId] ?? 0)); }
+    return cost;
+  }
+
   // ---------- cost preview ----------
   double get _estCompVal => _components.fold(0.0, (s, l) => s + l.qty * (_prodCost[l.productId] ?? 0));
-  double get _estFgCost => (_prodCost[_fgId] ?? 0) * _inQty;
+  double get _estFgCost => _fifoFgCost(_inQty);
   double get _estVariance => _estFgCost - _estCompVal;
 
   // ---------- save / post / delete ----------
   Future<String?> _save({bool silent = false}) async {
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return null; }
     if (!_isDraft) { _snack('Posted vouchers cannot be edited'); return _current?['id'] as String?; }
-    if (_branchId == null) { _snack('Select a branch'); return null; }
+    if (_branchId == null) { _snack('No branch selected — pick one in the sidebar'); return null; }
     if (_fgId == null) { _snack('Pick a BOM (sets the finished product)'); return null; }
     if (_inQty <= 0) { _snack('Quantity to disassemble must be greater than 0'); return null; }
     final comps = _components.where((l) => l.productId != null && l.qty > 0).toList();
@@ -329,8 +349,6 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     } catch (e) { _snack('Delete failed: $e'); }
   }
 
-  void _addComp() => setState(() => _components.add(_RComp()));
-  void _removeComp(int i) => setState(() { _components[i].dispose(); _components.removeAt(i); });
 
   // ---------- UI ----------
   @override
@@ -408,7 +426,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
           ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Loading...', style: TextStyle(color: AppTheme.textSecondary))]))
           : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 200, child: _labeled('Branch *', _branchDropdown())),
+              SizedBox(width: 220, child: _labeled('Branch', _readonlyBox((ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—'))),
               const SizedBox(width: 16),
               SizedBox(width: 150, child: _labeled('Date', _dateField())),
               const SizedBox(width: 16),
@@ -444,20 +462,6 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
     decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
     child: Text(text, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis));
-
-  Widget _branchDropdown() {
-    final ids = _branches.map((b) => b['id'] as String).toSet();
-    final name = _branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String? ?? '';
-    if (!_isDraft || (_branchId != null && !ids.contains(_branchId))) {
-      return _readonlyBox(name.isEmpty ? '—' : name);
-    }
-    return DropdownButtonFormField<String>(
-      value: ids.contains(_branchId) ? _branchId : null, isDense: true,
-      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
-      style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
-      items: _branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
-      onChanged: (v) => setState(() => _branchId = v));
-  }
 
   Widget _dateField() => InkWell(
     onTap: _isDraft ? () async {
@@ -553,11 +557,8 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
               SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
                 _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
                 textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))),
-              SizedBox(width: 30, child: _isDraft ? IconButton(icon: const Icon(Icons.close, size: 14, color: Colors.red), onPressed: () => _removeComp(i), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact) : const SizedBox()),
+              const SizedBox(width: 30),
             ])),
-        if (_isDraft) Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Align(alignment: Alignment.centerLeft,
-            child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add component', style: TextStyle(fontSize: 12)), onPressed: _addComp))),
       ]),
     );
   }

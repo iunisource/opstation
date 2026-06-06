@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart';
 
 class _PComp {
   static int _seq = 0;
@@ -40,9 +41,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   Map<String, double> _prodCost = {};
   bool _loadingProducts = true;
 
-  // boms + branches
+  // boms
   List<Map<String, dynamic>> _boms = [];
-  List<Map<String, dynamic>> _branches = [];
 
   // voucher list
   List<Map<String, dynamic>> _vouchers = [];
@@ -52,7 +52,6 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
 
   // current form
   Map<String, dynamic>? _current;
-  String? _branchId;
   DateTime _date = DateTime.now();
   String? _bomId; String _bomLabel = '';
   String? _fgId; String _fgLabel = '';
@@ -66,6 +65,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   bool _posting = false;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isDraft => _status != 'posted';
   double get _outQty => double.tryParse(_outputQtyCtrl.text) ?? 0;
 
@@ -73,7 +73,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadProducts(); _loadBoms(); _loadBranches(); _loadVouchers();
+      _loadProducts(); _loadBoms(); _loadVouchers();
     });
   }
 
@@ -146,16 +146,6 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     }).toList();
   }
 
-  Future<void> _loadBranches() async {
-    final orgId = _orgId; if (orgId == null) return;
-    try {
-      final rows = await Supabase.instance.client.from('branches')
-          .select().eq('org_id', orgId).eq('is_active', true).order('name');
-      final list = List<Map<String, dynamic>>.from(rows);
-      if (mounted) setState(() { _branches = list; _branchId ??= (list.isNotEmpty ? list.first['id'] as String? : null); });
-    } catch (_) {}
-  }
-
   Future<void> _loadVouchers() async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _loadingList = true);
@@ -175,7 +165,6 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
       _outputQtyCtrl.text = '1'; _notesCtrl.clear();
-      _branchId = _branches.isNotEmpty ? _branches.first['id'] as String? : null;
       _components = []; _overheads = [];
     });
   }
@@ -207,7 +196,6 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       if (mounted) setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
-        _branchId = v['branch_id'] as String?;
         final ds = v['voucher_date'] as String?;
         _date = ds != null ? DateTime.tryParse(ds) ?? DateTime.now() : DateTime.now();
         _bomId = v['bom_id'] as String?;
@@ -272,7 +260,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   Future<String?> _save({bool silent = false}) async {
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return null; }
     if (!_isDraft) { _snack('Posted vouchers cannot be edited'); return _current?['id'] as String?; }
-    if (_branchId == null) { _snack('Select a branch'); return null; }
+    if (_branchId == null) { _snack('No branch selected — pick one in the sidebar'); return null; }
     if (_fgId == null) { _snack('Pick a BOM (sets the finished product)'); return null; }
     if (_outQty <= 0) { _snack('Output quantity must be greater than 0'); return null; }
     final comps = _components.where((l) => l.productId != null && l.qty > 0).toList();
@@ -375,8 +363,6 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     } catch (e) { _snack('Delete failed: $e'); }
   }
 
-  void _addComp() => setState(() => _components.add(_PComp()));
-  void _removeComp(int i) => setState(() { _components[i].dispose(); _components.removeAt(i); });
   void _addOverhead() => setState(() => _overheads.add(_POh()));
   void _removeOverhead(int i) => setState(() { _overheads[i].dispose(); _overheads.removeAt(i); });
 
@@ -457,7 +443,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
           : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // header row
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 200, child: _labeled('Branch *', _branchDropdown())),
+              SizedBox(width: 220, child: _labeled('Branch', _readonlyBox((ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—'))),
               const SizedBox(width: 16),
               SizedBox(width: 150, child: _labeled('Date', _dateField())),
               const SizedBox(width: 16),
@@ -495,20 +481,6 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
     decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
     child: Text(text, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis));
-
-  Widget _branchDropdown() {
-    final ids = _branches.map((b) => b['id'] as String).toSet();
-    final name = _branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String? ?? '';
-    if (!_isDraft || (_branchId != null && !ids.contains(_branchId))) {
-      return _readonlyBox(name.isEmpty ? '—' : name);
-    }
-    return DropdownButtonFormField<String>(
-      value: ids.contains(_branchId) ? _branchId : null, isDense: true,
-      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
-      style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
-      items: _branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
-      onChanged: (v) => setState(() => _branchId = v));
-  }
 
   Widget _dateField() => InkWell(
     onTap: _isDraft ? () async {
@@ -604,11 +576,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
                 _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
                 textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))),
-              SizedBox(width: 30, child: _isDraft ? IconButton(icon: const Icon(Icons.close, size: 14, color: Colors.red), onPressed: () => _removeComp(i), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact) : const SizedBox()),
+              const SizedBox(width: 30),
             ])),
-        if (_isDraft) Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Align(alignment: Alignment.centerLeft,
-            child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add component', style: TextStyle(fontSize: 12)), onPressed: _addComp))),
       ]),
     );
   }
