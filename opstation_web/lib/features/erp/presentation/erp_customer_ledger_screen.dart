@@ -127,7 +127,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   }
 
   Future<void> _loadLedger(String customerId) async {
-    final orgId = _orgId; final branchId = _branchId;
+    final orgId = _orgId;
     if (orgId == null) return;
     setState(() { _loading = true; _entries = []; _errors = []; });
     final client = Supabase.instance.client;
@@ -149,10 +149,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
     // 1. Sales Invoices -> Debit
     try {
-      var siQ = client.from('sales_invoices').select('*')
+      // Org-wide: a customer's receivable is owed to the org, not a branch.
+      final sis = await client.from('sales_invoices').select('*')
           .eq('org_id', orgId).eq('customer_id', customerId);
-      if (branchId != null) siQ = siQ.eq('branch_id', branchId);
-      final sis = await siQ;
       for (final si in sis as List) {
         final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;
         final vno = ((si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '') as String);
@@ -169,18 +168,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
     // 2. POS Transactions -> Sale or Return
     try {
-      List posTxns = [];
-      if (branchId != null) {
-        final sessions = await client.from('pos_sessions').select('id').eq('branch_id', branchId);
-        final sids = (sessions as List).map((s) => s['id'] as String).toList();
-        if (sids.isNotEmpty) {
-          posTxns = await client.from('pos_transactions').select('*')
-              .eq('customer_id', customerId).inFilter('session_id', sids);
-        }
-      } else {
-        posTxns = await client.from('pos_transactions').select('*')
-            .eq('org_id', orgId).eq('customer_id', customerId);
-      }
+      final List posTxns = await client.from('pos_transactions').select('*')
+          .eq('org_id', orgId).eq('customer_id', customerId);
       final posMap = <String, Map<String, dynamic>>{};
       for (final t in posTxns as List) {
         final tid = t['id'];
@@ -227,10 +216,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     Map? firstSriRow;
     for (final tbl in const ['sales_return_invoices', 'sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
-        var q = client.from(tbl).select('*')
+        final rows = await client.from(tbl).select('*')
             .eq('org_id', orgId).eq('customer_id', customerId);
-        if (branchId != null) q = q.eq('branch_id', branchId);
-        final rows = await q;
         sriTable = tbl;
         sriRows = (rows as List).length;
         if (sriRows > 0) firstSriRow = rows.first as Map;
