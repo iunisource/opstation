@@ -60,6 +60,7 @@ class _ErpStockAdjustmentScreenState
   String? _voucherNumber;
   String _status = 'draft';
   bool _isLocked = false;
+  bool _isVoided = false;
 
   // lines
   final List<_AdjLine> _lines = [];
@@ -102,6 +103,7 @@ class _ErpStockAdjustmentScreenState
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   String get _userId => ref.read(currentUserProvider)!.id;
   bool get _isDraft => !_isLocked && _status != 'posted';
+  bool get _canVoid => _isLocked && !_isVoided;
 
   Future<void> _loadProducts() async {
     try {
@@ -147,6 +149,7 @@ class _ErpStockAdjustmentScreenState
       _voucherNumber = null;
       _status = 'draft';
       _isLocked = false;
+      _isVoided = false;
       _date = DateTime.now();
       _remarks.clear();
       _lines.clear();
@@ -187,6 +190,7 @@ class _ErpStockAdjustmentScreenState
           _voucherNumber = v['voucher_number'] as String?;
           _status = v['status'] as String? ?? 'draft';
           _isLocked = locked;
+          _isVoided = v['is_voided'] == true;
           _date = ds != null ? (DateTime.tryParse(ds) ?? DateTime.now()) : DateTime.now();
           _remarks.text = v['remarks'] as String? ?? '';
           _lines
@@ -297,16 +301,13 @@ class _ErpStockAdjustmentScreenState
           'locked_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', id);
 
-        // Optional: surface what the trigger posted.
-        final log = await _supa
-            .from('inventory_posting_log')
-            .select('status, message')
-            .eq('doc_id', id)
-            .order('created_at', ascending: false)
-            .limit(1)
-            .maybeSingle();
+        // The lock flip alone does NOT post — there is no trigger that calls the
+        // poster (the only trigger fires on is_voided). So invoke the poster
+        // explicitly, the same way the other voucher screens do.
+        final res = await _supa
+            .rpc('post_stock_adjustment_voucher', params: {'p_id': id});
         setState(() => _isLocked = true);
-        _toast(log == null ? 'Posted' : '${log['status']}: ${log['message']}');
+        _toast(res?.toString() ?? 'Posted');
       } else {
         _toast('Saved draft $number');
       }
@@ -350,6 +351,44 @@ class _ErpStockAdjustmentScreenState
       await _loadVouchers();
     } catch (e) {
       _toast('Delete failed: $e');
+    }
+  }
+
+  Future<void> _void() async {
+    if (_voucherId == null || !_canVoid) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Void this posted adjustment?'),
+        content: const Text(
+            'Voiding reverses the GL entry and the cost layers, and restores on-hand to what it was before this voucher. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(c, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Void'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _saving = true);
+    try {
+      final res = await _supa.rpc('void_stock_adjustment_voucher',
+          params: {'p_id': _voucherId, 'p_user': _userId});
+      _toast(res?.toString() ?? 'Voided');
+      final updated = await _supa
+          .from('stock_adjustment_vouchers')
+          .select()
+          .eq('id', _voucherId!)
+          .single();
+      await _loadVoucher(updated);
+      await _loadVouchers();
+    } catch (e) {
+      _toast('Void failed: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -457,8 +496,14 @@ class _ErpStockAdjustmentScreenState
                         itemBuilder: (_, i) {
                           final v = filtered[i];
                           final sel = _voucherId == v['id'];
-                          final posted = (v['status'] as String? ?? 'draft') == 'posted' ||
-                              v['is_locked'] == true;
+                          final voided = v['is_voided'] == true;
+                          final posted = !voided &&
+                              ((v['status'] as String? ?? 'draft') == 'posted' ||
+                                  v['is_locked'] == true);
+                          final badgeText = voided ? 'Voided' : (posted ? 'Posted' : 'Draft');
+                          final badgeColor = voided
+                              ? Colors.red
+                              : (posted ? Colors.green : Colors.orange);
                           return InkWell(
                             onTap: () => _loadVoucher(v),
                             child: Container(
@@ -479,14 +524,14 @@ class _ErpStockAdjustmentScreenState
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                                         decoration: BoxDecoration(
-                                          color: (posted ? Colors.green : Colors.orange).withOpacity(0.13),
+                                          color: badgeColor.withOpacity(0.13),
                                           borderRadius: BorderRadius.circular(3),
                                         ),
-                                        child: Text(posted ? 'Posted' : 'Draft',
+                                        child: Text(badgeText,
                                             style: TextStyle(
                                                 fontSize: 9,
                                                 fontWeight: FontWeight.w700,
-                                                color: posted ? Colors.green.shade700 : Colors.orange.shade800)),
+                                                color: badgeColor)),
                                       ),
                                     ],
                                   ),
@@ -539,6 +584,21 @@ class _ErpStockAdjustmentScreenState
                 child: Text(_voucherNumber == null ? 'Stock Adjustment Voucher' : 'Adjustment $_voucherNumber',
                     style: Theme.of(context).textTheme.headlineSmall),
               ),
+              if (_isVoided)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: Chip(label: Text('VOIDED'), backgroundColor: Color(0xFFFDE2E1)),
+                ),
+              if (_canVoid)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.undo, size: 16, color: Colors.red),
+                    label: const Text('Void', style: TextStyle(color: Colors.red)),
+                    style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.red)),
+                    onPressed: _saving ? null : _void,
+                  ),
+                ),
               if (_isDraft && _voucherId != null)
                 IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
