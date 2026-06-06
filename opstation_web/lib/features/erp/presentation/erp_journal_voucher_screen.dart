@@ -54,10 +54,23 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     super.initState();
     _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date);
     _lines = [_JvLine(), _JvLine()];
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); _ensureAccessReady(); });
   }
   @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  // Cold-refresh access fix: currentUserProvider can populate without notifying
+  // accessProvider's watch, so accessProvider stays parked on its first (null-user)
+  // run and access never resolves. Invalidating it forces a re-read of the
+  // now-populated user. Capped poll; stops as soon as access is resolved.
+  void _ensureAccessReady([int tries = 0]) {
+    if (!mounted) return;
+    final a = ref.read(accessSyncProvider);
+    if (a != null && a.role != null) return;
+    if (tries >= 25) return;
+    ref.invalidate(accessProvider);
+    Future.delayed(const Duration(milliseconds: 300), () => _ensureAccessReady(tries + 1));
+  }
 
   static String _typeLabel(dynamic t) {
     switch (t) {
