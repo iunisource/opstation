@@ -59,21 +59,43 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       // branch-filter the Balance Sheet.)
       final params = {'p_org_id': orgId, 'p_as_of': asOfStr};
 
-      // Customer master for names/codes.
-      final names = <String, String>{};
-      final codes = <String, String?>{};
-      try {
-        final cs = await client.from('customers')
-            .select('id, shop_name, code').eq('org_id', orgId).limit(20000);
-        for (final c in cs as List) {
-          final m = c as Map;
-          names[m['id'] as String] = (m['shop_name'] as String?) ?? '(Unknown)';
-          codes[m['id'] as String] = m['code'] as String?;
-        }
-      } catch (e) { /* names are best-effort */ }
-
       // Aggregate buckets + GL-true net per customer (ties to 1210).
       final agg = await client.rpc('rpc_customer_aging', params: params) as List;
+
+      // Resolve names/codes for exactly the customer ids in the result.
+      // Org-agnostic on purpose: some (imported) customers carry a different
+      // org_id tag, so filtering by org_id would drop them -> "(Unknown)".
+      // Falls back to pos_customers for POS-created ids.
+      final names = <String, String>{};
+      final codes = <String, String?>{};
+      final cidList = <String>[
+        for (final a in agg)
+          if ((a as Map)['customer_id'] != null) (a as Map)['customer_id'] as String
+      ];
+      if (cidList.isNotEmpty) {
+        try {
+          final cs = await client.from('customers')
+              .select('id, shop_name, code').inFilter('id', cidList);
+          for (final c in cs as List) {
+            final m = c as Map;
+            final sn = m['shop_name'] as String?;
+            if (sn != null && sn.isNotEmpty) names[m['id'] as String] = sn;
+            codes[m['id'] as String] = m['code'] as String?;
+          }
+        } catch (e) { /* names are best-effort */ }
+        final missing = [for (final id in cidList) if (!names.containsKey(id)) id];
+        if (missing.isNotEmpty) {
+          try {
+            final pcs = await client.from('pos_customers')
+                .select('id, name').inFilter('id', missing);
+            for (final c in pcs as List) {
+              final m = c as Map;
+              final nm = m['name'] as String?;
+              if (nm != null && nm.isNotEmpty) names[m['id'] as String] = nm;
+            }
+          } catch (e) { /* names are best-effort */ }
+        }
+      }
 
       // Open GL lines per customer for the drill-down (best-effort).
       final detailByCust = <String, List<Map<String, dynamic>>>{};
