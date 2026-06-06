@@ -50,16 +50,33 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
         debugPrint('=== net type: ${netVal.runtimeType} value: $netVal');
       }
 
+      // The RPC returns net = credit - debit for every account. Expenses are
+      // debit-normal, so that yields negative COGS/expense nets and, because the
+      // profit formulas below subtract those totals, overstates profit. Normalise
+      // expenses to a natural-positive convention (debit - credit) here, once, so
+      // every downstream consumer (totals, rows, print) is correct. Contra-expenses
+      // (e.g. Purchase Returns) then correctly read negative, as a deduction.
+      final rows = List<Map<String, dynamic>>.from(rawList);
+      for (final r in rows) {
+        if (r['account_type'] == 'expense') r['net'] = -_n(r['net']);
+      }
+      final expenseParents = <String>{
+        for (final r in rows) if (r['account_type'] == 'expense') (r['code'] ?? '') as String
+      };
+
       // Detail is additive: a missing/failed RPC just yields the flat view.
       List detail = [];
       try { detail = await client.rpc('rpc_profit_loss_detail', params: params) as List; } catch (_) {}
       final children = <String, List<Map<String, dynamic>>>{};
       for (final d in List<Map<String, dynamic>>.from(detail)) {
-        (children[(d['parent_code'] ?? '') as String] ??= []).add(d);
+        final dd = Map<String, dynamic>.from(d);
+        final pc = (dd['parent_code'] ?? '') as String;
+        if (expenseParents.contains(pc)) dd['net'] = -_n(dd['net']);
+        (children[pc] ??= []).add(dd);
       }
 
       setState(() {
-        _rows = List<Map<String, dynamic>>.from(rawList);
+        _rows = rows;
         _children = children;
         _expanded.clear();
         _loading = false;
