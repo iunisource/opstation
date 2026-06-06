@@ -28,6 +28,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
   String _sessionSearch = '';
   final Map<String, List<Map<String, dynamic>>> _sessionTxns = {};
   final Map<String, bool> _sessionExpanded = {};
+  final Map<String, double> _sessionTotals = {};
   String _globalTxnSearch = '';
 
   @override
@@ -54,6 +55,23 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
           .eq('org_id', orgId)
           .eq('is_active', true)
           .order('name');
+      // Per-session sales totals for the Recent Sessions list (show total sale per session).
+      final Map<String, double> sessionTotals = {};
+      final sessIds = (sessions as List).map((s) => s['id'] as String).toList();
+      if (sessIds.isNotEmpty) {
+        try {
+          final tRows = await client
+              .from('pos_transactions')
+              .select('session_id, total, transaction_type')
+              .inFilter('session_id', sessIds);
+          for (final t in tRows as List) {
+            final sid = t['session_id'] as String?;
+            if (sid == null) continue;
+            if (((t['transaction_type'] as String?) ?? 'sale') != 'sale') continue;
+            sessionTotals[sid] = (sessionTotals[sid] ?? 0) + ((t['total'] as num?)?.toDouble() ?? 0);
+          }
+        } catch (_) {}
+      }
       final activeList = (sessions as List).where((s) =>
           s['status'] == 'open' && s['opened_by'] == userId).toList();
       Map<String, dynamic>? active =
@@ -81,6 +99,9 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
         _sessions = List<Map<String, dynamic>>.from(sessions);
         _branches = List<Map<String, dynamic>>.from(branches);
         _activeSession = active;
+        _sessionTotals
+          ..clear()
+          ..addAll(sessionTotals);
         _loading = false;
       });
       if (autoClosed) _showSnack("Previous day's session was auto-closed.");
@@ -320,6 +341,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                       Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Opened', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Closed', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      Expanded(flex: 2, child: Text('Total Sale', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       SizedBox(width: 48),
                     ]),
@@ -375,6 +397,8 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                                         style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                                     Expanded(flex: 2, child: Text(closedAt,
                                         style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                                    Expanded(flex: 2, child: Text('Rs. ${(_sessionTotals[sid] ?? 0).toStringAsFixed(2)}',
+                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary))),
                                     Expanded(flex: 1, child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                       decoration: BoxDecoration(
@@ -959,7 +983,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         TextField(controller: notesCtrl, decoration: const InputDecoration(labelText: 'Notes (optional)'), maxLines: 2),
       ])),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Close Session'))],
+        ElevatedButton(onPressed: () {
+          if (double.tryParse(cashCtrl.text.trim()) == null) { _showSnack('Enter the closing cash to close the session'); return; }
+          Navigator.of(context, rootNavigator: true).pop(true);
+        }, child: const Text('Close Session'))],
     ));
     if (ok != true) return;
     try {
@@ -995,6 +1022,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     double totalSales = 0, totalReturns = 0;
     for (final t in sales) totalSales += (t['total'] as num?)?.toDouble() ?? 0;
     for (final t in returns) totalReturns += ((t['total'] as num?)?.toDouble() ?? 0).abs();
+    double customerAccountSale = 0;  // amount put on customer accounts (unpaid/credit portion) this session
+    for (final t in sales) {
+      final tot = (t['total'] as num?)?.toDouble() ?? 0;
+      final paid = (t['amount_paid'] as num?)?.toDouble() ?? tot;
+      final onAcct = tot - paid;
+      if (onAcct > 0) customerAccountSale += onAcct;
+    }
     final openingCash = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
     final closingCash = (_session['closing_cash'] as num?)?.toDouble() ?? 0;
     double totalExpenses = 0; String expRows = '';
@@ -1059,6 +1093,7 @@ tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;
   <div class="stat"><div class="sl">Total Sales</div><div class="sv green">${totalSales.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Total Refunds</div><div class="sv red">${totalReturns.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Net Sales</div><div class="sv">${(totalSales - totalReturns).toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Customer Account Sale</div><div class="sv blue">${customerAccountSale.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${openingCash.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${closingCash.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${cashDiff.abs().toStringAsFixed(2)}</div></div>
