@@ -1,26 +1,608 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../auth/auth_controller.dart';
 
-class ErpProductionInverseVoucherScreen extends ConsumerWidget {
+class _RComp {
+  static int _seq = 0;
+  final String id = 'rc_${DateTime.now().microsecondsSinceEpoch}_${_seq++}';
+  String? productId; String productLabel = '';
+  final TextEditingController qtyCtrl = TextEditingController();
+  double unitCostSnap = 0; double lineCostSnap = 0; // posted snapshot
+  double get qty => double.tryParse(qtyCtrl.text) ?? 0;
+  void dispose() { qtyCtrl.dispose(); }
+}
+
+class ErpProductionInverseVoucherScreen extends ConsumerStatefulWidget {
   const ErpProductionInverseVoucherScreen({super.key});
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Container(
-      color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+  ConsumerState<ErpProductionInverseVoucherScreen> createState() => _State();
+}
+
+class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
+  List<Map<String, dynamic>> _products = [];
+  Map<String, String> _prodLabel = {};
+  Map<String, double> _prodCost = {};
+  bool _loadingProducts = true;
+
+  List<Map<String, dynamic>> _boms = [];
+  List<Map<String, dynamic>> _branches = [];
+
+  List<Map<String, dynamic>> _vouchers = [];
+  bool _loadingList = true;
+  String _listSearch = '';
+  bool _drawerOpen = true;
+
+  Map<String, dynamic>? _current;
+  String? _branchId;
+  DateTime _date = DateTime.now();
+  String? _bomId; String _bomLabel = '';
+  String? _fgId; String _fgLabel = '';
+  double _bomBaseQty = 1;
+  final _inputQtyCtrl = TextEditingController(text: '1');
+  final _notesCtrl = TextEditingController();
+  String _status = 'draft';
+  List<_RComp> _components = [];
+  bool _saving = false;
+  bool _posting = false;
+
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _isDraft => _status != 'posted';
+  double get _inQty => double.tryParse(_inputQtyCtrl.text) ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadProducts(); _loadBoms(); _loadBranches(); _loadVouchers();
+    });
+  }
+
+  @override
+  void dispose() {
+    _inputQtyCtrl.dispose(); _notesCtrl.dispose();
+    for (final l in _components) l.dispose();
+    super.dispose();
+  }
+
+  void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+  static String _trim(double v) { if (v == v.roundToDouble()) return v.toStringAsFixed(0); return v.toString(); }
+  static String _money(num v) => NumberFormat('#,##0.00').format(v);
+
+  // ---------- loaders ----------
+  Future<void> _loadProducts() async {
+    final orgId = _orgId;
+    if (orgId == null) { await Future.delayed(const Duration(milliseconds: 500)); if (mounted) _loadProducts(); return; }
+    try {
+      final List<Map<String, dynamic>> all = [];
+      int from = 0; const page = 1000;
+      while (true) {
+        final rows = await Supabase.instance.client.from('products')
+            .select('id, name, sku, product_type, cost_price')
+            .eq('org_id', orgId).eq('is_active', true)
+            .order('name').range(from, from + page - 1);
+        final list = List<Map<String, dynamic>>.from(rows);
+        all.addAll(list);
+        if (list.length < page) break;
+        from += page; if (from > 100000) break;
+      }
+      final items = all.map((p) => {
+        'id': p['id'],
+        'label': "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} — ' : ''}${p['name'] ?? ''}",
+      }).toList();
+      final labelMap = {for (final p in items) p['id'] as String: p['label'] as String};
+      final costMap = {for (final p in all) p['id'] as String: (p['cost_price'] as num? ?? 0).toDouble()};
+      if (mounted) setState(() { _products = items; _prodLabel = labelMap; _prodCost = costMap; _loadingProducts = false; });
+    } catch (e) { if (mounted) { _snack('Products load error: $e'); setState(() => _loadingProducts = false); } }
+  }
+
+  List<Map<String, dynamic>> _filterProducts(String q) {
+    if (q.isEmpty) return _products.take(50).toList();
+    final ql = q.toLowerCase();
+    return _products.where((p) => (p['label'] as String).toLowerCase().contains(ql)).take(200).toList();
+  }
+
+  Future<void> _loadBoms() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('bom_headers')
+          .select().eq('org_id', orgId).eq('status', 'active').order('code').limit(500);
+      if (mounted) setState(() => _boms = List<Map<String, dynamic>>.from(rows));
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> _filterBoms(String q) {
+    final ql = q.toLowerCase();
+    final list = _boms.where((b) {
+      if (ql.isEmpty) return true;
+      final code = (b['code'] as String? ?? '').toLowerCase();
+      final name = (b['name'] as String? ?? '').toLowerCase();
+      final pn = (_prodLabel[b['product_id']] ?? '').toLowerCase();
+      return code.contains(ql) || name.contains(ql) || pn.contains(ql);
+    }).take(200).toList();
+    return list.map((b) => {
+      'id': b['id'],
+      'label': "${b['code'] ?? ''} — ${_prodLabel[b['product_id']] ?? (b['name'] ?? '')}",
+    }).toList();
+  }
+
+  Future<void> _loadBranches() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('branches')
+          .select().eq('org_id', orgId).eq('is_active', true).order('name');
+      final list = List<Map<String, dynamic>>.from(rows);
+      if (mounted) setState(() { _branches = list; _branchId ??= (list.isNotEmpty ? list.first['id'] as String? : null); });
+    } catch (_) {}
+  }
+
+  Future<void> _loadVouchers() async {
+    final orgId = _orgId; if (orgId == null) return;
+    setState(() => _loadingList = true);
+    try {
+      final rows = await Supabase.instance.client.from('production_inverse_vouchers')
+          .select().eq('org_id', orgId).order('created_at', ascending: false).limit(300);
+      if (mounted) setState(() { _vouchers = List<Map<String, dynamic>>.from(rows); _loadingList = false; });
+    } catch (e) { if (mounted) setState(() => _loadingList = false); }
+  }
+
+  // ---------- form state ----------
+  void _newVoucher() {
+    for (final l in _components) l.dispose();
+    setState(() {
+      _current = null; _status = 'draft';
+      _date = DateTime.now();
+      _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
+      _inputQtyCtrl.text = '1'; _notesCtrl.clear();
+      _branchId = _branches.isNotEmpty ? _branches.first['id'] as String? : null;
+      _components = [];
+    });
+  }
+
+  Future<void> _loadVoucher(Map<String, dynamic> v) async {
+    try {
+      final client = Supabase.instance.client;
+      final comps = await client.from('production_inverse_components').select().eq('voucher_id', v['id'] as String).order('line_order');
+      for (final l in _components) l.dispose();
+      final newComps = (comps as List).map((r) {
+        final l = _RComp();
+        l.productId = r['product_id'] as String?;
+        l.productLabel = _prodLabel[l.productId] ?? (l.productId ?? '');
+        final q = (r['quantity'] as num? ?? 0).toDouble();
+        if (q != 0) l.qtyCtrl.text = _trim(q);
+        l.unitCostSnap = (r['unit_cost'] as num? ?? 0).toDouble();
+        l.lineCostSnap = (r['line_cost'] as num? ?? 0).toDouble();
+        return l;
+      }).toList();
+      if (mounted) setState(() {
+        _current = v;
+        _status = v['status'] as String? ?? 'draft';
+        _branchId = v['branch_id'] as String?;
+        final ds = v['voucher_date'] as String?;
+        _date = ds != null ? DateTime.tryParse(ds) ?? DateTime.now() : DateTime.now();
+        _bomId = v['bom_id'] as String?;
+        _fgId = v['product_id'] as String?;
+        _fgLabel = _prodLabel[_fgId] ?? (_fgId ?? '');
+        _bomLabel = _bomId != null ? (_boms.firstWhere((b) => b['id'] == _bomId, orElse: () => {})['code'] as String? ?? '') : '';
+        _inputQtyCtrl.text = _trim((v['input_qty'] as num? ?? 1).toDouble());
+        _notesCtrl.text = v['notes'] as String? ?? '';
+        _components = newComps;
+      });
+    } catch (e) { _snack('Load error: $e'); }
+  }
+
+  void _pickBom(String bomId) {
+    final bom = _boms.firstWhere((b) => b['id'] == bomId, orElse: () => {});
+    if (bom.isEmpty) return;
+    setState(() {
+      _bomId = bomId;
+      _fgId = bom['product_id'] as String?;
+      _fgLabel = _prodLabel[_fgId] ?? (_fgId ?? '');
+      _bomBaseQty = (bom['output_qty'] as num? ?? 1).toDouble();
+      if (_bomBaseQty <= 0) _bomBaseQty = 1;
+    });
+    _reloadFromBom();
+  }
+
+  Future<void> _reloadFromBom() async {
+    if (_bomId == null) { _snack('Pick a BOM first'); return; }
+    try {
+      final client = Supabase.instance.client;
+      final comps = await client.from('bom_components').select().eq('bom_id', _bomId!).order('line_order');
+      final scale = _bomBaseQty > 0 ? (_inQty / _bomBaseQty) : 1;
+      for (final l in _components) l.dispose();
+      final newComps = (comps as List).map((r) {
+        final l = _RComp();
+        l.productId = r['product_id'] as String?;
+        l.productLabel = _prodLabel[l.productId] ?? (l.productId ?? '');
+        final q = (r['quantity'] as num? ?? 0).toDouble() * scale;
+        if (q != 0) l.qtyCtrl.text = _trim(double.parse(q.toStringAsFixed(4)));
+        return l;
+      }).toList();
+      if (mounted) setState(() => _components = newComps);
+    } catch (e) { _snack('BOM load error: $e'); }
+  }
+
+  // ---------- cost preview ----------
+  double get _estCompVal => _components.fold(0.0, (s, l) => s + l.qty * (_prodCost[l.productId] ?? 0));
+  double get _estFgCost => (_prodCost[_fgId] ?? 0) * _inQty;
+  double get _estVariance => _estFgCost - _estCompVal;
+
+  // ---------- save / post / delete ----------
+  Future<String?> _save({bool silent = false}) async {
+    final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return null; }
+    if (!_isDraft) { _snack('Posted vouchers cannot be edited'); return _current?['id'] as String?; }
+    if (_branchId == null) { _snack('Select a branch'); return null; }
+    if (_fgId == null) { _snack('Pick a BOM (sets the finished product)'); return null; }
+    if (_inQty <= 0) { _snack('Quantity to disassemble must be greater than 0'); return null; }
+    final comps = _components.where((l) => l.productId != null && l.qty > 0).toList();
+    if (comps.isEmpty) { _snack('Add at least one recovered component'); return null; }
+    final userId = ref.read(currentUserProvider)?.id ?? '';
+    setState(() => _saving = true);
+    String? resultId;
+    try {
+      final client = Supabase.instance.client;
+      String vId, num;
+      final dateStr = DateFormat('yyyy-MM-dd').format(_date);
+      if (_current == null) {
+        final cnt = await client.from('production_inverse_vouchers').select('id').eq('org_id', orgId);
+        num = 'PRDI-${_date.year}-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+        vId = 'prdi_' + DateTime.now().millisecondsSinceEpoch.toString();
+        await client.from('production_inverse_vouchers').insert({
+          'id': vId, 'org_id': orgId, 'branch_id': _branchId, 'voucher_number': num,
+          'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId, 'input_qty': _inQty,
+          'status': 'draft', 'is_locked': false, 'notes': _notesCtrl.text.trim(),
+          'created_by': userId, 'created_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        });
+      } else {
+        vId = _current!['id'] as String; num = _current!['voucher_number'] as String? ?? '';
+        await client.from('production_inverse_vouchers').update({
+          'branch_id': _branchId, 'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId,
+          'input_qty': _inQty, 'notes': _notesCtrl.text.trim(), 'updated_at': DateTime.now().toIso8601String(),
+        }).eq('id', vId);
+      }
+      await client.from('production_inverse_components').delete().eq('voucher_id', vId);
+      for (var i = 0; i < comps.length; i++) {
+        await client.from('production_inverse_components').insert({
+          'id': vId + '_c' + i.toString(), 'voucher_id': vId,
+          'product_id': comps[i].productId, 'quantity': comps[i].qty, 'line_order': i,
+        });
+      }
+      resultId = vId;
+      final updated = await client.from('production_inverse_vouchers').select().eq('id', vId).single();
+      if (mounted) setState(() => _current = updated);
+      if (!silent) _snack('Disassembly $num saved (draft)');
+      await _loadVouchers();
+    } catch (e) { _snack('Save failed: ' + e.toString()); }
+    if (mounted) setState(() => _saving = false);
+    return resultId;
+  }
+
+  Future<void> _post() async {
+    if (!_isDraft) return;
+    final id = await _save(silent: true);
+    if (id == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Post disassembly?'),
+      content: const Text('The finished good will be removed from stock (FIFO) and the recovered components returned to stock at standard cost. Any absorbed labor/overhead that cannot be recovered is written off to Inventory Adjustment. This posts to the General Ledger and cannot be edited afterward.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Post')),
+      ],
+    ));
+    if (ok != true) return;
+    setState(() => _posting = true);
+    try {
+      final client = Supabase.instance.client;
+      await client.from('production_inverse_vouchers').update({'is_locked': true}).eq('id', id);
+      final res = await client.rpc('post_production_inverse_voucher', params: {'p_id': id});
+      _snack(res?.toString() ?? 'Posted');
+      final updated = await client.from('production_inverse_vouchers').select().eq('id', id).single();
+      if (mounted) setState(() { _current = updated; _status = updated['status'] as String? ?? 'posted'; });
+      await _loadVouchers();
+      await _loadVoucher(updated);
+    } catch (e) { _snack('Post failed: ' + e.toString()); }
+    if (mounted) setState(() => _posting = false);
+  }
+
+  Future<void> _delete() async {
+    if (_current == null) return;
+    if (!_isDraft) { _snack('Posted vouchers cannot be deleted — reverse via Void'); return; }
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Delete draft?'),
+      content: const Text('This draft disassembly voucher will be permanently deleted.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text('Delete')),
+      ],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('production_inverse_vouchers').delete().eq('id', _current!['id'] as String);
+      _snack('Draft deleted');
+      _newVoucher();
+      await _loadVouchers();
+    } catch (e) { _snack('Delete failed: $e'); }
+  }
+
+  void _addComp() => setState(() => _components.add(_RComp()));
+  void _removeComp(int i) => setState(() { _components[i].dispose(); _components.removeAt(i); });
+
+  // ---------- UI ----------
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
+      final q = _listSearch.toLowerCase();
+      final pn = (_prodLabel[v['product_id']] ?? '').toLowerCase();
+      return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || pn.contains(q);
+    }).toList();
+
+    return Container(color: AppTheme.background, child: Row(children: [
+      if (_drawerOpen) Container(width: 300,
+        decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
+        child: Column(children: [
+          Container(padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+            decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+            child: Column(children: [
+              Row(children: [
+                const Expanded(child: Text('Disassembly Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero),
+                  onPressed: _newVoucher),
+              ]),
+              const SizedBox(height: 8),
+              TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 15), isDense: true),
+                onChanged: (v) => setState(() => _listSearch = v)),
+            ])),
+          Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+            : filtered.isEmpty ? const Center(child: Text('No disassembly vouchers yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
+                final v = filtered[i]; final sel = _current?['id'] == v['id'];
+                final posted = (v['status'] as String? ?? 'draft') == 'posted';
+                return InkWell(onTap: () => _loadVoucher(v), child: Container(
+                  color: sel ? AppTheme.primary.withOpacity(0.07) : null,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Expanded(child: Text(v['voucher_number'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))),
+                      Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(color: (posted ? Colors.green : Colors.orange).withOpacity(0.13), borderRadius: BorderRadius.circular(3)),
+                        child: Text(posted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, color: posted ? Colors.green.shade700 : Colors.orange.shade800, fontWeight: FontWeight.w700))),
+                    ]),
+                    const SizedBox(height: 2),
+                    Text(_prodLabel[v['product_id']] ?? '', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
+                    Text('${v['voucher_date'] ?? ''}  ·  qty ${_trim((v['input_qty'] as num? ?? 0).toDouble())}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                  ]),
+                ));
+              })),
+        ])),
+
+      Expanded(child: Column(children: [
+        Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+          child: Row(children: [
+            IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+            const SizedBox(width: 8),
+            Expanded(child: Text(_current?['voucher_number'] as String? ?? 'New Disassembly', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+            if (!_isDraft) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: Colors.green.withOpacity(0.13), borderRadius: BorderRadius.circular(4)),
+              child: Text('Posted', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w700))),
+            if (_isDraft && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete draft'),
+            const SizedBox(width: 8),
+            if (_isDraft) OutlinedButton.icon(
+              icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
+              label: const Text('Save draft'),
+              onPressed: _saving || _posting ? null : () => _save()),
+            const SizedBox(width: 8),
+            if (_isDraft) ElevatedButton.icon(
+              icon: _posting ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle_outline, size: 16),
+              label: const Text('Post'),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+              onPressed: _saving || _posting ? null : _post),
+          ])),
+        Expanded(child: _loadingProducts
+          ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Loading...', style: TextStyle(color: AppTheme.textSecondary))]))
+          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 200, child: _labeled('Branch *', _branchDropdown())),
+              const SizedBox(width: 16),
+              SizedBox(width: 150, child: _labeled('Date', _dateField())),
+              const SizedBox(width: 16),
+              Expanded(child: _labeled('Bill of Materials *', _isDraft
+                ? _ProductField(key: ValueKey('bom_${_current?['id'] ?? 'new'}_$_bomId'), initialLabel: _bomLabel.isEmpty ? '' : (_bomLabel + (_fgLabel.isNotEmpty ? ' — $_fgLabel' : '')), filterFn: _filterBoms, onPick: (b) => _pickBom(b['id'] as String))
+                : _readonlyBox(_bomLabel.isEmpty ? '—' : _bomLabel))),
+              const SizedBox(width: 16),
+              SizedBox(width: 130, child: _labeled('Qty to break *', _inputQtyField())),
+            ]),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: _labeled('Finished Product (disassembled)', _readonlyBox(_fgLabel.isEmpty ? 'Select a BOM' : _fgLabel))),
+              const SizedBox(width: 16),
+              Expanded(flex: 2, child: _labeled('Notes', TextField(controller: _notesCtrl, enabled: _isDraft,
+                decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))))),
+            ]),
+            const SizedBox(height: 20),
+            _summaryCard(),
+            const SizedBox(height: 20),
+            _compSection(),
+            const SizedBox(height: 30),
+          ]))),
+      ])),
+    ]));
+  }
+
+  Widget _labeled(String label, Widget child) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+    const SizedBox(height: 4), child,
+  ]);
+
+  Widget _readonlyBox(String text) => Container(width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+    decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
+    child: Text(text, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis));
+
+  Widget _branchDropdown() {
+    final ids = _branches.map((b) => b['id'] as String).toSet();
+    final name = _branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String? ?? '';
+    if (!_isDraft || (_branchId != null && !ids.contains(_branchId))) {
+      return _readonlyBox(name.isEmpty ? '—' : name);
+    }
+    return DropdownButtonFormField<String>(
+      value: ids.contains(_branchId) ? _branchId : null, isDense: true,
+      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
+      style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+      items: _branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
+      onChanged: (v) => setState(() => _branchId = v));
+  }
+
+  Widget _dateField() => InkWell(
+    onTap: _isDraft ? () async {
+      final d = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime(2100));
+      if (d != null) setState(() => _date = d);
+    } : null,
+    child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
+      child: Row(children: [
+        Expanded(child: Text(DateFormat('yyyy-MM-dd').format(_date), style: const TextStyle(fontSize: 12))),
+        const Icon(Icons.calendar_today_outlined, size: 13, color: AppTheme.textSecondary),
+      ])));
+
+  Widget _inputQtyField() => TextField(controller: _inputQtyCtrl, enabled: _isDraft,
+    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+    decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
+    onChanged: (_) => setState(() {}));
+
+  Widget _summaryCard() {
+    final posted = !_isDraft;
+    final fgCost = posted ? (_current?['fg_cost'] as num? ?? 0).toDouble() : _estFgCost;
+    final compVal = posted ? (_current?['component_value'] as num? ?? 0).toDouble() : _estCompVal;
+    final variance = posted ? (_current?['variance'] as num? ?? 0).toDouble() : _estVariance;
+    final lossLabel = variance >= 0 ? 'Variance (loss)' : 'Variance (gain)';
+    final varColor = variance > 0 ? Colors.red.shade600 : (variance < 0 ? Colors.green.shade700 : AppTheme.textSecondary);
+    return Container(padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Production Inverse Voucher', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 8),
-        const Text('De-assemble a finished product back into its components (the reverse of a Production Voucher).',
-            style: TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 24),
-        Expanded(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.undo_outlined, size: 56, color: AppTheme.textSecondary.withOpacity(0.3)),
-          const SizedBox(height: 12),
-          const Text('Coming soon', style: TextStyle(color: AppTheme.textSecondary, fontSize: 16, fontWeight: FontWeight.w600)),
-        ]))),
+        Text(posted ? 'Cost (posted, actual FIFO)' : 'Cost (estimate — actual FIFO computed at posting)',
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: posted ? Colors.green.shade700 : AppTheme.textSecondary)),
+        const SizedBox(height: 10),
+        Row(children: [
+          _costCell('Finished good (out)', fgCost, AppTheme.primary),
+          _costCell('Components recovered (in)', compVal, Colors.teal),
+          _costCell(lossLabel, variance.abs(), varColor, bold: true),
+        ]),
+        const SizedBox(height: 6),
+        const Text('Labor/overhead that cannot be recovered is written off to Inventory Adjustment.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+      ]));
+  }
+
+  Widget _costCell(String label, double v, Color c, {bool bold = false}) => Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+    const SizedBox(height: 3),
+    Text(_money(v), style: TextStyle(fontSize: bold ? 16 : 14, fontWeight: bold ? FontWeight.w800 : FontWeight.w600, color: c)),
+  ]));
+
+  Widget _compSection() {
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Column(children: [
+        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
+          child: Row(children: [
+            Container(width: 6, height: 14, decoration: BoxDecoration(color: Colors.teal, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 8),
+            const Text('Recovered Components (returned to stock)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 10),
+            const Expanded(child: Text('Pre-filled from the BOM, scaled to qty. Edit to match what the teardown actually recovers.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            if (_isDraft && _bomId != null) TextButton.icon(icon: const Icon(Icons.refresh, size: 14), label: const Text('Reload from BOM', style: TextStyle(fontSize: 11)), onPressed: _reloadFromBom),
+          ])),
+        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+          child: Row(children: const [
+            SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            Expanded(child: Text('Product', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 12),
+            SizedBox(width: 110, child: Text('Quantity', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 12),
+            SizedBox(width: 120, child: Text('Value', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 30),
+          ])),
+        for (var i = 0; i < _components.length; i++)
+          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 26, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
+              Expanded(child: _isDraft
+                ? _ProductField(key: ValueKey(_components[i].id), initialLabel: _components[i].productLabel, filterFn: _filterProducts,
+                    onPick: (p) => setState(() { _components[i].productId = p['id'] as String?; _components[i].productLabel = p['label'] as String? ?? ''; }))
+                : Padding(padding: const EdgeInsets.only(top: 8), child: Text(_components[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+              const SizedBox(width: 12),
+              SizedBox(width: 110, child: _isDraft
+                ? TextField(controller: _components[i].qtyCtrl, textAlign: TextAlign.right,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                    decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                      border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
+                    style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}))
+                : Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
+              const SizedBox(width: 12),
+              SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
+                _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
+                textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))),
+              SizedBox(width: 30, child: _isDraft ? IconButton(icon: const Icon(Icons.close, size: 14, color: Colors.red), onPressed: () => _removeComp(i), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact) : const SizedBox()),
+            ])),
+        if (_isDraft) Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Align(alignment: Alignment.centerLeft,
+            child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add component', style: TextStyle(fontSize: 12)), onPressed: _addComp))),
       ]),
     );
+  }
+}
+
+class _ProductField extends StatefulWidget {
+  final String initialLabel;
+  final List<Map<String, dynamic>> Function(String) filterFn;
+  final void Function(Map<String, dynamic>) onPick;
+  const _ProductField({super.key, required this.initialLabel, required this.filterFn, required this.onPick});
+  @override State<_ProductField> createState() => _ProductFieldState();
+}
+
+class _ProductFieldState extends State<_ProductField> {
+  final _ctrl = TextEditingController();
+  final _focus = FocusNode();
+  bool _open = false; String _q = ''; bool _picked = false;
+
+  @override void initState() {
+    super.initState();
+    _ctrl.text = widget.initialLabel;
+    _picked = widget.initialLabel.isNotEmpty;
+    _focus.addListener(() { if (!_focus.hasFocus) Future.delayed(const Duration(milliseconds: 160), () { if (mounted && !_focus.hasFocus) setState(() => _open = false); }); });
+  }
+  @override void dispose() { _ctrl.dispose(); _focus.dispose(); super.dispose(); }
+
+  @override Widget build(BuildContext context) {
+    final res = widget.filterFn(_q);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      TextField(controller: _ctrl, focusNode: _focus,
+        decoration: InputDecoration(hintText: 'Search...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+          border: OutlineInputBorder(borderSide: BorderSide(color: _picked ? Colors.green : const Color(0xFFE0E0E0))),
+          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _picked ? Colors.green : const Color(0xFFE0E0E0))),
+          suffixIcon: _picked ? const Icon(Icons.check_circle, size: 14, color: Colors.green) : null),
+        style: const TextStyle(fontSize: 12),
+        onChanged: (v) => setState(() { _q = v; _open = true; _picked = false; }),
+        onTap: () => setState(() { _q = _picked ? '' : _ctrl.text; _open = true; })),
+      if (_open && res.isNotEmpty) Container(constraints: const BoxConstraints(maxHeight: 220), margin: const EdgeInsets.only(top: 2),
+        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)]),
+        child: ListView(shrinkWrap: true, children: res.map((p) => InkWell(
+          onTap: () { widget.onPick(p); _ctrl.text = p['label'] as String? ?? ''; setState(() { _open = false; _picked = true; _q = ''; }); _focus.unfocus(); },
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            child: Text(p['label'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+        )).toList())),
+    ]);
   }
 }
