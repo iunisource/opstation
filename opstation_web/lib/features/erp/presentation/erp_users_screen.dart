@@ -242,7 +242,8 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
         .order('name');
 
     List<String> currentBranches = [];
-    Set<String> currentPermissions = {};
+    // scope key '*' == all branches (branch_id NULL / global grant); else a branch_id.
+    final Map<String, Set<String>> permsByScope = {};
 
     if (user != null) {
       final existingBranches = await client
@@ -254,12 +255,14 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
 
       final existingPerms = await client
           .from('user_permissions')
-          .select('permission')
+          .select('permission, branch_id')
           .eq('user_id', user['id']);
-      currentPermissions = (existingPerms as List)
-          .map((p) => p['permission'] as String)
-          .where(kAllPermKeys.contains) // drop legacy keys
-          .toSet();
+      for (final p in existingPerms as List) {
+        final key = p['permission'] as String;
+        if (!kAllPermKeys.contains(key)) continue; // drop legacy keys
+        final bid = p['branch_id'] as String?;
+        (permsByScope[bid ?? '*'] ??= <String>{}).add(key);
+      }
     }
 
     if (!mounted) return;
@@ -268,7 +271,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
     final emailCtrl = TextEditingController(text: user?['email'] ?? '');
     final passCtrl = TextEditingController();
     final selectedBranches = Set<String>.from(currentBranches);
-    final selectedPerms = Set<String>.from(currentPermissions);
+    String currentScope = '*';
     final expandedModules = <String>{};
 
     showDialog(
@@ -323,6 +326,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                             selectedBranches.add(bid);
                           } else {
                             selectedBranches.remove(bid);
+                            if (currentScope == bid) currentScope = '*';
                           }
                         }),
                       );
@@ -339,6 +343,35 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                 const Align(alignment: Alignment.centerLeft,
                     child: Text('Add / Edit per voucher · Show per report. Delete is restricted to admins.',
                         style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                const SizedBox(height: 10),
+                // Branch scope switcher (Option A): 'All branches' edits global
+                // grants (branch_id NULL); a branch edits grants only for it.
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(spacing: 8, runSpacing: 6, children: [
+                    ChoiceChip(
+                      label: const Text('All branches'),
+                      selected: currentScope == '*',
+                      onSelected: (_) => setS(() => currentScope = '*'),
+                    ),
+                    for (final b in (branches as List).where((b) => selectedBranches.contains(b['id'] as String)))
+                      ChoiceChip(
+                        label: Text(b['name'] as String),
+                        selected: currentScope == b['id'],
+                        onSelected: (_) => setS(() => currentScope = b['id'] as String),
+                      ),
+                  ]),
+                ),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    currentScope == '*'
+                        ? 'Editing grants that apply at every branch.'
+                        : 'Editing grants that apply only at the selected branch.',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
@@ -347,7 +380,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   child: Column(
                     children: [
                       for (final mod in kPermissionRegistry)
-                        _permModuleTile(mod, selectedPerms, expandedModules, setS),
+                        _permModuleTile(mod, permsByScope.putIfAbsent(currentScope, () => <String>{}), expandedModules, setS),
                     ],
                   ),
                 ),
@@ -425,34 +458,52 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                         .eq('branch_id', bid);
                   }
 
-                  // Permissions — same diff approach. Removing keys that are no
-                  // longer selected also purges any stale legacy keys.
+                  // Permissions — branch-scoped diff (Option A). A pair is
+                  // "<scope>|<permission>"; scope '*' maps to branch_id NULL
+                  // (global), otherwise to that branch_id. Grants for branches no
+                  // longer assigned are pruned.
                   final existPm = await client
                       .from('user_permissions')
-                      .select('permission')
+                      .select('permission, branch_id')
                       .eq('user_id', userId);
-                  final existingPerms = {
-                    for (final r in existPm as List) r['permission'] as String
+                  final existingPairs = <String>{
+                    for (final r in existPm as List)
+                      '${(r['branch_id'] as String?) ?? '*'}|${r['permission'] as String}'
                   };
-                  final toAddPm = selectedPerms.difference(existingPerms);
-                  final toRemovePm = existingPerms.difference(selectedPerms);
+                  final desiredPairs = <String>{};
+                  permsByScope.forEach((scope, keys) {
+                    if (scope != '*' && !selectedBranches.contains(scope)) return;
+                    for (final k in keys) desiredPairs.add('$scope|$k');
+                  });
                   final grantedBy = ref.read(currentUserProvider)?.id;
                   int pseq = 0;
-                  for (final perm in toAddPm) {
+                  for (final pair in desiredPairs.difference(existingPairs)) {
+                    final i = pair.indexOf('|');
+                    final scope = pair.substring(0, i);
+                    final perm = pair.substring(i + 1);
                     await client.from('user_permissions').insert({
                       'id': 'up_${DateTime.now().microsecondsSinceEpoch}_${pseq++}',
                       'org_id': orgId,
                       'user_id': userId,
                       'permission': perm,
+                      'branch_id': scope == '*' ? null : scope,
                       'granted_by': grantedBy,
                     });
                   }
-                  for (final perm in toRemovePm) {
-                    await client
+                  for (final pair in existingPairs.difference(desiredPairs)) {
+                    final i = pair.indexOf('|');
+                    final scope = pair.substring(0, i);
+                    final perm = pair.substring(i + 1);
+                    final del = client
                         .from('user_permissions')
                         .delete()
                         .eq('user_id', userId)
                         .eq('permission', perm);
+                    if (scope == '*') {
+                      await del.isFilter('branch_id', null);
+                    } else {
+                      await del.eq('branch_id', scope);
+                    }
                   }
 
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
