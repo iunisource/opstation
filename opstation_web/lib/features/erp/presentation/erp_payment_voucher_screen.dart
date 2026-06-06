@@ -222,7 +222,20 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final eId    = 'je_cpv_' + vid;
     final client = Supabase.instance.client;
     try {
-      await client.from('journal_entries').upsert({
+      // Idempotent re-post. journal_entries has no UPDATE policy by design
+      // (GL entries are immutable), so we DELETE any prior GL for this voucher
+      // then INSERT fresh — never upsert. This makes re-posting fully replace
+      // the previous entry instead of erroring on the update branch or duplicating.
+      final prior = await client.from('journal_entries').select('id')
+          .eq('org_id', orgId).eq('reference_type', 'cpv').eq('reference_id', vid);
+      for (final e in (prior as List)) {
+        await client.from('journal_lines').delete().eq('entry_id', e['id'] as String);
+      }
+      await client.from('journal_lines').delete().eq('entry_id', eId);
+      await client.from('journal_entries').delete()
+          .eq('org_id', orgId).eq('reference_type', 'cpv').eq('reference_id', vid);
+      await client.from('journal_entries').delete().eq('id', eId);
+      await client.from('journal_entries').insert({
         'id': eId, 'org_id': orgId, 'branch_id': bid,
         'entry_number': 'CPV-' + vNum,
         'entry_date': dateStr,
@@ -233,7 +246,6 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         'created_at': DateTime.now().toIso8601String(),
         'posted_at': DateTime.now().toIso8601String(),
       });
-      await client.from('journal_lines').delete().eq('entry_id', eId);
       await client.from('journal_lines').insert({
         'id': eId + '_0', 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
         'account_id': cashCoaId, 'debit': 0.0, 'credit': total, 'line_order': 0,
