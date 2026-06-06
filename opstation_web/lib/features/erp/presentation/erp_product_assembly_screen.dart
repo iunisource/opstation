@@ -15,6 +15,17 @@ class _BomLine {
   void dispose() { qtyCtrl.dispose(); }
 }
 
+class _CostLine {
+  static int _seq = 0;
+  final String id = 'ol_${DateTime.now().microsecondsSinceEpoch}_${_seq++}';
+  String costType;
+  final TextEditingController descCtrl = TextEditingController();
+  final TextEditingController amountCtrl = TextEditingController();
+  _CostLine({this.costType = 'overhead'});
+  double get amount => double.tryParse(amountCtrl.text) ?? 0;
+  void dispose() { descCtrl.dispose(); amountCtrl.dispose(); }
+}
+
 class ErpProductAssemblyScreen extends ConsumerStatefulWidget {
   const ErpProductAssemblyScreen({super.key});
   @override
@@ -38,6 +49,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   String _status = 'active';
   List<_BomLine> _components = [];
   List<_BomLine> _waste = [];
+  List<_CostLine> _overheads = [];
   bool _saving = false;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -54,6 +66,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     _outputQtyCtrl.dispose(); _nameCtrl.dispose();
     for (final l in _components) l.dispose();
     for (final l in _waste) l.dispose();
+    for (final l in _overheads) l.dispose();
     super.dispose();
   }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
@@ -103,10 +116,11 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   void _newBom() {
     for (final l in _components) l.dispose();
     for (final l in _waste) l.dispose();
+    for (final l in _overheads) l.dispose();
     setState(() {
       _current = null; _fgId = null; _fgLabel = ''; _status = 'active';
       _outputQtyCtrl.text = '1'; _nameCtrl.clear();
-      _components = [_BomLine()]; _waste = [];
+      _components = [_BomLine()]; _waste = []; _overheads = [];
     });
   }
 
@@ -115,8 +129,10 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       final client = Supabase.instance.client;
       final comps = await client.from('bom_components').select().eq('bom_id', b['id'] as String).order('line_order');
       final wastes = await client.from('bom_waste').select().eq('bom_id', b['id'] as String).order('line_order');
+      final ohs = await client.from('bom_overheads').select().eq('bom_id', b['id'] as String).order('line_order');
       for (final l in _components) l.dispose();
       for (final l in _waste) l.dispose();
+      for (final l in _overheads) l.dispose();
       List<_BomLine> mk(List rows) => rows.map((r) {
         final l = _BomLine();
         l.productId = r['product_id'] as String?;
@@ -127,6 +143,13 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       }).toList();
       final newComps = mk(comps as List);
       final newWaste = mk(wastes as List);
+      final newOh = (ohs as List).map((r) {
+        final l = _CostLine(costType: (r['cost_type'] as String?) ?? 'overhead');
+        l.descCtrl.text = (r['description'] as String?) ?? '';
+        final a = (r['amount'] as num? ?? 0).toDouble();
+        if (a != 0) l.amountCtrl.text = _trim(a);
+        return l;
+      }).toList();
       if (mounted) setState(() {
         _current = b;
         _fgId = b['product_id'] as String?;
@@ -136,6 +159,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         _nameCtrl.text = b['name'] as String? ?? '';
         _components = newComps.isEmpty ? [_BomLine()] : newComps;
         _waste = newWaste;
+        _overheads = newOh;
       });
     } catch (e) { _snack('Load error: $e'); }
   }
@@ -153,6 +177,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     final comps = _components.where((l) => l.productId != null && l.qty > 0).toList();
     if (comps.isEmpty) { _snack('Add at least one component'); return; }
     final wastes = _waste.where((l) => l.productId != null && l.qty > 0).toList();
+    final ohs = _overheads.where((l) => l.amount != 0 || l.descCtrl.text.trim().isNotEmpty).toList();
     final userId = ref.read(currentUserProvider)?.id ?? '';
     setState(() => _saving = true);
     try {
@@ -191,6 +216,14 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           'product_id': wastes[i].productId, 'quantity': wastes[i].qty, 'line_order': i,
         });
       }
+      await client.from('bom_overheads').delete().eq('bom_id', bomId);
+      for (var i = 0; i < ohs.length; i++) {
+        await client.from('bom_overheads').insert({
+          'id': bomId + '_o' + i.toString(), 'bom_id': bomId,
+          'cost_type': ohs[i].costType, 'description': ohs[i].descCtrl.text.trim(),
+          'amount': ohs[i].amount, 'line_order': i,
+        });
+      }
       final updated = await client.from('bom_headers').select().eq('id', bomId).single();
       if (mounted) setState(() => _current = updated);
       _snack('BOM ' + code + ' saved');
@@ -222,6 +255,8 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   void _removeComp(int i) { setState(() { _components[i].dispose(); _components.removeAt(i); }); if (_components.isEmpty) _addComp(); }
   void _addWaste() => setState(() => _waste.add(_BomLine()));
   void _removeWaste(int i) => setState(() { _waste[i].dispose(); _waste.removeAt(i); });
+  void _addOverhead() => setState(() => _overheads.add(_CostLine()));
+  void _removeOverhead(int i) => setState(() { _overheads[i].dispose(); _overheads.removeAt(i); });
 
   @override
   Widget build(BuildContext context) {
@@ -327,6 +362,8 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
               title: 'Waste Outputs (produced)', accent: Colors.orange, lines: _waste,
               onAdd: _addWaste, onRemove: _removeWaste,
               hint: 'Waste collected from a production run; each becomes waste inventory.'),
+            const SizedBox(height: 22),
+            _overheadSection(),
             const SizedBox(height: 30),
           ]))),
       ])),
@@ -377,6 +414,73 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           child: Align(alignment: Alignment.centerLeft,
             child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add line', style: TextStyle(fontSize: 12)), onPressed: onAdd))),
+      ]),
+    );
+  }
+
+  Widget _overheadSection() {
+    final total = _overheads.fold<double>(0, (s, l) => s + l.amount);
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Column(children: [
+        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
+          child: Row(children: [
+            Container(width: 6, height: 14, decoration: BoxDecoration(color: Colors.teal, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 8),
+            const Text('Labor & Overhead (absorbed)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 10),
+            const Expanded(child: Text('Added to finished-product cost at production, on top of component cost. Totals are per the Output Qty above.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            if (total > 0) Text(_trim(total), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.teal)),
+          ])),
+        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+          child: const Row(children: [
+            SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 130, child: Text('Type', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 12),
+            Expanded(child: Text('Description', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 12),
+            SizedBox(width: 130, child: Text('Amount', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 30),
+          ])),
+        for (var i = 0; i < _overheads.length; i++)
+          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              SizedBox(width: 26, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+              SizedBox(width: 130, child: DropdownButtonFormField<String>(
+                value: _overheads[i].costType,
+                isDense: true,
+                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                  border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
+                style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+                items: const [
+                  DropdownMenuItem(value: 'labor', child: Text('Labor', style: TextStyle(fontSize: 12))),
+                  DropdownMenuItem(value: 'overhead', child: Text('Overhead', style: TextStyle(fontSize: 12))),
+                ],
+                onChanged: (v) => setState(() => _overheads[i].costType = v ?? 'overhead'))),
+              const SizedBox(width: 12),
+              Expanded(child: TextField(controller: _overheads[i].descCtrl,
+                decoration: const InputDecoration(hintText: 'e.g. Direct labor, machine time', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                  border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
+                style: const TextStyle(fontSize: 12))),
+              const SizedBox(width: 12),
+              SizedBox(width: 130, child: TextField(controller: _overheads[i].amountCtrl, textAlign: TextAlign.right,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                  border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
+                style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}))),
+              SizedBox(width: 30, child: IconButton(icon: const Icon(Icons.close, size: 14, color: Colors.red),
+                onPressed: () => _removeOverhead(i), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact)),
+            ])),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Align(alignment: Alignment.centerLeft,
+            child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add line', style: TextStyle(fontSize: 12)), onPressed: _addOverhead))),
       ]),
     );
   }
