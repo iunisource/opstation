@@ -49,6 +49,15 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
   bool _saving = false;
   bool _posting = false;
 
+  // ----- insights -----
+  String _view = 'entries';                          // entries | insights
+  bool _insLoading = false;
+  DateTime? _insFrom; DateTime? _insTo;
+  int _insClaims = 0; double _insQty = 0; int _insProducts = 0; int _insCustomers = 0;
+  List<Map<String, dynamic>> _insByReason = [];
+  List<Map<String, dynamic>> _insByProduct = [];
+  List<Map<String, dynamic>> _insByCustomer = [];
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isDraft => _status != 'posted';
@@ -200,7 +209,6 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
   Future<String?> _createReason(String name) async {
     final orgId = _orgId; if (orgId == null) return null;
     final trimmed = name.trim(); if (trimmed.isEmpty) return null;
-    // reuse existing (case-insensitive) if present
     final existing = _reasons.firstWhere(
         (r) => (r['name'] as String).toLowerCase() == trimmed.toLowerCase(),
         orElse: () => {});
@@ -273,7 +281,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
   // ---------- save / post / delete ----------
   Future<String?> _save({bool silent = false}) async {
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return null; }
-    if (!_isDraft) { _snack('Posted vouchers cannot be edited'); return _current?['id'] as String?; }
+    if (!_isDraft) { _snack('Finalized claims cannot be edited'); return _current?['id'] as String?; }
     if (_branchId == null) { _snack('No branch selected \u2014 pick one in the sidebar'); return null; }
     final lines = _lines.where((l) => l.productId != null && l.qty > 0).toList();
     if (lines.isEmpty) { _snack('Add at least one product with a quantity'); return null; }
@@ -330,7 +338,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
     if (id == null) return;
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Finalize claim?'),
-      content: const Text('This locks the claim record so its data stays consistent for reporting. It does not post to the General Ledger or affect stock. You will not be able to edit it afterward.'),
+      content: const Text('This locks the claim record so its data stays consistent for reporting. It does not post to the General Ledger or affect stock. You will not be able to edit it afterward (you can still delete it).'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Finalize')),
@@ -355,10 +363,12 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
   Future<void> _delete() async {
     final id = _current?['id'] as String?;
     if (id == null) return;
-    if (!_isDraft) { _snack('Finalized claims cannot be deleted'); return; }
+    final finalized = !_isDraft;
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
-      title: const Text('Delete draft?'),
-      content: const Text('This draft claim voucher and its lines will be permanently deleted.'),
+      title: Text(finalized ? 'Delete claim?' : 'Delete draft?'),
+      content: Text(finalized
+        ? 'This finalized claim and its lines will be permanently deleted. Since a claim has no ledger or stock impact, this is safe — but it cannot be undone.'
+        : 'This draft claim voucher and its lines will be permanently deleted.'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text('Delete')),
@@ -368,7 +378,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
     try {
       await Supabase.instance.client.from('claim_voucher_lines').delete().eq('voucher_id', id);
       await Supabase.instance.client.from('claim_vouchers').delete().eq('id', id);
-      _snack('Draft deleted');
+      _snack('Claim deleted');
       _newVoucher();
       await _loadVouchers();
     } catch (e) { _snack('Delete failed: $e'); }
@@ -376,6 +386,64 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
 
   void _addLine() => setState(() => _lines.add(_CLine()));
   void _removeLine(int i) => setState(() { _lines[i].dispose(); _lines.removeAt(i); });
+
+  // ---------- insights ----------
+  Future<void> _loadInsights() async {
+    final orgId = _orgId; if (orgId == null) return;
+    setState(() => _insLoading = true);
+    try {
+      final client = Supabase.instance.client;
+      final heads = await client.from('claim_vouchers').select('id, voucher_date, customer_id').eq('org_id', orgId);
+      final headList = List<Map<String, dynamic>>.from(heads).where((h) {
+        final d = h['voucher_date'] != null ? DateTime.tryParse(h['voucher_date'] as String) : null;
+        if (_insFrom != null && (d == null || d.isBefore(_insFrom!))) return false;
+        if (_insTo != null && (d == null || d.isAfter(_insTo!))) return false;
+        return true;
+      }).toList();
+      final ids = headList.map((h) => h['id'] as String).toList();
+      final headById = {for (final h in headList) h['id'] as String: h};
+
+      final rQty = <String, double>{}, pQty = <String, double>{}, cQty = <String, double>{};
+      final rCl = <String, Set<String>>{}, pCl = <String, Set<String>>{}, cCl = <String, Set<String>>{};
+      double totalQty = 0; final vSet = <String>{}; final prods = <String>{}; final custs = <String>{};
+
+      if (ids.isNotEmpty) {
+        // chunk to stay well under PostgREST limits
+        const chunk = 200;
+        for (var i = 0; i < ids.length; i += chunk) {
+          final slice = ids.sublist(i, (i + chunk > ids.length) ? ids.length : i + chunk);
+          final lines = await client.from('claim_voucher_lines')
+              .select('voucher_id, product_id, reason_id, quantity').inFilter('voucher_id', slice);
+          for (final l in lines as List) {
+            final vid = l['voucher_id'] as String;
+            final qty = (l['quantity'] as num?)?.toDouble() ?? 0;
+            final rid = l['reason_id'] as String? ?? '__none__';
+            final pid = l['product_id'] as String? ?? '__none__';
+            final cid = (headById[vid]?['customer_id'] as String?) ?? '__none__';
+            totalQty += qty; vSet.add(vid); if (pid != '__none__') prods.add(pid); if (cid != '__none__') custs.add(cid);
+            rQty[rid] = (rQty[rid] ?? 0) + qty; (rCl[rid] ??= <String>{}).add(vid);
+            pQty[pid] = (pQty[pid] ?? 0) + qty; (pCl[pid] ??= <String>{}).add(vid);
+            cQty[cid] = (cQty[cid] ?? 0) + qty; (cCl[cid] ??= <String>{}).add(vid);
+          }
+        }
+      }
+
+      List<Map<String, dynamic>> rank(Map<String, double> q, Map<String, Set<String>> c, String Function(String) label) {
+        final list = q.entries.map((e) => {'label': label(e.key), 'qty': e.value, 'claims': (c[e.key]?.length ?? 0)}).toList();
+        list.sort((a, b) => (b['qty'] as double).compareTo(a['qty'] as double));
+        return list;
+      }
+
+      final byReason = rank(rQty, rCl, (k) => k == '__none__' ? '(no reason)' : (_reasonName[k] ?? k));
+      final byProduct = rank(pQty, pCl, (k) => k == '__none__' ? '(no product)' : (_prodLabel[k] ?? k));
+      final byCustomer = rank(cQty, cCl, (k) => k == '__none__' ? '(no customer)' : (_custLabel[k] ?? k));
+
+      if (mounted) setState(() {
+        _insClaims = vSet.length; _insQty = totalQty; _insProducts = prods.length; _insCustomers = custs.length;
+        _insByReason = byReason; _insByProduct = byProduct; _insByCustomer = byCustomer; _insLoading = false;
+      });
+    } catch (e) { if (mounted) { _snack('Insights load error: $e'); setState(() => _insLoading = false); } }
+  }
 
   // ---------- UI ----------
   @override
@@ -386,7 +454,39 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
       return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || cust.contains(q);
     }).toList();
 
-    return Container(color: AppTheme.background, child: Row(children: [
+    return Container(color: AppTheme.background, child: Column(children: [
+      _modeBar(),
+      Expanded(child: _view == 'insights' ? _insightsView() : _entriesBody(filtered)),
+    ]));
+  }
+
+  Widget _modeBar() => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+    decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+    child: Row(children: [
+      _modeTab('entries', 'Claim Entries', Icons.assignment_outlined),
+      const SizedBox(width: 8),
+      _modeTab('insights', 'Insights', Icons.insights_outlined),
+    ]),
+  );
+
+  Widget _modeTab(String v, String label, IconData icon) {
+    final sel = _view == v;
+    return InkWell(
+      onTap: () { setState(() => _view = v); if (v == 'insights') _loadInsights(); },
+      borderRadius: BorderRadius.circular(6),
+      child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(color: sel ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(6), border: Border.all(color: sel ? AppTheme.primary : AppTheme.border)),
+        child: Row(children: [
+          Icon(icon, size: 14, color: sel ? Colors.white : AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: sel ? Colors.white : AppTheme.textSecondary)),
+        ])),
+    );
+  }
+
+  Widget _entriesBody(List<Map<String, dynamic>> filtered) {
+    return Row(children: [
       if (_drawerOpen) Container(width: 300,
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
@@ -438,7 +538,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
             if (_status == 'posted') Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(color: Colors.green.withOpacity(0.13), borderRadius: BorderRadius.circular(4)),
               child: Text('Finalized', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w700))),
-            if (_isDraft && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete draft'),
+            if (_current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete claim'),
             const SizedBox(width: 8),
             if (_isDraft) OutlinedButton.icon(
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
@@ -470,7 +570,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
             const SizedBox(height: 30),
           ]))),
       ])),
-    ]));
+    ]);
   }
 
   Widget _labeled(String label, Widget child) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -497,7 +597,6 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
 
   Widget _reasonField(int i) {
     final l = _lines[i];
-    // build items: active reasons + the line's current reason if it's inactive/missing
     final items = <Map<String, dynamic>>[..._activeReasons];
     if (l.reasonId != null && !items.any((r) => r['id'] == l.reasonId)) {
       final cur = _reasons.firstWhere((r) => r['id'] == l.reasonId, orElse: () => {});
@@ -579,6 +678,92 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
             child: TextButton.icon(icon: const Icon(Icons.add, size: 14), label: const Text('Add item', style: TextStyle(fontSize: 12)), onPressed: _addLine))),
       ]),
     );
+  }
+
+  // ---------- insights view ----------
+  Widget _insightsView() {
+    return Column(children: [
+      Container(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+        child: Row(children: [
+          const Text('Claim Insights', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const Spacer(),
+          _dateBtn('From', _insFrom, (d) { setState(() => _insFrom = d); _loadInsights(); }),
+          const SizedBox(width: 6),
+          _dateBtn('To', _insTo, (d) { setState(() => _insTo = d); _loadInsights(); }),
+          if (_insFrom != null || _insTo != null) ...[
+            const SizedBox(width: 4),
+            IconButton(icon: const Icon(Icons.clear, size: 16), tooltip: 'Clear dates', onPressed: () { setState(() { _insFrom = null; _insTo = null; }); _loadInsights(); }),
+          ],
+          const SizedBox(width: 6),
+          OutlinedButton.icon(icon: const Icon(Icons.refresh, size: 15), label: const Text('Refresh', style: TextStyle(fontSize: 12)), onPressed: _loadInsights),
+        ])),
+      Expanded(child: _insLoading
+        ? const Center(child: CircularProgressIndicator())
+        : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            _sumCard('Claims', _insClaims.toString(), AppTheme.primary),
+            const SizedBox(width: 12),
+            _sumCard('Defective qty', _trim(_insQty), Colors.red.shade600),
+            const SizedBox(width: 12),
+            _sumCard('Products affected', _insProducts.toString(), Colors.teal),
+            const SizedBox(width: 12),
+            _sumCard('Customers', _insCustomers.toString(), Colors.indigo),
+          ]),
+          const SizedBox(height: 22),
+          _insSection('By reason', _insByReason),
+          const SizedBox(height: 22),
+          _insSection('Top products', _insByProduct),
+          const SizedBox(height: 22),
+          _insSection('By customer', _insByCustomer),
+          const SizedBox(height: 30),
+        ]))),
+    ]);
+  }
+
+  Widget _dateBtn(String label, DateTime? value, void Function(DateTime) onPick) => OutlinedButton.icon(
+    icon: const Icon(Icons.date_range, size: 15),
+    label: Text(value != null ? DateFormat('d MMM yyyy').format(value) : label, style: const TextStyle(fontSize: 12)),
+    onPressed: () async {
+      final d = await showDatePicker(context: context, initialDate: value ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
+      if (d != null) onPick(d);
+    });
+
+  Widget _sumCard(String label, String value, Color color) => Expanded(child: Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 6),
+      Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: color)),
+    ])));
+
+  Widget _insSection(String title, List<Map<String, dynamic>> rows) {
+    final maxQty = rows.fold<double>(0, (m, r) => (r['qty'] as double) > m ? r['qty'] as double : m);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8),
+      Container(
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+        child: rows.isEmpty
+          ? const Padding(padding: EdgeInsets.all(16), child: Text('No data for this range.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+          : Column(children: [
+              for (var i = 0; i < rows.length; i++)
+                Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  decoration: BoxDecoration(border: i == rows.length - 1 ? null : Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
+                  child: Row(children: [
+                    SizedBox(width: 240, child: Text(rows[i]['label'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                    const SizedBox(width: 12),
+                    Expanded(child: Container(height: 8, decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(4)),
+                      child: FractionallySizedBox(alignment: Alignment.centerLeft, widthFactor: maxQty > 0 ? ((rows[i]['qty'] as double) / maxQty).clamp(0.02, 1.0) : 0.0,
+                        child: Container(decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(4)))))),
+                    const SizedBox(width: 12),
+                    SizedBox(width: 60, child: Text(_trim(rows[i]['qty'] as double), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                    SizedBox(width: 78, child: Text('${rows[i]['claims']} claim(s)', textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                  ])),
+            ]),
+      ),
+    ]);
   }
 }
 
