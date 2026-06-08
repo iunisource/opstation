@@ -410,9 +410,13 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                                               color: isOpen ? AppTheme.success : AppTheme.textSecondary,
                                               fontSize: 12, fontWeight: FontWeight.w600)),
                                     )),
-                                    SizedBox(width: 48, child: isOpen
-                                      ? TextButton(onPressed: () => _openSession(s), child: const Text('Enter', style: TextStyle(fontSize: 11)))
-                                      : Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary)),
+                                    SizedBox(width: isOpen ? 56 : 100, child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                                      TextButton(
+                                        onPressed: () => _openSession(s),
+                                        style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                                        child: const Text('Enter', style: TextStyle(fontSize: 11))),
+                                      if (!isOpen) Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
+                                    ])),
                                   ]),
                                 ),
                               ),
