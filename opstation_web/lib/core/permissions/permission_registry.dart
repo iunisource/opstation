@@ -83,6 +83,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('supplier_aging', 'Supplier Aging', PermKind.report, '/erp/supplier-aging'),
   ], moduleGated: false),
   PermModule('production', 'Manufacturing', Icons.precision_manufacturing_outlined, [
+    PermItem('production_floor', 'Production Floor', PermKind.report, '/manufacturing/production-floor'),
     PermItem('bom', 'Product Assembly (BOM)', PermKind.doc, '/manufacturing/product-assembly'),
     PermItem('production', 'Production Voucher', PermKind.doc, '/manufacturing/production-voucher'),
     PermItem('job_card', 'Job Card', PermKind.doc, '/manufacturing/job-card'),

@@ -185,6 +185,7 @@ class _TopNav extends ConsumerWidget {
     ];
 
     final manufacturingItems = <Widget>[
+      if (show('/manufacturing/production-floor')) _menuItem(context, 'Production Floor',           Icons.dashboard_outlined,               '/manufacturing/production-floor',           location),
       if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)',    Icons.account_tree_outlined,            '/manufacturing/product-assembly',           location),
       if (show('/manufacturing/production-voucher')) _menuItem(context, 'Production Voucher',         Icons.precision_manufacturing_outlined, '/manufacturing/production-voucher',         location),
       if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card',                   Icons.assignment_outlined,              '/manufacturing/job-card',                   location),
@@ -249,7 +250,7 @@ class _TopNav extends ConsumerWidget {
           _trimDividers(ledgerItems)),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
-          ['/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints',
+          ['/manufacturing/production-floor', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
            '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report'],
           _trimDividers(manufacturingItems)),
