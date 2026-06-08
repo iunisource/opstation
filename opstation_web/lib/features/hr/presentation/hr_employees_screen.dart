@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,9 +52,14 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   bool _photoUploading = false;
   List<Map<String, dynamic>> _shifts = [];
   Map<String, String> _shiftName = {};
+  List<Map<String, dynamic>> _docs = [];
+  bool _docUploading = false;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  String? get _userId => ref.read(currentUserProvider)?.id;
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin; }
+  bool get _pending => _current != null && (_current!['approval_status'] as String? ?? 'approved') == 'pending';
+  bool get _voided => _current != null && _current!['is_voided'] == true;
   int? _min(String? hhmm) { if (hhmm == null || hhmm.isEmpty) return null; final p = hhmm.split(':'); if (p.length != 2) return null; final h = int.tryParse(p[0]), m = int.tryParse(p[1]); if (h == null || m == null) return null; return h * 60 + m; }
 
   static const _genders = [
@@ -129,6 +135,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
       _dob = null; _joinDate = null;
       _shiftId = null; _photoUrl = null;
+      _docs = [];
     });
   }
 
@@ -158,6 +165,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _shiftId = e['shift_id'] as String?;
       _photoUrl = e['photo_url'] as String?;
     });
+    _loadDocs();
   }
 
   // ---- department / designation management ----
@@ -250,9 +258,12 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'join_date': _joinDate != null ? DateFormat('yyyy-MM-dd').format(_joinDate!) : null,
         'status': _status, 'basic_salary': double.tryParse(_salary.text) ?? 0,
         'shift_id': _shiftId, 'photo_url': _photoUrl,
+        'approval_status': _isAdmin ? 'approved' : 'pending',
         'bank_name': _t(_bankName), 'bank_account': _t(_bankAcct), 'notes': _t(_notes),
         'updated_at': DateTime.now().toIso8601String(),
       };
+      if (_isAdmin) { payload['approved_by'] = userId; payload['approved_at'] = DateTime.now().toIso8601String(); }
+      else { payload['approved_by'] = null; payload['approved_at'] = null; }
       if (_current == null) {
         payload['id'] = id; payload['created_by'] = userId; payload['created_at'] = DateTime.now().toIso8601String();
         await client.from('hr_employees').insert(payload);
@@ -262,7 +273,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       final updated = await client.from('hr_employees').select().eq('id', id).single();
       if (mounted) setState(() => _current = updated);
       await _loadEmployees();
-      _snack('Employee $code saved');
+      _snack(_isAdmin ? 'Employee $code saved & approved' : 'Employee $code saved \u2014 sent for admin review');
     } catch (e) { _snack('Save failed: ' + e.toString()); }
     if (mounted) setState(() => _saving = false);
   }
@@ -282,6 +293,251 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       await Supabase.instance.client.from('hr_employees').delete().eq('id', id);
       _snack('Employee deleted'); _newEmployee(); await _loadEmployees();
     } catch (e) { _snack('Delete failed: $e'); }
+  }
+
+  // ---- approval / void ----
+  Future<void> _approve() async {
+    final id = _current?['id'] as String?; if (id == null) return;
+    try {
+      final client = Supabase.instance.client;
+      final now = DateTime.now().toIso8601String();
+      await client.from('hr_employees').update({'approval_status': 'approved', 'approved_by': _userId, 'approved_at': now, 'updated_at': now}).eq('id', id);
+      final updated = await client.from('hr_employees').select().eq('id', id).single();
+      if (mounted) setState(() => _current = updated);
+      await _loadEmployees();
+      _snack('Profile approved \u2014 now visible in Attendance');
+    } catch (e) { _snack('Approve failed: $e'); }
+  }
+
+  Future<void> _void() async {
+    final id = _current?['id'] as String?; if (id == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Void employee?'),
+      content: const Text('The profile and its history are kept, but the employee is removed from Attendance and active lists. An admin can restore it later.'),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade800), child: const Text('Void'))],
+    ));
+    if (ok != true) return;
+    try {
+      final client = Supabase.instance.client;
+      final now = DateTime.now().toIso8601String();
+      await client.from('hr_employees').update({'is_voided': true, 'voided_by': _userId, 'voided_at': now, 'updated_at': now}).eq('id', id);
+      final updated = await client.from('hr_employees').select().eq('id', id).single();
+      if (mounted) setState(() => _current = updated);
+      await _loadEmployees();
+      _snack('Profile voided (kept for records)');
+    } catch (e) { _snack('Void failed: $e'); }
+  }
+
+  Future<void> _unvoid() async {
+    final id = _current?['id'] as String?; if (id == null) return;
+    try {
+      final client = Supabase.instance.client;
+      await client.from('hr_employees').update({'is_voided': false, 'voided_by': null, 'voided_at': null, 'updated_at': DateTime.now().toIso8601String()}).eq('id', id);
+      final updated = await client.from('hr_employees').select().eq('id', id).single();
+      if (mounted) setState(() => _current = updated);
+      await _loadEmployees();
+      _snack('Profile restored');
+    } catch (e) { _snack('Restore failed: $e'); }
+  }
+
+  // ---- documents ----
+  Future<Uint8List> _compressImage(html.File file) async {
+    final objUrl = html.Url.createObjectUrlFromBlob(file);
+    final img = html.ImageElement();
+    img.src = objUrl;
+    await img.onLoad.first;
+    var w = img.naturalWidth ?? 0, h = img.naturalHeight ?? 0;
+    if (w == 0 || h == 0) { html.Url.revokeObjectUrl(objUrl); throw 'Could not read image dimensions'; }
+    const maxDim = 1400;
+    if (w > maxDim || h > maxDim) {
+      if (w >= h) { h = (h * maxDim / w).round(); w = maxDim; }
+      else { w = (w * maxDim / h).round(); h = maxDim; }
+    }
+    final canvas = html.CanvasElement(width: w, height: h);
+    canvas.context2D.drawImageScaled(img, 0, 0, w, h);
+    html.Url.revokeObjectUrl(objUrl);
+    final dataUrl = canvas.toDataUrl('image/jpeg', 0.82);
+    return base64Decode(dataUrl.split(',').last);
+  }
+
+  Future<void> _loadDocs() async {
+    final id = _current?['id'] as String?;
+    if (id == null) { if (mounted) setState(() => _docs = []); return; }
+    try {
+      final rows = await Supabase.instance.client.from('hr_employee_documents').select().eq('employee_id', id).order('uploaded_at', ascending: false);
+      if (mounted) setState(() => _docs = List<Map<String, dynamic>>.from(rows));
+    } catch (_) { /* table may not exist yet */ }
+  }
+
+  Future<void> _uploadDoc() async {
+    if (_current == null) { _snack('Save the employee first, then attach documents'); return; }
+    final orgId = _orgId; if (orgId == null) return;
+    final input = html.FileUploadInputElement()..accept = 'image/*,application/pdf';
+    input.style.display = 'none';
+    html.document.body?.append(input);
+    input.click();
+    await input.onChange.first;
+    final files = input.files;
+    input.remove();
+    if (files == null || files.isEmpty) return;
+    final file = files.first;
+    setState(() => _docUploading = true);
+    try {
+      Uint8List bytes; String ct; String ext;
+      if (file.type.startsWith('image/')) {
+        bytes = await _compressImage(file); ct = 'image/jpeg'; ext = 'jpg';
+      } else {
+        final r = html.FileReader(); r.readAsArrayBuffer(file); await r.onLoadEnd.first;
+        final res = r.result;
+        bytes = res is Uint8List ? res : (res as ByteBuffer).asUint8List();
+        ct = file.type.isNotEmpty ? file.type : 'application/octet-stream';
+        ext = file.name.contains('.') ? file.name.split('.').last.toLowerCase() : 'bin';
+      }
+      if (bytes.isEmpty) { _snack('Selected file is empty'); setState(() => _docUploading = false); return; }
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final path = '$orgId/docs/${_current!['id']}_$ts.$ext';
+      final client = Supabase.instance.client;
+      await client.storage.from('hr-photos').uploadBinary(path, bytes, fileOptions: FileOptions(upsert: true, contentType: ct));
+      final url = client.storage.from('hr-photos').getPublicUrl(path);
+      await client.from('hr_employee_documents').insert({
+        'id': 'doc_$ts', 'org_id': orgId, 'employee_id': _current!['id'],
+        'name': file.name, 'url': url, 'file_type': ct, 'size_bytes': bytes.length, 'uploaded_by': _userId,
+      });
+      await _loadDocs();
+      _snack('Document uploaded');
+    } catch (e) { _snack('Upload failed: $e'); }
+    if (mounted) setState(() => _docUploading = false);
+  }
+
+  Future<void> _deleteDoc(Map<String, dynamic> d) async {
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Remove document?'),
+      content: Text('Remove "${d['name'] ?? 'document'}" from this employee?'),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: Colors.red), child: const Text('Remove'))],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('hr_employee_documents').delete().eq('id', d['id'] as String);
+      await _loadDocs();
+    } catch (e) { _snack('Remove failed: $e'); }
+  }
+
+  String _fmtSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+  }
+
+  // ---- print profile ----
+  void _printProfile() {
+    final e = _current; if (e == null) return;
+    String esc(String? s) => (s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    String row(String k, String? v) => (v == null || v.isEmpty) ? '' : '<tr><td class="k">$k</td><td>${esc(v)}</td></tr>';
+    final dept = _deptName[e['department_id']] ?? '';
+    final desig = _desigName[e['designation_id']] ?? '';
+    final branch = _branchName[e['branch_id']] ?? '';
+    final shift = _shiftName[e['shift_id']] ?? '';
+    final sal = (e['basic_salary'] as num?);
+    final photo = (e['photo_url'] as String?);
+    final status = (e['is_voided'] == true) ? 'Voided' : (((e['approval_status'] ?? 'approved') == 'pending') ? 'Review Pending' : 'Approved');
+    final notes = e['notes'] as String?;
+    final docsHtml = _docs.isEmpty ? '' : '<h3>Documents</h3><ul>' + _docs.map((d) => '<li>${esc(d['name'] as String?)}</li>').join('') + '</ul>';
+    final bankHtml = (e['bank_name'] != null || e['bank_account'] != null)
+        ? '<h3>Bank</h3><table>' + row('Bank', e['bank_name'] as String?) + row('Account', e['bank_account'] as String?) + '</table>'
+        : '';
+    final notesHtml = (notes != null && notes.isNotEmpty) ? '<h3>Notes</h3><div style="font-size:12px">' + esc(notes) + '</div>' : '';
+    final content = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(e['full_name'] as String?)}</title>
+<style>
+*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#000;padding:24px;max-width:760px;margin:0 auto}
+.head{display:flex;align-items:center;gap:16px;border-bottom:2px solid #333;padding-bottom:14px;margin-bottom:8px}
+.photo{width:88px;height:88px;border-radius:50%;object-fit:cover;border:1px solid #999}
+.ph{width:88px;height:88px;border-radius:50%;background:#eee;display:flex;align-items:center;justify-content:center;color:#999;font-size:30px}
+h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:13px}
+.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid #999;margin-top:4px}
+h3{font-size:13px;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:3px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td{padding:4px 6px;border-bottom:1px solid #f0f0f0;vertical-align:top}
+td.k{color:#666;width:170px}
+ul{font-size:12px;margin:4px 0 0 18px}
+@media print{body{padding:8px}}
+</style></head><body>
+<div class="head">
+${photo != null && photo.isNotEmpty ? '<img class="photo" src="${esc(photo)}"/>' : '<div class="ph">&#128100;</div>'}
+<div><h1>${esc(e['full_name'] as String?)}</h1>
+<div class="sub">${esc(e['employee_code'] as String?)}${desig.isNotEmpty ? ' &middot; ' + esc(desig) : ''}${dept.isNotEmpty ? ' &middot; ' + esc(dept) : ''}</div>
+<div class="tag">$status</div></div>
+</div>
+<h3>Employment</h3><table>
+${row('Branch', branch)}${row('Designation', desig)}${row('Department', dept)}${row('Employment type', e['employment_type'] as String?)}${row('Shift', shift)}${row('Join date', e['join_date'] as String?)}${row('Status', e['status'] as String?)}${(sal != null && sal > 0) ? row('Basic salary', sal.toString()) : ''}
+</table>
+<h3>Personal</h3><table>
+${row('Father name', e['father_name'] as String?)}${row('CNIC', e['cnic'] as String?)}${row('Gender', e['gender'] as String?)}${row('Date of birth', e['date_of_birth'] as String?)}${row('Phone', e['phone'] as String?)}${row('Email', e['email'] as String?)}${row('Emergency contact', e['emergency_contact'] as String?)}${row('Address', e['address'] as String?)}
+</table>
+$bankHtml
+$notesHtml
+$docsHtml
+<div style="margin-top:20px;font-size:10px;color:#888">Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}</div>
+<script>window.onload=function(){window.print();}</script>
+</body></html>''';
+    final blob = html.Blob([content], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+  }
+
+  Widget _statusChip() {
+    final voided = _voided;
+    final pending = _pending;
+    final label = voided ? 'Voided' : (pending ? 'Review Pending' : 'Approved');
+    final MaterialColor c = voided ? Colors.grey : (pending ? Colors.orange : Colors.green);
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(12), border: Border.all(color: c.withOpacity(0.4))),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(voided ? Icons.block : (pending ? Icons.hourglass_top : Icons.verified), size: 13, color: c.shade700),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c.shade700)),
+      ]));
+  }
+
+  Widget _docsSection() {
+    return _card('Supporting documents', [
+      if (_current == null)
+        const Text('Save the employee profile first, then attach documents (CNIC, contract, certificates).', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+      else ...[
+        Row(children: [
+          OutlinedButton.icon(
+            icon: _docUploading ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.attach_file, size: 15),
+            label: const Text('Upload document', style: TextStyle(fontSize: 12)),
+            onPressed: _docUploading ? null : _uploadDoc),
+          const SizedBox(width: 10),
+          const Expanded(child: Text('Images are compressed automatically. PDFs upload as-is.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+        ]),
+        const SizedBox(height: 10),
+        if (_docs.isEmpty)
+          const Text('No documents attached.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+        else
+          Column(children: _docs.map((d) {
+            final isImg = (d['file_type'] as String? ?? '').startsWith('image/');
+            final size = (d['size_bytes'] as num?)?.toInt();
+            return Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+              child: Row(children: [
+                Icon(isImg ? Icons.image_outlined : Icons.picture_as_pdf_outlined, size: 18, color: AppTheme.textSecondary),
+                const SizedBox(width: 10),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(d['name'] as String? ?? 'document', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+                  if (size != null) Text(_fmtSize(size), style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                ])),
+                IconButton(icon: const Icon(Icons.open_in_new, size: 16), tooltip: 'Open', onPressed: () { final u = d['url'] as String?; if (u != null) html.window.open(u, '_blank'); }, visualDensity: VisualDensity.compact),
+                IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red), tooltip: 'Remove', onPressed: () => _deleteDoc(d), visualDensity: VisualDensity.compact),
+              ]),
+            );
+          }).toList()),
+      ],
+    ]);
   }
 
   @override
@@ -314,6 +570,10 @@ class _State extends ConsumerState<HrEmployeesScreen> {
             : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
                 final e = filtered[i]; final sel = _current?['id'] == e['id'];
                 final active = (e['status'] as String? ?? 'active') == 'active';
+                final voided = e['is_voided'] == true;
+                final pending = (e['approval_status'] as String? ?? 'approved') == 'pending';
+                final String tag = voided ? 'Voided' : (pending ? 'Review Pending' : (active ? 'Active' : 'Inactive'));
+                final MaterialColor tagColor = voided ? Colors.grey : (pending ? Colors.orange : (active ? Colors.green : Colors.grey));
                 return InkWell(onTap: () => _loadEmployee(e), child: Container(
                   color: sel ? AppTheme.primary.withOpacity(0.07) : null,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -321,8 +581,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                     Row(children: [
                       Expanded(child: Text(e['full_name'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary), overflow: TextOverflow.ellipsis)),
                       Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(color: (active ? Colors.green : Colors.grey).withOpacity(0.13), borderRadius: BorderRadius.circular(3)),
-                        child: Text(active ? 'Active' : 'Inactive', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: active ? Colors.green.shade700 : Colors.grey.shade700))),
+                        decoration: BoxDecoration(color: tagColor.withOpacity(0.13), borderRadius: BorderRadius.circular(3)),
+                        child: Text(tag, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: tagColor.shade700))),
                     ]),
                     const SizedBox(height: 2),
                     Text('${e['employee_code'] ?? ''}  \u00b7  ${_desigName[e['designation_id']] ?? '\u2014'}', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
@@ -342,13 +602,29 @@ class _State extends ConsumerState<HrEmployeesScreen> {
             TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
             TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
             if (_isAdmin) TextButton.icon(icon: const Icon(Icons.schedule_outlined, size: 15), label: const Text('Shifts', style: TextStyle(fontSize: 12)), onPressed: _manageShifts),
-            if (_current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete employee'),
+            if (_current != null) _statusChip(),
+            if (_current != null) const SizedBox(width: 6),
+            if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 19), tooltip: 'Print / PDF', onPressed: _printProfile),
+            if (_isAdmin && _pending && !_voided)
+              Padding(padding: const EdgeInsets.only(left: 2), child: ElevatedButton.icon(
+                icon: const Icon(Icons.verified_outlined, size: 15), label: const Text('Approve', style: TextStyle(fontSize: 12)),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9), minimumSize: Size.zero),
+                onPressed: _approve)),
+            if (_current != null && !_voided)
+              TextButton.icon(icon: Icon(Icons.block, size: 16, color: Colors.orange.shade800), label: Text('Void', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)), onPressed: _void),
+            if (_isAdmin && _voided)
+              TextButton.icon(icon: const Icon(Icons.restore, size: 16), label: const Text('Restore', style: TextStyle(fontSize: 12)), onPressed: _unvoid),
+            if (_isAdmin && _current != null)
+              IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete permanently (admin)'),
             const SizedBox(width: 8),
-            ElevatedButton.icon(
+            if (!_voided) ElevatedButton.icon(
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_outlined, size: 16),
               label: const Text('Save'),
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
               onPressed: _saving ? null : _save),
+            if (_voided) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
+              child: Text('Voided \u2014 restore to edit', style: TextStyle(fontSize: 11, color: Colors.grey.shade700))),
           ])),
         Expanded(child: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -414,6 +690,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
               const SizedBox(height: 12),
               _labeled('Notes', _tf(_notes, lines: 2)),
             ]),
+            const SizedBox(height: 16),
+            _docsSection(),
             const SizedBox(height: 30),
           ]))),
       ])),
@@ -544,19 +822,29 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     input.remove();
     if (files == null || files.isEmpty) return;
     final file = files.first;
-    final reader = html.FileReader();
-    reader.readAsArrayBuffer(file);
-    await reader.onLoadEnd.first;
-    final result = reader.result;
-    if (result == null) { _snack('Could not read the image file'); return; }
-    final bytes = result is Uint8List ? result : (result as ByteBuffer).asUint8List();
-    if (bytes.isEmpty) { _snack('Selected file is empty'); return; }
-    final ext = (file.name.contains('.') ? file.name.split('.').last : 'jpg').toLowerCase();
-    final path = '$orgId/${_current?['id'] ?? 'new'}_${DateTime.now().millisecondsSinceEpoch}.$ext';
     setState(() => _photoUploading = true);
+    Uint8List bytes;
+    String contentType = 'image/jpeg';
+    String ext = 'jpg';
+    try {
+      if (file.type.startsWith('image/')) {
+        bytes = await _compressImage(file);
+      } else {
+        final reader = html.FileReader();
+        reader.readAsArrayBuffer(file);
+        await reader.onLoadEnd.first;
+        final result = reader.result;
+        if (result == null) { _snack('Could not read the image file'); setState(() => _photoUploading = false); return; }
+        bytes = result is Uint8List ? result : (result as ByteBuffer).asUint8List();
+        contentType = file.type.isNotEmpty ? file.type : 'image/jpeg';
+        ext = (file.name.contains('.') ? file.name.split('.').last : 'jpg').toLowerCase();
+      }
+    } catch (e) { _snack('Could not process image: $e'); setState(() => _photoUploading = false); return; }
+    if (bytes.isEmpty) { _snack('Selected file is empty'); setState(() => _photoUploading = false); return; }
+    final path = '$orgId/${_current?['id'] ?? 'new'}_${DateTime.now().millisecondsSinceEpoch}.$ext';
     try {
       await Supabase.instance.client.storage.from('hr-photos').uploadBinary(path, bytes,
-        fileOptions: FileOptions(upsert: true, contentType: file.type.isNotEmpty ? file.type : 'image/jpeg'));
+        fileOptions: FileOptions(upsert: true, contentType: contentType));
       final url = Supabase.instance.client.storage.from('hr-photos').getPublicUrl(path);
       if (mounted) setState(() => _photoUrl = url);
       _snack('Photo uploaded \u2014 remember to Save');

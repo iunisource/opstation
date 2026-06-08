@@ -71,7 +71,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       _shiftById = {for (final s in (sh as List)) s['id'] as String: Map<String, dynamic>.from(s)};
       final emps = await client.from('hr_employees')
           .select('id, full_name, employee_code, branch_id, department_id, shift_id, status')
-          .eq('org_id', orgId).eq('status', 'active').order('full_name');
+          .eq('org_id', orgId).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false).order('full_name');
       _employees = List<Map<String, dynamic>>.from(emps);
       _empName = {for (final e in _employees) e['id'] as String: e['full_name'] as String? ?? ''};
       await _loadForDate();
