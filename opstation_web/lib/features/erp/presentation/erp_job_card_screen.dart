@@ -412,11 +412,11 @@ class _State extends ConsumerState<ErpJobCardScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
             onPressed: canPost ? () async {
               setS(() => saving = true);
+              final runId = 'jrun_' + DateTime.now().millisecondsSinceEpoch.toString();
               try {
                 final client = Supabase.instance.client;
                 final orgId = _orgId!; final userId = ref.read(currentUserProvider)?.id ?? '';
                 final nextNo = (_runs.fold<int>(0, (m, r) => ((r['run_no'] ?? 0) as int) > m ? (r['run_no'] as int) : m)) + 1;
-                final runId = 'jrun_' + DateTime.now().millisecondsSinceEpoch.toString();
                 final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
                 await client.from('job_card_runs').insert({
                   'id': runId, 'org_id': orgId, 'branch_id': _branchId, 'job_card_id': jobId,
@@ -443,6 +443,10 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                 await _loadJobs();
                 await _loadJob(updated);
               } catch (e) {
+                try {
+                  await Supabase.instance.client.from('qc_inspections').delete().eq('run_id', runId);
+                  await Supabase.instance.client.from('job_card_runs').delete().eq('id', runId);
+                } catch (_) {}
                 setS(() => saving = false);
                 if (dCtx.mounted) ScaffoldMessenger.of(dCtx).showSnackBar(SnackBar(content: Text('Post failed: $e')));
               }
