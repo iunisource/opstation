@@ -40,9 +40,21 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
   String _search = '';
   String _sortBy = 'total';
   bool _sortDesc = true;
+  final ScrollController _listCtrl = ScrollController();
+  final ScrollController _detailCtrl = ScrollController();
+  // Route (market) + salesperson filters
+  String? _fRoute;
+  String? _fSalesperson;
+  List<Map<String, dynamic>> _routes = [];        // {id, name}
+  List<Map<String, dynamic>> _salespeople = [];   // {id, name}
+  Map<String, Set<String>> _custToRoutes = {};    // customer_id -> {route_id}
+  Map<String, String> _routeToSalesperson = {};   // route_id -> user_id (salesperson)
 
   @override
   void initState() { super.initState(); _load(); }
+
+  @override
+  void dispose() { _listCtrl.dispose(); _detailCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -143,7 +155,40 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         }
         rows.add(row);
       }
-      setState(() { _rows = rows; _loading = false; });
+      // Route (market) + salesperson mapping for filters.
+      List<Map<String, dynamic>> routeList = [];
+      List<Map<String, dynamic>> salespeople = [];
+      final custToRoutes = <String, Set<String>>{};
+      final routeToSp = <String, String>{};
+      try {
+        final routesRes = await client.from('sales_routes')
+            .select('id, name').eq('org_id', orgId).order('name');
+        routeList = List<Map<String, dynamic>>.from(routesRes);
+        salespeople = List<Map<String, dynamic>>.from(await client.from('users')
+            .select('id, name').eq('org_id', orgId).eq('role', 'salesperson').order('name'));
+        final routeIds = [for (final r in routeList) r['id'] as String];
+        if (routeIds.isNotEmpty) {
+          final stops = await client.from('route_stops').select('route_id, customer_id').inFilter('route_id', routeIds);
+          for (final s in stops as List) {
+            final m = s as Map;
+            (custToRoutes[m['customer_id'] as String] ??= <String>{}).add(m['route_id'] as String);
+          }
+          final asg = await client.from('route_assignments').select('user_id, route_id').inFilter('route_id', routeIds);
+          for (final a in asg as List) {
+            final m = a as Map;
+            routeToSp[m['route_id'] as String] = m['user_id'] as String;
+          }
+        }
+      } catch (e) { /* filters are best-effort */ }
+
+      setState(() {
+        _rows = rows;
+        _routes = routeList;
+        _salespeople = salespeople;
+        _custToRoutes = custToRoutes;
+        _routeToSalesperson = routeToSp;
+        _loading = false;
+      });
     } catch (e) {
       // ignore: avoid_print
       print('[CustomerAging] load error: $e');
@@ -153,9 +198,14 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
   List<_AgingRow> get _filteredSorted {
     final q = _search.toLowerCase().trim();
     var list = _rows.where((r) {
-      if (q.isEmpty) return true;
-      return r.customerName.toLowerCase().contains(q) ||
-             (r.code ?? '').toLowerCase().contains(q);
+      if (q.isNotEmpty &&
+          !(r.customerName.toLowerCase().contains(q) || (r.code ?? '').toLowerCase().contains(q))) {
+        return false;
+      }
+      final routeIds = _custToRoutes[r.customerId] ?? const <String>{};
+      if (_fRoute != null && !routeIds.contains(_fRoute)) return false;
+      if (_fSalesperson != null && !routeIds.any((rid) => _routeToSalesperson[rid] == _fSalesperson)) return false;
+      return true;
     }).toList();
     int cmp(_AgingRow a, _AgingRow b) {
       switch (_sortBy) {
@@ -213,6 +263,8 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         pw.Text('Customer Aging Report', style: pw.TextStyle(fontSize: 13, color: PdfColors.grey700)),
         if (branch != null) pw.Text('Branch: ${branch['name']}', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
         pw.Text('As of: ${DateFormat('d MMM yyyy').format(_asOf)}', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+        if (_fRoute != null) pw.Text('Route: ' + ((_routes.firstWhere((r) => r['id'] == _fRoute, orElse: () => const {})['name'] as String?) ?? '-'), style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+        if (_fSalesperson != null) pw.Text('Salesperson: ' + ((_salespeople.firstWhere((u) => u['id'] == _fSalesperson, orElse: () => const {})['name'] as String?) ?? '-'), style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
         pw.SizedBox(height: 12),
         pw.Table.fromTextArray(
           headers: ['#', 'Customer', 'Code', 'Invoices', '0-30', '31-60', '61-90', '91-120', '120+', 'Total'],
@@ -289,7 +341,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         const SizedBox(height: 20),
 
         // Filters
-        Row(children: [
+        Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
           OutlinedButton.icon(
             icon: const Icon(Icons.calendar_today, size: 16),
             label: Text('As of: ${DateFormat('d MMM yyyy').format(_asOf)}'),
@@ -301,9 +353,8 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
               if (picked != null) { setState(() => _asOf = picked); _load(); }
             },
           ),
-          const SizedBox(width: 12),
           SizedBox(
-            width: 320,
+            width: 260,
             child: TextField(
               decoration: const InputDecoration(
                 labelText: 'Search customer / code',
@@ -313,7 +364,29 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
               onChanged: (v) => setState(() => _search = v),
             ),
           ),
-          const Spacer(),
+          SizedBox(width: 200, child: DropdownButtonFormField<String?>(
+            value: _fRoute,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Route / Market', isDense: true),
+            items: [
+              const DropdownMenuItem<String?>(value: null, child: Text('All routes')),
+              ..._routes.map((r) => DropdownMenuItem<String?>(value: r['id'] as String, child: Text(r['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))),
+            ],
+            onChanged: (v) => setState(() => _fRoute = v),
+          )),
+          SizedBox(width: 200, child: DropdownButtonFormField<String?>(
+            value: _fSalesperson,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Salesperson', isDense: true),
+            items: [
+              const DropdownMenuItem<String?>(value: null, child: Text('All salespersons')),
+              ..._salespeople.map((u) => DropdownMenuItem<String?>(value: u['id'] as String, child: Text(u['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))),
+            ],
+            onChanged: (v) => setState(() => _fSalesperson = v),
+          )),
+          if (_fRoute != null || _fSalesperson != null)
+            TextButton.icon(onPressed: () => setState(() { _fRoute = null; _fSalesperson = null; }),
+                icon: const Icon(Icons.clear, size: 16), label: const Text('Clear')),
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh, size: 20), tooltip: 'Refresh'),
         ]),
         const SizedBox(height: 12),
@@ -361,7 +434,12 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
                         ),
                         const Divider(height: 1),
                         Expanded(
-                          child: ListView.separated(
+                          child: Scrollbar(
+                            controller: _listCtrl,
+                            thumbVisibility: true,
+                            child: ListView.separated(
+                            controller: _listCtrl,
+                            primary: false,
                             itemCount: rows.length,
                             separatorBuilder: (_, __) => const Divider(height: 1),
                             itemBuilder: (_, i) {
@@ -384,6 +462,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
                                 ]),
                               );
                             },
+                          ),
                           ),
                         ),
                       ]),
@@ -442,6 +521,8 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         const Divider(height: 1),
         Expanded(
           child: ListView.separated(
+            controller: _detailCtrl,
+            primary: false,
             itemCount: show.length + (remaining > 0 ? 1 : 0),
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (_, i) {

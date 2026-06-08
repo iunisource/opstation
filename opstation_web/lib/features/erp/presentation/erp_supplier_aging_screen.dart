@@ -40,9 +40,14 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
   String _search = '';
   String _sortBy = 'total';
   bool _sortDesc = true;
+  final ScrollController _listCtrl = ScrollController();
+  final ScrollController _detailCtrl = ScrollController();
 
   @override
   void initState() { super.initState(); _load(); }
+
+  @override
+  void dispose() { _listCtrl.dispose(); _detailCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -390,7 +395,12 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
                         ),
                         const Divider(height: 1),
                         Expanded(
-                          child: ListView.separated(
+                          child: Scrollbar(
+                            controller: _listCtrl,
+                            thumbVisibility: true,
+                            child: ListView.separated(
+                            controller: _listCtrl,
+                            primary: false,
                             itemCount: rows.length,
                             separatorBuilder: (_, __) => const Divider(height: 1),
                             itemBuilder: (_, i) {
@@ -413,6 +423,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
                                 ]),
                               );
                             },
+                          ),
                           ),
                         ),
                       ]),
@@ -471,6 +482,8 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
         const Divider(height: 1),
         Expanded(
           child: ListView.separated(
+            controller: _detailCtrl,
+            primary: false,
             itemCount: show.length + (remaining > 0 ? 1 : 0),
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (_, i) {
