@@ -12,6 +12,7 @@ import '../../features/erp/presentation/erp_claim_processing_voucher_screen.dart
 import '../../features/erp/presentation/erp_production_waste_report_screen.dart';
 import '../../features/hr/presentation/hr_employees_screen.dart';
 import '../../features/hr/presentation/hr_attendance_screen.dart';
+import '../../features/hr/presentation/hr_leave_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -198,6 +199,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => const ErpProductionWasteReportScreen()),
       GoRoute(path: '/hr/employees', builder: (_, __) => const HrEmployeesScreen()),
       GoRoute(path: '/hr/attendance', builder: (_, __) => const HrAttendanceScreen()),
+      GoRoute(path: '/hr/leave', builder: (_, __) => const HrLeaveScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),
           GoRoute(path: '/erp/pos-config', builder: (_, __) => const ErpPosConfigScreen()),

@@ -194,6 +194,7 @@ class _TopNav extends ConsumerWidget {
     final hrItems = <Widget>[
       if (show('/hr/employees')) _menuItem(context, 'Employee Directory', Icons.groups_outlined, '/hr/employees', location),
       if (show('/hr/attendance')) _menuItem(context, 'Attendance', Icons.fact_check_outlined, '/hr/attendance', location),
+      if (show('/hr/leave')) _menuItem(context, 'Leave', Icons.beach_access_outlined, '/hr/leave', location),
     ];
 
     final financialItems = <Widget>[
@@ -254,7 +255,7 @@ class _TopNav extends ConsumerWidget {
           _trimDividers(financialItems)),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
-          ['/hr/employees', '/hr/attendance'], _trimDividers(hrItems)),
+          ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
       if (_hasItems(erpAdminItems))
         _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
           ['/erp/users'], _trimDividers(erpAdminItems)),
