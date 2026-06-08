@@ -165,16 +165,17 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       context: context,
       builder: (_) => _CsvImportDialog(
         uoms: _uoms,
+        branches: _branches,
         existingSkus: _products.map((p) => (p['sku'] as String?) ?? '').where((s) => s.isNotEmpty).toSet(),
         onImport: _doCsvImport,
       ),
     );
   }
 
-  Future<void> _doCsvImport(List<Map<String, dynamic>> rows) async {
+  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
-    int success = 0; int failed = 0;
+    int success = 0; int failed = 0; int allocFailed = 0;
     for (var i = 0; i < rows.length; i++) {
       try {
         final id = 'prod_${DateTime.now().millisecondsSinceEpoch}_$i';
@@ -186,13 +187,39 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
         success++;
+        // Allocate imported product to the chosen branches at zero stock.
+        for (var b = 0; b < branchIds.length; b++) {
+          try {
+            await Supabase.instance.client.from('inventory_stock').insert({
+              'id': 'invs_${DateTime.now().millisecondsSinceEpoch}_${i}_$b',
+              'org_id': orgId, 'product_id': id, 'branch_id': branchIds[b], 'quantity': 0,
+            });
+          } catch (_) { allocFailed++; }
+        }
       } catch (_) { failed++; }
     }
-    _showSnack('Imported $success product${success == 1 ? "" : "s"}${failed > 0 ? " — $failed failed" : ""}');
+    _showSnack('Imported $success product${success == 1 ? "" : "s"}'
+        '${branchIds.isNotEmpty ? " into ${branchIds.length} branch${branchIds.length == 1 ? "" : "es"}" : ""}'
+        '${failed > 0 ? " — $failed failed" : ""}'
+        '${allocFailed > 0 ? " — $allocFailed stock rows failed" : ""}');
     _load();
   }
 
-  void _showDialog(BuildContext context, Map<String, dynamic>? product) {
+  Future<void> _showDialog(BuildContext context, Map<String, dynamic>? product) async {
+    final orgIdPre = ref.read(currentUserProvider)?.orgId;
+    // Load existing branch allocation (inventory_stock) for this product (edit only).
+    final Map<String, double> existingStock = {}; // branch_id -> qty
+    if (product != null && orgIdPre != null) {
+      try {
+        final rows = await Supabase.instance.client.from('inventory_stock')
+            .select('branch_id, quantity').eq('org_id', orgIdPre).eq('product_id', product['id'] as String);
+        for (final r in rows as List) {
+          existingStock[r['branch_id'] as String] = (r['quantity'] as num?)?.toDouble() ?? 0.0;
+        }
+      } catch (_) {}
+    }
+    final Set<String> selectedBranches = {...existingStock.keys};
+    if (!context.mounted) return;
     final nameCtrl = TextEditingController(text: product?['name'] ?? '');
     final skuCtrl = TextEditingController(text: product?['sku'] ?? '');
     final barcodeCtrl = TextEditingController(text: product?['barcode'] ?? '');
@@ -318,6 +345,26 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true))),
                 ]),
+                const SizedBox(height: 16),
+                const Align(alignment: Alignment.centerLeft, child: Text('Branch Allocation', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                const SizedBox(height: 4),
+                const Align(alignment: Alignment.centerLeft, child: Text('Tick the branches this product is stocked in. Newly ticked branches start at zero stock; existing stock is never changed here. Branches that already hold stock are locked.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                const SizedBox(height: 8),
+                if (_branches.isEmpty)
+                  const Align(alignment: Alignment.centerLeft, child: Text('No branches found.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+                else
+                  Align(alignment: Alignment.centerLeft, child: Wrap(spacing: 8, runSpacing: 4, children: _branches.map((b) {
+                    final bid = b['id'] as String;
+                    final allocated = existingStock.containsKey(bid);
+                    final qty = existingStock[bid] ?? 0.0;
+                    final locked = allocated && qty > 0; // protect real stock from being un-allocated
+                    final checked = selectedBranches.contains(bid);
+                    return FilterChip(
+                      label: Text('${b['name'] ?? '-'}' + (allocated ? '  •  ${qty.toStringAsFixed(0)}' : '')),
+                      selected: checked,
+                      onSelected: locked ? null : (v) => setS(() { if (v) selectedBranches.add(bid); else selectedBranches.remove(bid); }),
+                    );
+                  }).toList())),
               ]),
             ),
           ),
@@ -356,16 +403,39 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'updated_at': DateTime.now().toUtc().toIso8601String(),
                 };
                 try {
+                  String pid;
                   if (product == null) {
-                    final id = 'prod_${DateTime.now().millisecondsSinceEpoch}';
+                    pid = 'prod_${DateTime.now().millisecondsSinceEpoch}';
                     await Supabase.instance.client
                         .from('products')
-                        .insert({...data, 'id': id});
+                        .insert({...data, 'id': pid});
                   } else {
+                    pid = product['id'] as String;
                     await Supabase.instance.client
                         .from('products')
                         .update(data)
-                        .eq('id', product['id']);
+                        .eq('id', pid);
+                  }
+                  // Reconcile branch allocation (inventory_stock). Add zero-stock rows for
+                  // newly ticked branches; remove rows only where stock is zero. Never touch
+                  // a branch's existing quantity.
+                  try {
+                    int allocCounter = 0;
+                    for (final bid in selectedBranches) {
+                      if (existingStock.containsKey(bid)) continue;
+                      await Supabase.instance.client.from('inventory_stock').insert({
+                        'id': 'invs_${DateTime.now().millisecondsSinceEpoch}_${allocCounter++}',
+                        'org_id': orgId, 'product_id': pid, 'branch_id': bid, 'quantity': 0,
+                      });
+                    }
+                    for (final bid in existingStock.keys) {
+                      if (!selectedBranches.contains(bid) && (existingStock[bid] ?? 0) == 0) {
+                        await Supabase.instance.client.from('inventory_stock')
+                            .delete().eq('org_id', orgId ?? '').eq('product_id', pid).eq('branch_id', bid);
+                      }
+                    }
+                  } catch (e) {
+                    _showSnack('Product saved, but branch allocation failed: $e');
                   }
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                   _showSnack(product == null ? 'Product added' : 'Product updated');
@@ -623,9 +693,10 @@ class _BranchPickerDialog extends StatelessWidget {
 
 class _CsvImportDialog extends StatefulWidget {
   final List<Map<String, dynamic>> uoms;
+  final List<Map<String, dynamic>> branches;
   final Set<String> existingSkus;
-  final Future<void> Function(List<Map<String, dynamic>>) onImport;
-  const _CsvImportDialog({required this.uoms, required this.existingSkus, required this.onImport});
+  final Future<void> Function(List<Map<String, dynamic>>, List<String>) onImport;
+  const _CsvImportDialog({required this.uoms, required this.branches, required this.existingSkus, required this.onImport});
   @override
   State<_CsvImportDialog> createState() => _CsvImportDialogState();
 }
@@ -633,6 +704,7 @@ class _CsvImportDialog extends StatefulWidget {
 class _CsvImportDialogState extends State<_CsvImportDialog> {
   List<Map<String, dynamic>> _validRows = [];
   List<String> _rowErrors = [];
+  final Set<String> _importBranches = {};
   int _totalParsed = 0;
   bool _importing = false;
   String? _fileName;
@@ -756,6 +828,27 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       content: SizedBox(
         width: 640,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.storefront_outlined, size: 16, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            const Text('Import into branches (optional):', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+          ]),
+          const SizedBox(height: 6),
+          if (widget.branches.isEmpty)
+            const Text('No branches found.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+          else
+            Wrap(spacing: 8, runSpacing: 4, children: widget.branches.map((b) {
+              final bid = b['id'] as String;
+              final checked = _importBranches.contains(bid);
+              return FilterChip(
+                label: Text(b['name'] as String? ?? '-'),
+                selected: checked,
+                onSelected: (v) => setState(() { if (v) _importBranches.add(bid); else _importBranches.remove(bid); }),
+              );
+            }).toList()),
+          const SizedBox(height: 4),
+          const Text('Imported products start at zero stock in the selected branches. Leave blank to import without allocating to any branch.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          const Divider(height: 22),
           if (_fileName == null) ...[
             const Text('Upload a CSV with your products. The "name" and "uom" columns are required; everything else is optional.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
             const SizedBox(height: 16),
@@ -805,7 +898,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         if (_validRows.isNotEmpty) ElevatedButton(
           onPressed: _importing ? null : () async {
             setState(() => _importing = true);
-            await widget.onImport(_validRows);
+            await widget.onImport(_validRows, _importBranches.toList());
             if (mounted) Navigator.pop(context);
           },
           child: Text(_importing ? 'Importing...' : 'Import ${_validRows.length} rows'),
