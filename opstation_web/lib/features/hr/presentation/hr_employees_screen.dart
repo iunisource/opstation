@@ -1,3 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -43,8 +46,15 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   String? _deptId, _desigId, _branchId, _gender, _empType;
   DateTime? _dob, _joinDate;
   String _status = 'active';
+  String? _shiftId;
+  String? _photoUrl;
+  bool _photoUploading = false;
+  List<Map<String, dynamic>> _shifts = [];
+  Map<String, String> _shiftName = {};
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin; }
+  int? _min(String? hhmm) { if (hhmm == null || hhmm.isEmpty) return null; final p = hhmm.split(':'); if (p.length != 2) return null; final h = int.tryParse(p[0]), m = int.tryParse(p[1]); if (h == null || m == null) return null; return h * 60 + m; }
 
   static const _genders = [
     {'v': 'male', 'l': 'Male'}, {'v': 'female', 'l': 'Female'}, {'v': 'other', 'l': 'Other'},
@@ -72,7 +82,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (orgId == null) { await Future.delayed(const Duration(milliseconds: 400)); if (mounted) _loadAll(); return; }
     setState(() => _loading = true);
     try {
-      await Future.wait([_loadDepts(), _loadDesignations(), _loadBranches()]);
+      await Future.wait([_loadDepts(), _loadDesignations(), _loadBranches(), _loadShifts()]);
       await _loadEmployees();
     } catch (e) { _snack('Load error: $e'); }
     if (mounted) setState(() => _loading = false);
@@ -102,6 +112,12 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (mounted) setState(() { _branches = List<Map<String, dynamic>>.from(rows); _branchName = {for (final b in _branches) b['id'] as String: b['name'] as String}; });
   }
 
+  Future<void> _loadShifts() async {
+    final orgId = _orgId; if (orgId == null) return;
+    final rows = await Supabase.instance.client.from('hr_shifts').select().eq('org_id', orgId).order('name');
+    if (mounted) setState(() { _shifts = List<Map<String, dynamic>>.from(rows); _shiftName = {for (final s in _shifts) s['id'] as String: s['name'] as String}; });
+  }
+
   List<Map<String, dynamic>> get _activeDepts => _departments.where((d) => d['is_active'] != false).toList();
   List<Map<String, dynamic>> get _activeDesigs => _designations.where((d) => d['is_active'] != false).toList();
 
@@ -112,6 +128,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _deptId = null; _desigId = null; _gender = null; _empType = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
       _dob = null; _joinDate = null;
+      _shiftId = null; _photoUrl = null;
     });
   }
 
@@ -138,6 +155,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _status = e['status'] as String? ?? 'active';
       _dob = e['date_of_birth'] != null ? DateTime.tryParse(e['date_of_birth'] as String) : null;
       _joinDate = e['join_date'] != null ? DateTime.tryParse(e['join_date'] as String) : null;
+      _shiftId = e['shift_id'] as String?;
+      _photoUrl = e['photo_url'] as String?;
     });
   }
 
@@ -230,6 +249,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'employment_type': _empType,
         'join_date': _joinDate != null ? DateFormat('yyyy-MM-dd').format(_joinDate!) : null,
         'status': _status, 'basic_salary': double.tryParse(_salary.text) ?? 0,
+        'shift_id': _shiftId, 'photo_url': _photoUrl,
         'bank_name': _t(_bankName), 'bank_account': _t(_bankAcct), 'notes': _t(_notes),
         'updated_at': DateTime.now().toIso8601String(),
       };
@@ -321,6 +341,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
             Expanded(child: Text(_current == null ? 'New Employee' : (_name.text.isEmpty ? 'Employee' : _name.text), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
             TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
             TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
+            if (_isAdmin) TextButton.icon(icon: const Icon(Icons.schedule_outlined, size: 15), label: const Text('Shifts', style: TextStyle(fontSize: 12)), onPressed: _manageShifts),
             if (_current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete employee'),
             const SizedBox(width: 8),
             ElevatedButton.icon(
@@ -332,6 +353,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         Expanded(child: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _photoSection(),
+            const SizedBox(height: 16),
             _card('Employment', [
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(child: _labeled('Employee code', _tf(_code, hint: 'Auto if blank'))),
@@ -355,6 +378,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 Expanded(child: _labeled('Join date', _dateField(_joinDate, (d) => setState(() => _joinDate = d)))),
                 const SizedBox(width: 12),
                 Expanded(child: _labeled('Basic salary', _tf(_salary, numeric: true))),
+                const SizedBox(width: 12),
+                Expanded(child: _labeled('Shift', _shiftDropdown())),
               ]),
             ]),
             const SizedBox(height: 16),
@@ -476,4 +501,137 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         Expanded(child: Text(value != null ? DateFormat('yyyy-MM-dd').format(value) : 'Select', style: TextStyle(fontSize: 12, color: value != null ? AppTheme.textPrimary : AppTheme.textSecondary))),
         const Icon(Icons.calendar_today_outlined, size: 13, color: AppTheme.textSecondary),
       ])));
+
+  Widget _photoSection() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Row(children: [
+        Container(width: 64, height: 64,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: AppTheme.background, border: Border.all(color: AppTheme.border),
+            image: _photoUrl != null && _photoUrl!.isNotEmpty ? DecorationImage(image: NetworkImage(_photoUrl!), fit: BoxFit.cover) : null),
+          alignment: Alignment.center,
+          child: (_photoUrl == null || _photoUrl!.isEmpty) ? const Icon(Icons.person_outline, size: 30, color: AppTheme.textSecondary) : null),
+        const SizedBox(width: 14),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          const Text('Photo', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Row(children: [
+            OutlinedButton.icon(
+              icon: _photoUploading ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.upload_outlined, size: 15),
+              label: Text(_photoUrl != null && _photoUrl!.isNotEmpty ? 'Change' : 'Upload', style: const TextStyle(fontSize: 12)),
+              onPressed: _photoUploading ? null : _uploadPhoto),
+            if (_photoUrl != null && _photoUrl!.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              TextButton.icon(icon: const Icon(Icons.delete_outline, size: 15, color: Colors.red), label: const Text('Remove', style: TextStyle(fontSize: 12, color: Colors.red)), onPressed: () => setState(() => _photoUrl = null)),
+            ],
+          ]),
+          const Text('JPG/PNG. Saved with the employee.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+        ]),
+      ]),
+    );
+  }
+
+  Future<void> _uploadPhoto() async {
+    final orgId = _orgId; if (orgId == null) return;
+    final input = html.FileUploadInputElement()..accept = 'image/*';
+    input.click();
+    await input.onChange.first;
+    if (input.files == null || input.files!.isEmpty) return;
+    final file = input.files!.first;
+    final reader = html.FileReader();
+    reader.readAsArrayBuffer(file);
+    await reader.onLoad.first;
+    final bytes = (reader.result as ByteBuffer).asUint8List();
+    final ext = (file.name.contains('.') ? file.name.split('.').last : 'jpg').toLowerCase();
+    final path = '$orgId/${_current?['id'] ?? 'new'}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    setState(() => _photoUploading = true);
+    try {
+      await Supabase.instance.client.storage.from('hr-photos').uploadBinary(path, bytes,
+        fileOptions: FileOptions(upsert: true, contentType: file.type.isNotEmpty ? file.type : 'image/jpeg'));
+      final url = Supabase.instance.client.storage.from('hr-photos').getPublicUrl(path);
+      if (mounted) setState(() => _photoUrl = url);
+      _snack('Photo uploaded \u2014 remember to Save');
+    } catch (e) { _snack('Upload failed: $e'); }
+    if (mounted) setState(() => _photoUploading = false);
+  }
+
+  Widget _shiftDropdown() {
+    final items = _shifts.where((s) => s['is_active'] != false || s['id'] == _shiftId).toList();
+    return DropdownButtonFormField<String>(
+      value: items.any((s) => s['id'] == _shiftId) ? _shiftId : null, isDense: true, isExpanded: true,
+      hint: const Text('Select', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+        border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
+      style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+      items: [
+        ...items.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text('${s['name']}${s['start_time'] != null ? ' (${s['start_time']}\u2013${s['end_time'] ?? ''})' : ''}', overflow: TextOverflow.ellipsis))),
+        if (_isAdmin) const DropdownMenuItem(value: '__manage__', child: Text('Manage shifts\u2026', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
+      ],
+      onChanged: (v) async { if (v == '__manage__') { await _manageShifts(); } else setState(() => _shiftId = v); });
+  }
+
+  Future<void> _manageShifts() async {
+    await showDialog(context: context, builder: (ctx) {
+      final nameCtrl = TextEditingController();
+      final graceCtrl = TextEditingController(text: '0');
+      String? editId; String? sStart; String? sEnd;
+      return StatefulBuilder(builder: (ctx, setLocal) {
+        Future<void> refresh() async { await _loadShifts(); setLocal(() {}); }
+        double? calc() { final a = _min(sStart), b = _min(sEnd); if (a == null || b == null) return null; var d = b - a; if (d <= 0) d += 1440; return (d / 60 * 100).round() / 100; }
+        Future<void> pick(bool isStart) async {
+          final t = await showTimePicker(context: ctx, initialTime: const TimeOfDay(hour: 9, minute: 0));
+          if (t != null) setLocal(() { final s = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}'; if (isStart) sStart = s; else sEnd = s; });
+        }
+        Future<void> saveShift() async {
+          final orgId = _orgId; if (orgId == null) return;
+          if (nameCtrl.text.trim().isEmpty) { _snack('Shift name required'); return; }
+          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'is_active': true};
+          try {
+            if (editId == null) { payload['id'] = 'shift_' + DateTime.now().millisecondsSinceEpoch.toString(); await Supabase.instance.client.from('hr_shifts').insert(payload); }
+            else { await Supabase.instance.client.from('hr_shifts').update(payload).eq('id', editId!); }
+            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; sStart = null; sEnd = null; editId = null; });
+            await refresh();
+          } catch (e) { _snack('Save failed: $e'); }
+        }
+        return AlertDialog(
+          title: Text(editId == null ? 'Shifts' : 'Edit shift'),
+          content: SizedBox(width: 470, child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(controller: nameCtrl, decoration: const InputDecoration(hintText: 'Shift name (e.g. Morning 9-5)', isDense: true, border: OutlineInputBorder())),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: OutlinedButton(onPressed: () => pick(true), child: Text(sStart ?? 'Start time', style: const TextStyle(fontSize: 12)))),
+              const SizedBox(width: 8),
+              Expanded(child: OutlinedButton(onPressed: () => pick(false), child: Text(sEnd ?? 'End time', style: const TextStyle(fontSize: 12)))),
+              const SizedBox(width: 8),
+              SizedBox(width: 96, child: TextField(controller: graceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Grace min', isDense: true, border: OutlineInputBorder()))),
+            ]),
+            const SizedBox(height: 6),
+            Align(alignment: Alignment.centerLeft, child: Text('Standard hours: ${calc()?.toString() ?? '\u2014'}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+            const SizedBox(height: 8),
+            Row(children: [
+              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
+              const Spacer(),
+              ElevatedButton(onPressed: saveShift, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: Text(editId == null ? 'Add shift' : 'Update')),
+            ]),
+            const Divider(),
+            SizedBox(height: 220, width: 470, child: _shifts.isEmpty
+              ? const Center(child: Text('No shifts yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+              : ListView.separated(itemCount: _shifts.length, separatorBuilder: (_, __) => const Divider(height: 1), itemBuilder: (_, i) {
+                  final s = _shifts[i]; final active = s['is_active'] != false;
+                  return ListTile(dense: true,
+                    title: Text(s['name'] as String? ?? '', style: TextStyle(fontSize: 13, decoration: active ? null : TextDecoration.lineThrough)),
+                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m', style: const TextStyle(fontSize: 11)),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); })),
+                      Switch(value: active, onChanged: (v) async { try { await Supabase.instance.client.from('hr_shifts').update({'is_active': v}).eq('id', s['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); } }),
+                    ]));
+                })),
+          ])),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
+        );
+      });
+    });
+    if (mounted) setState(() {});
+  }
 }
