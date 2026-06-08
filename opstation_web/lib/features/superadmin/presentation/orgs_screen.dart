@@ -174,9 +174,9 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
         'name': orgName,
         'max_users': maxUsers,
         'expires_at': expiresAt?.toUtc().toIso8601String(),
-        'costing_method': costingMethod,
         'updated_at': now.toIso8601String(),
       }).eq('id', orgId);
+      // Note: costing_method is intentionally NOT updated here — it is fixed at creation.
 
       if (existingMaster != null) {
         final updates = <String, dynamic>{
@@ -326,11 +326,11 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                       DropdownMenuItem(value: 'last_purchase', child: Text('Last Purchase Cost')),
                       DropdownMenuItem(value: 'standard', child: Text('Standard Cost')),
                     ],
-                    onChanged: (v) => setS(() => costingMethod = v ?? 'weighted_average'),
+                    onChanged: isEdit ? null : (v) => setS(() => costingMethod = v ?? 'weighted_average'),
                   ),
                   if (isEdit) const Padding(
                     padding: EdgeInsets.only(top: 4),
-                    child: Text('Changing this does not re-value existing stock.',
+                    child: Text('Set at creation \u2014 cannot be changed.',
                         style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   ),
                   const SizedBox(height: 24),

@@ -52,6 +52,18 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
             .select('id, name, sku, cost_price, selling_price, product_main_group, product_group, product_class, product_movement_category, uoms(abbreviation)')
             .eq('org_id', orgId).eq('is_active', true);
         final byId = {for (final p in products as List) p['id'] as String: Map<String, dynamic>.from(p)};
+
+        // Engine-costed unit costs from the cost layers (weighted-average of remaining
+        // layers, matching current_unit_cost). One RPC call for the whole branch.
+        final Map<String, double> costMap = {};
+        try {
+          final costs = await client.rpc('rpc_stock_unit_costs', params: {'p_org': orgId, 'p_branch': _branchId});
+          for (final c in costs as List) {
+            final pid = c['product_id'] as String?;
+            if (pid != null) costMap[pid] = (c['unit_cost'] as num?)?.toDouble() ?? 0;
+          }
+        } catch (_) { /* RPC unavailable -> fall back to cost_price below */ }
+
         final stock = await client.from('inventory_stock')
             .select('product_id, quantity').eq('org_id', orgId).eq('branch_id', _branchId!);
         for (final s in stock as List) {
@@ -61,7 +73,8 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
           if (p == null) continue;
           final qty = (s['quantity'] as num?)?.toDouble() ?? 0;
           if (qty == 0) continue;                       // only on-hand stock
-          final cost = (p['cost_price'] as num?)?.toDouble() ?? 0;
+          // engine cost first; fall back to product cost_price when no remaining layers
+          final cost = costMap[pid] ?? (p['cost_price'] as num?)?.toDouble() ?? 0;
           final sell = (p['selling_price'] as num?)?.toDouble() ?? 0;
           rows.add({
             'name': p['name'], 'sku': p['sku'],
@@ -168,7 +181,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         '@page{size:landscape}'
         '</style></head><body>'
         '<h1>$orgName &mdash; Stock Value Report</h1>'
-        '<div class="muted">Branch: ${esc(_branchName)} &middot; valued at product cost price</div>'
+        '<div class="muted">Branch: ${esc(_branchName)} &middot; valued at inventory cost (cost layers)</div>'
         '<div class="muted">Filters: $filterLine</div>'
         '<div class="muted">Generated: $dateStr &middot; ${list.length} item(s) on hand</div>'
         '<table><thead><tr>'
@@ -201,7 +214,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
           OutlinedButton.icon(onPressed: list.isEmpty ? null : _print, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
         ]),
         const SizedBox(height: 4),
-        Text('Value of stock on hand, valued at product cost price. ${list.length} item${list.length == 1 ? '' : 's'}.',
+        Text('Value of stock on hand, valued at inventory cost (cost layers). ${list.length} item${list.length == 1 ? '' : 's'}.',
             style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
