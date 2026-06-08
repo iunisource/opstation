@@ -246,21 +246,6 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
     ));
   }
 
-  Future<void> _openClosedSummary(Map<String, dynamic> s) async {
-    final sid = s['id'] as String;
-    try {
-      final client = Supabase.instance.client;
-      final txns = await client.from('pos_transactions')
-          .select('*, customers(shop_name), pos_customers(name, phone)')
-          .eq('session_id', sid).order('transacted_at');
-      final exps = await client.from('pos_expenses')
-          .select('*').eq('session_id', sid).order('created_at');
-      await openPosSessionSummary(ref, s,
-          List<Map<String, dynamic>>.from(txns),
-          List<Map<String, dynamic>>.from(exps));
-    } catch (e) { _showSnack('Could not load summary: $e'); }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -358,7 +343,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                       Expanded(flex: 2, child: Text('Closed', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Total Sale', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      SizedBox(width: 88),
+                      SizedBox(width: 48),
                     ]),
                   ),
                   const Divider(height: 1),
@@ -425,13 +410,9 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                                               color: isOpen ? AppTheme.success : AppTheme.textSecondary,
                                               fontSize: 12, fontWeight: FontWeight.w600)),
                                     )),
-                                    SizedBox(width: 88, child: isOpen
-                                      ? Align(alignment: Alignment.centerRight, child: TextButton(onPressed: () => _openSession(s), child: const Text('Enter', style: TextStyle(fontSize: 11))))
-                                      : Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                                          IconButton(icon: const Icon(Icons.summarize_outlined, size: 17, color: AppTheme.primary), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact, constraints: const BoxConstraints(), tooltip: 'Session summary', onPressed: () => _openClosedSummary(s)),
-                                          const SizedBox(width: 6),
-                                          Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
-                                        ])),
+                                    SizedBox(width: 48, child: isOpen
+                                      ? TextButton(onPressed: () => _openSession(s), child: const Text('Enter', style: TextStyle(fontSize: 11)))
+                                      : Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary)),
                                   ]),
                                 ),
                               ),
@@ -559,9 +540,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   // ── Stage a product for editing before adding to bill ─────
   void _stageProduct(Map<String, dynamic> product, {int? cartIndex}) {
-    // Block if 0 stock
+    // Block only a tracked zero stock (< 0 means inventory not tracked → sellable)
     final pStock = (product['stock_qty'] as num?)?.toDouble() ?? 0;
-    if (cartIndex == null && pStock <= 0) { _playBadgeSound(); return; }
+    if (cartIndex == null && pStock >= 0 && pStock <= 0) { _playBadgeSound(); return; }
     // If already in cart and not explicitly editing, load that cart entry
     if (cartIndex == null) {
       final existIdx = _cart.indexWhere((ci) => ci['pos_catalog_id'] == (product['id'] ?? product['pos_catalog_id']));
@@ -650,7 +631,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           if (isEdit) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: const Text('Editing', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w700))),
         ]),
         const SizedBox(height: 3),
-        Text('Rs. ' + price.toStringAsFixed(2) + '   Stock: ' + stock.toStringAsFixed(0), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        Text('Rs. ' + price.toStringAsFixed(2) + (stock >= 0 ? '   Stock: ' + stock.toStringAsFixed(0) : '   Stock not tracked'), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         const SizedBox(height: 14),
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -784,7 +765,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final item in _cart) {
       final qty = item['quantity'] as double;
       final stock = (item['stock_qty'] as num?)?.toDouble() ?? 0;
-      if (qty > stock) { _showSnack('Insufficient stock for "${item['name']}": ${stock.toStringAsFixed(0)} available'); return; }
+      if (stock >= 0 && qty > stock) { _showSnack('Insufficient stock for "${item['name']}": ${stock.toStringAsFixed(0)} available'); return; }
     }
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final branchId = _session['branch_id'] as String;
@@ -1023,7 +1004,121 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   }
 
   Future<void> _exportSummary() async {
-    await openPosSessionSummary(ref, _session, _transactions, _expenses);
+    final orgId = _orgId; if (orgId == null) return;
+    final client = Supabase.instance.client;
+    final txnIds = _transactions.map((t) => t['id'] as String).toList();
+    Map<String, List<Map<String, dynamic>>> itemsByTxn = {};
+    if (txnIds.isNotEmpty) {
+      try {
+        final allItems = await client.from('pos_transaction_items').select('*, products(name, sku)').inFilter('transaction_id', txnIds);
+        for (final item in allItems as List) {
+          final tid = item['transaction_id'] as String;
+          itemsByTxn.putIfAbsent(tid, () => []).add(Map<String, dynamic>.from(item));
+        }
+      } catch (_) {}
+    }
+    final sales = _transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'sale').toList();
+    final returns = _transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'return').toList();
+    double totalSales = 0, totalReturns = 0;
+    for (final t in sales) totalSales += (t['total'] as num?)?.toDouble() ?? 0;
+    for (final t in returns) totalReturns += ((t['total'] as num?)?.toDouble() ?? 0).abs();
+    double customerAccountSale = 0;  // amount put on customer accounts (unpaid/credit portion) this session
+    for (final t in sales) {
+      final tot = (t['total'] as num?)?.toDouble() ?? 0;
+      final paid = (t['amount_paid'] as num?)?.toDouble() ?? tot;
+      final onAcct = tot - paid;
+      if (onAcct > 0) customerAccountSale += onAcct;
+    }
+    final openingCash = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
+    final closingCash = (_session['closing_cash'] as num?)?.toDouble() ?? 0;
+    double totalExpenses = 0; String expRows = '';
+    for (final e in _expenses) {
+      final ea = (e['amount'] as num?)?.toDouble() ?? 0; totalExpenses += ea;
+      final ec = e['category'] as String? ?? '-'; final en = e['note'] as String? ?? '';
+      final et = e['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+      expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>${en}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${ea.toStringAsFixed(2)}</td></tr>';
+    }
+    final cashDiff = totalSales - totalReturns - totalExpenses + openingCash - closingCash;  // +ve = cash short, -ve = cash over
+    final branch = _session['branches']?['name'] as String? ?? '-';
+    final user = ref.read(currentUserProvider);
+    final cashier = user?.name ?? user?.id ?? '-';
+    final openedAt = _session['opened_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_session['opened_at'] as String).toLocal()) : '-';
+    final closedAt = _session['closed_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_session['closed_at'] as String).toLocal()) : 'Open';
+
+    String txnRows = '';
+    for (final t in sales) {
+      final tid = t['id'] as String;
+      final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
+      final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
+      final method = t['payment_method'] as String? ?? '';
+      final total = (t['total'] as num?)?.toStringAsFixed(2) ?? '0.00';
+      final disc = (t['discount'] as num?)?.toDouble() ?? 0;
+      final items = itemsByTxn[tid] ?? [];
+      final itemStr = items.map((i) { final q = (i['quantity'] as num?)?.toDouble() ?? 0; final p = (i['unit_price'] as num?)?.toDouble() ?? 0; final d = (i['discount'] as num?)?.toDouble() ?? 0; final n = i['products']?['name'] as String? ?? '-'; return '$n × ${q.toStringAsFixed(0)} @ ${p.toStringAsFixed(2)}${d > 0 ? ' (-${d.toStringAsFixed(2)})' : ''}'; }).join('<br>');
+      txnRows += '<tr><td>$time</td><td style="font-size:11px;color:#666">${tid.substring(0, 10)}…</td><td>$customer</td><td style="font-size:11px">$itemStr</td><td>$method</td>${disc > 0 ? '<td style="color:#e67e22">-${disc.toStringAsFixed(2)}</td>' : '<td>-</td>'}<td style="text-align:right;font-weight:bold">$total</td></tr>';
+    }
+    String retRows = '';
+    for (final t in returns) {
+      final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
+      final refId = t['reference_transaction_id'] as String? ?? '-';
+      final refShort = refId.length > 10 ? '${refId.substring(0, 10)}…' : refId;
+      final total = ((t['total'] as num?)?.toDouble() ?? 0).abs().toStringAsFixed(2);
+      final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
+      retRows += '<tr style="background:#fff5f5"><td>$time</td><td>$customer</td><td style="font-size:11px;color:#666">← $refShort</td><td style="text-align:right;color:#e74c3c;font-weight:bold">-$total</td></tr>';
+    }
+
+    final htmlContent = '''<!DOCTYPE html><html><head><title>POS Session Summary</title>
+<style>
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;padding:32px;color:#333;max-width:900px;margin:0 auto}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:16px;margin:24px 0 10px;color:#555;border-bottom:2px solid #eee;padding-bottom:6px}
+.meta{color:#888;font-size:13px;margin-bottom:20px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px}
+.stat{background:#f8f9fa;padding:14px 16px;border-radius:10px;border:1px solid #e9ecef}
+.sl{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.sv{font-size:20px;font-weight:700;color:#2c3e50}
+.sv.green{color:#27ae60}.sv.red{color:#e74c3c}.sv.blue{color:#2980b9}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#f1f3f5;padding:9px 12px;text-align:left;font-size:12px;font-weight:600;color:#555}
+td{padding:8px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
+tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;font-size:14px}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.badge-sale{background:#d4edda;color:#155724}.badge-ret{background:#f8d7da;color:#721c24}
+@media print{body{padding:16px}h1{font-size:20px}}
+</style></head><body>
+<h1>POS Session Summary</h1>
+<div class="meta">Branch: <b>$branch</b> &nbsp;|&nbsp; Cashier: <b>$cashier</b> &nbsp;|&nbsp; Opened: <b>$openedAt</b> &nbsp;|&nbsp; Closed: <b>$closedAt</b></div>
+<div class="stats">
+  <div class="stat"><div class="sl">Transactions</div><div class="sv blue">${sales.length}</div></div>
+  <div class="stat"><div class="sl">Returns</div><div class="sv red">${returns.length}</div></div>
+  <div class="stat"><div class="sl">Total Sales</div><div class="sv green">${totalSales.toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Total Refunds</div><div class="sv red">${totalReturns.toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Net Sales</div><div class="sv">${(totalSales - totalReturns).toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Customer Account Sale</div><div class="sv blue">${customerAccountSale.toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${openingCash.toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${closingCash.toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${cashDiff.abs().toStringAsFixed(2)}</div></div>
+</div>
+${txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
+<table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
+<tbody>$txnRows
+<tr class="total-row"><td colspan="6">TOTAL SALES</td><td style="text-align:right">${totalSales.toStringAsFixed(2)}</td></tr>
+</tbody></table>''' : ''}
+${expRows.isNotEmpty ? '''<h2>Expenses</h2>
+<table><thead><tr><th>Time</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>
+<tbody>$expRows
+<tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:#c0392b">-${totalExpenses.toStringAsFixed(2)}</td></tr>
+</tbody></table>''' : ''}
+${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
+<table><thead><tr><th>Time</th><th>Customer</th><th>Original Txn</th><th>Refund</th></tr></thead>
+<tbody>$retRows
+<tr class="total-row"><td colspan="3">TOTAL REFUNDS</td><td style="text-align:right;color:#e74c3c">-${totalReturns.toStringAsFixed(2)}</td></tr>
+</tbody></table>''' : ''}
+<script>window.onload=function(){window.print();}</script>
+</body></html>''';
+
+    final blob = html.Blob([htmlContent], 'text/html');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');  // opens in new tab, auto-prints via window.onload
   }
 
   @override
@@ -1094,7 +1189,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
                 final idx = _dropdownHighlight.clamp(0, opts.length - 1);
                 final sel = opts[idx];
                 final selStock = (sel['stock_qty'] as num?)?.toDouble() ?? 0;
-                if (selStock <= 0) { _playBadgeSound(); } else { _stageProduct(sel); _searchCtrl.clear(); _filterProducts(''); }
+                if (selStock >= 0 && selStock <= 0) { _playBadgeSound(); } else { _stageProduct(sel); _searchCtrl.clear(); _filterProducts(''); }
               }
             },
           ))),
@@ -1102,44 +1197,50 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           if ((_search.isNotEmpty || _showDropdown) && _stagedProduct == null)
             Container(
               margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              constraints: const BoxConstraints(maxHeight: 380),
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: AppTheme.border),
                   boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 10)]),
-              child: Column(
-                children: _displayProducts.take(8).toList().asMap().entries.map((entry) {
-                  final i = entry.key; final p = entry.value;
-                  final price = (p['price'] as num?)?.toDouble() ?? 0;
-                  final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
-                  final blocked = stock <= 0;
-                  final highlighted = i == _dropdownHighlight;
-                  return InkWell(
-                    onTap: blocked ? () { _playBadgeSound(); } : () { _stageProduct(p); _searchCtrl.clear(); _filterProducts(''); },
-                    child: Container(
-                      color: highlighted ? AppTheme.primary.withOpacity(0.08) : Colors.transparent,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      child: Row(children: [
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(p['name'] as String? ?? '-',
-                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                                  color: blocked ? Colors.grey : AppTheme.textPrimary)),
-                          Text('Rs. ' + price.toStringAsFixed(2) + '  |  Stock: ' + stock.toStringAsFixed(0),
-                              style: TextStyle(fontSize: 11,
-                                  color: blocked ? Colors.red.shade300 : AppTheme.textSecondary)),
-                        ])),
-                        if (blocked)
-                          const Text('OUT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.red))
-                        else if (highlighted)
-                          const Icon(Icons.keyboard_return, size: 14, color: AppTheme.primary),
-                      ]),
-                    ),
-                  );
-                }).toList(),
-              ),
+              child: _displayProducts.isEmpty
+                ? const Padding(padding: EdgeInsets.all(16), child: Text('No products found', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+                : Scrollbar(child: ListView.builder(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: _displayProducts.length,
+                    itemBuilder: (ctx, i) {
+                      final p = _displayProducts[i];
+                      final price = (p['price'] as num?)?.toDouble() ?? 0;
+                      final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
+                      final tracked = stock >= 0;            // < 0 is the "no inventory record" sentinel
+                      final blocked = tracked && stock <= 0; // only a tracked zero is OUT
+                      final highlighted = i == _dropdownHighlight;
+                      return InkWell(
+                        onTap: blocked ? () { _playBadgeSound(); } : () { _stageProduct(p); _searchCtrl.clear(); _filterProducts(''); },
+                        child: Container(
+                          color: highlighted ? AppTheme.primary.withOpacity(0.08) : Colors.transparent,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          child: Row(children: [
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(p['name'] as String? ?? '-',
+                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                                      color: blocked ? Colors.grey : AppTheme.textPrimary)),
+                              Text('Rs. ' + price.toStringAsFixed(2) + (tracked ? '  |  Stock: ' + stock.toStringAsFixed(0) : '  |  Stock not tracked'),
+                                  style: TextStyle(fontSize: 11,
+                                      color: blocked ? Colors.red.shade300 : AppTheme.textSecondary)),
+                            ])),
+                            if (blocked)
+                              const Text('OUT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.red))
+                            else if (highlighted)
+                              const Icon(Icons.keyboard_return, size: 14, color: AppTheme.primary),
+                          ]),
+                        ),
+                      );
+                    })),
             ),
           // Staging card
           if (_stagedProduct != null) _buildStagingCard(),
           // Empty state
-          if (_stagedProduct == null && _search.isEmpty)
+          if (_stagedProduct == null && _search.isEmpty && !_showDropdown)
             Expanded(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.point_of_sale_outlined, size: 64, color: Colors.grey.shade200),
               const SizedBox(height: 12),
@@ -1580,127 +1681,6 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 }
 
 // ── Receipt Dialog ─────────────────────────────────────────────────────────
-// Builds and opens the POS session summary (new tab, auto-print). Reusable from
-// both the live session screen and the Recent Sessions list (closed sessions).
-Future<void> openPosSessionSummary(WidgetRef ref, Map<String, dynamic> session,
-    List<Map<String, dynamic>> transactions, List<Map<String, dynamic>> expenses) async {
-  final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
-  final client = Supabase.instance.client;
-  final txnIds = transactions.map((t) => t['id'] as String).toList();
-  Map<String, List<Map<String, dynamic>>> itemsByTxn = {};
-  if (txnIds.isNotEmpty) {
-    try {
-      final allItems = await client.from('pos_transaction_items').select('*, products(name, sku)').inFilter('transaction_id', txnIds);
-      for (final item in allItems as List) {
-        final tid = item['transaction_id'] as String;
-        itemsByTxn.putIfAbsent(tid, () => []).add(Map<String, dynamic>.from(item));
-      }
-    } catch (_) {}
-  }
-  final sales = transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'sale').toList();
-  final returns = transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'return').toList();
-  double totalSales = 0, totalReturns = 0;
-  for (final t in sales) totalSales += (t['total'] as num?)?.toDouble() ?? 0;
-  for (final t in returns) totalReturns += ((t['total'] as num?)?.toDouble() ?? 0).abs();
-  double customerAccountSale = 0;
-  for (final t in sales) {
-    final tot = (t['total'] as num?)?.toDouble() ?? 0;
-    final paid = (t['amount_paid'] as num?)?.toDouble() ?? tot;
-    final onAcct = tot - paid;
-    if (onAcct > 0) customerAccountSale += onAcct;
-  }
-  final openingCash = (session['opening_cash'] as num?)?.toDouble() ?? 0;
-  final closingCash = (session['closing_cash'] as num?)?.toDouble() ?? 0;
-  double totalExpenses = 0; String expRows = '';
-  for (final e in expenses) {
-    final ea = (e['amount'] as num?)?.toDouble() ?? 0; totalExpenses += ea;
-    final ec = e['category'] as String? ?? '-'; final en = e['note'] as String? ?? '';
-    final et = e['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
-    expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>${en}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${ea.toStringAsFixed(2)}</td></tr>';
-  }
-  final cashDiff = totalSales - totalReturns - totalExpenses + openingCash - closingCash;
-  final branch = session['branches']?['name'] as String? ?? '-';
-  final user = ref.read(currentUserProvider);
-  final cashier = user?.name ?? user?.id ?? '-';
-  final openedAt = session['opened_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(session['opened_at'] as String).toLocal()) : '-';
-  final closedAt = session['closed_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(session['closed_at'] as String).toLocal()) : 'Open';
-
-  String txnRows = '';
-  for (final t in sales) {
-    final tid = t['id'] as String;
-    final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
-    final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
-    final method = t['payment_method'] as String? ?? '';
-    final total = (t['total'] as num?)?.toStringAsFixed(2) ?? '0.00';
-    final disc = (t['discount'] as num?)?.toDouble() ?? 0;
-    final items = itemsByTxn[tid] ?? [];
-    final itemStr = items.map((i) { final q = (i['quantity'] as num?)?.toDouble() ?? 0; final p = (i['unit_price'] as num?)?.toDouble() ?? 0; final d = (i['discount'] as num?)?.toDouble() ?? 0; final n = i['products']?['name'] as String? ?? '-'; return '$n × ${q.toStringAsFixed(0)} @ ${p.toStringAsFixed(2)}${d > 0 ? ' (-${d.toStringAsFixed(2)})' : ''}'; }).join('<br>');
-    txnRows += '<tr><td>$time</td><td style="font-size:11px;color:#666">${tid.substring(0, 10)}…</td><td>$customer</td><td style="font-size:11px">$itemStr</td><td>$method</td>${disc > 0 ? '<td style="color:#e67e22">-${disc.toStringAsFixed(2)}</td>' : '<td>-</td>'}<td style="text-align:right;font-weight:bold">$total</td></tr>';
-  }
-  String retRows = '';
-  for (final t in returns) {
-    final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
-    final refId = t['reference_transaction_id'] as String? ?? '-';
-    final refShort = refId.length > 10 ? '${refId.substring(0, 10)}…' : refId;
-    final total = ((t['total'] as num?)?.toDouble() ?? 0).abs().toStringAsFixed(2);
-    final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
-    retRows += '<tr style="background:#fff5f5"><td>$time</td><td>$customer</td><td style="font-size:11px;color:#666">← $refShort</td><td style="text-align:right;color:#e74c3c;font-weight:bold">-$total</td></tr>';
-  }
-
-  final htmlContent = '''<!DOCTYPE html><html><head><title>POS Session Summary</title>
-<style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;padding:32px;color:#333;max-width:900px;margin:0 auto}
-h1{font-size:24px;margin:0 0 4px}h2{font-size:16px;margin:24px 0 10px;color:#555;border-bottom:2px solid #eee;padding-bottom:6px}
-.meta{color:#888;font-size:13px;margin-bottom:20px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px}
-.stat{background:#f8f9fa;padding:14px 16px;border-radius:10px;border:1px solid #e9ecef}
-.sl{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-.sv{font-size:20px;font-weight:700;color:#2c3e50}
-.sv.green{color:#27ae60}.sv.red{color:#e74c3c}.sv.blue{color:#2980b9}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{background:#f1f3f5;padding:9px 12px;text-align:left;font-size:12px;font-weight:600;color:#555}
-td{padding:8px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
-tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;font-size:14px}
-.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
-.badge-sale{background:#d4edda;color:#155724}.badge-ret{background:#f8d7da;color:#721c24}
-@media print{body{padding:16px}h1{font-size:20px}}
-</style></head><body>
-<h1>POS Session Summary</h1>
-<div class="meta">Branch: <b>$branch</b> &nbsp;|&nbsp; Cashier: <b>$cashier</b> &nbsp;|&nbsp; Opened: <b>$openedAt</b> &nbsp;|&nbsp; Closed: <b>$closedAt</b></div>
-<div class="stats">
-  <div class="stat"><div class="sl">Transactions</div><div class="sv blue">${sales.length}</div></div>
-  <div class="stat"><div class="sl">Returns</div><div class="sv red">${returns.length}</div></div>
-  <div class="stat"><div class="sl">Total Sales</div><div class="sv green">${totalSales.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Total Refunds</div><div class="sv red">${totalReturns.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Net Sales</div><div class="sv">${(totalSales - totalReturns).toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Customer Account Sale</div><div class="sv blue">${customerAccountSale.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${openingCash.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${closingCash.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${cashDiff.abs().toStringAsFixed(2)}</div></div>
-</div>
-${txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
-<table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
-<tbody>$txnRows
-<tr class="total-row"><td colspan="6">TOTAL SALES</td><td style="text-align:right">${totalSales.toStringAsFixed(2)}</td></tr>
-</tbody></table>''' : ''}
-${expRows.isNotEmpty ? '''<h2>Expenses</h2>
-<table><thead><tr><th>Time</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>
-<tbody>$expRows
-<tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:#c0392b">-${totalExpenses.toStringAsFixed(2)}</td></tr>
-</tbody></table>''' : ''}
-${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
-<table><thead><tr><th>Time</th><th>Customer</th><th>Original Txn</th><th>Refund</th></tr></thead>
-<tbody>$retRows
-<tr class="total-row"><td colspan="3">TOTAL REFUNDS</td><td style="text-align:right;color:#e74c3c">-${totalReturns.toStringAsFixed(2)}</td></tr>
-</tbody></table>''' : ''}
-<script>window.onload=function(){window.print();}</script>
-</body></html>''';
-
-  final blob = html.Blob([htmlContent], 'text/html');
-  final url = html.Url.createObjectUrlFromBlob(blob);
-  html.window.open(url, '_blank');
-}
-
 class _ReceiptDialog extends StatelessWidget {
   final Map<String, dynamic> transaction;
   final List<Map<String, dynamic>> items;
