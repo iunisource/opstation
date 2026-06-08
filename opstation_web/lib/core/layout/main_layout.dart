@@ -191,6 +191,11 @@ class _TopNav extends ConsumerWidget {
       if (show('/manufacturing/production-waste-report')) _menuItem(context, 'Production Waste Report',    Icons.recycling_outlined,               '/manufacturing/production-waste-report',    location),
     ];
 
+    final hrItems = <Widget>[
+      if (show('/hr/employees')) _menuItem(context, 'Employee Directory', Icons.groups_outlined, '/hr/employees', location),
+      if (show('/hr/attendance')) _menuItem(context, 'Attendance', Icons.fact_check_outlined, '/hr/attendance', location),
+    ];
+
     final financialItems = <Widget>[
       if (show('/erp/chart-of-accounts')) _menuItem(context, 'Chart of Accounts',  Icons.account_tree_outlined,    '/erp/chart-of-accounts',          location),
       if (show('/financials/journal-vouchers')) _menuItem(context, 'Journal Vouchers',   Icons.edit_note_outlined,          '/financials/journal-vouchers',    location),
@@ -210,7 +215,7 @@ class _TopNav extends ConsumerWidget {
     // Legacy combined list (still used for isNotEmpty guards)
     final erpMenuItems = <Widget>[
       ...inventoryItems, ...purchaseItems, ...salesItems, ...posItems,
-      ...ledgerItems, ...financialItems, ...manufacturingItems, ...erpAdminItems,
+      ...ledgerItems, ...financialItems, ...manufacturingItems, ...hrItems, ...erpAdminItems,
     ];
 
     List<Widget> splitErpMenus() => [
@@ -247,6 +252,9 @@ class _TopNav extends ConsumerWidget {
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
           ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers'],
           _trimDividers(financialItems)),
+      if (_hasItems(hrItems))
+        _navMenu(context, 'HR', Icons.badge_outlined, location,
+          ['/hr/employees', '/hr/attendance'], _trimDividers(hrItems)),
       if (_hasItems(erpAdminItems))
         _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
           ['/erp/users'], _trimDividers(erpAdminItems)),

@@ -88,6 +88,10 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
     PermItem('production_waste', 'Production Waste Report', PermKind.report, '/manufacturing/production-waste-report'),
   ]),
+  PermModule('hr', 'HR', Icons.badge_outlined, [
+    PermItem('hr_employees', 'Employee Directory', PermKind.doc, '/hr/employees'),
+    PermItem('hr_attendance', 'Attendance', PermKind.doc, '/hr/attendance'),
+  ], moduleGated: false),
   PermModule('financial_reporting', 'Financials', Icons.account_balance_outlined, [
     PermItem('chart_of_accounts', 'Chart of Accounts', PermKind.doc, '/erp/chart-of-accounts'),
     PermItem('jv', 'Journal Vouchers', PermKind.doc, '/financials/journal-vouchers'),

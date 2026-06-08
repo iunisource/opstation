@@ -10,6 +10,8 @@ import '../../features/erp/presentation/erp_production_inverse_voucher_screen.da
 import '../../features/erp/presentation/erp_damage_stock_voucher_screen.dart';
 import '../../features/erp/presentation/erp_claim_processing_voucher_screen.dart';
 import '../../features/erp/presentation/erp_production_waste_report_screen.dart';
+import '../../features/hr/presentation/hr_employees_screen.dart';
+import '../../features/hr/presentation/hr_attendance_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -125,7 +127,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           if (role == WebUserRole.erpUser) {
             final inErp = loc.startsWith('/erp/') ||
                 loc.startsWith('/financials/') ||
-                loc.startsWith('/manufacturing/');
+                loc.startsWith('/manufacturing/') ||
+                loc.startsWith('/hr/');
             if (!inErp) return false;
             if (loc == '/erp/no-access') return true;
             if (access == null) return true;
@@ -193,6 +196,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => const ErpDamageStockVoucherScreen()),
       GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => const ErpClaimProcessingVoucherScreen()),
       GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => const ErpProductionWasteReportScreen()),
+      GoRoute(path: '/hr/employees', builder: (_, __) => const HrEmployeesScreen()),
+      GoRoute(path: '/hr/attendance', builder: (_, __) => const HrAttendanceScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),
           GoRoute(path: '/erp/pos-config', builder: (_, __) => const ErpPosConfigScreen()),
