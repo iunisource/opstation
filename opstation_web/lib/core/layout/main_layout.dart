@@ -187,6 +187,7 @@ class _TopNav extends ConsumerWidget {
     final manufacturingItems = <Widget>[
       if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)',    Icons.account_tree_outlined,            '/manufacturing/product-assembly',           location),
       if (show('/manufacturing/production-voucher')) _menuItem(context, 'Production Voucher',         Icons.precision_manufacturing_outlined, '/manufacturing/production-voucher',         location),
+      if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card',                   Icons.assignment_outlined,              '/manufacturing/job-card',                   location),
       if (show('/manufacturing/production-inverse-voucher')) _menuItem(context, 'Production Inverse Voucher', Icons.undo_outlined,                    '/manufacturing/production-inverse-voucher', location),
       if (show('/manufacturing/damage-stock-voucher')) _menuItem(context, 'Damage Stock Voucher',       Icons.report_gmailerrorred_outlined,    '/manufacturing/damage-stock-voucher',       location),
       if (show('/manufacturing/claim-processing-voucher')) _menuItem(context, 'Claim Processing Voucher',   Icons.assignment_return_outlined,       '/manufacturing/claim-processing-voucher',   location),
@@ -247,7 +248,7 @@ class _TopNav extends ConsumerWidget {
           _trimDividers(ledgerItems)),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
-          ['/manufacturing/product-assembly', '/manufacturing/production-voucher',
+          ['/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
            '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report'],
           _trimDividers(manufacturingItems)),

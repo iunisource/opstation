@@ -45,6 +45,8 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('branches', 'Branches', PermKind.doc, '/erp/branches'),
     PermItem('uoms', 'Units of Measure', PermKind.doc, '/erp/uoms'),
     PermItem('stock_levels', 'Stock Levels', PermKind.report, '/erp/stock'),
+    PermItem('low_stock_report', 'Low Stock Report', PermKind.report, '/erp/low-stock-report'),
+    PermItem('stock_value_report', 'Stock Value Report', PermKind.report, '/erp/stock-value-report'),
     PermItem('product_classifications', 'Product Classifications', PermKind.doc, '/erp/product-classifications'),
     PermItem('opening_stock', 'Opening Stock', PermKind.doc, '/erp/opening-stock'),
     PermItem('stock_transfer', 'Stock Transfers', PermKind.doc, '/erp/stock-transfers'),
@@ -83,6 +85,7 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('production', 'Manufacturing', Icons.precision_manufacturing_outlined, [
     PermItem('bom', 'Product Assembly (BOM)', PermKind.doc, '/manufacturing/product-assembly'),
     PermItem('production', 'Production Voucher', PermKind.doc, '/manufacturing/production-voucher'),
+    PermItem('job_card', 'Job Card', PermKind.doc, '/manufacturing/job-card'),
     PermItem('production_inverse', 'Production Inverse Voucher', PermKind.doc, '/manufacturing/production-inverse-voucher'),
     PermItem('damage_stock', 'Damage Stock Voucher', PermKind.doc, '/manufacturing/damage-stock-voucher'),
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
@@ -91,6 +94,7 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('hr', 'HR', Icons.badge_outlined, [
     PermItem('hr_employees', 'Employee Directory', PermKind.doc, '/hr/employees'),
     PermItem('hr_attendance', 'Attendance', PermKind.doc, '/hr/attendance'),
+    PermItem('hr_leave', 'Leave', PermKind.doc, '/hr/leave'),
   ], moduleGated: false),
   PermModule('financial_reporting', 'Financials', Icons.account_balance_outlined, [
     PermItem('chart_of_accounts', 'Chart of Accounts', PermKind.doc, '/erp/chart-of-accounts'),
