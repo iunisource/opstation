@@ -535,14 +535,22 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   Future<void> _uploadPhoto() async {
     final orgId = _orgId; if (orgId == null) return;
     final input = html.FileUploadInputElement()..accept = 'image/*';
+    // Safari/Firefox need the input attached to the DOM for click()+onChange to fire.
+    input.style.display = 'none';
+    html.document.body?.append(input);
     input.click();
     await input.onChange.first;
-    if (input.files == null || input.files!.isEmpty) return;
-    final file = input.files!.first;
+    final files = input.files;
+    input.remove();
+    if (files == null || files.isEmpty) return;
+    final file = files.first;
     final reader = html.FileReader();
     reader.readAsArrayBuffer(file);
-    await reader.onLoad.first;
-    final bytes = (reader.result as ByteBuffer).asUint8List();
+    await reader.onLoadEnd.first;
+    final result = reader.result;
+    if (result == null) { _snack('Could not read the image file'); return; }
+    final bytes = result is Uint8List ? result : (result as ByteBuffer).asUint8List();
+    if (bytes.isEmpty) { _snack('Selected file is empty'); return; }
     final ext = (file.name.contains('.') ? file.name.split('.').last : 'jpg').toLowerCase();
     final path = '$orgId/${_current?['id'] ?? 'new'}_${DateTime.now().millisecondsSinceEpoch}.$ext';
     setState(() => _photoUploading = true);
