@@ -145,8 +145,14 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
           'maPasswordHash': hash,
           'maPasswordSalt': salt,
         });
-        // Best-effort: read the new org id from the response so the dialog can
-        // apply the chosen costing method to inventory_settings.
+        // Resolve the new org id. Primary: look it up via the just-created master
+        // admin (email is unique). Fallback: the function response payload.
+        try {
+          final maRow = await client.from('users')
+              .select('org_id').eq('email', maEmail).limit(1).maybeSingle();
+          final oid = maRow?['org_id'];
+          if (oid is String) return oid;
+        } catch (_) {}
         final d = resp.data;
         if (d is Map) {
           final v = d['orgId'] ?? d['org_id'] ?? d['id'] ??
