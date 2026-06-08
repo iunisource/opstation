@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1694,23 +1695,32 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       ));
       if (ok != true) return;
     }
-    // Held cart is stored as JSONB: doubles like 1.0 can come back as int → coerce
-    // every numeric field to double so the cart build (item['quantity'] as double) won't throw.
-    final items = (bill['items'] as List).map((i) {
+    // Held cart is stored as JSONB. Two things can crash the rebuild:
+    //  1) numbers come back as int (1 not 1.0) → 'as double' throws,
+    //  2) items may come back as a JSON string instead of a List.
+    final rawItems = bill['items'];
+    final List itemsList = rawItems is String
+        ? (jsonDecode(rawItems) as List? ?? const [])
+        : (rawItems as List? ?? const []);
+    final items = itemsList.map((i) {
       final m = Map<String, dynamic>.from(i as Map);
       m['quantity'] = (m['quantity'] as num?)?.toDouble() ?? 1.0;
       m['unit_price'] = (m['unit_price'] as num?)?.toDouble() ?? 0.0;
       m['discount'] = (m['discount'] as num?)?.toDouble() ?? 0.0;
       m['stock_qty'] = (m['stock_qty'] as num?)?.toDouble() ?? 0.0;
-      m['discount_type'] = m['discount_type'] as String? ?? 'fixed';
+      m['discount_type'] = (m['discount_type'] == 'percent') ? 'percent' : 'fixed';
       m['name'] = m['name'] as String? ?? '-';
       return m;
     }).toList();
+    // Clamp restored values to what their widgets accept, or the DropdownButton
+    // (order discount type) and SegmentedButton (payment) will assert → white screen.
+    final odt = bill['order_discount_type'] as String?;
+    final pm = bill['payment_method'] as String?;
     setState(() {
       _cart = items;
       _orderDiscount = (bill['order_discount'] as num?)?.toDouble() ?? 0;
-      _orderDiscountType = bill['order_discount_type'] as String? ?? 'fixed';
-      _paymentMethod = bill['payment_method'] as String? ?? 'cash';
+      _orderDiscountType = (odt == 'percent') ? 'percent' : 'fixed';
+      _paymentMethod = const {'cash', 'card', 'other'}.contains(pm) ? pm! : 'cash';
       _stagedProduct = null; _stagedCartIndex = null;
     });
     try {
