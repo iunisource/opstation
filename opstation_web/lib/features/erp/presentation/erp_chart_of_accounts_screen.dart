@@ -50,8 +50,14 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
 
   List<Map<String, dynamic>> _getLevel(int level, {String? group, String? parentId}) =>
       _accounts.where((a) => a['level'] == level
-          && (group == null || a['account_group'] == group)
-          && (parentId == null || a['parent_id'] == parentId)).toList();
+          // When a parent is selected, the parent link is authoritative — do NOT
+          // also filter by account_group. The pre-fed template stores the immediate
+          // sub-group name in account_group (e.g. 'Current Assets'), while app-created
+          // accounts store the top-level group ('Assets'); filtering by group here
+          // wrongly hid all template children. parent_id matches both conventions.
+          && (parentId != null
+              ? a['parent_id'] == parentId
+              : (group == null || a['account_group'] == group))).toList();
 
   // Generate code automatically
   String _genCode({String? parentCode, String? group, required int level}) {
