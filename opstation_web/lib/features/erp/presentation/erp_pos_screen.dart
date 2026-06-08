@@ -486,6 +486,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _posCustomers = [];
   Map<String, dynamic>? _selectedPosCustomer;  // quick POS customer
   Map<String, double> _stockMap = {};  // product_id → qty in stock
+  bool _allowNoStock = false;           // org setting: allow selling without stock
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
@@ -522,6 +523,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         expenseList = List<Map<String, dynamic>>.from(expRows);
       } catch (_) {}
       // Load expenses separately (avoids Future.wait index issues)
+      bool allowNoStock = false;
+      try {
+        final s = await Supabase.instance.client.from('pos_settings').select('allow_sell_without_stock').eq('org_id', orgId).maybeSingle();
+        allowNoStock = s != null && s['allow_sell_without_stock'] == true;
+      } catch (_) {}
 
       setState(() {
         _expenses = expenseList;
@@ -531,6 +537,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _customers = List<Map<String, dynamic>>.from(results[2] as List);
         _session = Map<String, dynamic>.from(results[3] as Map);
         _stockMap = stockMap;
+        _allowNoStock = allowNoStock;
         _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
         _heldBills = List<Map<String, dynamic>>.from(results[6] as List);
         _loading = false;
@@ -540,9 +547,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   // ── Stage a product for editing before adding to bill ─────
   void _stageProduct(Map<String, dynamic> product, {int? cartIndex}) {
-    // Block only a tracked zero stock (< 0 means inventory not tracked → sellable)
+    // Block unless org allows no-stock selling, or the item has tracked stock > 0
     final pStock = (product['stock_qty'] as num?)?.toDouble() ?? 0;
-    if (cartIndex == null && pStock >= 0 && pStock <= 0) { _playBadgeSound(); return; }
+    if (cartIndex == null && !_allowNoStock && pStock <= 0) { _playBadgeSound(); return; }
     // If already in cart and not explicitly editing, load that cart entry
     if (cartIndex == null) {
       final existIdx = _cart.indexWhere((ci) => ci['pos_catalog_id'] == (product['id'] ?? product['pos_catalog_id']));
@@ -631,7 +638,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           if (isEdit) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: const Text('Editing', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w700))),
         ]),
         const SizedBox(height: 3),
-        Text('Rs. ' + price.toStringAsFixed(2) + (stock >= 0 ? '   Stock: ' + stock.toStringAsFixed(0) : '   Stock not tracked'), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        Text('Rs. ' + price.toStringAsFixed(2) + '   ' + (stock >= 0 ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock')), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         const SizedBox(height: 14),
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -765,7 +772,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final item in _cart) {
       final qty = item['quantity'] as double;
       final stock = (item['stock_qty'] as num?)?.toDouble() ?? 0;
-      if (stock >= 0 && qty > stock) { _showSnack('Insufficient stock for "${item['name']}": ${stock.toStringAsFixed(0)} available'); return; }
+      if (!_allowNoStock && (stock <= 0 || qty > stock)) { _showSnack('Insufficient stock for "${item['name']}": ${(stock < 0 ? 0 : stock).toStringAsFixed(0)} available'); return; }
     }
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final branchId = _session['branch_id'] as String;
@@ -1189,7 +1196,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 final idx = _dropdownHighlight.clamp(0, opts.length - 1);
                 final sel = opts[idx];
                 final selStock = (sel['stock_qty'] as num?)?.toDouble() ?? 0;
-                if (selStock >= 0 && selStock <= 0) { _playBadgeSound(); } else { _stageProduct(sel); _searchCtrl.clear(); _filterProducts(''); }
+                if (!_allowNoStock && selStock <= 0) { _playBadgeSound(); } else { _stageProduct(sel); _searchCtrl.clear(); _filterProducts(''); }
               }
             },
           ))),
@@ -1212,7 +1219,8 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       final price = (p['price'] as num?)?.toDouble() ?? 0;
                       final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
                       final tracked = stock >= 0;            // < 0 is the "no inventory record" sentinel
-                      final blocked = tracked && stock <= 0; // only a tracked zero is OUT
+                      final blocked = !_allowNoStock && !(tracked && stock > 0);
+                      final stockLabel = tracked ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock');
                       final highlighted = i == _dropdownHighlight;
                       return InkWell(
                         onTap: blocked ? () { _playBadgeSound(); } : () { _stageProduct(p); _searchCtrl.clear(); _filterProducts(''); },
@@ -1224,12 +1232,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                               Text(p['name'] as String? ?? '-',
                                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                                       color: blocked ? Colors.grey : AppTheme.textPrimary)),
-                              Text('Rs. ' + price.toStringAsFixed(2) + (tracked ? '  |  Stock: ' + stock.toStringAsFixed(0) : '  |  Stock not tracked'),
+                              Text('Rs. ' + price.toStringAsFixed(2) + '  |  ' + stockLabel,
                                   style: TextStyle(fontSize: 11,
                                       color: blocked ? Colors.red.shade300 : AppTheme.textSecondary)),
                             ])),
                             if (blocked)
-                              const Text('OUT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.red))
+                              Text(tracked ? 'OUT' : 'NO STOCK', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.red))
                             else if (highlighted)
                               const Icon(Icons.keyboard_return, size: 14, color: AppTheme.primary),
                           ]),

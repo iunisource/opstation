@@ -16,14 +16,41 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
   List<Map<String, dynamic>> _filtered = [];
   List<Map<String, dynamic>> _allBranches = [];
   bool _loading = true;
+  bool _allowNoStock = false;
+  bool _savingSetting = false;
   Map<String, double> _stockMap = {};
   final _searchCtrl = TextEditingController();
+
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin; }
 
   @override
   void initState() {
     super.initState();
     _searchCtrl.addListener(_filter);
     _load();
+    _loadSetting();
+  }
+
+  Future<void> _loadSetting() async {
+    final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
+    try {
+      final s = await Supabase.instance.client.from('pos_settings')
+          .select('allow_sell_without_stock').eq('org_id', orgId).maybeSingle();
+      if (mounted) setState(() => _allowNoStock = s != null && s['allow_sell_without_stock'] == true);
+    } catch (_) {}
+  }
+
+  Future<void> _setAllowNoStock(bool v) async {
+    final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
+    setState(() { _allowNoStock = v; _savingSetting = true; });
+    try {
+      await Supabase.instance.client.from('pos_settings').upsert({
+        'org_id': orgId, 'allow_sell_without_stock': v,
+        'updated_at': DateTime.now().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
+      }, onConflict: 'org_id');
+      _showSnack(v ? 'Selling without stock is now ALLOWED' : 'Selling without stock is now LOCKED');
+    } catch (e) { _showSnack('Failed to save setting: $e'); if (mounted) setState(() => _allowNoStock = !v); }
+    if (mounted) setState(() => _savingSetting = false);
   }
 
   @override
@@ -235,6 +262,26 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
         const SizedBox(height: 8),
         Text(branch == null ? 'Select a branch' : 'Branch: ${branch['name']} — ${_filtered.length} items',
             style: const TextStyle(color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+          child: Row(children: [
+            Icon(_allowNoStock ? Icons.lock_open_outlined : Icons.lock_outline, size: 18, color: _allowNoStock ? Colors.orange.shade800 : AppTheme.textSecondary),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Allow selling without stock', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              Text(_allowNoStock
+                  ? 'On — items can be sold even with no stock on hand (inventory may go negative).'
+                  : 'Off — an item sells only when it has stock (opening stock or a purchase). Untracked or zero-stock items are locked.',
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              if (!_isAdmin) const Text('Only an admin can change this.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
+            ])),
+            const SizedBox(width: 12),
+            if (_savingSetting) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+            else Switch(value: _allowNoStock, onChanged: _isAdmin ? _setAllowNoStock : null),
+          ]),
+        ),
         const SizedBox(height: 16),
         if (branch != null)
           SizedBox(width: 320, child: TextField(
