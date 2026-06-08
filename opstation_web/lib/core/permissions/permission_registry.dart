@@ -86,6 +86,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('bom', 'Product Assembly (BOM)', PermKind.doc, '/manufacturing/product-assembly'),
     PermItem('production', 'Production Voucher', PermKind.doc, '/manufacturing/production-voucher'),
     PermItem('job_card', 'Job Card', PermKind.doc, '/manufacturing/job-card'),
+    PermItem('qc_checkpoints', 'QC Checkpoints', PermKind.doc, '/manufacturing/qc-checkpoints'),
     PermItem('production_inverse', 'Production Inverse Voucher', PermKind.doc, '/manufacturing/production-inverse-voucher'),
     PermItem('damage_stock', 'Damage Stock Voucher', PermKind.doc, '/manufacturing/damage-stock-voucher'),
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
