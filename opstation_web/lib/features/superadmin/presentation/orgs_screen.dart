@@ -112,6 +112,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     required String maName,
     required String maEmail,
     required String maPassword,
+    required String costingMethod,
   }) async {
     final client = Supabase.instance.client;
     final now = DateTime.now();
@@ -128,6 +129,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
           'orgName': orgName,
           'maxUsers': maxUsers,
           'expiresAt': expiresAt?.toUtc().toIso8601String(),
+          'costingMethod': costingMethod,
           'maName': maName,
           'maEmail': maEmail,
           'maPassword': maPassword,
@@ -172,6 +174,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
         'name': orgName,
         'max_users': maxUsers,
         'expires_at': expiresAt?.toUtc().toIso8601String(),
+        'costing_method': costingMethod,
         'updated_at': now.toIso8601String(),
       }).eq('id', orgId);
 
@@ -242,6 +245,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     final maPasswordCtrl = TextEditingController();
     bool obscure = true;
     bool saving = false;
+    String costingMethod = (org?['costing_method'] as String?) ?? 'weighted_average';
 
     showDialog(
       context: context,
@@ -311,6 +315,24 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                       ),
                     ],
                   ]),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: costingMethod,
+                    decoration: const InputDecoration(labelText: 'Costing Method *'),
+                    items: const [
+                      DropdownMenuItem(value: 'fifo', child: Text('FIFO')),
+                      DropdownMenuItem(value: 'lifo', child: Text('LIFO')),
+                      DropdownMenuItem(value: 'weighted_average', child: Text('Weighted Average')),
+                      DropdownMenuItem(value: 'last_purchase', child: Text('Last Purchase Cost')),
+                      DropdownMenuItem(value: 'standard', child: Text('Standard Cost')),
+                    ],
+                    onChanged: (v) => setS(() => costingMethod = v ?? 'weighted_average'),
+                  ),
+                  if (isEdit) const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Text('Changing this does not re-value existing stock.',
+                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ),
                   const SizedBox(height: 24),
                   Text(isEdit ? 'MASTER ADMIN' : 'MASTER ADMIN (created with org)',
                       style: const TextStyle(
@@ -393,6 +415,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     maName: maNameCtrl.text.trim(),
                     maEmail: maEmailCtrl.text.trim().toLowerCase(),
                     maPassword: maPasswordCtrl.text,
+                    costingMethod: costingMethod,
                   );
                   if (dCtx.mounted) {
                     ScaffoldMessenger.of(dCtx)
