@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/permissions/access_control.dart';
 
 class HrEmployeesScreen extends ConsumerStatefulWidget {
   const HrEmployeesScreen({super.key});
@@ -29,6 +30,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   Map<String, dynamic>? _current;
   bool _saving = false;
+  bool _canWrite = false;
 
   // form controllers
   final _code = TextEditingController();
@@ -230,6 +232,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   // ---- save / delete ----
   Future<void> _save() async {
+    if (!_canWrite) { _snack('You do not have edit access for employees'); return; }
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return; }
     if (_name.text.trim().isEmpty) { _snack('Employee name is required'); return; }
     final userId = ref.read(currentUserProvider)?.id ?? '';
@@ -310,6 +313,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   }
 
   Future<void> _void() async {
+    if (!_canWrite) return;
     final id = _current?['id'] as String?; if (id == null) return;
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Void employee?'),
@@ -371,6 +375,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   }
 
   Future<void> _uploadDoc() async {
+    if (!_canWrite) { _snack('You do not have edit access'); return; }
     if (_current == null) { _snack('Save the employee first, then attach documents'); return; }
     final orgId = _orgId; if (orgId == null) return;
     final input = html.FileUploadInputElement()..accept = 'image/*,application/pdf';
@@ -411,6 +416,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   }
 
   Future<void> _deleteDoc(Map<String, dynamic> d) async {
+    if (!_canWrite) return;
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Remove document?'),
       content: Text('Remove "${d['name'] ?? 'document'}" from this employee?'),
@@ -509,7 +515,7 @@ $docsHtml
           OutlinedButton.icon(
             icon: _docUploading ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.attach_file, size: 15),
             label: const Text('Upload document', style: TextStyle(fontSize: 12)),
-            onPressed: _docUploading ? null : _uploadDoc),
+            onPressed: (!_canWrite || _docUploading) ? null : _uploadDoc),
           const SizedBox(width: 10),
           const Expanded(child: Text('Images are compressed automatically. PDFs upload as-is.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
         ]),
@@ -532,7 +538,7 @@ $docsHtml
                   if (size != null) Text(_fmtSize(size), style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                 ])),
                 IconButton(icon: const Icon(Icons.open_in_new, size: 16), tooltip: 'Open', onPressed: () { final u = d['url'] as String?; if (u != null) html.window.open(u, '_blank'); }, visualDensity: VisualDensity.compact),
-                IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red), tooltip: 'Remove', onPressed: () => _deleteDoc(d), visualDensity: VisualDensity.compact),
+                if (_canWrite) IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red), tooltip: 'Remove', onPressed: () => _deleteDoc(d), visualDensity: VisualDensity.compact),
               ]),
             );
           }).toList()),
@@ -542,6 +548,10 @@ $docsHtml
 
   @override
   Widget build(BuildContext context) {
+    final access = ref.watch(accessSyncProvider);
+    final canAdd = access?.canAddDoc('hr_employees') ?? false;
+    final canEdit = access?.canEditDoc('hr_employees') ?? false;
+    _canWrite = _current == null ? canAdd : canEdit;
     final filtered = _listSearch.isEmpty ? _employees : _employees.where((e) {
       final q = _listSearch.toLowerCase();
       return (e['full_name'] as String? ?? '').toLowerCase().contains(q)
@@ -599,8 +609,8 @@ $docsHtml
             IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
             const SizedBox(width: 8),
             Expanded(child: Text(_current == null ? 'New Employee' : (_name.text.isEmpty ? 'Employee' : _name.text), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
-            TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
-            TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
+            if (_canWrite) TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
+            if (_canWrite) TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
             if (_isAdmin) TextButton.icon(icon: const Icon(Icons.schedule_outlined, size: 15), label: const Text('Shifts', style: TextStyle(fontSize: 12)), onPressed: _manageShifts),
             if (_current != null) _statusChip(),
             if (_current != null) const SizedBox(width: 6),
@@ -610,18 +620,25 @@ $docsHtml
                 icon: const Icon(Icons.verified_outlined, size: 15), label: const Text('Approve', style: TextStyle(fontSize: 12)),
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9), minimumSize: Size.zero),
                 onPressed: _approve)),
-            if (_current != null && !_voided)
+            if (_current != null && !_voided && _canWrite)
               TextButton.icon(icon: Icon(Icons.block, size: 16, color: Colors.orange.shade800), label: Text('Void', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)), onPressed: _void),
             if (_isAdmin && _voided)
               TextButton.icon(icon: const Icon(Icons.restore, size: 16), label: const Text('Restore', style: TextStyle(fontSize: 12)), onPressed: _unvoid),
             if (_isAdmin && _current != null)
               IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete permanently (admin)'),
             const SizedBox(width: 8),
-            if (!_voided) ElevatedButton.icon(
+            if (!_voided && _canWrite) ElevatedButton.icon(
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_outlined, size: 16),
               label: const Text('Save'),
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
               onPressed: _saving ? null : _save),
+            if (!_canWrite && !_voided) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.lock_outline, size: 13, color: Colors.grey.shade700),
+                const SizedBox(width: 5),
+                Text('View only', style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
+              ])),
             if (_voided) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
               child: Text('Voided \u2014 restore to edit', style: TextStyle(fontSize: 11, color: Colors.grey.shade700))),
@@ -715,20 +732,20 @@ $docsHtml
   ]);
 
   Widget _tf(TextEditingController c, {String hint = '', bool numeric = false, int lines = 1}) => TextField(
-    controller: c, minLines: lines, maxLines: lines,
+    controller: c, minLines: lines, maxLines: lines, enabled: _canWrite,
     keyboardType: numeric ? const TextInputType.numberWithOptions(decimal: true) : null,
     inputFormatters: numeric ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))] : null,
     decoration: InputDecoration(hintText: hint, isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
       border: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
     style: const TextStyle(fontSize: 12));
 
-  Widget _statusToggle() => Container(
+  Widget _statusToggle() => IgnorePointer(ignoring: !_canWrite, child: Container(
     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
     decoration: BoxDecoration(borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
     child: Row(children: [
       Expanded(child: _segBtn('Active', _status == 'active', () => setState(() => _status = 'active'), Colors.green)),
       Expanded(child: _segBtn('Inactive', _status == 'inactive', () => setState(() => _status = 'inactive'), Colors.grey)),
-    ]));
+    ])));
 
   Widget _segBtn(String label, bool sel, VoidCallback onTap, Color color) => InkWell(onTap: onTap, child: Container(
     alignment: Alignment.center, padding: const EdgeInsets.symmetric(vertical: 7),
@@ -747,7 +764,7 @@ $docsHtml
         ...items.map((i) => DropdownMenuItem(value: i['id'] as String, child: Text(i['name'] as String? ?? '', overflow: TextOverflow.ellipsis))),
         DropdownMenuItem(value: '__add__', child: Text('+ Add $addLabel\u2026', style: const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
       ],
-      onChanged: (v) async { if (v == '__add__') { final id = await _quickAddDialog(addTable, addLabel); if (id != null) onAdd(id); } else onChanged(v); });
+      onChanged: !_canWrite ? null : (v) async { if (v == '__add__') { final id = await _quickAddDialog(addTable, addLabel); if (id != null) onAdd(id); } else onChanged(v); });
   }
 
   Widget _simpleDropdown(String? value, List<Map<String, String>> opts, void Function(String?) onChanged) => DropdownButtonFormField<String>(
@@ -757,7 +774,7 @@ $docsHtml
       border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
     style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
     items: opts.map((o) => DropdownMenuItem(value: o['v'], child: Text(o['l'] ?? ''))).toList(),
-    onChanged: onChanged);
+    onChanged: _canWrite ? onChanged : null);
 
   Widget _branchDropdown() => DropdownButtonFormField<String>(
     value: _branchId != null && _branches.any((b) => b['id'] == _branchId) ? _branchId : null, isDense: true, isExpanded: true,
@@ -766,10 +783,10 @@ $docsHtml
       border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
     style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
     items: _branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '', overflow: TextOverflow.ellipsis))).toList(),
-    onChanged: (v) => setState(() => _branchId = v));
+    onChanged: _canWrite ? (v) => setState(() => _branchId = v) : null);
 
   Widget _dateField(DateTime? value, void Function(DateTime) onPick) => InkWell(
-    onTap: () async {
+    onTap: !_canWrite ? null : () async {
       final d = await showDatePicker(context: context, initialDate: value ?? DateTime(2000), firstDate: DateTime(1950), lastDate: DateTime(2100));
       if (d != null) onPick(d);
     },
@@ -798,8 +815,8 @@ $docsHtml
             OutlinedButton.icon(
               icon: _photoUploading ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.upload_outlined, size: 15),
               label: Text(_photoUrl != null && _photoUrl!.isNotEmpty ? 'Change' : 'Upload', style: const TextStyle(fontSize: 12)),
-              onPressed: _photoUploading ? null : _uploadPhoto),
-            if (_photoUrl != null && _photoUrl!.isNotEmpty) ...[
+              onPressed: (!_canWrite || _photoUploading) ? null : _uploadPhoto),
+            if (_canWrite && _photoUrl != null && _photoUrl!.isNotEmpty) ...[
               const SizedBox(width: 8),
               TextButton.icon(icon: const Icon(Icons.delete_outline, size: 15, color: Colors.red), label: const Text('Remove', style: TextStyle(fontSize: 12, color: Colors.red)), onPressed: () => setState(() => _photoUrl = null)),
             ],
@@ -811,6 +828,7 @@ $docsHtml
   }
 
   Future<void> _uploadPhoto() async {
+    if (!_canWrite) return;
     final orgId = _orgId; if (orgId == null) return;
     final input = html.FileUploadInputElement()..accept = 'image/*';
     // Safari/Firefox need the input attached to the DOM for click()+onChange to fire.
@@ -864,7 +882,7 @@ $docsHtml
         ...items.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text('${s['name']}${s['start_time'] != null ? ' (${s['start_time']}\u2013${s['end_time'] ?? ''})' : ''}', overflow: TextOverflow.ellipsis))),
         if (_isAdmin) const DropdownMenuItem(value: '__manage__', child: Text('Manage shifts\u2026', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
       ],
-      onChanged: (v) async { if (v == '__manage__') { await _manageShifts(); } else setState(() => _shiftId = v); });
+      onChanged: !_canWrite ? null : (v) async { if (v == '__manage__') { await _manageShifts(); } else setState(() => _shiftId = v); });
   }
 
   Future<void> _manageShifts() async {

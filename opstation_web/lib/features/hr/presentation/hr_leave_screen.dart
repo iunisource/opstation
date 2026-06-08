@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/permissions/access_control.dart';
 
 class HrLeaveScreen extends ConsumerStatefulWidget {
   const HrLeaveScreen({super.key});
@@ -27,6 +28,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
 
   Map<String, dynamic>? _current;
   bool _saving = false;
+  bool _canWrite = false;
 
   // form
   String? _empId, _typeId;
@@ -137,6 +139,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
 
   // ---- save ----
   Future<void> _save() async {
+    if (!_canWrite) { _snack('You do not have edit access for leave'); return; }
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return; }
     if (_empId == null) { _snack('Select an employee'); return; }
     if (_typeId == null) { _snack('Select a leave type'); return; }
@@ -307,6 +310,8 @@ class _State extends ConsumerState<HrLeaveScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final access = ref.watch(accessSyncProvider);
+    _canWrite = (access?.canAddDoc('hr_leave') ?? false) || (access?.canEditDoc('hr_leave') ?? false);
     final filtered = _requests.where((r) {
       if (_statusFilter != 'all' && (r['status'] as String? ?? 'pending') != _statusFilter) return false;
       if (_listSearch.isEmpty) return true;
@@ -380,11 +385,14 @@ class _State extends ConsumerState<HrLeaveScreen> {
             if (_isAdmin && (_isPending || _isApproved)) TextButton.icon(icon: const Icon(Icons.close, size: 16, color: Colors.red), label: const Text('Reject', style: TextStyle(fontSize: 12, color: Colors.red)), onPressed: _saving ? null : _reject),
             if (_current != null && (_isAdmin || _isPending)) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), tooltip: 'Delete request', onPressed: _deleteRequest),
             const SizedBox(width: 8),
-            ElevatedButton.icon(
+            if (_canWrite) ElevatedButton.icon(
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_outlined, size: 16),
               label: const Text('Save'),
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
               onPressed: _saving ? null : _save),
+            if (!_canWrite) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 13, color: Colors.grey.shade700), const SizedBox(width: 5), Text('View only', style: TextStyle(fontSize: 11, color: Colors.grey.shade700))])),
           ])),
         Expanded(child: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -409,7 +417,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
               if (_from != null && _to != null && _fmt(_from!) == _fmt(_to!)) ...[
                 const SizedBox(height: 6),
                 Row(children: [
-                  Checkbox(value: _halfDay, visualDensity: VisualDensity.compact, onChanged: (v) => setState(() => _halfDay = v ?? false)),
+                  Checkbox(value: _halfDay, visualDensity: VisualDensity.compact, onChanged: _canWrite ? (v) => setState(() => _halfDay = v ?? false) : null),
                   const Text('Half day', style: TextStyle(fontSize: 12)),
                 ]),
               ],
@@ -475,7 +483,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
       decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
       hint: const Text('Select employee', style: TextStyle(fontSize: 13)),
       items: _employees.map((e) => DropdownMenuItem(value: e['id'] as String, child: Text('${e['full_name'] ?? ''} (${e['employee_code'] ?? ''})', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))).toList(),
-      onChanged: (v) => setState(() => _empId = v));
+      onChanged: _canWrite ? (v) => setState(() => _empId = v) : null);
   }
 
   Widget _typeDropdown() {
@@ -488,12 +496,12 @@ class _State extends ConsumerState<HrLeaveScreen> {
         ...items.map((t) => DropdownMenuItem(value: t['id'] as String, child: Text(t['name'] as String? ?? '', style: const TextStyle(fontSize: 13)))),
         if (_isAdmin) const DropdownMenuItem(value: '__manage__', child: Text('+ Manage types...', style: TextStyle(fontSize: 13, color: AppTheme.primary))),
       ],
-      onChanged: (v) async { if (v == '__manage__') { await _manageTypes(); } else { setState(() => _typeId = v); } });
+      onChanged: !_canWrite ? null : (v) async { if (v == '__manage__') { await _manageTypes(); } else { setState(() => _typeId = v); } });
   }
 
   Widget _dateField(DateTime? value, void Function(DateTime) onPick) {
     return InkWell(
-      onTap: () async {
+      onTap: !_canWrite ? null : () async {
         final d = await showDatePicker(context: context, initialDate: value ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2035));
         if (d != null) onPick(_d0(d));
       },
@@ -526,7 +534,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
   }
 
   Widget _tf(TextEditingController c, {int lines = 1, String? hint}) {
-    return TextField(controller: c, maxLines: lines, style: const TextStyle(fontSize: 13),
+    return TextField(controller: c, maxLines: lines, enabled: _canWrite, style: const TextStyle(fontSize: 13),
       decoration: InputDecoration(hintText: hint, isDense: true, border: const OutlineInputBorder(), contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10)));
   }
 }

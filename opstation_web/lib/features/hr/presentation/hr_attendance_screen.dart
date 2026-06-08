@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/permissions/access_control.dart';
 import '../../auth/auth_controller.dart';
 
 class HrAttendanceScreen extends ConsumerStatefulWidget {
@@ -17,6 +18,7 @@ class HrAttendanceScreen extends ConsumerStatefulWidget {
 class _State extends ConsumerState<HrAttendanceScreen> {
   bool _loading = true;
   bool _savingAll = false;
+  bool _canWrite = false;
   DateTime _date = DateTime.now();
   String _branchFilter = '__all__';
   String _search = '';
@@ -129,6 +131,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   }
 
   Future<void> _pickTime(_Row r, bool isIn) async {
+    if (!_canWrite) return;
     final cur = isIn ? r.checkIn : r.checkOut;
     TimeOfDay initial = const TimeOfDay(hour: 9, minute: 0);
     final m = _min(cur); if (m != null) initial = TimeOfDay(hour: m ~/ 60, minute: m % 60);
@@ -139,6 +142,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   }
 
   void _stampNow(_Row r, bool isIn) {
+    if (!_canWrite) return;
     final now = DateTime.now();
     final s = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     setState(() { if (isIn) r.checkIn = s; else r.checkOut = s; if (r.status == 'absent' || r.status == 'leave') r.status = 'present'; });
@@ -155,6 +159,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   }
 
   Future<void> _saveRow(_Row r, {bool silent = false}) async {
+    if (!_canWrite) return;
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return; }
     setState(() => r.saving = true);
     try {
@@ -183,6 +188,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   }
 
   Future<void> _saveAll() async {
+    if (!_canWrite) return;
     final vis = _visible; if (vis.isEmpty) return;
     setState(() => _savingAll = true);
     int n = 0;
@@ -194,7 +200,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     _snack(n == 0 ? 'Nothing to save' : 'Saved $n row(s)');
   }
 
-  void _markAll(String status) => setState(() { for (final r in _visible) r.status = status; });
+  void _markAll(String status) { if (!_canWrite) return; setState(() { for (final r in _visible) r.status = status; }); }
 
   Color _statusColor(String s) {
     switch (s) {
@@ -206,6 +212,8 @@ class _State extends ConsumerState<HrAttendanceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final access = ref.watch(accessSyncProvider);
+    _canWrite = (access?.canAddDoc('hr_attendance') ?? false) || (access?.canEditDoc('hr_attendance') ?? false);
     final vis = _visible;
     final counts = <String, int>{};
     for (final r in vis) counts[r.status] = (counts[r.status] ?? 0) + 1;
@@ -232,17 +240,20 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           const SizedBox(width: 8),
           OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 15), label: const Text('Print register', style: TextStyle(fontSize: 12)), onPressed: _printDialog),
           const SizedBox(width: 8),
-          PopupMenuButton<String>(tooltip: 'Mark all', onSelected: _markAll,
+          if (_canWrite) PopupMenuButton<String>(tooltip: 'Mark all', onSelected: _markAll,
             itemBuilder: (_) => _statuses.map((s) => PopupMenuItem(value: s['v'], child: Text('Mark all ${s['l']}'))).toList(),
             child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
               child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.done_all, size: 15), SizedBox(width: 5), Text('Mark all', style: TextStyle(fontSize: 12)), Icon(Icons.arrow_drop_down, size: 16)]))),
-          const SizedBox(width: 8),
-          ElevatedButton.icon(
+          if (_canWrite) const SizedBox(width: 8),
+          if (_canWrite) ElevatedButton.icon(
             icon: _savingAll ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_outlined, size: 16),
             label: const Text('Save all'),
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
             onPressed: _savingAll ? null : _saveAll),
+          if (!_canWrite) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 13, color: Colors.grey.shade700), const SizedBox(width: 5), Text('View only', style: TextStyle(fontSize: 11, color: Colors.grey.shade700))])),
         ])),
       if (!_loading) Container(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
@@ -286,7 +297,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     final worked = _hours(r.checkIn, r.checkOut);
     final shift = _shiftFor(r.shiftId);
     final total = (shift?['work_hours'] as num?)?.toDouble();
-    final timesEnabled = r.status == 'present' || r.status == 'half_day';
+    final timesEnabled = (r.status == 'present' || r.status == 'half_day') && _canWrite;
     final dirty = r.recordId == null || _diff(r) != null;
     return Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
       decoration: BoxDecoration(border: last ? null : Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
@@ -301,7 +312,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
             border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
           style: TextStyle(fontSize: 12, color: _statusColor(r.status), fontWeight: FontWeight.w600),
           items: _statuses.map((s) => DropdownMenuItem(value: s['v'], child: Text(s['l'] ?? '', style: TextStyle(fontSize: 12, color: _statusColor(s['v']!), fontWeight: FontWeight.w600)))).toList(),
-          onChanged: (v) => setState(() => r.status = v ?? 'present'))),
+          onChanged: _canWrite ? (v) => setState(() => r.status = v ?? 'present') : null)),
         const SizedBox(width: 8),
         SizedBox(width: 142, child: _timeCell(r.checkIn, timesEnabled, () => _stampNow(r, true), () => _pickTime(r, true), () => setState(() => r.checkIn = null), 'In')),
         const SizedBox(width: 8),
@@ -310,13 +321,13 @@ class _State extends ConsumerState<HrAttendanceScreen> {
         SizedBox(width: 52, child: Text(worked != null ? worked.toString() : '\u2014', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
         SizedBox(width: 50, child: Text(total != null ? total.toString() : '\u2014', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
         const SizedBox(width: 12),
-        Expanded(flex: 2, child: TextField(controller: r.remarks,
+        Expanded(flex: 2, child: TextField(controller: r.remarks, enabled: _canWrite,
           decoration: const InputDecoration(hintText: 'Optional', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
             border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
           style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}))),
         SizedBox(width: 40, child: r.saving
           ? const Padding(padding: EdgeInsets.all(8), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)))
-          : IconButton(icon: Icon(Icons.save_outlined, size: 18, color: dirty ? AppTheme.primary : AppTheme.border), tooltip: 'Save row', onPressed: dirty ? () => _saveRow(r) : null)),
+          : IconButton(icon: Icon(Icons.save_outlined, size: 18, color: (dirty && _canWrite) ? AppTheme.primary : AppTheme.border), tooltip: 'Save row', onPressed: (dirty && _canWrite) ? () => _saveRow(r) : null)),
       ]));
   }
 
