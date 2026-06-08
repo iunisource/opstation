@@ -227,6 +227,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         text: product?['selling_price']?.toString() ?? '0');
     final costPriceCtrl = TextEditingController(
         text: product?['cost_price']?.toString() ?? '0');
+    final lowStockCtrl = TextEditingController(
+        text: product?['low_stock_limit']?.toString() ?? '0');
     String? uomId = product?['base_uom_id'] as String?;
     String? productType = product?['product_type'] as String?;
     String? mainGroup = product?['product_main_group'] as String?;
@@ -345,6 +347,12 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true))),
                 ]),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(child: TextField(controller: lowStockCtrl, decoration: const InputDecoration(labelText: 'Low Stock Limit', helperText: 'Flag in Low Stock Report when on-hand is at or below this'), keyboardType: const TextInputType.numberWithOptions(decimal: true))),
+                  const SizedBox(width: 12),
+                  const Expanded(child: SizedBox()),
+                ]),
                 const SizedBox(height: 16),
                 const Align(alignment: Alignment.centerLeft, child: Text('Branch Allocation', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 4),
@@ -400,6 +408,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'product_movement_category': movementCategory,
                   'selling_price': double.tryParse(sellPriceCtrl.text.trim()) ?? 0,
                   'cost_price': double.tryParse(costPriceCtrl.text.trim()) ?? 0,
+                  'low_stock_limit': double.tryParse(lowStockCtrl.text.trim()) ?? 0,
                   'updated_at': DateTime.now().toUtc().toIso8601String(),
                 };
                 try {
@@ -711,9 +720,9 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
   String? _fatalError;
 
   void _downloadTemplate() {
-    const csv = 'name,sku,barcode,uom,product_type,main_group,group,sub_group,class,movement_category,selling_price,cost_price\n'
-        'Example Product A,SKU001,8901234567890,pcs,Stock Item,Lighting,Downlights,LED,A,Fast,210,150\n'
-        'Example Product B,SKU002,,box,Stock Item,Electricals,,,,Slow,1000,800\n';
+    const csv = 'name,sku,barcode,uom,product_type,main_group,group,sub_group,class,movement_category,selling_price,cost_price,low_stock_limit\n'
+        'Example Product A,SKU001,8901234567890,pcs,Stock Item,Lighting,Downlights,LED,A,Fast,210,150,10\n'
+        'Example Product B,SKU002,,box,Stock Item,Electricals,,,,Slow,1000,800,0\n';
     final blob = html.Blob([csv], 'text/csv;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.AnchorElement(href: url)..setAttribute('download', 'products_template.csv')..click();
@@ -781,6 +790,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
     final iUom = idx('uom'); final iType = idx('product_type'); final iMain = idx('main_group');
     final iGroup = idx('group'); final iSub = idx('sub_group'); final iClass = idx('class');
     final iMov = idx('movement_category'); final iSell = idx('selling_price'); final iCost = idx('cost_price');
+    final iLow = idx('low_stock_limit');
 
     final uomByAbbr = {for (final u in widget.uoms) (u['abbreviation'] as String? ?? '').toLowerCase(): u['id'] as String};
     final uomByName = {for (final u in widget.uoms) (u['name'] as String? ?? '').toLowerCase(): u['id'] as String};
@@ -816,6 +826,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         'product_movement_category': iMov >= 0 && get(iMov).isNotEmpty ? get(iMov) : null,
         'selling_price': sell,
         'cost_price': cost,
+        'low_stock_limit': iLow >= 0 ? (double.tryParse(get(iLow)) ?? 0) : 0,
       });
     }
     setState(() { _totalParsed = rows.length - 1; _validRows = valid; _rowErrors = errors; });

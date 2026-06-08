@@ -43,6 +43,7 @@ import '../permissions/permission_registry.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart';
 import '../../features/erp/presentation/erp_payment_voucher_screen.dart';
 import '../../features/erp/presentation/erp_products_screen.dart';
+import '../../features/erp/presentation/erp_low_stock_report_screen.dart';
 import '../../features/erp/presentation/erp_branches_screen.dart';
 import '../../features/erp/presentation/erp_uoms_screen.dart';
 import '../../features/erp/presentation/erp_stock_screen.dart';
@@ -176,6 +177,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
           GoRoute(path: '/orgs', builder: (_, __) => const OrgsScreen()),
           GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
+          GoRoute(path: '/erp/low-stock-report', builder: (_, __) => const ErpLowStockReportScreen()),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => const ErpProductClassificationsScreen()),
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
           GoRoute(path: '/erp/home', builder: (_, __) => const ErpHomeScreen()),
