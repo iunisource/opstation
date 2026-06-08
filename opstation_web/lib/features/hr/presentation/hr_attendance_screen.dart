@@ -395,84 +395,112 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       final attRows = List<Map<String, dynamic>>.from(
         await client.from('hr_attendance').select().eq('org_id', orgId).gte('att_date', _fmt(from)).lte('att_date', _fmt(to)).order('att_date'));
       final aud = List<Map<String, dynamic>>.from(
-        await client.from('hr_attendance_audit').select().eq('org_id', orgId).gte('att_date', _fmt(from)).lte('att_date', _fmt(to)).order('changed_at', ascending: false).limit(500));
+        await client.from('hr_attendance_audit').select().eq('org_id', orgId).gte('att_date', _fmt(from)).lte('att_date', _fmt(to)).order('changed_at', ascending: false).limit(300));
 
-      final byEmp = <String, List<Map<String, dynamic>>>{};
+      // index attendance: empId -> dateStr -> record
+      final byEmpDate = <String, Map<String, Map<String, dynamic>>>{};
       for (final a in attRows) {
         if (eff != null && a['branch_id'] != eff) continue;
-        (byEmp[a['employee_id'] as String] ??= []).add(a);
+        ((byEmpDate[a['employee_id'] as String] ??= <String, Map<String, dynamic>>{}))[a['att_date'] as String] = a;
       }
+      final emps = _employees.where((e) => eff == null || e['branch_id'] == eff).toList();
 
-      String varText(int? actual, int? ref) {
-        if (actual == null || ref == null) return '\u2014';
-        final d = actual - ref;
-        if (d == 0) return 'on time';
-        return d > 0 ? '+${d}m' : '${d}m';
-      }
+      final days = <DateTime>[];
+      for (var d = _d0(from); !d.isAfter(_d0(to)); d = d.add(const Duration(days: 1))) days.add(d);
+      final single = days.length <= 1;
 
-      final empOrder = _employees.where((e) => byEmp.containsKey(e['id'])).toList();
-      String sections = '';
-      for (final e in empOrder) {
-        final eid = e['id'] as String;
-        final list = byEmp[eid]!..sort((a, b) => (a['att_date'] as String).compareTo(b['att_date'] as String));
-        final shift = _shiftFor(e['shift_id'] as String?);
-        final sStart = _min(shift?['start_time'] as String?), sEnd = _min(shift?['end_time'] as String?);
-        final stdHrs = (shift?['work_hours'] as num?)?.toDouble();
-        int present = 0; double worked = 0; int totalLate = 0; int totalEarly = 0;
+      String esc(String? s) => (s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      String code(String? st) { switch (st) { case 'present': return 'P'; case 'absent': return 'A'; case 'leave': return 'L'; case 'half_day': return '&frac12;'; case 'holiday': return 'H'; case 'rest_day': return 'R'; default: return ''; } }
+      String varText(int? actual, int? ref) { if (actual == null || ref == null) return '-'; final d = actual - ref; if (d == 0) return 'on time'; return d > 0 ? '+${d}m' : '${d}m'; }
+      String trimNum(double v) { final r = (v * 100).roundToDouble() / 100; return r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toString(); }
+
+      String body;
+      if (single) {
+        final ds = _fmt(days.isEmpty ? from : days.first);
         String rows = '';
-        for (final a in list) {
-          final st = a['status'] as String? ?? '';
-          final cin = a['check_in'] as String?, cout = a['check_out'] as String?;
+        for (final e in emps) {
+          final rec = byEmpDate[e['id']]?[ds];
+          final shift = _shiftFor(e['shift_id'] as String?);
+          final sStart = _min(shift?['start_time'] as String?), sEnd = _min(shift?['end_time'] as String?);
+          final stdHrs = (shift?['work_hours'] as num?)?.toDouble();
+          final cin = rec?['check_in'] as String?, cout = rec?['check_out'] as String?;
           final wh = _hours(cin, cout);
-          if (st == 'present' || st == 'half_day') present++;
-          if (wh != null) worked += wh;
-          final inVar = (_min(cin) != null && sStart != null) ? _min(cin)! - sStart : null;
-          final outVar = (_min(cout) != null && sEnd != null) ? _min(cout)! - sEnd : null;
-          if (inVar != null && inVar > 0) totalLate += inVar;
-          if (outVar != null && outVar < 0) totalEarly += -outVar;
-          rows += '<tr><td>${a['att_date']}</td><td>$st</td><td>${cin ?? '\u2014'}</td><td>${cout ?? '\u2014'}</td>'
-              '<td style="text-align:right">${wh?.toStringAsFixed(2) ?? '\u2014'}</td>'
-              '<td style="text-align:right">${stdHrs?.toStringAsFixed(2) ?? '\u2014'}</td>'
-              '<td style="text-align:center">${varText(_min(cin), sStart)}</td>'
-              '<td style="text-align:center">${varText(_min(cout), sEnd)}</td>'
-              '<td>${a['remarks'] ?? ''}</td></tr>';
+          rows += '<tr><td class="emp">${esc(e['full_name'] as String?)}<span class="code">${esc(e['employee_code'] as String?)}</span></td>'
+              '<td>${rec?['status'] ?? '-'}</td><td>${cin ?? '-'}</td><td>${cout ?? '-'}</td>'
+              '<td class="r">${wh?.toStringAsFixed(2) ?? '-'}</td><td class="r">${stdHrs?.toStringAsFixed(2) ?? '-'}</td>'
+              '<td class="c">${varText(_min(cin), sStart)}</td><td class="c">${varText(_min(cout), sEnd)}</td>'
+              '<td>${esc(rec?['remarks'] as String?)}</td></tr>';
         }
-        sections += '<h3>${e['full_name'] ?? ''} <span class="sub">${e['employee_code'] ?? ''}'
-            '${shift != null ? ' &middot; ${shift['name']} (${shift['start_time'] ?? ''}\u2013${shift['end_time'] ?? ''})' : ' &middot; no shift'}</span></h3>'
-            '<table><thead><tr><th>Date</th><th>Status</th><th>In</th><th>Out</th><th>Worked</th><th>Shift hrs</th><th>In var</th><th>Out var</th><th>Remarks</th></tr></thead><tbody>'
-            '$rows'
-            '<tr class="sum"><td colspan="4">Summary</td><td style="text-align:right">${worked.toStringAsFixed(2)}</td><td></td>'
-            '<td colspan="2" style="text-align:center">Late ${totalLate}m &middot; Early ${totalEarly}m</td><td>Present days: $present</td></tr>'
-            '</tbody></table>';
+        body = '<table><thead><tr><th class="emp">Employee</th><th>Status</th><th>In</th><th>Out</th><th>Worked</th><th>Shift</th><th>In var</th><th>Out var</th><th>Remarks</th></tr></thead><tbody>'
+            '${rows.isEmpty ? '<tr><td colspan="9">No employees.</td></tr>' : rows}</tbody></table>';
+      } else {
+        String head = '<th class="emp">Employee</th>';
+        for (final d in days) head += '<th class="day">${d.day}</th>';
+        head += '<th class="r">Hrs var</th><th class="r">Days</th>';
+        String rows = '';
+        for (final e in emps) {
+          final shift = _shiftFor(e['shift_id'] as String?);
+          final stdHrs = (shift?['work_hours'] as num?)?.toDouble() ?? 0;
+          double worked = 0, expected = 0, daysWorked = 0;
+          String cells = '';
+          for (final d in days) {
+            final rec = byEmpDate[e['id']]?[_fmt(d)];
+            final st = rec?['status'] as String?;
+            cells += '<td class="day">${code(st)}</td>';
+            if (st == 'present' || st == 'half_day') {
+              final wh = _hours(rec?['check_in'] as String?, rec?['check_out'] as String?);
+              if (wh != null) worked += wh;
+              if (st == 'present') { daysWorked += 1; expected += stdHrs; } else { daysWorked += 0.5; expected += stdHrs / 2; }
+            }
+          }
+          final variance = worked - expected;
+          final vStr = (worked == 0 && expected == 0) ? '-' : (variance.abs() < 0.05 ? '0' : (variance > 0 ? '+${trimNum(variance)}' : trimNum(variance)));
+          rows += '<tr><td class="emp">${esc(e['full_name'] as String?)}<span class="code">${esc(e['employee_code'] as String?)}</span></td>$cells'
+              '<td class="r">$vStr</td><td class="r">${trimNum(daysWorked)}</td></tr>';
+        }
+        body = '<table class="matrix"><thead><tr>$head</tr></thead><tbody>'
+            '${rows.isEmpty ? '<tr><td>No employees.</td></tr>' : rows}</tbody></table>'
+            '<div class="legend">P = Present &nbsp; A = Absent &nbsp; L = Leave &nbsp; &frac12; = Half day &nbsp; H = Holiday &nbsp; R = Rest day &nbsp;&nbsp;|&nbsp;&nbsp; Hrs var = worked hours minus expected shift hours (+ surplus / - short)</div>';
       }
 
       String auditRows = '';
       for (final a in aud) {
-        auditRows += '<tr><td>${a['att_date'] ?? ''}</td><td>${_empName[a['employee_id']] ?? a['employee_id'] ?? ''}</td>'
-            '<td>${a['action'] ?? ''}</td><td>${a['changes'] ?? ''}</td><td>${a['changed_by_name'] ?? ''}</td>'
+        auditRows += '<tr><td>${a['att_date'] ?? ''}</td><td>${esc(_empName[a['employee_id']] ?? a['employee_id'] as String?)}</td>'
+            '<td>${a['action'] ?? ''}</td><td>${esc(a['changes'] as String?)}</td><td>${esc(a['changed_by_name'] as String?)}</td>'
             '<td>${a['changed_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(a['changed_at'] as String).toLocal()) : ''}</td></tr>';
       }
+      final auditHtml = auditRows.isEmpty ? '' : '<h2>Edit trail</h2><table class="trail"><thead><tr><th>Date</th><th>Employee</th><th>Action</th><th>Change</th><th>By</th><th>When</th></tr></thead><tbody>$auditRows</tbody></table>';
 
-      final branchLabel = eff != null ? (_branchName[eff] ?? '') : 'All branches';
-      final htmlContent = '''<!DOCTYPE html><html><head><title>Attendance Register</title>
+      final branchLabel = esc(eff != null ? (_branchName[eff] ?? '') : 'All branches');
+      final headerDate = single ? DateFormat('EEE, d MMM yyyy').format(days.isEmpty ? from : days.first)
+          : '${DateFormat('d MMM').format(from)} &ndash; ${DateFormat('d MMM yyyy').format(to)}';
+      final fontSize = (!single && days.length > 20) ? 8 : (!single ? 9 : 11);
+      final htmlContent = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Attendance Register</title>
 <style>
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;padding:28px;color:#222;max-width:1000px;margin:0 auto}
-h1{font-size:22px;margin:0 0 2px}.meta{color:#777;font-size:12px;margin-bottom:18px}
-h3{font-size:14px;margin:20px 0 6px;border-bottom:2px solid #eee;padding-bottom:4px}.sub{color:#999;font-weight:400;font-size:12px}
-table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6px}
-th{background:#f1f3f5;padding:6px 8px;text-align:left;font-size:11px;color:#555}
-td{padding:5px 8px;border-bottom:1px solid #f0f0f0}
-tr.sum td{font-weight:700;background:#fafafa;border-top:2px solid #eee}
-h2{font-size:15px;margin:26px 0 8px}
-@media print{body{padding:10px}}
+*{box-sizing:border-box}
+body{font-family:Arial,Helvetica,sans-serif;padding:18px;color:#000}
+h1{font-size:18px;margin:0 0 2px}
+h2{font-size:13px;margin:18px 0 6px}
+.meta{color:#555;font-size:11px;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:${fontSize}px}
+th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top}
+th{background:#eee;font-weight:700}
+td.r,th.r{text-align:right}
+td.c{text-align:center}
+td.emp,th.emp{text-align:left;white-space:nowrap}
+td.emp .code{display:block;color:#777;font-size:0.85em;font-weight:400}
+table.matrix th.day,table.matrix td.day{text-align:center;padding:3px 2px;width:18px}
+table.trail{font-size:10px;margin-top:6px}
+.legend{font-size:10px;color:#555;margin-top:8px}
+@media print{body{padding:6px}@page{size:landscape;margin:8mm}}
 </style></head><body>
 <h1>Attendance Register</h1>
-<div class="meta">${DateFormat('d MMM yyyy').format(from)} \u2013 ${DateFormat('d MMM yyyy').format(to)} &nbsp;|&nbsp; $branchLabel &nbsp;|&nbsp; Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}</div>
-${sections.isEmpty ? '<p>No attendance records in this range.</p>' : sections}
-${auditRows.isEmpty ? '' : '<h2>Edit trail</h2><table><thead><tr><th>Date</th><th>Employee</th><th>Action</th><th>Change</th><th>By</th><th>When</th></tr></thead><tbody>$auditRows</tbody></table>'}
+<div class="meta">$headerDate &nbsp;|&nbsp; $branchLabel &nbsp;|&nbsp; Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}</div>
+$body
+$auditHtml
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
-      final blob = html.Blob([htmlContent], 'text/html');
+      final blob = html.Blob([htmlContent], 'text/html;charset=utf-8');
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.window.open(url, '_blank');
     } catch (e) { _snack('Register failed: ' + e.toString()); }
