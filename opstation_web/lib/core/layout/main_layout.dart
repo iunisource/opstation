@@ -124,6 +124,7 @@ class _TopNav extends ConsumerWidget {
         if (show('/erp/uoms')) _menuItem(context, 'Units of Measure', Icons.straighten_outlined, '/erp/uoms', location),
         if (show('/erp/stock')) _menuItem(context, 'Stock Levels', Icons.stacked_bar_chart_outlined, '/erp/stock', location),
         if (show('/erp/low-stock-report')) _menuItem(context, 'Low Stock Report', Icons.warning_amber_outlined, '/erp/low-stock-report', location),
+        if (show('/erp/stock-value-report')) _menuItem(context, 'Stock Value Report', Icons.payments_outlined, '/erp/stock-value-report', location),
         if (show('/erp/product-classifications')) _menuItem(context, 'Product Classifications', Icons.label_outline, '/erp/product-classifications', location),
         if (show('/erp/opening-stock')) _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
         if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location),
@@ -223,7 +224,7 @@ class _TopNav extends ConsumerWidget {
     List<Widget> splitErpMenus() => [
       if (_hasItems(inventoryItems))
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
-          ['/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock', '/erp/low-stock-report',
+          ['/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment'],
           _trimDividers(inventoryItems)),
       if (_hasItems(purchaseItems))

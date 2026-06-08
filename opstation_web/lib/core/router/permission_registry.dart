@@ -46,6 +46,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('uoms', 'Units of Measure', PermKind.doc, '/erp/uoms'),
     PermItem('stock_levels', 'Stock Levels', PermKind.report, '/erp/stock'),
     PermItem('low_stock_report', 'Low Stock Report', PermKind.report, '/erp/low-stock-report'),
+    PermItem('stock_value_report', 'Stock Value Report', PermKind.report, '/erp/stock-value-report'),
     PermItem('product_classifications', 'Product Classifications', PermKind.doc, '/erp/product-classifications'),
     PermItem('opening_stock', 'Opening Stock', PermKind.doc, '/erp/opening-stock'),
     PermItem('stock_transfer', 'Stock Transfers', PermKind.doc, '/erp/stock-transfers'),
