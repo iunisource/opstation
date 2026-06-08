@@ -16,6 +16,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
   List<Map<String, dynamic>> _orgs = [];
   Map<String, Map<String, dynamic>> _mastersByOrgId = {};
   Map<String, int> _userCountsByOrgId = {};
+  Map<String, Map<String, dynamic>> _settingsByOrgId = {};   // org_id -> {costing_method, method_locked}
   bool _loading = true;
 
   @override
@@ -53,11 +54,21 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
           }
         }
       }
+      final settingsByOrgId = <String, Map<String, dynamic>>{};
+      try {
+        final settings = await client.from('inventory_settings').select('org_id, costing_method, method_locked');
+        for (final s in settings as List) {
+          final m = Map<String, dynamic>.from(s as Map);
+          final oid = m['org_id'] as String?;
+          if (oid != null) settingsByOrgId[oid] = m;
+        }
+      } catch (_) { /* settings are optional for the list view */ }
       if (!mounted) return;
       setState(() {
         _orgs = List<Map<String, dynamic>>.from(orgs);
         _mastersByOrgId = mastersByOrgId;
         _userCountsByOrgId = userCountsByOrgId;
+        _settingsByOrgId = settingsByOrgId;
         _loading = false;
       });
     } catch (e) {
@@ -102,7 +113,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     }
   }
 
-  Future<void> _saveOrg({
+  Future<String?> _saveOrg({
     required bool isEdit,
     required Map<String, dynamic>? existingOrg,
     required Map<String, dynamic>? existingMaster,
@@ -112,7 +123,6 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     required String maName,
     required String maEmail,
     required String maPassword,
-    required String costingMethod,
   }) async {
     final client = Supabase.instance.client;
     final now = DateTime.now();
@@ -125,17 +135,25 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
       final hash = PasswordHasher.hash(maPassword, salt);
 
       try {
-        await client.functions.invoke('create-org-admin', body: {
+        final resp = await client.functions.invoke('create-org-admin', body: {
           'orgName': orgName,
           'maxUsers': maxUsers,
           'expiresAt': expiresAt?.toUtc().toIso8601String(),
-          'costingMethod': costingMethod,
           'maName': maName,
           'maEmail': maEmail,
           'maPassword': maPassword,
           'maPasswordHash': hash,
           'maPasswordSalt': salt,
         });
+        // Best-effort: read the new org id from the response so the dialog can
+        // apply the chosen costing method to inventory_settings.
+        final d = resp.data;
+        if (d is Map) {
+          final v = d['orgId'] ?? d['org_id'] ?? d['id'] ??
+              (d['org'] is Map ? (d['org'] as Map)['id'] : null);
+          if (v is String) return v;
+        }
+        return null;
       } on FunctionException catch (e) {
         String code = '';
         String detail = '';
@@ -245,7 +263,9 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     final maPasswordCtrl = TextEditingController();
     bool obscure = true;
     bool saving = false;
-    String costingMethod = (org?['costing_method'] as String?) ?? 'weighted_average';
+    final orgSettings = isEdit && org != null ? _settingsByOrgId[org['id'] as String] : null;
+    String costingMethod = (orgSettings?['costing_method'] as String?) ?? 'fifo';
+    final bool methodLocked = (orgSettings?['method_locked'] as bool?) ?? false;
 
     showDialog(
       context: context,
@@ -320,18 +340,19 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     value: costingMethod,
                     decoration: const InputDecoration(labelText: 'Costing Method *'),
                     items: const [
-                      DropdownMenuItem(value: 'fifo', child: Text('FIFO')),
-                      DropdownMenuItem(value: 'lifo', child: Text('LIFO')),
-                      DropdownMenuItem(value: 'weighted_average', child: Text('Weighted Average')),
-                      DropdownMenuItem(value: 'last_purchase', child: Text('Last Purchase Cost')),
-                      DropdownMenuItem(value: 'standard', child: Text('Standard Cost')),
+                      DropdownMenuItem(value: 'fifo', child: Text('FIFO (First In, First Out)')),
+                      DropdownMenuItem(value: 'lifo', child: Text('LIFO (Last In, First Out)')),
+                      DropdownMenuItem(value: 'avco', child: Text('Weighted Average')),
                     ],
-                    onChanged: isEdit ? null : (v) => setS(() => costingMethod = v ?? 'weighted_average'),
+                    onChanged: methodLocked ? null : (v) => setS(() => costingMethod = v ?? 'fifo'),
                   ),
-                  if (isEdit) const Padding(
-                    padding: EdgeInsets.only(top: 4),
-                    child: Text('Set at creation \u2014 cannot be changed.',
-                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      methodLocked
+                          ? 'Locked \u2014 this org already has inventory transactions.'
+                          : 'Takes effect immediately; locks after the first inventory transaction.',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   ),
                   const SizedBox(height: 24),
                   Text(isEdit ? 'MASTER ADMIN' : 'MASTER ADMIN (created with org)',
@@ -405,7 +426,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                 }
                 setS(() => saving = true);
                 try {
-                  await _saveOrg(
+                  final newOrgId = await _saveOrg(
                     isEdit: isEdit,
                     existingOrg: org,
                     existingMaster: master,
@@ -415,8 +436,17 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     maName: maNameCtrl.text.trim(),
                     maEmail: maEmailCtrl.text.trim().toLowerCase(),
                     maPassword: maPasswordCtrl.text,
-                    costingMethod: costingMethod,
                   );
+                  // Apply the chosen costing method to inventory_settings (the engine's source of truth).
+                  if (!methodLocked) {
+                    final targetOrg = isEdit ? (org!['id'] as String) : newOrgId;
+                    if (targetOrg != null) {
+                      try {
+                        await Supabase.instance.client.rpc('set_org_costing_method',
+                            params: {'p_org': targetOrg, 'p_method': costingMethod});
+                      } catch (_) { /* non-fatal: can be set later via Edit before any transactions */ }
+                    }
+                  }
                   if (dCtx.mounted) {
                     ScaffoldMessenger.of(dCtx)
                       ..clearSnackBars()
