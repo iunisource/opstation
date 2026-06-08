@@ -456,6 +456,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   bool _showDropdown = false;
   final _stagedQtyCtrl = TextEditingController();
   final _stagedDiscCtrl = TextEditingController();
+  final _stagedPriceCtrl = TextEditingController();
   final _stagedQtyFocus = FocusNode();
   final _stagedDiscFocus = FocusNode();
   final _searchFocus = FocusNode();
@@ -487,10 +488,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, dynamic>? _selectedPosCustomer;  // quick POS customer
   Map<String, double> _stockMap = {};  // product_id → qty in stock
   bool _allowNoStock = false;           // org setting: allow selling without stock
+  bool _allowPriceEdit = false;         // org setting: allow editing price at POS
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedPriceCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -524,9 +526,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       } catch (_) {}
       // Load expenses separately (avoids Future.wait index issues)
       bool allowNoStock = false;
+      bool allowPriceEdit = false;
       try {
-        final s = await Supabase.instance.client.from('pos_settings').select('allow_sell_without_stock').eq('org_id', orgId).maybeSingle();
+        final s = await Supabase.instance.client.from('pos_settings').select('allow_sell_without_stock, allow_price_edit').eq('org_id', orgId).maybeSingle();
         allowNoStock = s != null && s['allow_sell_without_stock'] == true;
+        allowPriceEdit = s != null && s['allow_price_edit'] == true;
       } catch (_) {}
 
       setState(() {
@@ -538,6 +542,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _session = Map<String, dynamic>.from(results[3] as Map);
         _stockMap = stockMap;
         _allowNoStock = allowNoStock;
+        _allowPriceEdit = allowPriceEdit;
         _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
         _heldBills = List<Map<String, dynamic>>.from(results[6] as List);
         _loading = false;
@@ -558,6 +563,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     setState(() {
       _stagedProduct = product;
       _dropdownHighlight = -1;
+      final basePrice = (product['price'] as num?)?.toDouble() ?? (product['unit_price'] as num?)?.toDouble() ?? 0;
       if (cartIndex != null) {
         _stagedCartIndex = cartIndex;
         final it = _cart[cartIndex];
@@ -565,11 +571,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         final d = (it['discount'] as double);
         _stagedDiscCtrl.text = d > 0 ? d.toStringAsFixed(0) : '';
         _stagedDiscType = it['discount_type'] as String? ?? 'fixed';
+        _stagedPriceCtrl.text = ((it['unit_price'] as num?)?.toDouble() ?? basePrice).toStringAsFixed(2);
       } else {
         _stagedCartIndex = null;
         _stagedQtyCtrl.text = '1';
         _stagedDiscCtrl.clear();
         _stagedDiscType = 'percent';
+        _stagedPriceCtrl.text = basePrice.toStringAsFixed(2);
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -583,12 +591,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final qty = double.tryParse(_stagedQtyCtrl.text.trim()) ?? 1;
     if (qty <= 0) return;
     final disc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
-    final price = (_stagedProduct!['price'] as num?)?.toDouble() ?? (_stagedProduct!['unit_price'] as num?)?.toDouble() ?? 0;
+    final basePrice = (_stagedProduct!['price'] as num?)?.toDouble() ?? (_stagedProduct!['unit_price'] as num?)?.toDouble() ?? 0;
+    final price = _allowPriceEdit ? (double.tryParse(_stagedPriceCtrl.text.trim()) ?? basePrice) : basePrice;
     setState(() {
       if (_stagedCartIndex != null && _stagedCartIndex! < _cart.length) {
         _cart[_stagedCartIndex!]['quantity'] = qty;
         _cart[_stagedCartIndex!]['discount'] = disc;
         _cart[_stagedCartIndex!]['discount_type'] = _stagedDiscType;
+        if (_allowPriceEdit) _cart[_stagedCartIndex!]['unit_price'] = price;
       } else {
         _cart.add({
           'pos_catalog_id': _stagedProduct!['id'] ?? _stagedProduct!['pos_catalog_id'],
@@ -604,7 +614,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         });
       }
       _stagedProduct = null; _stagedCartIndex = null;
-      _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear();
+      _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear(); _stagedPriceCtrl.clear();
       _searchCtrl.clear(); _filterProducts('');
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _searchFocus.requestFocus());
@@ -617,7 +627,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   Widget _buildStagingCard() {
     final p = _stagedProduct!;
-    final price = (p['price'] as num?)?.toDouble() ?? (p['unit_price'] as num?)?.toDouble() ?? 0;
+    final basePrice = (p['price'] as num?)?.toDouble() ?? (p['unit_price'] as num?)?.toDouble() ?? 0;
+    final price = _allowPriceEdit ? (double.tryParse(_stagedPriceCtrl.text.trim()) ?? basePrice) : basePrice;
     final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
     final qty = double.tryParse(_stagedQtyCtrl.text.trim()) ?? 1;
     final disc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
@@ -638,7 +649,22 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           if (isEdit) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: const Text('Editing', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w700))),
         ]),
         const SizedBox(height: 3),
-        Text('Rs. ' + price.toStringAsFixed(2) + '   ' + (stock >= 0 ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock')), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        if (_allowPriceEdit)
+          Row(children: [
+            SizedBox(width: 160, child: TextField(controller: _stagedPriceCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+              decoration: InputDecoration(prefixText: 'Rs. ', labelText: 'Unit price', isDense: true,
+                filled: true, fillColor: const Color(0xFFF8F9FA),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+              onChanged: (_) => setState(() {}))),
+            const SizedBox(width: 12),
+            Expanded(child: Text(stock >= 0 ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock'),
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          ])
+        else
+          Text('Rs. ' + price.toStringAsFixed(2) + '   ' + (stock >= 0 ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock')), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         const SizedBox(height: 14),
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1664,7 +1690,18 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       ));
       if (ok != true) return;
     }
-    final items = (bill['items'] as List).map((i) => Map<String, dynamic>.from(i as Map)).toList();
+    // Held cart is stored as JSONB: doubles like 1.0 can come back as int → coerce
+    // every numeric field to double so the cart build (item['quantity'] as double) won't throw.
+    final items = (bill['items'] as List).map((i) {
+      final m = Map<String, dynamic>.from(i as Map);
+      m['quantity'] = (m['quantity'] as num?)?.toDouble() ?? 1.0;
+      m['unit_price'] = (m['unit_price'] as num?)?.toDouble() ?? 0.0;
+      m['discount'] = (m['discount'] as num?)?.toDouble() ?? 0.0;
+      m['stock_qty'] = (m['stock_qty'] as num?)?.toDouble() ?? 0.0;
+      m['discount_type'] = m['discount_type'] as String? ?? 'fixed';
+      m['name'] = m['name'] as String? ?? '-';
+      return m;
+    }).toList();
     setState(() {
       _cart = items;
       _orderDiscount = (bill['order_discount'] as num?)?.toDouble() ?? 0;

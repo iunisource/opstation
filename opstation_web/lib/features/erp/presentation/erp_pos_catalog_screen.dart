@@ -17,6 +17,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
   List<Map<String, dynamic>> _allBranches = [];
   bool _loading = true;
   bool _allowNoStock = false;
+  bool _allowPriceEdit = false;
   bool _savingSetting = false;
   Map<String, double> _stockMap = {};
   final _searchCtrl = TextEditingController();
@@ -35,8 +36,11 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
     final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
     try {
       final s = await Supabase.instance.client.from('pos_settings')
-          .select('allow_sell_without_stock').eq('org_id', orgId).maybeSingle();
-      if (mounted) setState(() => _allowNoStock = s != null && s['allow_sell_without_stock'] == true);
+          .select('allow_sell_without_stock, allow_price_edit').eq('org_id', orgId).maybeSingle();
+      if (mounted) setState(() {
+        _allowNoStock = s != null && s['allow_sell_without_stock'] == true;
+        _allowPriceEdit = s != null && s['allow_price_edit'] == true;
+      });
     } catch (_) {}
   }
 
@@ -50,6 +54,19 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
       }, onConflict: 'org_id');
       _showSnack(v ? 'Selling without stock is now ALLOWED' : 'Selling without stock is now LOCKED');
     } catch (e) { _showSnack('Failed to save setting: $e'); if (mounted) setState(() => _allowNoStock = !v); }
+    if (mounted) setState(() => _savingSetting = false);
+  }
+
+  Future<void> _setAllowPriceEdit(bool v) async {
+    final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
+    setState(() { _allowPriceEdit = v; _savingSetting = true; });
+    try {
+      await Supabase.instance.client.from('pos_settings').upsert({
+        'org_id': orgId, 'allow_price_edit': v,
+        'updated_at': DateTime.now().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
+      }, onConflict: 'org_id');
+      _showSnack(v ? 'Price editing is now ALLOWED at POS' : 'Price editing is now LOCKED (system price)');
+    } catch (e) { _showSnack('Failed to save setting: $e'); if (mounted) setState(() => _allowPriceEdit = !v); }
     if (mounted) setState(() => _savingSetting = false);
   }
 
@@ -280,6 +297,26 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
             const SizedBox(width: 12),
             if (_savingSetting) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
             else Switch(value: _allowNoStock, onChanged: _isAdmin ? _setAllowNoStock : null),
+          ]),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+          child: Row(children: [
+            Icon(_allowPriceEdit ? Icons.edit_outlined : Icons.lock_outline, size: 18, color: _allowPriceEdit ? Colors.orange.shade800 : AppTheme.textSecondary),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Allow price edit', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              Text(_allowPriceEdit
+                  ? 'On — cashiers can change an item\'s price during a sale.'
+                  : 'Off — the system price is used and cannot be changed at POS.',
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              if (!_isAdmin) const Text('Only an admin can change this.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
+            ])),
+            const SizedBox(width: 12),
+            if (_savingSetting) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+            else Switch(value: _allowPriceEdit, onChanged: _isAdmin ? _setAllowPriceEdit : null),
           ]),
         ),
         const SizedBox(height: 16),
