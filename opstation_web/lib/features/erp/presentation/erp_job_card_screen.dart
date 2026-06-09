@@ -60,6 +60,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   final _priorityCtrl = TextEditingController(text: '0');
   final _wcCtrl = TextEditingController();
   String? _assignedTo;
+  List<Map<String, dynamic>> _workCenters = [];
+  List<Map<String, dynamic>> _workers = [];
+  String? _assignedWorkerId;
   final _notesCtrl = TextEditingController();
   String _status = 'queued';
   List<_JobMat> _materials = [];
@@ -81,7 +84,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadProducts(); _loadBoms(); _loadUsers(); _loadCheckpoints(); _loadJobs(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadProducts(); _loadBoms(); _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCheckpoints(); _loadJobs(); });
   }
 
   @override
@@ -138,6 +141,22 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     try {
       final rows = await Supabase.instance.client.from('users').select('id, name').eq('org_id', orgId).order('name').limit(500);
       if (mounted) setState(() => _users = List<Map<String, dynamic>>.from(rows));
+    } catch (_) {}
+  }
+
+  Future<void> _loadWorkCenters() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('work_centers').select().eq('org_id', orgId).order('name').limit(500);
+      if (mounted) setState(() => _workCenters = List<Map<String, dynamic>>.from(rows));
+    } catch (_) {}
+  }
+
+  Future<void> _loadWorkers() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('workers').select().eq('org_id', orgId).order('name').limit(500);
+      if (mounted) setState(() => _workers = List<Map<String, dynamic>>.from(rows));
     } catch (_) {}
   }
 
@@ -233,7 +252,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _current = null; _runs = []; _status = 'queued';
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
-      _plannedQtyCtrl.text = '1'; _priorityCtrl.text = '0'; _wcCtrl.clear(); _assignedTo = null; _notesCtrl.clear();
+      _plannedQtyCtrl.text = '1'; _priorityCtrl.text = '0'; _wcCtrl.clear(); _assignedTo = null; _assignedWorkerId = null; _notesCtrl.clear();
       _materials = []; _overheads = []; _baseComps = []; _baseOh = [];
     });
   }
@@ -275,6 +294,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _priorityCtrl.text = (j['priority'] ?? 0).toString();
         _wcCtrl.text = j['work_center'] as String? ?? '';
         _assignedTo = j['assigned_to'] as String?;
+        _assignedWorkerId = j['assigned_worker_id'] as String?;
         _notesCtrl.text = j['notes'] as String? ?? '';
         _materials = newMats; _overheads = newOh;
       });
@@ -353,7 +373,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           'id': jId, 'org_id': orgId, 'branch_id': _branchId, 'job_number': num,
           'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId, 'planned_qty': _plannedQty,
           'status': 'queued', 'priority': prio, 'is_locked': false,
-          'work_center': _wcCtrl.text.trim(), 'assigned_to': _assignedTo, 'notes': _notesCtrl.text.trim(),
+          'work_center': _wcCtrl.text.trim(), 'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(),
           'created_by': userId, 'created_at': DateTime.now().toIso8601String(), 'updated_at': DateTime.now().toIso8601String(),
         });
       } else {
@@ -361,7 +381,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         await client.from('job_cards').update({
           'branch_id': _branchId, 'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId,
           'planned_qty': _plannedQty, 'priority': prio, 'work_center': _wcCtrl.text.trim(),
-          'assigned_to': _assignedTo, 'notes': _notesCtrl.text.trim(), 'updated_at': DateTime.now().toIso8601String(),
+          'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(), 'updated_at': DateTime.now().toIso8601String(),
         }).eq('id', jId);
       }
       await client.from('job_card_materials').delete().eq('job_card_id', jId);
@@ -562,6 +582,84 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  Future<void> _manageWorkCenters() async {
+    final orgId = _orgId; if (orgId == null) return;
+    final addCtrl = TextEditingController();
+    await showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+      Future<void> reload() async { await _loadWorkCenters(); setS(() {}); }
+      return AlertDialog(
+        title: const Text('Manage work centers'),
+        content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: TextField(controller: addCtrl, decoration: const InputDecoration(hintText: 'New work center', isDense: true))),
+            const SizedBox(width: 8),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+              onPressed: () async {
+                final name = addCtrl.text.trim(); if (name.isEmpty) return;
+                try {
+                  await Supabase.instance.client.from('work_centers').insert({
+                    'id': 'wc_${DateTime.now().millisecondsSinceEpoch}', 'org_id': orgId, 'name': name, 'is_active': true,
+                    'created_at': DateTime.now().toIso8601String()});
+                  addCtrl.clear(); await reload();
+                } catch (e) { _snack('Add failed: $e'); }
+              }, child: const Text('Add')),
+          ]),
+          const SizedBox(height: 12),
+          SizedBox(height: 300, width: 420, child: _workCenters.isEmpty
+            ? const Center(child: Text('No work centers yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : ListView(children: _workCenters.map((w) => Row(children: [
+                Expanded(child: Text(w['name'] as String? ?? '', style: const TextStyle(fontSize: 13))),
+                Switch(value: w['is_active'] != false, onChanged: (v) async {
+                  try { await Supabase.instance.client.from('work_centers').update({'is_active': v}).eq('id', w['id'] as String); await reload(); }
+                  catch (e) { _snack('Update failed: $e'); }
+                }),
+              ])).toList())),
+        ])),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
+      );
+    }));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _manageWorkers() async {
+    final orgId = _orgId; if (orgId == null) return;
+    final addCtrl = TextEditingController();
+    await showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+      Future<void> reload() async { await _loadWorkers(); setS(() {}); }
+      return AlertDialog(
+        title: const Text('Manage workers'),
+        content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: TextField(controller: addCtrl, decoration: const InputDecoration(hintText: 'New worker name', isDense: true))),
+            const SizedBox(width: 8),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+              onPressed: () async {
+                final name = addCtrl.text.trim(); if (name.isEmpty) return;
+                try {
+                  await Supabase.instance.client.from('workers').insert({
+                    'id': 'wkr_${DateTime.now().millisecondsSinceEpoch}', 'org_id': orgId, 'name': name, 'is_active': true,
+                    'created_at': DateTime.now().toIso8601String()});
+                  addCtrl.clear(); await reload();
+                } catch (e) { _snack('Add failed: $e'); }
+              }, child: const Text('Add')),
+          ]),
+          const SizedBox(height: 12),
+          SizedBox(height: 300, width: 420, child: _workers.isEmpty
+            ? const Center(child: Text('No workers yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : ListView(children: _workers.map((w) => Row(children: [
+                Expanded(child: Text(w['name'] as String? ?? '', style: const TextStyle(fontSize: 13))),
+                Switch(value: w['is_active'] != false, onChanged: (v) async {
+                  try { await Supabase.instance.client.from('workers').update({'is_active': v}).eq('id', w['id'] as String); await reload(); }
+                  catch (e) { _snack('Update failed: $e'); }
+                }),
+              ])).toList())),
+        ])),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
+      );
+    }));
+    if (mounted) setState(() {});
+  }
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime(2100));
     if (picked != null) setState(() => _date = picked);
@@ -588,6 +686,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     }).toList();
 
     final running = (_current?['is_running'] as bool?) ?? false;
+
+    final wcNames = _workCenters.where((w) => w['is_active'] != false).map((w) => w['name'] as String).toList();
+    { final cur = _wcCtrl.text.trim(); if (cur.isNotEmpty && !wcNames.contains(cur)) wcNames.add(cur); }
+    final activeWorkers = _workers.where((w) => w['is_active'] != false).toList();
+    if (_assignedWorkerId != null && !activeWorkers.any((w) => w['id'] == _assignedWorkerId)) {
+      final cur = _workers.where((w) => w['id'] == _assignedWorkerId);
+      if (cur.isNotEmpty) activeWorkers.add(cur.first);
+    }
 
     return Container(color: AppTheme.background, child: Row(children: [
       if (_drawerOpen) Container(width: 300,
@@ -684,14 +790,26 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                 inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9]'))],
                 decoration: const InputDecoration(isDense: true, hintText: '0', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 11))))),
               const SizedBox(width: 12),
-              SizedBox(width: 170, child: _labeled('Work Center', TextField(controller: _wcCtrl, enabled: _editable,
-                decoration: const InputDecoration(isDense: true, hintText: 'e.g. Line A', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 11))))),
+              SizedBox(width: 210, child: _labeled('Work Center', Row(children: [
+                Expanded(child: DropdownButtonFormField<String?>(
+                  value: _wcCtrl.text.trim().isEmpty ? null : _wcCtrl.text.trim(), isExpanded: true,
+                  decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
+                  items: [const DropdownMenuItem<String?>(value: null, child: Text('—')),
+                    ...wcNames.map((n) => DropdownMenuItem<String?>(value: n, child: Text(n, overflow: TextOverflow.ellipsis)))],
+                  onChanged: _editable ? (v) => setState(() => _wcCtrl.text = v ?? '') : null)),
+                if (_editable) IconButton(icon: const Icon(Icons.settings_outlined, size: 16), tooltip: 'Manage work centers',
+                  visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 30), onPressed: _manageWorkCenters),
+              ]))),
               const SizedBox(width: 12),
-              SizedBox(width: 210, child: _labeled('Assigned To', DropdownButtonFormField<String?>(value: _assignedTo, isExpanded: true,
-                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
-                items: [const DropdownMenuItem<String?>(value: null, child: Text('—')),
-                  ..._users.map((u) => DropdownMenuItem<String?>(value: u['id'] as String, child: Text(u['name'] as String? ?? '-', overflow: TextOverflow.ellipsis)))],
-                onChanged: _editable ? (v) => setState(() => _assignedTo = v) : null))),
+              SizedBox(width: 230, child: _labeled('Assigned To', Row(children: [
+                Expanded(child: DropdownButtonFormField<String?>(value: _assignedWorkerId, isExpanded: true,
+                  decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
+                  items: [const DropdownMenuItem<String?>(value: null, child: Text('—')),
+                    ...activeWorkers.map((w) => DropdownMenuItem<String?>(value: w['id'] as String, child: Text(w['name'] as String? ?? '-', overflow: TextOverflow.ellipsis)))],
+                  onChanged: _editable ? (v) => setState(() => _assignedWorkerId = v) : null)),
+                if (_editable) IconButton(icon: const Icon(Icons.settings_outlined, size: 16), tooltip: 'Manage workers',
+                  visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 30), onPressed: _manageWorkers),
+              ]))),
             ]),
             const SizedBox(height: 18),
             _recipeSection(),
