@@ -168,19 +168,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     } catch (e) { errors.add('SI: ' + e.toString()); }
 
 // 3. Purchase Return Invoices (SRI) -> Credit
-    String? priTable;
-    int priRows = 0;
-    int priAdded = 0;
-    Map? firstPriRow;
     for (final tbl in const ['purchase_return_invoices', 'sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
         var q = client.from(tbl).select('*')
             .eq('org_id', orgId).eq('supplier_id', supplierId);
         if (branchId != null) q = q.eq('branch_id', branchId);
         final rows = await q;
-        priTable = tbl;
-        priRows = (rows as List).length;
-        if (priRows > 0) firstPriRow = rows.first as Map;
         for (final sr in rows) {
           final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount'] ?? sr['net_amount'] ?? sr['return_total'] ?? sr['refund_amount'] ?? sr['value'] ?? sr['subtotal']) as num?)?.toDouble() ?? 0;
           final vno = ((sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? sr['return_no'] ?? '') as String);
@@ -191,36 +184,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               'description': vno.isNotEmpty ? 'Purchase Return ' + vno : 'Purchase Return',
               'debit': 0.0, 'credit': total, 'id': sr['id'] as String?, 'type': 'Purchase Return',
             });
-            priAdded++;
           }
         }
         break;
-      } catch (e) { errors.add('PRI [' + tbl + ']: ' + e.toString()); continue; }
+      } catch (e) { errors.add('PRI: ' + e.toString()); continue; }
     }
-    if (priTable == null) {
-      errors.add('PRI: no matching table. Tried: purchase_return_invoices');
-    } else if (priRows == 0) {
-      try {
-        final any = await client.from(priTable).select('*').limit(1);
-        if ((any as List).isNotEmpty) {
-          final keys = (any.first as Map).keys.toList();
-          errors.add('PRI: "' + priTable + '" has rows but 0 match org/supplier/branch. Cols: ' + keys.join(', '));
-        } else {
-          errors.add('PRI: "' + priTable + '" is empty');
-        }
-      } catch (e) { errors.add('SRI probe: ' + e.toString()); }
-    } else if (priAdded == 0) {
-      final fsr = firstPriRow;
-      if (fsr != null) {
-        final keys = fsr.keys.toList();
-        errors.add('PRI: "' + priTable + '" had ' + priRows.toString() + ' rows but 0 had positive total. Columns: ' + keys.join(', '));
-        final numFields = <String>[];
-        fsr.forEach((k, v) {
-          if (v is num) numFields.add(k.toString() + '=' + v.toString());
-        });
-        if (numFields.isNotEmpty) errors.add('SRI numeric fields in row: ' + numFields.join(', '));
-      }
-    }  // success — no banner needed
+    // A supplier simply having no purchase returns is normal — no banner for that.
 
     // 4. CRV -> Credit (supplier paid us)
     try {
@@ -232,11 +201,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             .select('amount, description, voucher_id')
             .eq('account_id', supplierId).eq('account_type', 'supplier').inFilter('voucher_id', crvIds);
         final crvMap = {for (final v in crvVouchers) v['id'] as String: v};
-        Map? firstNoDate;
         for (final line in crvLines as List) {
           final v = crvMap[line['voucher_id'] as String]; if (v == null) continue;
           final date = extractDate(v as Map, const ['voucher_date', 'value_date', 'transaction_date', 'date', 'posted_at', 'posted_date', 'created_at', 'created_date', 'updated_at']);
-          if (date.isEmpty && firstNoDate == null) firstNoDate = v;
           entries.add({
             'date': date,
             'voucher': (v['voucher_number'] as String?) ?? '',
@@ -244,13 +211,6 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             'debit': (line['amount'] as num?)?.toDouble() ?? 0, 'credit': 0.0,
             'id': v['id'] as String?, 'type': 'Receipt (CRV)',
           });
-        }
-        if (firstNoDate != null) {
-          final fields = firstNoDate.keys.toList().join(', ');
-          errors.add('CRV missing date. Available fields: ' + fields);
-          for (final f in const ['voucher_date', 'posted_at', 'created_at']) {
-            errors.add('CRV.' + f + ' = ' + (firstNoDate[f]?.toString() ?? 'null'));
-          }
         }
       }
     } catch (e) { errors.add('CRV: ' + e.toString()); }
