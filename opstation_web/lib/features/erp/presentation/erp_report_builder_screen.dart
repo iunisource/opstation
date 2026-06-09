@@ -21,7 +21,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   final List<String> _rows = [];
   final List<String> _cols = [];
   final List<String> _values = [];
-  final Map<String, String> _filters = {};
+  final Map<String, List<String>> _filters = {};
   DateTime? _dateFrom;
   DateTime? _dateTo;
   String _view = 'table'; // table | pivot | chart
@@ -115,6 +115,18 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     });
   }
 
+  // For master-backed dimensions, the source view only contains values that
+  // appear in transactions. Returns {table, column} so the picker can union
+  // the full directory in, making every record selectable. (product/sku share
+  // the products master; extend here for customer/supplier once confirmed.)
+  Map<String, String>? _masterFor(String field) {
+    final f = field.toLowerCase();
+    final lbl = _label(field).toLowerCase();
+    if (f == 'product' || f == 'product_name' || lbl == 'product') return {'table': 'products', 'column': 'name'};
+    if (f == 'sku' || lbl == 'sku') return {'table': 'products', 'column': 'sku'};
+    return null;
+  }
+
   Future<void> _addFilter(String field) async {
     final orgId = _orgId;
     List<String> values = [];
@@ -125,12 +137,22 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         });
         values = List<String>.from(((res as List?) ?? const []).map((e) => e.toString()));
       } catch (_) {}
+      // Union the full master directory for master-backed dimensions so records
+      // with no rows in the current source are still selectable.
+      final ml = _masterFor(field);
+      if (ml != null) {
+        try {
+          final rows = await Supabase.instance.client.from(ml['table']!).select(ml['column']!).eq('org_id', orgId).limit(20000);
+          final masterVals = List<Map<String, dynamic>>.from(rows)
+              .map((r) => (r[ml['column']] ?? '').toString()).where((s) => s.isNotEmpty);
+          values = <String>{...values, ...masterVals}.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        } catch (_) {}
+      }
     }
     if (!mounted) return;
-    final current = _filters[field];
+    final selected = <String>{...?_filters[field]};
     final searchCtrl = TextEditingController();
-    final manualCtrl = TextEditingController(text: current ?? '');
-    String? picked = current;
+    final manualCtrl = TextEditingController();
 
     final result = await showDialog<_FilterResult>(context: context, builder: (ctx) => StatefulBuilder(builder: (c, setS) {
       final q = searchCtrl.text.toLowerCase();
@@ -139,25 +161,36 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         title: Text('Filter: ${_label(field)}'),
         content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (values.isEmpty) ...[
-            const Text('No stored values for this field — type one to match exactly:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const Text('No stored values for this field — type one or more (comma-separated) to match exactly:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             const SizedBox(height: 8),
-            TextField(controller: manualCtrl, autofocus: true, decoration: const InputDecoration(hintText: 'Equals…', isDense: true)),
+            TextField(controller: manualCtrl, autofocus: true, decoration: const InputDecoration(hintText: 'value1, value2…', isDense: true)),
           ] else ...[
-            Text('${values.length} value${values.length == 1 ? '' : 's'} in this source — pick one:', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            Row(children: [
+              Expanded(child: Text('${values.length} value${values.length == 1 ? '' : 's'} — pick one or more:', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+              if (selected.isNotEmpty) Text('${selected.length} selected', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+            ]),
             const SizedBox(height: 8),
             TextField(controller: searchCtrl, autofocus: true,
               decoration: const InputDecoration(hintText: 'Search values…', isDense: true, prefixIcon: Icon(Icons.search, size: 16)),
               onChanged: (_) => setS(() {})),
-            const SizedBox(height: 8),
-            SizedBox(height: 280, child: shown.isEmpty
+            const SizedBox(height: 2),
+            Row(children: [
+              TextButton(onPressed: () => setS(() => selected.addAll(shown)),
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero),
+                child: Text(q.isEmpty ? 'Select all' : 'Select all shown', style: const TextStyle(fontSize: 11))),
+              TextButton(onPressed: () => setS(() => selected.clear()),
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero),
+                child: const Text('Clear', style: TextStyle(fontSize: 11))),
+            ]),
+            SizedBox(height: 250, child: shown.isEmpty
               ? const Center(child: Text('No match', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-              : ListView.builder(itemCount: shown.length > 400 ? 400 : shown.length, itemBuilder: (_, i) {
-                  final v = shown[i]; final sel = v == picked;
-                  return InkWell(onTap: () => setS(() => picked = v), child: Container(
+              : ListView.builder(itemCount: shown.length > 800 ? 800 : shown.length, itemBuilder: (_, i) {
+                  final v = shown[i]; final sel = selected.contains(v);
+                  return InkWell(onTap: () => setS(() { if (sel) { selected.remove(v); } else { selected.add(v); } }), child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
                     color: sel ? AppTheme.primary.withOpacity(0.08) : null,
                     child: Row(children: [
-                      Icon(sel ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 16, color: sel ? AppTheme.primary : AppTheme.textSecondary),
+                      Icon(sel ? Icons.check_box : Icons.check_box_outline_blank, size: 16, color: sel ? AppTheme.primary : AppTheme.textSecondary),
                       const SizedBox(width: 8),
                       Expanded(child: Text(v, style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
                     ]),
@@ -166,12 +199,14 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
           ],
         ])),
         actions: [
-          if (current != null) TextButton(onPressed: () => Navigator.pop(ctx, const _FilterResult(clear: true)),
+          if (_filters.containsKey(field)) TextButton(onPressed: () => Navigator.pop(ctx, const _FilterResult(clear: true)),
             style: TextButton.styleFrom(foregroundColor: Colors.red), child: const Text('Remove filter')),
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(onPressed: () {
-            final val = values.isEmpty ? manualCtrl.text.trim() : (picked ?? '');
-            Navigator.pop(ctx, _FilterResult(value: val.isEmpty ? null : val));
+            final List<String> vals = values.isEmpty
+              ? manualCtrl.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList()
+              : selected.toList();
+            Navigator.pop(ctx, _FilterResult(values: vals.isEmpty ? null : vals));
           }, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Apply')),
         ],
       );
@@ -179,10 +214,10 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
     if (result == null) return;
     setState(() {
-      if (result.clear || result.value == null) {
+      if (result.clear || result.values == null) {
         _filters.remove(field);
       } else {
-        _rows.remove(field); _cols.remove(field); _filters[field] = result.value!;
+        _rows.remove(field); _cols.remove(field); _filters[field] = result.values!;
       }
     });
   }
@@ -250,7 +285,14 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       _rows..clear()..addAll(List<String>.from(cfg['rows'] ?? []));
       _cols..clear()..addAll(List<String>.from(cfg['cols'] ?? []));
       _values..clear()..addAll(List<String>.from(cfg['values'] ?? []));
-      _filters..clear()..addAll(Map<String, String>.from((cfg['filters'] as Map?)?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? {}));
+      _filters.clear();
+      final rawF = cfg['filters'];
+      if (rawF is Map) {
+        rawF.forEach((k, v) {
+          if (v is List) { _filters[k.toString()] = v.map((e) => e.toString()).toList(); }
+          else if (v != null) { _filters[k.toString()] = [v.toString()]; }
+        });
+      }
       _view = cfg['view'] as String? ?? 'table';
       _dateFrom = cfg['date_from'] != null ? DateTime.tryParse(cfg['date_from']) : null;
       _dateTo = cfg['date_to'] != null ? DateTime.tryParse(cfg['date_to']) : null;
@@ -356,7 +398,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         decoration: BoxDecoration(color: Colors.orange.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.25))),
         child: _filters.isEmpty ? const Text('—', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
           : Wrap(spacing: 4, runSpacing: 4, children: _filters.entries.map((e) => Chip(
-              label: Text('${_label(e.key)} = ${e.value}', style: const TextStyle(fontSize: 11)),
+              label: Text('${_label(e.key)}: ${e.value.length <= 2 ? e.value.join(', ') : '${e.value.length} selected'}', style: const TextStyle(fontSize: 11)),
               visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               onDeleted: () => setState(() => _filters.remove(e.key)),
             )).toList())),
@@ -568,7 +610,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     if (_rows.isNotEmpty) parts.add('Rows: ${_rows.map(_label).join(', ')}');
     if (_cols.isNotEmpty) parts.add('Columns: ${_cols.map(_label).join(', ')}');
     if (_values.isNotEmpty) parts.add('Values: ${_values.map(_label).join(', ')}');
-    if (_filters.isNotEmpty) parts.add('Filters: ${_filters.entries.map((e) => '${_label(e.key)}=${e.value}').join(', ')}');
+    if (_filters.isNotEmpty) parts.add('Filters: ${_filters.entries.map((e) => '${_label(e.key)}=${e.value.join(', ')}').join('; ')}');
     if (_dateFrom != null || _dateTo != null) parts.add('Period: ${_dateFrom != null ? DateFormat('d MMM yyyy').format(_dateFrom!) : '…'} – ${_dateTo != null ? DateFormat('d MMM yyyy').format(_dateTo!) : '…'}');
     buf.write('<div class="meta">${_esc(parts.join('  •  '))}</div>');
 
@@ -637,9 +679,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 }
 
 class _FilterResult {
-  final String? value;
+  final List<String>? values;
   final bool clear;
-  const _FilterResult({this.value, this.clear = false});
+  const _FilterResult({this.values, this.clear = false});
 }
 
 class _LinePainter extends CustomPainter {
