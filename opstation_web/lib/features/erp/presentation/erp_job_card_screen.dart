@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import 'running_dot.dart';
 
 class _JobMat {
   static int _seq = 0;
@@ -496,6 +497,24 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     catch (e) { _snack('Delete failed: $e'); }
   }
 
+  Future<void> _toggleRunning() async {
+    if (_current == null) return;
+    final id = _current!['id'] as String;
+    final next = !((_current!['is_running'] as bool?) ?? false);
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client.from('job_cards')
+          .update({'is_running': next, 'updated_at': DateTime.now().toIso8601String()})
+          .eq('id', id);
+      if (mounted) setState(() {
+        _current!['is_running'] = next;
+        final idx = _jobs.indexWhere((j) => j['id'] == id);
+        if (idx >= 0) _jobs[idx]['is_running'] = next;
+      });
+    } catch (e) { _snack('Could not update status: $e'); }
+    if (mounted) setState(() => _busy = false);
+  }
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime(2100));
     if (picked != null) setState(() => _date = picked);
@@ -520,6 +539,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final pn = (_prodLabel[j['product_id']] ?? '').toLowerCase();
       return (j['job_number'] as String? ?? '').toLowerCase().contains(q) || pn.contains(q);
     }).toList();
+
+    final running = (_current?['is_running'] as bool?) ?? false;
 
     return Container(color: AppTheme.background, child: Row(children: [
       if (_drawerOpen) Container(width: 300,
@@ -552,6 +573,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
                       Expanded(child: Text(j['job_number'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))),
+                      if (j['is_running'] == true) const Padding(padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
                       Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.13), borderRadius: BorderRadius.circular(3)),
                         child: Text(lbl, style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))),
                     ]),
@@ -570,6 +592,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
             IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
             const SizedBox(width: 8),
             Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+            if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
             if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_trim(_remainingQty)} left',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
             if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete'),
@@ -577,6 +600,19 @@ class _State extends ConsumerState<ErpJobCardScreen> {
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
               label: const Text('Save'), onPressed: _saving || _busy ? null : () => _save()),
             const SizedBox(width: 8),
+            if (_current != null && _status != 'completed' && _status != 'cancelled') ...[
+              OutlinedButton.icon(
+                icon: Icon(running ? Icons.pause : Icons.play_arrow, size: 18),
+                label: Text(running ? 'Pause' : 'Play'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: running ? Colors.orange.shade800 : Colors.green.shade700,
+                  side: BorderSide(color: running ? Colors.orange.shade300 : Colors.green.shade300),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                ),
+                onPressed: _busy ? null : _toggleRunning,
+              ),
+              const SizedBox(width: 8),
+            ],
             if (_current != null && _remainingQty > 0 && _status != 'cancelled') ElevatedButton.icon(
               icon: const Icon(Icons.add_task, size: 16), label: const Text('Produce Batch'),
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),

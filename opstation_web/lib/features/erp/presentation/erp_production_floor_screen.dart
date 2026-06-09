@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import 'running_dot.dart';
 
 class ErpProductionFloorScreen extends ConsumerStatefulWidget {
   const ErpProductionFloorScreen({super.key});
@@ -151,6 +152,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
           boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 4, offset: const Offset(0, 1))]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
+            if (j['is_running'] == true) const Padding(padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
             Expanded(child: Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
             if (prio > 0) Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), decoration: BoxDecoration(color: Colors.red.withOpacity(0.10), borderRadius: BorderRadius.circular(4)),
               child: Text('P$prio', style: const TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700))),
@@ -200,8 +202,11 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
             cells: [
               DataCell(Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
               DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 240), child: Text(_prodLabel[j['product_id']] ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
-              DataCell(Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2), decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                child: Text(lbl, style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w700)))),
+              DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+                if (j['is_running'] == true) const Padding(padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2), decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                  child: Text(lbl, style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w700))),
+              ])),
               DataCell(Text(_trim(_planned(j)), style: const TextStyle(fontSize: 12))),
               DataCell(Text(_trim(_produced(j)), style: const TextStyle(fontSize: 12))),
               DataCell(Text(_trim(_remaining(j)), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
