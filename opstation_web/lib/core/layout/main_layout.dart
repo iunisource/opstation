@@ -248,6 +248,9 @@ class _TopNav extends ConsumerWidget {
           ['/erp/supplier-ledger', '/erp/customer-ledger', '/erp/inventory-ledger',
            '/erp/customer-aging', '/erp/supplier-aging'],
           _trimDividers(ledgerItems)),
+      _navMenu(context, 'Reports', Icons.summarize_outlined, location,
+        ['/reports/margin'],
+        [_menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location)]),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
           ['/manufacturing/production-floor', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints',
