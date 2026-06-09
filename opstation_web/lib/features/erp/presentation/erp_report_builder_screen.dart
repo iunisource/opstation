@@ -11,14 +11,9 @@ class ErpReportBuilderScreen extends ConsumerStatefulWidget {
   ConsumerState<ErpReportBuilderScreen> createState() => _State();
 }
 
-const _sources = [
-  {'key': 'sales', 'label': 'Sales'},
-  {'key': 'purchases', 'label': 'Purchases'},
-  {'key': 'inventory', 'label': 'Inventory'},
-];
-
 class _State extends ConsumerState<ErpReportBuilderScreen> {
   List<Map<String, dynamic>> _allMeta = [];
+  List<Map<String, dynamic>> _sources = [];
   bool _loadingMeta = true;
 
   String _source = 'sales';
@@ -41,10 +36,24 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMeta(); _loadTemplates(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadSources(); _loadMeta(); _loadTemplates(); });
   }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  Future<void> _loadSources() async {
+    try {
+      final rows = await Supabase.instance.client.from('report_sources').select().order('ord');
+      if (!mounted) return;
+      final list = List<Map<String, dynamic>>.from(rows);
+      setState(() {
+        _sources = list;
+        if (list.isNotEmpty && !list.any((s) => s['source_key'] == _source)) {
+          _source = list.first['source_key'] as String;
+        }
+      });
+    } catch (_) {}
+  }
 
   Future<void> _loadMeta() async {
     final orgId = _orgId;
@@ -196,8 +205,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
       child: Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
         const Text('Report Builder', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-        DropdownButton<String>(value: _source, underline: const SizedBox(),
-          items: _sources.map((s) => DropdownMenuItem(value: s['key'], child: Text(s['label']!))).toList(),
+        DropdownButton<String>(value: _sources.any((s) => s['source_key'] == _source) ? _source : null, underline: const SizedBox(),
+          hint: const Text('Source'),
+          items: _sources.map((s) => DropdownMenuItem(value: s['source_key'] as String, child: Text(s['label'] as String))).toList(),
           onChanged: (v) { if (v != null) _resetForSource(v); }),
         _dateBtn('From', _dateFrom, () => _pickDate(true), () => setState(() => _dateFrom = null)),
         _dateBtn('To', _dateTo, () => _pickDate(false), () => setState(() => _dateTo = null)),
