@@ -21,7 +21,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   final List<String> _rows = [];
   final List<String> _cols = [];
   final List<String> _values = [];
-  final Map<String, List<String>> _filters = {};
+  final Map<String, _Cond> _filters = {};
   DateTime? _dateFrom;
   DateTime? _dateTo;
   String _view = 'table'; // table | pivot | chart
@@ -115,6 +115,15 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     });
   }
 
+  static const Map<String, String> _opLabels = {
+    'in': 'is any of', 'notin': 'is none of', 'eq': 'equals', 'ne': 'not equals',
+    'contains': 'contains', 'gt': '>', 'ge': '≥', 'lt': '<', 'le': '≤',
+    'between': 'between', 'blank': 'is blank', 'notblank': 'is not blank',
+  };
+  static bool _opIsList(String op) => op == 'in' || op == 'notin';
+  static bool _opNoValue(String op) => op == 'blank' || op == 'notblank';
+  static bool _opTwoValues(String op) => op == 'between';
+
   // For master-backed dimensions, the source view only contains values that
   // appear in transactions. Returns {table, column} so the picker can union
   // the full directory in, making every record selectable. (product/sku share
@@ -150,63 +159,102 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       }
     }
     if (!mounted) return;
-    final selected = <String>{...?_filters[field]};
+    final existing = _filters[field];
+    String op = existing?.op ?? 'in';
+    final selected = <String>{...?(existing != null && _opIsList(existing.op) ? existing.vals : null)};
+    final v1Ctrl = TextEditingController(text: (existing != null && !_opIsList(existing.op) && existing.vals.isNotEmpty) ? existing.vals[0] : '');
+    final v2Ctrl = TextEditingController(text: (existing != null && existing.op == 'between' && existing.vals.length > 1) ? existing.vals[1] : '');
     final searchCtrl = TextEditingController();
-    final manualCtrl = TextEditingController();
 
     final result = await showDialog<_FilterResult>(context: context, builder: (ctx) => StatefulBuilder(builder: (c, setS) {
       final q = searchCtrl.text.toLowerCase();
       final shown = (q.isEmpty ? values : values.where((v) => v.toLowerCase().contains(q)).toList());
       return AlertDialog(
-        title: Text('Filter: ${_label(field)}'),
-        content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (values.isEmpty) ...[
-            const Text('No stored values for this field — type one or more (comma-separated) to match exactly:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-            const SizedBox(height: 8),
-            TextField(controller: manualCtrl, autofocus: true, decoration: const InputDecoration(hintText: 'value1, value2…', isDense: true)),
+        title: Text('Condition: ${_label(field)}'),
+        content: SizedBox(width: 400, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('Where it', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(width: 10),
+            DropdownButton<String>(value: op, isDense: true,
+              items: _opLabels.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, style: const TextStyle(fontSize: 13)))).toList(),
+              onChanged: (v) => setS(() => op = v ?? 'in')),
+          ]),
+          const SizedBox(height: 10),
+          if (_opNoValue(op))
+            const Text('No value needed for this condition.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))
+          else if (_opIsList(op)) ...[
+            if (values.isEmpty)
+              TextField(controller: v1Ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'Comma-separated values…', isDense: true))
+            else ...[
+              Row(children: [
+                Expanded(child: Text('${values.length} value${values.length == 1 ? '' : 's'} — tick any:', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                if (selected.isNotEmpty) Text('${selected.length} selected', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+              ]),
+              const SizedBox(height: 6),
+              TextField(controller: searchCtrl, decoration: const InputDecoration(hintText: 'Search values…', isDense: true, prefixIcon: Icon(Icons.search, size: 16)), onChanged: (_) => setS(() {})),
+              Row(children: [
+                TextButton(onPressed: () => setS(() => selected.addAll(shown)),
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero),
+                  child: Text(q.isEmpty ? 'Select all' : 'Select all shown', style: const TextStyle(fontSize: 11))),
+                TextButton(onPressed: () => setS(() => selected.clear()),
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero),
+                  child: const Text('Clear', style: TextStyle(fontSize: 11))),
+              ]),
+              SizedBox(height: 230, child: shown.isEmpty
+                ? const Center(child: Text('No match', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+                : ListView.builder(itemCount: shown.length > 800 ? 800 : shown.length, itemBuilder: (_, i) {
+                    final v = shown[i]; final sel = selected.contains(v);
+                    return InkWell(onTap: () => setS(() { if (sel) { selected.remove(v); } else { selected.add(v); } }), child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                      color: sel ? AppTheme.primary.withOpacity(0.08) : null,
+                      child: Row(children: [
+                        Icon(sel ? Icons.check_box : Icons.check_box_outline_blank, size: 16, color: sel ? AppTheme.primary : AppTheme.textSecondary),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(v, style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
+                      ]),
+                    ));
+                  })),
+            ],
+          ] else if (_opTwoValues(op)) ...[
+            Row(children: [
+              Expanded(child: TextField(controller: v1Ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'From', isDense: true))),
+              const SizedBox(width: 10),
+              Expanded(child: TextField(controller: v2Ctrl, decoration: const InputDecoration(labelText: 'To', isDense: true))),
+            ]),
+            if (values.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text('${values.length} known values exist for reference.', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
           ] else ...[
-            Row(children: [
-              Expanded(child: Text('${values.length} value${values.length == 1 ? '' : 's'} — pick one or more:', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-              if (selected.isNotEmpty) Text('${selected.length} selected', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.primary)),
-            ]),
-            const SizedBox(height: 8),
-            TextField(controller: searchCtrl, autofocus: true,
-              decoration: const InputDecoration(hintText: 'Search values…', isDense: true, prefixIcon: Icon(Icons.search, size: 16)),
-              onChanged: (_) => setS(() {})),
-            const SizedBox(height: 2),
-            Row(children: [
-              TextButton(onPressed: () => setS(() => selected.addAll(shown)),
-                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero),
-                child: Text(q.isEmpty ? 'Select all' : 'Select all shown', style: const TextStyle(fontSize: 11))),
-              TextButton(onPressed: () => setS(() => selected.clear()),
-                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero),
-                child: const Text('Clear', style: TextStyle(fontSize: 11))),
-            ]),
-            SizedBox(height: 250, child: shown.isEmpty
-              ? const Center(child: Text('No match', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-              : ListView.builder(itemCount: shown.length > 800 ? 800 : shown.length, itemBuilder: (_, i) {
-                  final v = shown[i]; final sel = selected.contains(v);
-                  return InkWell(onTap: () => setS(() { if (sel) { selected.remove(v); } else { selected.add(v); } }), child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-                    color: sel ? AppTheme.primary.withOpacity(0.08) : null,
-                    child: Row(children: [
-                      Icon(sel ? Icons.check_box : Icons.check_box_outline_blank, size: 16, color: sel ? AppTheme.primary : AppTheme.textSecondary),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(v, style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
-                    ]),
-                  ));
-                })),
+            TextField(controller: v1Ctrl, autofocus: true, decoration: InputDecoration(hintText: op == 'contains' ? 'Text to match…' : 'Value…', isDense: true), onChanged: (_) => setS(() {})),
+            if (values.isNotEmpty && (op == 'eq' || op == 'ne')) ...[
+              const SizedBox(height: 8),
+              TextField(controller: searchCtrl, decoration: const InputDecoration(hintText: 'Or search known values…', isDense: true, prefixIcon: Icon(Icons.search, size: 16)), onChanged: (_) => setS(() {})),
+              SizedBox(height: 150, child: ListView.builder(itemCount: shown.length > 400 ? 400 : shown.length, itemBuilder: (_, i) {
+                final v = shown[i]; final sel = v1Ctrl.text == v;
+                return InkWell(onTap: () => setS(() => v1Ctrl.text = v), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                  child: Text(v, style: TextStyle(fontSize: 13, color: sel ? AppTheme.primary : AppTheme.textPrimary, fontWeight: sel ? FontWeight.w700 : FontWeight.w400), overflow: TextOverflow.ellipsis))); })),
+            ],
           ],
         ])),
         actions: [
           if (_filters.containsKey(field)) TextButton(onPressed: () => Navigator.pop(ctx, const _FilterResult(clear: true)),
-            style: TextButton.styleFrom(foregroundColor: Colors.red), child: const Text('Remove filter')),
+            style: TextButton.styleFrom(foregroundColor: Colors.red), child: const Text('Remove')),
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(onPressed: () {
-            final List<String> vals = values.isEmpty
-              ? manualCtrl.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList()
-              : selected.toList();
-            Navigator.pop(ctx, _FilterResult(values: vals.isEmpty ? null : vals));
+            List<String>? vals;
+            if (_opNoValue(op)) {
+              vals = [];
+            } else if (_opIsList(op)) {
+              vals = values.isEmpty
+                ? v1Ctrl.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList()
+                : selected.toList();
+              if (vals.isEmpty) vals = null;
+            } else if (_opTwoValues(op)) {
+              final a = v1Ctrl.text.trim(); final b = v2Ctrl.text.trim();
+              vals = (a.isNotEmpty && b.isNotEmpty) ? [a, b] : null;
+            } else {
+              final a = v1Ctrl.text.trim(); vals = a.isNotEmpty ? [a] : null;
+            }
+            if (vals == null) { Navigator.pop(ctx, const _FilterResult(clear: true)); return; }
+            Navigator.pop(ctx, _FilterResult(op: op, vals: vals));
           }, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Apply')),
         ],
       );
@@ -214,10 +262,10 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
     if (result == null) return;
     setState(() {
-      if (result.clear || result.values == null) {
+      if (result.clear || result.vals == null) {
         _filters.remove(field);
       } else {
-        _rows.remove(field); _cols.remove(field); _filters[field] = result.values!;
+        _rows.remove(field); _cols.remove(field); _filters[field] = _Cond(result.op!, result.vals!);
       }
     });
   }
@@ -231,7 +279,8 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       final res = await Supabase.instance.client.rpc('rpc_report_query', params: {
         'p_org': orgId, 'p_source': _source,
         'p_dims': dims, 'p_measures': _values,
-        'p_filters': _filters,
+        'p_filters': <String, dynamic>{},
+        'p_conditions': _filters.entries.map((e) => {'field': e.key, 'op': e.value.op, 'vals': e.value.vals}).toList(),
         'p_date_from': _dateFrom != null ? DateFormat('yyyy-MM-dd').format(_dateFrom!) : null,
         'p_date_to': _dateTo != null ? DateFormat('yyyy-MM-dd').format(_dateTo!) : null,
       });
@@ -268,7 +317,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         'id': 'rpt_${DateTime.now().millisecondsSinceEpoch}', 'org_id': _orgId, 'name': nameCtrl.text.trim(), 'source': _source,
         'is_shared': shared, 'created_by': ref.read(currentUserProvider)?.id,
         'config': {
-          'rows': _rows, 'cols': _cols, 'values': _values, 'filters': _filters, 'view': _view,
+          'rows': _rows, 'cols': _cols, 'values': _values, 'filters': _filters.map((k, v) => MapEntry(k, {'op': v.op, 'vals': v.vals})), 'view': _view,
           'date_from': _dateFrom != null ? DateFormat('yyyy-MM-dd').format(_dateFrom!) : null,
           'date_to': _dateTo != null ? DateFormat('yyyy-MM-dd').format(_dateTo!) : null,
         },
@@ -289,8 +338,15 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       final rawF = cfg['filters'];
       if (rawF is Map) {
         rawF.forEach((k, v) {
-          if (v is List) { _filters[k.toString()] = v.map((e) => e.toString()).toList(); }
-          else if (v != null) { _filters[k.toString()] = [v.toString()]; }
+          if (v is Map) {
+            final op = (v['op'] as String?) ?? 'in';
+            final vals = (v['vals'] is List) ? List<String>.from((v['vals'] as List).map((e) => e.toString())) : <String>[];
+            _filters[k.toString()] = _Cond(op, vals);
+          } else if (v is List) {
+            _filters[k.toString()] = _Cond('in', v.map((e) => e.toString()).toList());
+          } else if (v != null) {
+            _filters[k.toString()] = _Cond('eq', [v.toString()]);
+          }
         });
       }
       _view = cfg['view'] as String? ?? 'table';
@@ -324,6 +380,31 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
           onChanged: (v) { if (v != null) _resetForSource(v); }),
         _dateBtn('From', _dateFrom, () => _pickDate(true), () => setState(() => _dateFrom = null)),
         _dateBtn('To', _dateTo, () => _pickDate(false), () => setState(() => _dateTo = null)),
+        PopupMenuButton<String>(
+          tooltip: 'Quick date range',
+          onSelected: (v) => setState(() {
+            final now = DateTime.now();
+            switch (v) {
+              case 'l7': _dateTo = now; _dateFrom = now.subtract(const Duration(days: 7)); break;
+              case 'l30': _dateTo = now; _dateFrom = now.subtract(const Duration(days: 30)); break;
+              case 'l90': _dateTo = now; _dateFrom = now.subtract(const Duration(days: 90)); break;
+              case 'mtd': _dateFrom = DateTime(now.year, now.month, 1); _dateTo = now; break;
+              case 'ytd': _dateFrom = DateTime(now.year, 1, 1); _dateTo = now; break;
+              case 'clear': _dateFrom = null; _dateTo = null; break;
+            }
+          }),
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'l7', child: Text('Last 7 days')),
+            PopupMenuItem(value: 'l30', child: Text('Last 30 days')),
+            PopupMenuItem(value: 'l90', child: Text('Last 90 days')),
+            PopupMenuItem(value: 'mtd', child: Text('This month')),
+            PopupMenuItem(value: 'ytd', child: Text('This year')),
+            PopupMenuItem(value: 'clear', child: Text('Clear dates')),
+          ],
+          child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+            decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6)),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.history, size: 14, color: AppTheme.textSecondary), SizedBox(width: 4), Icon(Icons.arrow_drop_down, size: 16, color: AppTheme.textSecondary)])),
+        ),
         ElevatedButton.icon(onPressed: _running ? null : _run,
           icon: _running ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.play_arrow, size: 18),
           label: const Text('Run'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
@@ -397,11 +478,16 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       Container(width: double.infinity, constraints: const BoxConstraints(minHeight: 36), padding: const EdgeInsets.all(6),
         decoration: BoxDecoration(color: Colors.orange.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.25))),
         child: _filters.isEmpty ? const Text('—', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
-          : Wrap(spacing: 4, runSpacing: 4, children: _filters.entries.map((e) => Chip(
-              label: Text('${_label(e.key)}: ${e.value.length <= 2 ? e.value.join(', ') : '${e.value.length} selected'}', style: const TextStyle(fontSize: 11)),
-              visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              onDeleted: () => setState(() => _filters.remove(e.key)),
-            )).toList())),
+          : Wrap(spacing: 4, runSpacing: 4, children: _filters.entries.map((e) {
+              final cond = e.value;
+              final opl = _opLabels[cond.op] ?? cond.op;
+              final valStr = _opNoValue(cond.op) ? '' : (cond.vals.length <= 2 ? cond.vals.join(cond.op == 'between' ? ' – ' : ', ') : '${cond.vals.length} selected');
+              return Chip(
+                label: Text('${_label(e.key)} $opl${valStr.isEmpty ? '' : ' $valStr'}', style: const TextStyle(fontSize: 11)),
+                visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onDeleted: () => setState(() => _filters.remove(e.key)),
+              );
+            }).toList())),
     ]));
   }
 
@@ -610,7 +696,11 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     if (_rows.isNotEmpty) parts.add('Rows: ${_rows.map(_label).join(', ')}');
     if (_cols.isNotEmpty) parts.add('Columns: ${_cols.map(_label).join(', ')}');
     if (_values.isNotEmpty) parts.add('Values: ${_values.map(_label).join(', ')}');
-    if (_filters.isNotEmpty) parts.add('Filters: ${_filters.entries.map((e) => '${_label(e.key)}=${e.value.join(', ')}').join('; ')}');
+    if (_filters.isNotEmpty) parts.add('Filters: ${_filters.entries.map((e) {
+      final opl = _opLabels[e.value.op] ?? e.value.op;
+      final vs = _opNoValue(e.value.op) ? '' : ' ${e.value.vals.join(', ')}';
+      return '${_label(e.key)} $opl$vs';
+    }).join('; ')}');
     if (_dateFrom != null || _dateTo != null) parts.add('Period: ${_dateFrom != null ? DateFormat('d MMM yyyy').format(_dateFrom!) : '…'} – ${_dateTo != null ? DateFormat('d MMM yyyy').format(_dateTo!) : '…'}');
     buf.write('<div class="meta">${_esc(parts.join('  •  '))}</div>');
 
@@ -678,10 +768,17 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   }
 }
 
+class _Cond {
+  String op;
+  List<String> vals;
+  _Cond(this.op, this.vals);
+}
+
 class _FilterResult {
-  final List<String>? values;
+  final String? op;
+  final List<String>? vals;
   final bool clear;
-  const _FilterResult({this.values, this.clear = false});
+  const _FilterResult({this.op, this.vals, this.clear = false});
 }
 
 class _LinePainter extends CustomPainter {
