@@ -113,7 +113,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (orgId == null) return;
     await Supabase.instance.client
         .from('app_config')
-        .upsert({'key': key, 'value': value, 'org_id': orgId});
+        .upsert({'key': key, 'value': value, 'org_id': orgId}, onConflict: 'key,org_id,branch_id');
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Saved')),
@@ -143,7 +143,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           'key': entry.key,
           'value': entry.value,
           'org_id': orgId,
-        });
+        }, onConflict: 'key,org_id,branch_id');
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
