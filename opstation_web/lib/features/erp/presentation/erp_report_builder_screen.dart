@@ -116,16 +116,75 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   }
 
   Future<void> _addFilter(String field) async {
-    final ctrl = TextEditingController(text: _filters[field] ?? '');
-    final v = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
-      title: Text('Filter: ${_label(field)}'),
-      content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'Equals…', isDense: true)),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Apply')),
-      ],
-    ));
-    if (v != null && v.isNotEmpty) setState(() { _rows.remove(field); _cols.remove(field); _filters[field] = v; });
+    final orgId = _orgId;
+    List<String> values = [];
+    if (orgId != null) {
+      try {
+        final res = await Supabase.instance.client.rpc('rpc_report_distinct', params: {
+          'p_org': orgId, 'p_source': _source, 'p_field': field,
+        });
+        values = List<String>.from(((res as List?) ?? const []).map((e) => e.toString()));
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    final current = _filters[field];
+    final searchCtrl = TextEditingController();
+    final manualCtrl = TextEditingController(text: current ?? '');
+    String? picked = current;
+
+    final result = await showDialog<_FilterResult>(context: context, builder: (ctx) => StatefulBuilder(builder: (c, setS) {
+      final q = searchCtrl.text.toLowerCase();
+      final shown = (q.isEmpty ? values : values.where((v) => v.toLowerCase().contains(q)).toList());
+      return AlertDialog(
+        title: Text('Filter: ${_label(field)}'),
+        content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (values.isEmpty) ...[
+            const Text('No stored values for this field — type one to match exactly:', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(height: 8),
+            TextField(controller: manualCtrl, autofocus: true, decoration: const InputDecoration(hintText: 'Equals…', isDense: true)),
+          ] else ...[
+            Text('${values.length} value${values.length == 1 ? '' : 's'} in this source — pick one:', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(height: 8),
+            TextField(controller: searchCtrl, autofocus: true,
+              decoration: const InputDecoration(hintText: 'Search values…', isDense: true, prefixIcon: Icon(Icons.search, size: 16)),
+              onChanged: (_) => setS(() {})),
+            const SizedBox(height: 8),
+            SizedBox(height: 280, child: shown.isEmpty
+              ? const Center(child: Text('No match', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+              : ListView.builder(itemCount: shown.length > 400 ? 400 : shown.length, itemBuilder: (_, i) {
+                  final v = shown[i]; final sel = v == picked;
+                  return InkWell(onTap: () => setS(() => picked = v), child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                    color: sel ? AppTheme.primary.withOpacity(0.08) : null,
+                    child: Row(children: [
+                      Icon(sel ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 16, color: sel ? AppTheme.primary : AppTheme.textSecondary),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(v, style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
+                    ]),
+                  ));
+                })),
+          ],
+        ])),
+        actions: [
+          if (current != null) TextButton(onPressed: () => Navigator.pop(ctx, const _FilterResult(clear: true)),
+            style: TextButton.styleFrom(foregroundColor: Colors.red), child: const Text('Remove filter')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () {
+            final val = values.isEmpty ? manualCtrl.text.trim() : (picked ?? '');
+            Navigator.pop(ctx, _FilterResult(value: val.isEmpty ? null : val));
+          }, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Apply')),
+        ],
+      );
+    }));
+
+    if (result == null) return;
+    setState(() {
+      if (result.clear || result.value == null) {
+        _filters.remove(field);
+      } else {
+        _rows.remove(field); _cols.remove(field); _filters[field] = result.value!;
+      }
+    });
   }
 
   Future<void> _run() async {
@@ -575,6 +634,12 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     b.write('<td class="num">${_esc(_fmt(grand))}</td></tr></tbody></table>');
     return b.toString();
   }
+}
+
+class _FilterResult {
+  final String? value;
+  final bool clear;
+  const _FilterResult({this.value, this.clear = false});
 }
 
 class _LinePainter extends CustomPainter {
