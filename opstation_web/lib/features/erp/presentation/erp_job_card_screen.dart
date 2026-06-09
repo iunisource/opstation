@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -67,6 +68,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   List<Map<String, dynamic>> _baseOh = [];
   bool _saving = false;
   bool _busy = false;
+  RealtimeChannel? _channel;
+  Timer? _rtDebounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -83,6 +86,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 
   @override
   void dispose() {
+    _rtDebounce?.cancel();
+    final ch = _channel;
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
     _plannedQtyCtrl.dispose(); _priorityCtrl.dispose(); _wcCtrl.dispose(); _notesCtrl.dispose();
     for (final l in _materials) l.dispose();
     for (final l in _overheads) l.dispose();
@@ -162,7 +168,48 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final rows = await Supabase.instance.client.from('job_cards').select().eq('org_id', orgId)
           .order('priority', ascending: false).order('created_at', ascending: false).limit(400);
       if (mounted) setState(() { _jobs = List<Map<String, dynamic>>.from(rows); _loadingList = false; });
+      _subscribe(orgId);
     } catch (e) { if (mounted) setState(() => _loadingList = false); }
+  }
+
+  // ── Realtime: keep the drawer list in sync with other users' changes ──────
+  void _subscribe(String orgId) {
+    if (_channel != null) return;
+    _channel = Supabase.instance.client
+        .channel('job_card_list_$orgId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'job_cards',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
+          callback: (_) => _scheduleRefresh(),
+        )
+        .subscribe();
+  }
+
+  void _scheduleRefresh() {
+    _rtDebounce?.cancel();
+    _rtDebounce = Timer(const Duration(milliseconds: 250), _refreshList);
+  }
+
+  // Re-pull the drawer list quietly (no spinner). Does NOT touch the open
+  // job's editable form — only mirrors the live is_running flag onto it so the
+  // header dot / Play-Pause button reflect another user's toggle.
+  Future<void> _refreshList() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('job_cards').select().eq('org_id', orgId)
+          .order('priority', ascending: false).order('created_at', ascending: false).limit(400);
+      if (!mounted) return;
+      final fresh = List<Map<String, dynamic>>.from(rows);
+      setState(() {
+        _jobs = fresh;
+        if (_current != null) {
+          final m = fresh.where((j) => j['id'] == _current!['id']);
+          if (m.isNotEmpty) _current!['is_running'] = m.first['is_running'];
+        }
+      });
+    } catch (_) { /* transient; next event or manual action recovers */ }
   }
 
   // checkpoints applicable to the current job (by product/bom/global)
@@ -601,14 +648,10 @@ class _State extends ConsumerState<ErpJobCardScreen> {
               label: const Text('Save'), onPressed: _saving || _busy ? null : () => _save()),
             const SizedBox(width: 8),
             if (_current != null && _status != 'completed' && _status != 'cancelled') ...[
-              OutlinedButton.icon(
-                icon: Icon(running ? Icons.pause : Icons.play_arrow, size: 18),
-                label: Text(running ? 'Pause' : 'Play'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: running ? Colors.orange.shade800 : Colors.green.shade700,
-                  side: BorderSide(color: running ? Colors.orange.shade300 : Colors.green.shade300),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                ),
+              IconButton(
+                tooltip: running ? 'Pause' : 'Play',
+                icon: Icon(running ? Icons.pause_circle : Icons.play_circle, size: 28,
+                  color: running ? Colors.orange.shade800 : Colors.green.shade700),
                 onPressed: _busy ? null : _toggleRunning,
               ),
               const SizedBox(width: 8),
