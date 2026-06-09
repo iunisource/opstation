@@ -8,6 +8,7 @@ import '../../features/auth/auth_controller.dart';
 import '../theme/app_theme.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
+import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
 
@@ -293,7 +294,11 @@ class _TopNav extends ConsumerWidget {
         Container(width: 1, height: 28, color: Colors.white12),
         const SizedBox(width: 4),
 
-        // ── Navigation items (role-based) ────────────────────────────────────
+        // ── Navigation items (role-based, horizontally scrollable) ───────────
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
         if (user?.role == WebUserRole.superAdmin)
           _navButton(context, 'Organizations', Icons.business, '/orgs', location),
 
@@ -336,8 +341,20 @@ class _TopNav extends ConsumerWidget {
 
         if (isErpUser && erpMenuItems.isNotEmpty)
           ...splitErpMenus(),
+            ]),
+          ),
+        ),
 
-        const Spacer(),
+        // ── Global search ────────────────────────────────────────────────────
+        IconButton(
+          tooltip: 'Search products, customers, suppliers, vouchers, entries',
+          icon: const Icon(Icons.search, color: Colors.white70, size: 20),
+          onPressed: () {
+            final oid = user?.orgId;
+            if (oid != null) showGlobalSearch(context, orgId: oid, can: show);
+          },
+        ),
+        const SizedBox(width: 4),
 
         // ── Branch selector ──────────────────────────────────────────────────
         Builder(builder: (ctx) {
