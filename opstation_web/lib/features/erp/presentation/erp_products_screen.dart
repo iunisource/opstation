@@ -239,13 +239,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
 
     Widget _taxonomyDropdown(String type, String label, String? value, void Function(String?) onChanged) {
       final items = _taxonomies[type] ?? [];
+      final names = items.map((t) => t['name'] as String).toList();
+      final cur = (value != null && value.isNotEmpty) ? value : null;
+      if (cur != null && !names.contains(cur)) names.insert(0, cur);
       return DropdownButtonFormField<String>(
-        value: value,
+        value: cur,
         decoration: InputDecoration(labelText: label),
         hint: const Text('Select...'),
-        items: items.map((t) => DropdownMenuItem(
-            value: t['name'] as String,
-            child: Text(t['name'] as String))).toList(),
+        items: names.map((n) => DropdownMenuItem(value: n, child: Text(n))).toList(),
         onChanged: onChanged,
       );
     }
