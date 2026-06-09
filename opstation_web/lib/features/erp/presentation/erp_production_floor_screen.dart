@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
@@ -21,6 +22,8 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
   List<Map<String, dynamic>> _jobs = [];
   Map<String, String> _prodLabel = {};
   Map<String, String> _userLabel = {};
+  RealtimeChannel? _channel;
+  Timer? _debounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -44,7 +47,48 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       _prodLabel = {for (final p in (prods as List)) p['id'] as String: "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} — ' : ''}${p['name'] ?? ''}"};
       _userLabel = {for (final u in (users as List)) u['id'] as String: (u['name'] as String? ?? '-')};
       if (mounted) setState(() { _jobs = List<Map<String, dynamic>>.from(jobs); _loading = false; });
+      _subscribe(orgId);
     } catch (e) { if (mounted) { _snack('Load failed: $e'); setState(() => _loading = false); } }
+  }
+
+  // ── Realtime: keep the board live when job_cards change anywhere ──────────
+  void _subscribe(String orgId) {
+    if (_channel != null) return;
+    final client = Supabase.instance.client;
+    _channel = client
+        .channel('production_floor_$orgId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'job_cards',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
+          callback: (_) => _scheduleReload(),
+        )
+        .subscribe();
+  }
+
+  void _scheduleReload() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), _reloadJobs);
+  }
+
+  // Lightweight refresh: re-pull jobs only (no spinner, labels stay cached).
+  Future<void> _reloadJobs() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final jobs = await Supabase.instance.client.from('job_cards').select().eq('org_id', orgId)
+          .order('priority', ascending: false).order('created_at', ascending: false).limit(1000);
+      if (mounted) setState(() => _jobs = List<Map<String, dynamic>>.from(jobs));
+    } catch (_) { /* transient; next event or manual refresh will recover */ }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    final ch = _channel;
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
+    super.dispose();
   }
 
   List<Map<String, dynamic>> get _visible {
