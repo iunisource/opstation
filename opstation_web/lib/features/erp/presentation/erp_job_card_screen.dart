@@ -41,6 +41,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   Map<String, double> _prodCost = {};
   bool _loadingProducts = true;
 
+  List<Map<String, dynamic>> _customers = [];
+  Map<String, String> _custLabel = {};
+
   List<Map<String, dynamic>> _boms = [];
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _checkpoints = [];
@@ -63,6 +66,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   List<Map<String, dynamic>> _workCenters = [];
   List<Map<String, dynamic>> _workers = [];
   String? _assignedWorkerId;
+  String? _customerId; String _customerLabel = '';
   final _notesCtrl = TextEditingController();
   String _status = 'queued';
   List<_JobMat> _materials = [];
@@ -80,11 +84,15 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   double get _plannedQty => double.tryParse(_plannedQtyCtrl.text) ?? 0;
   double get _producedQty => (_current?['produced_qty'] as num? ?? 0).toDouble();
   double get _remainingQty => (_plannedQty - _producedQty);
+  double get _componentsCost => _materials.fold(0.0, (s, l) => s + l.qty * (_prodCost[l.productId] ?? 0));
+  double get _laborOhCost => _overheads.fold(0.0, (s, l) => s + l.amount);
+  double get _totalCost => _componentsCost + _laborOhCost;
+  double get _unitCost => _plannedQty > 0 ? _totalCost / _plannedQty : 0;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadProducts(); _loadBoms(); _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCheckpoints(); _loadJobs(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadProducts(); _loadBoms(); _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCustomers(); _loadCheckpoints(); _loadJobs(); });
   }
 
   @override
@@ -158,6 +166,32 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final rows = await Supabase.instance.client.from('workers').select().eq('org_id', orgId).order('name').limit(500);
       if (mounted) setState(() => _workers = List<Map<String, dynamic>>.from(rows));
     } catch (_) {}
+  }
+
+  Future<void> _loadCustomers() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(5000);
+      final list = List<Map<String, dynamic>>.from(rows);
+      if (mounted) setState(() {
+        _customers = list;
+        _custLabel = {for (final c in list) c['id'] as String:
+          "${(c['code'] != null && (c['code'] as String).isNotEmpty) ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}"};
+        // keep an open job's loaded customer label in sync once labels arrive
+        if (_customerId != null && _customerLabel.isEmpty) _customerLabel = _custLabel[_customerId] ?? '';
+      });
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> _filterCustomers(String q) {
+    final ql = q.toLowerCase();
+    final list = _customers.where((c) {
+      if (ql.isEmpty) return true;
+      final sn = (c['shop_name'] as String? ?? '').toLowerCase();
+      final cd = (c['code'] as String? ?? '').toLowerCase();
+      return sn.contains(ql) || cd.contains(ql);
+    }).take(200).toList();
+    return list.map((c) => {'id': c['id'], 'label': _custLabel[c['id']] ?? (c['shop_name'] ?? '')}).toList();
   }
 
   Future<void> _loadCheckpoints() async {
@@ -253,6 +287,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
       _plannedQtyCtrl.text = '1'; _priorityCtrl.text = '0'; _wcCtrl.clear(); _assignedTo = null; _assignedWorkerId = null; _notesCtrl.clear();
+      _customerId = null; _customerLabel = '';
       _materials = []; _overheads = []; _baseComps = []; _baseOh = [];
     });
   }
@@ -295,6 +330,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _wcCtrl.text = j['work_center'] as String? ?? '';
         _assignedTo = j['assigned_to'] as String?;
         _assignedWorkerId = j['assigned_worker_id'] as String?;
+        _customerId = j['customer_id'] as String?;
+        _customerLabel = _customerId != null ? (_custLabel[_customerId] ?? '') : '';
         _notesCtrl.text = j['notes'] as String? ?? '';
         _materials = newMats; _overheads = newOh;
       });
@@ -374,6 +411,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId, 'planned_qty': _plannedQty,
           'status': 'queued', 'priority': prio, 'is_locked': false,
           'work_center': _wcCtrl.text.trim(), 'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(),
+          'customer_id': _customerId,
           'created_by': userId, 'created_at': DateTime.now().toIso8601String(), 'updated_at': DateTime.now().toIso8601String(),
         });
       } else {
@@ -381,7 +419,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         await client.from('job_cards').update({
           'branch_id': _branchId, 'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId,
           'planned_qty': _plannedQty, 'priority': prio, 'work_center': _wcCtrl.text.trim(),
-          'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(), 'updated_at': DateTime.now().toIso8601String(),
+          'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(), 'customer_id': _customerId, 'updated_at': DateTime.now().toIso8601String(),
         }).eq('id', jId);
       }
       await client.from('job_card_materials').delete().eq('job_card_id', jId);
@@ -733,6 +771,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                     const SizedBox(height: 2),
                     Text(_prodLabel[j['product_id']] ?? '', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
                     Text('${_trim(produced)} / ${_trim(planned)} done  ·  ${_trim(planned - produced)} left', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                    if (j['customer_id'] != null && (_custLabel[j['customer_id']] ?? '').isNotEmpty)
+                      Padding(padding: const EdgeInsets.only(top: 1), child: Row(children: [
+                        const Icon(Icons.storefront_outlined, size: 11, color: AppTheme.textSecondary),
+                        const SizedBox(width: 3),
+                        Expanded(child: Text(_custLabel[j['customer_id']]!, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+                      ])),
                   ]),
                 ));
               })),
@@ -811,13 +855,58 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                   visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 30), onPressed: _manageWorkers),
               ]))),
             ]),
+            const SizedBox(height: 14),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 420, child: _labeled('Customer (optional)', _editable
+                ? Row(children: [
+                    Expanded(child: _ProductField(
+                      key: ValueKey('cust_${_current?['id'] ?? 'new'}_$_customerId'),
+                      initialLabel: _customerLabel,
+                      filterFn: _filterCustomers,
+                      onPick: (c) => setState(() { _customerId = c['id'] as String?; _customerLabel = c['label'] as String? ?? ''; }))),
+                    if (_customerId != null) IconButton(icon: const Icon(Icons.clear, size: 16), tooltip: 'Clear customer',
+                      visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 30),
+                      onPressed: () => setState(() { _customerId = null; _customerLabel = ''; })),
+                  ])
+                : _readonlyBox(_customerLabel.isEmpty ? '—' : _customerLabel))),
+            ]),
             const SizedBox(height: 18),
+            if (_materials.isNotEmpty || _overheads.isNotEmpty) ...[
+              _costSummary(),
+              const SizedBox(height: 14),
+            ],
             _recipeSection(),
             const SizedBox(height: 18),
             _runsSection(),
           ]))),
       ])),
     ]));
+  }
+
+  Widget _costSummary() {
+    final comp = _componentsCost;
+    final oh = _laborOhCost;
+    final total = comp + oh;
+    final unit = _unitCost;
+    Widget cell(String label, String value, Color color) => Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+      const SizedBox(height: 2),
+      Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: color)),
+    ]));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Cost (estimate — actual FIFO computed at batch posting)', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+        const SizedBox(height: 9),
+        Row(children: [
+          cell('Components', _money(comp), AppTheme.primary),
+          cell('Labor & Overhead', _money(oh), Colors.green.shade700),
+          cell('Total absorbed', _money(total), AppTheme.textPrimary),
+          cell('Unit cost', NumberFormat('#,##0.0000').format(unit), Colors.deepPurple),
+        ]),
+      ]),
+    );
   }
 
   Widget _recipeSection() {
@@ -833,14 +922,29 @@ class _State extends ConsumerState<ErpJobCardScreen> {
             const Expanded(child: Text('From the BOM, scaled to Planned Qty. Each batch consumes its share.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           ])),
         if (_materials.isEmpty) const Padding(padding: EdgeInsets.all(14), child: Text('Pick a BOM to load the recipe.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+        if (_materials.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+          child: Row(children: const [
+            SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            Expanded(child: Text('Component', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 12),
+            SizedBox(width: 80, child: Text('Qty', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            SizedBox(width: 110, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+          ])),
         for (var i = 0; i < _materials.length; i++)
           Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
             child: Row(children: [
               SizedBox(width: 26, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
               Expanded(child: Text(_materials[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
               const SizedBox(width: 12),
-              SizedBox(width: 110, child: Text(_trim(_materials[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              SizedBox(width: 80, child: Text(_trim(_materials[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              SizedBox(width: 110, child: Text(_money(_materials[i].qty * (_prodCost[_materials[i].productId] ?? 0)), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
             ])),
+        if (_materials.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+          child: Row(children: [
+            const Expanded(child: Text('Components total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700))),
+            Text(_money(_componentsCost), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+          ])),
         if (_overheads.isNotEmpty) ...[
           Container(padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
             child: const Text('Labor & overhead (planned)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
