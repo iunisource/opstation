@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'dart:html' as html;
 
 class ErpReportBuilderScreen extends ConsumerStatefulWidget {
   const ErpReportBuilderScreen({super.key});
@@ -23,7 +24,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   final Map<String, String> _filters = {};
   DateTime? _dateFrom;
   DateTime? _dateTo;
-  String _view = 'table'; // table | pivot
+  String _view = 'table'; // table | pivot | chart
+  String _chartType = 'bar'; // bar | line | pie
+  String _userName = '';
 
   List<Map<String, dynamic>> _result = [];
   bool _running = false;
@@ -36,10 +39,19 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadSources(); _loadMeta(); _loadTemplates(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadSources(); _loadMeta(); _loadTemplates(); _loadUserName(); });
   }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  Future<void> _loadUserName() async {
+    final uid = ref.read(currentUserProvider)?.id;
+    if (uid == null) return;
+    try {
+      final row = await Supabase.instance.client.from('users').select('name').eq('id', uid).maybeSingle();
+      if (mounted && row != null) setState(() => _userName = (row['name'] as String?) ?? '');
+    } catch (_) {}
+  }
 
   Future<void> _loadSources() async {
     try {
@@ -214,10 +226,15 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         ElevatedButton.icon(onPressed: _running ? null : _run,
           icon: _running ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.play_arrow, size: 18),
           label: const Text('Run'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
-        ToggleButtons(isSelected: [_view == 'table', _view == 'pivot'], onPressed: (i) => setState(() => _view = i == 0 ? 'table' : 'pivot'),
-          borderRadius: BorderRadius.circular(8), constraints: const BoxConstraints(minHeight: 34, minWidth: 64),
-          children: const [Text('Table'), Text('Pivot')]),
+        ToggleButtons(isSelected: [_view == 'table', _view == 'pivot', _view == 'chart'],
+          onPressed: (i) => setState(() => _view = i == 0 ? 'table' : i == 1 ? 'pivot' : 'chart'),
+          borderRadius: BorderRadius.circular(8), constraints: const BoxConstraints(minHeight: 34, minWidth: 58),
+          children: const [Text('Table'), Text('Pivot'), Text('Chart')]),
+        if (_view == 'chart') DropdownButton<String>(value: _chartType, underline: const SizedBox(),
+          items: const [DropdownMenuItem(value: 'bar', child: Text('Bar')), DropdownMenuItem(value: 'line', child: Text('Line')), DropdownMenuItem(value: 'pie', child: Text('Pie'))],
+          onChanged: (v) { if (v != null) setState(() => _chartType = v); }),
         OutlinedButton.icon(onPressed: _saveTemplate, icon: const Icon(Icons.bookmark_add_outlined, size: 16), label: const Text('Save')),
+        OutlinedButton.icon(onPressed: _result.isEmpty ? null : _export, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
         if (_templates.isNotEmpty) PopupMenuButton<Map<String, dynamic>>(
           tooltip: 'Load template',
           onSelected: _loadTemplate,
@@ -313,7 +330,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   Widget _resultsPanel() {
     if (_error != null) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('Query error:\n$_error', style: const TextStyle(color: Colors.red))));
     if (_result.isEmpty) return const Center(child: Text('Assign fields and press Run.', style: TextStyle(color: AppTheme.textSecondary)));
-    return Padding(padding: const EdgeInsets.all(16), child: _view == 'pivot' ? _pivot() : _table());
+    return Padding(padding: const EdgeInsets.all(16), child: _view == 'pivot' ? _pivot() : _view == 'chart' ? _chart() : _table());
   }
 
   Widget _table() {
@@ -396,4 +413,211 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       )))),
     ]);
   }
+
+  // ---------- chart ----------
+  List<MapEntry<String, double>> _chartSeries() {
+    final all = [..._rows, ..._cols];
+    final catDim = _rows.isNotEmpty ? _rows.first : (all.isNotEmpty ? all.first : null);
+    final measure = _values.isNotEmpty ? _values.first : null;
+    if (catDim == null || measure == null) return [];
+    final Map<String, double> agg = {};
+    for (final r in _result) {
+      final cat = r[catDim]?.toString() ?? '(none)';
+      agg[cat] = (agg[cat] ?? 0) + ((r[measure] as num?)?.toDouble() ?? 0);
+    }
+    final list = agg.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    return list;
+  }
+
+  static const _palette = [Color(0xFF4F46E5), Color(0xFF059669), Color(0xFFD97706), Color(0xFFDC2626), Color(0xFF0891B2), Color(0xFF7C3AED), Color(0xFFDB2777), Color(0xFF65A30D)];
+
+  Widget _chart() {
+    final all = [..._rows, ..._cols];
+    final catDim = _rows.isNotEmpty ? _rows.first : (all.isNotEmpty ? all.first : null);
+    final measure = _values.isNotEmpty ? _values.first : null;
+    if (catDim == null || measure == null) {
+      return const Center(child: Text('Charts need at least one Row (category) and one Value.', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary)));
+    }
+    final series = _chartSeries();
+    if (series.isEmpty) return const Center(child: Text('No data to chart.', style: TextStyle(color: AppTheme.textSecondary)));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('${_label(measure)} by ${_label(catDim)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 10),
+      Expanded(child: Container(padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+        child: _chartType == 'pie' ? _pie(series) : _chartType == 'line' ? _line(series) : _bars(series))),
+    ]);
+  }
+
+  Widget _bars(List<MapEntry<String, double>> series) {
+    final shown = series.take(25).toList();
+    final maxV = shown.fold<double>(0, (m, e) => e.value > m ? e.value : m);
+    return ListView(children: shown.map((e) {
+      final frac = maxV > 0 ? (e.value / maxV) : 0.0;
+      return Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
+        SizedBox(width: 160, child: Text(e.key, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+        Expanded(child: Stack(children: [
+          Container(height: 18, decoration: BoxDecoration(color: const Color(0xFFEDEFF2), borderRadius: BorderRadius.circular(4))),
+          FractionallySizedBox(widthFactor: frac <= 0 ? 0.001 : frac, child: Container(height: 18, decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(4)))),
+        ])),
+        SizedBox(width: 96, child: Text(_fmt(e.value), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+      ]));
+    }).toList());
+  }
+
+  Widget _line(List<MapEntry<String, double>> series) => CustomPaint(painter: _LinePainter(series.take(40).toList()), child: const SizedBox.expand());
+
+  Widget _pie(List<MapEntry<String, double>> series) {
+    final sorted = [...series];
+    List<MapEntry<String, double>> slices;
+    if (sorted.length > 8) {
+      final other = sorted.skip(7).fold<double>(0, (s, e) => s + e.value);
+      slices = [...sorted.take(7), MapEntry('Other', other)];
+    } else { slices = sorted; }
+    final total = slices.fold<double>(0, (s, e) => s + e.value);
+    return Row(children: [
+      Expanded(flex: 2, child: CustomPaint(painter: _PiePainter(slices, total, _palette), child: const SizedBox.expand())),
+      const SizedBox(width: 16),
+      Expanded(flex: 1, child: ListView(children: [
+        for (var i = 0; i < slices.length; i++) Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(children: [
+          Container(width: 12, height: 12, color: _palette[i % _palette.length]), const SizedBox(width: 6),
+          Expanded(child: Text(slices[i].key, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis)),
+          Text(total > 0 ? '${(slices[i].value / total * 100).toStringAsFixed(1)}%' : '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ])),
+      ])),
+    ]);
+  }
+
+  // ---------- export / print ----------
+  String _esc(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+  void _export() {
+    final sourceLabel = (_sources.firstWhere((s) => s['source_key'] == _source, orElse: () => {'label': _source})['label']) as String;
+    final dims = [..._rows, ..._cols];
+    final buf = StringBuffer();
+    buf.write('<!doctype html><html><head><meta charset="utf-8"><title>Report — ${_esc(sourceLabel)}</title>');
+    buf.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#1a1a1a}'
+        'h1{font-size:18px;margin:0 0 4px}.meta{font-size:12px;color:#555;margin-bottom:14px}'
+        'table{border-collapse:collapse;width:100%;font-size:12px}'
+        'th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f3f4f6}'
+        'td.num,th.num{text-align:right}tr.total td{font-weight:700;background:#fafafa}'
+        '.foot{margin-top:18px;font-size:11px;color:#666;border-top:1px solid #eee;padding-top:8px}'
+        '.no-print{margin-bottom:14px}@media print{.no-print{display:none}}</style></head><body>');
+    buf.write('<div class="no-print"><button onclick="window.print()">&#x1F5A8; Print / Save as PDF</button></div>');
+    buf.write('<h1>${_esc(sourceLabel)} Report</h1>');
+    final parts = <String>[];
+    if (_rows.isNotEmpty) parts.add('Rows: ${_rows.map(_label).join(', ')}');
+    if (_cols.isNotEmpty) parts.add('Columns: ${_cols.map(_label).join(', ')}');
+    if (_values.isNotEmpty) parts.add('Values: ${_values.map(_label).join(', ')}');
+    if (_filters.isNotEmpty) parts.add('Filters: ${_filters.entries.map((e) => '${_label(e.key)}=${e.value}').join(', ')}');
+    if (_dateFrom != null || _dateTo != null) parts.add('Period: ${_dateFrom != null ? DateFormat('d MMM yyyy').format(_dateFrom!) : '…'} – ${_dateTo != null ? DateFormat('d MMM yyyy').format(_dateTo!) : '…'}');
+    buf.write('<div class="meta">${_esc(parts.join('  •  '))}</div>');
+
+    if (_view == 'pivot' && _rows.isNotEmpty && _values.isNotEmpty) {
+      buf.write(_crosstabHtml());
+    } else {
+      final cols = [...dims, ..._values];
+      buf.write('<table><thead><tr>');
+      for (final c in cols) buf.write('<th class="${_values.contains(c) ? 'num' : ''}">${_esc(_label(c))}</th>');
+      buf.write('</tr></thead><tbody>');
+      for (final r in _result) {
+        buf.write('<tr>');
+        for (final c in cols) {
+          final isM = _values.contains(c);
+          buf.write('<td class="${isM ? 'num' : ''}">${_esc(isM ? _fmt(r[c] as num?) : (r[c]?.toString() ?? '(none)'))}</td>');
+        }
+        buf.write('</tr>');
+      }
+      buf.write('</tbody></table>');
+    }
+
+    final ts = DateFormat('d MMM yyyy, HH:mm').format(DateTime.now());
+    buf.write('<div class="foot">Created by ${_esc(_userName.isEmpty ? '—' : _userName)} &nbsp;•&nbsp; Created at $ts</div>');
+    buf.write('</body></html>');
+
+    final blob = html.Blob([buf.toString()], 'text/html;charset=utf-8');
+    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+  }
+
+  String _crosstabHtml() {
+    final measure = _values.first;
+    final rowKeys = <String>[]; final colKeys = <String>[];
+    final Map<String, List<String>> rowParts = {};
+    final Map<String, Map<String, num>> cell = {};
+    for (final r in _result) {
+      final rk = _rows.map((d) => (r[d]?.toString() ?? '(none)')).toList();
+      final ck = _cols.map((d) => (r[d]?.toString() ?? '(none)')).toList();
+      final rKey = rk.join('\u0001'); final cKey = ck.join('\u0001');
+      if (!rowKeys.contains(rKey)) { rowKeys.add(rKey); rowParts[rKey] = rk; }
+      if (!colKeys.contains(cKey)) colKeys.add(cKey);
+      (cell[rKey] ??= {})[cKey] = ((cell[rKey]?[cKey]) ?? 0) + ((r[measure] as num?) ?? 0);
+    }
+    rowKeys.sort(); colKeys.sort();
+    String colLabel(String c) => _cols.isEmpty ? _label(measure) : c.split('\u0001').join(' / ');
+    final b = StringBuffer('<table><thead><tr>');
+    for (final d in _rows) b.write('<th>${_esc(_label(d))}</th>');
+    for (final ck in colKeys) b.write('<th class="num">${_esc(colLabel(ck))}</th>');
+    b.write('<th class="num">Total</th></tr></thead><tbody>');
+    num grand = 0; final Map<String, num> colTot = {for (final ck in colKeys) ck: 0};
+    for (final rKey in rowKeys) {
+      num rt = 0; b.write('<tr>');
+      for (final p in rowParts[rKey]!) b.write('<td>${_esc(p)}</td>');
+      for (final ck in colKeys) {
+        final v = cell[rKey]?[ck];
+        if (v != null) { rt += v; colTot[ck] = (colTot[ck] ?? 0) + v; }
+        b.write('<td class="num">${v == null ? '–' : _esc(_fmt(v))}</td>');
+      }
+      b.write('<td class="num">${_esc(_fmt(rt))}</td></tr>'); grand += rt;
+    }
+    b.write('<tr class="total">');
+    for (var i = 0; i < _rows.length; i++) b.write('<td>${i == 0 ? 'Total' : ''}</td>');
+    for (final ck in colKeys) b.write('<td class="num">${_esc(_fmt(colTot[ck]))}</td>');
+    b.write('<td class="num">${_esc(_fmt(grand))}</td></tr></tbody></table>');
+    return b.toString();
+  }
+}
+
+class _LinePainter extends CustomPainter {
+  final List<MapEntry<String, double>> data;
+  _LinePainter(this.data);
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.isEmpty) return;
+    final maxV = data.fold<double>(0, (m, e) => e.value > m ? e.value : m);
+    const padL = 8.0, padR = 8.0, padT = 8.0, padB = 8.0;
+    final w = size.width - padL - padR, h = size.height - padT - padB;
+    canvas.drawLine(Offset(padL, padT + h), Offset(padL + w, padT + h), Paint()..color = const Color(0xFFE0E0E0)..strokeWidth = 1);
+    final n = data.length;
+    Offset pt(int i) {
+      final x = padL + (n == 1 ? w / 2 : w * i / (n - 1));
+      final y = padT + h - (maxV > 0 ? data[i].value / maxV * h : 0);
+      return Offset(x, y);
+    }
+    final path = Path();
+    for (var i = 0; i < n; i++) { final p = pt(i); if (i == 0) path.moveTo(p.dx, p.dy); else path.lineTo(p.dx, p.dy); }
+    canvas.drawPath(path, Paint()..color = const Color(0xFF4F46E5)..strokeWidth = 2..style = PaintingStyle.stroke);
+    final dot = Paint()..color = const Color(0xFF4F46E5);
+    for (var i = 0; i < n; i++) canvas.drawCircle(pt(i), 3, dot);
+  }
+  @override
+  bool shouldRepaint(covariant _LinePainter o) => o.data != data;
+}
+
+class _PiePainter extends CustomPainter {
+  final List<MapEntry<String, double>> slices; final num total; final List<Color> palette;
+  _PiePainter(this.slices, this.total, this.palette);
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (total <= 0) return;
+    final r = (size.shortestSide / 2) - 6;
+    final c = Offset(size.width / 2, size.height / 2);
+    double start = -1.5708;
+    for (var i = 0; i < slices.length; i++) {
+      final sweep = (slices[i].value / total) * 6.28318;
+      canvas.drawArc(Rect.fromCircle(center: c, radius: r), start, sweep, true, Paint()..color = palette[i % palette.length]..style = PaintingStyle.fill);
+      start += sweep;
+    }
+  }
+  @override
+  bool shouldRepaint(covariant _PiePainter o) => o.slices != slices;
 }
