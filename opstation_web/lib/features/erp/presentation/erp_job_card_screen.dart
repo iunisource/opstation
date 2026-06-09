@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -620,6 +622,124 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  String _esc(String s) => s
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+
+  String _buildJobCardHtml() {
+    final jobNo = _current?['job_number'] as String? ?? 'New Job';
+    final st = _status;
+    final stLabel = st == 'completed' ? 'Completed' : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : 'Queued';
+    final branch = (ref.read(selectedBranchProvider)?['name'] as String?) ?? '—';
+    final dateStr = DateFormat('d MMM yyyy').format(_date);
+    final bomFg = _bomLabel.isEmpty ? (_fgLabel.isEmpty ? '—' : _fgLabel) : (_fgLabel.isEmpty ? _bomLabel : '$_bomLabel — $_fgLabel');
+    final wc = _wcCtrl.text.trim();
+    final assignee = _assignedWorkerId != null ? ((_workers.firstWhere((w) => w['id'] == _assignedWorkerId, orElse: () => <String, dynamic>{})['name'] as String?) ?? '') : '';
+    final prio = _priorityCtrl.text.trim();
+    final comp = _componentsCost, oh = _laborOhCost, total = _totalCost, unit = _unitCost;
+    final uid = ref.read(currentUserProvider)?.id;
+    final by = uid != null ? ((_users.firstWhere((u) => u['id'] == uid, orElse: () => <String, dynamic>{})['name'] as String?) ?? '') : '';
+    final printedAt = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+
+    final mat = StringBuffer();
+    for (var i = 0; i < _materials.length; i++) {
+      final m = _materials[i];
+      final lineCost = m.qty * (_prodCost[m.productId] ?? 0);
+      mat.write('<tr><td class="n">${i + 1}</td><td>${_esc(m.productLabel)}</td><td class="r">${_trim(m.qty)}</td><td class="r">${_money(lineCost)}</td></tr>');
+    }
+    final ohb = StringBuffer();
+    for (final o in _overheads) {
+      final desc = o.descCtrl.text.trim().isNotEmpty ? o.descCtrl.text.trim() : (o.costType == 'labor' ? 'Labor' : 'Overhead');
+      ohb.write('<tr><td>${o.costType == 'labor' ? 'Labor' : 'Overhead'}</td><td>${_esc(desc)}</td><td class="r">${_money(o.amount)}</td></tr>');
+    }
+    final runb = StringBuffer();
+    for (final r in _runs) {
+      runb.write('<tr><td class="n">R${r['run_no']}</td><td>${_esc((r['run_date'] ?? '').toString())}</td>'
+          '<td class="r">${_trim((r['produced_qty'] as num? ?? 0).toDouble())}</td>'
+          '<td class="r">${_trim((r['accepted_qty'] as num? ?? 0).toDouble())}</td>'
+          '<td class="r">${_trim((r['rejected_qty'] as num? ?? 0).toDouble())}</td>'
+          '<td class="r">${_money((r['total_cost'] as num? ?? 0).toDouble())}</td>'
+          '<td>${_esc((r['status'] ?? '').toString())}</td></tr>');
+    }
+
+    final ohSection = _overheads.isEmpty ? '' :
+      '<div class="sec">Labor &amp; overhead</div><table><thead><tr><th>Type</th><th>Description</th><th class="r">Amount</th></tr></thead>'
+      '<tbody>${ohb.toString()}</tbody><tfoot><tr><td colspan="2">Total</td><td class="r">${_money(oh)}</td></tr></tfoot></table>';
+    final runSection = _runs.isEmpty ? '' :
+      '<div class="sec">Production batches</div><table><thead><tr><th class="n">Batch</th><th>Date</th><th class="r">Produced</th><th class="r">Accepted</th><th class="r">Rejected</th><th class="r">Cost</th><th>Status</th></tr></thead>'
+      '<tbody>${runb.toString()}</tbody></table>';
+    final matBody = mat.toString().isEmpty ? '<tr><td colspan="4" style="color:#999">No components.</td></tr>' : mat.toString();
+
+    return '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job Card $jobNo</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; font-size: 12px; margin: 0; }
+  .toolbar { padding: 10px 0; }
+  .btn { background: #2f6fed; color: #fff; border: 0; padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  h1 { font-size: 20px; margin: 0; }
+  .sub { color: #666; font-size: 12px; margin-top: 2px; }
+  .hdr { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #222; padding-bottom: 10px; margin-bottom: 12px; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px 24px; margin-bottom: 14px; }
+  .meta .k { color: #888; font-size: 10px; text-transform: uppercase; letter-spacing: .3px; }
+  .meta .v { font-size: 13px; font-weight: 600; }
+  .cards { display: flex; gap: 10px; margin-bottom: 16px; }
+  .card { flex: 1; border: 1px solid #e3e3e3; border-radius: 8px; padding: 8px 10px; }
+  .card .k { color: #888; font-size: 10px; }
+  .card .v { font-size: 16px; font-weight: 800; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; color: #888; border-bottom: 1px solid #ccc; padding: 6px 8px; }
+  td { padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 12px; }
+  td.r, th.r { text-align: right; }
+  td.n { color: #999; width: 40px; }
+  tfoot td { font-weight: 800; border-top: 2px solid #222; border-bottom: 0; }
+  .sec { font-size: 13px; font-weight: 700; margin: 4px 0 6px; }
+  .foot { margin-top: 24px; padding-top: 8px; border-top: 1px solid #ddd; color: #888; font-size: 11px; display: flex; justify-content: space-between; }
+  @media print { .no-print { display: none !important; } }
+</style></head><body>
+<div class="toolbar no-print"><button class="btn" onclick="window.print()">Print / Save as PDF</button></div>
+<div class="hdr">
+  <div><h1>Job Card</h1><div class="sub">$branch</div></div>
+  <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div></div>
+</div>
+<div class="meta">
+  <div><div class="k">Date</div><div class="v">$dateStr</div></div>
+  <div><div class="k">BOM / Finished product</div><div class="v">${_esc(bomFg)}</div></div>
+  <div><div class="k">Customer</div><div class="v">${_customerLabel.isEmpty ? '—' : _esc(_customerLabel)}</div></div>
+  <div><div class="k">Work center</div><div class="v">${wc.isEmpty ? '—' : _esc(wc)}</div></div>
+  <div><div class="k">Assigned to</div><div class="v">${assignee.isEmpty ? '—' : _esc(assignee)}</div></div>
+  <div><div class="k">Priority</div><div class="v">${prio.isEmpty ? '0' : _esc(prio)}</div></div>
+  <div><div class="k">Planned</div><div class="v">${_trim(_plannedQty)}</div></div>
+  <div><div class="k">Produced</div><div class="v">${_trim(_producedQty)}</div></div>
+  <div><div class="k">Remaining</div><div class="v">${_trim(_remainingQty)}</div></div>
+</div>
+<div class="cards">
+  <div class="card"><div class="k">Components</div><div class="v">${_money(comp)}</div></div>
+  <div class="card"><div class="k">Labor &amp; Overhead</div><div class="v">${_money(oh)}</div></div>
+  <div class="card"><div class="k">Total absorbed</div><div class="v">${_money(total)}</div></div>
+  <div class="card"><div class="k">Unit cost</div><div class="v">${NumberFormat('#,##0.0000').format(unit)}</div></div>
+</div>
+<div class="sec">Recipe (per planned qty)</div>
+<table><thead><tr><th class="n">#</th><th>Component</th><th class="r">Qty</th><th class="r">Cost</th></tr></thead>
+<tbody>$matBody</tbody>
+<tfoot><tr><td colspan="3">Components total</td><td class="r">${_money(comp)}</td></tr></tfoot></table>
+$ohSection
+$runSection
+<div class="foot"><div>Printed by ${by.isEmpty ? '—' : _esc(by)}</div><div>$printedAt</div></div>
+<script>window.onload=function(){setTimeout(function(){window.print();},250);};</script>
+</body></html>''';
+  }
+
+  void _printJobCard() {
+    if (_current == null) { _snack('Open a saved job card to print'); return; }
+    try {
+      final out = _buildJobCardHtml();
+      final blob = html.Blob([out], 'text/html');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.window.open(url, '_blank');
+      Future.delayed(const Duration(seconds: 60), () { try { html.Url.revokeObjectUrl(url); } catch (_) {} });
+    } catch (e) { _snack('Print failed: $e'); }
+  }
+
   Future<void> _manageWorkCenters() async {
     final orgId = _orgId; if (orgId == null) return;
     final addCtrl = TextEditingController();
@@ -792,6 +912,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
             if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
             if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_trim(_remainingQty)} left',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
+            if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _printJobCard, tooltip: 'Print / PDF'),
             if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete'),
             if (_editable) OutlinedButton.icon(
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
