@@ -723,9 +723,30 @@ class _State extends ConsumerState<ErpJobCardScreen> {
               const SizedBox(width: 12),
               SizedBox(width: 110, child: Text(_trim(_materials[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
             ])),
-        if (_overheads.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(children: [const Text('Labor & overhead (planned): ', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-            Text(_money(_overheads.fold(0.0, (s, l) => s + l.amount)), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))])),
+        if (_overheads.isNotEmpty) ...[
+          Container(padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+            child: const Text('Labor & overhead (planned)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+          for (var i = 0; i < _overheads.length; i++)
+            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
+              child: Row(children: [
+                SizedBox(width: 26, child: Icon(_overheads[i].costType == 'labor' ? Icons.engineering_outlined : Icons.bolt_outlined, size: 14, color: AppTheme.textSecondary)),
+                Expanded(child: Text(
+                  _overheads[i].descCtrl.text.trim().isNotEmpty ? _overheads[i].descCtrl.text.trim() : (_overheads[i].costType == 'labor' ? 'Labor' : 'Overhead'),
+                  style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+                const SizedBox(width: 8),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(3)),
+                  child: Text(_overheads[i].costType == 'labor' ? 'Labor' : 'Overhead', style: const TextStyle(fontSize: 9, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+                const SizedBox(width: 12),
+                SizedBox(width: 110, child: Text(_money(_overheads[i].amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              ])),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Row(children: [
+              const Expanded(child: Text('Labor & overhead total (planned)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700))),
+              Text(_money(_overheads.fold(0.0, (s, l) => s + l.amount)), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+            ])),
+        ],
       ]));
   }
 
