@@ -15,6 +15,7 @@ import '../../features/erp/presentation/erp_qc_checkpoints_screen.dart';
 import '../../features/erp/presentation/erp_production_floor_screen.dart';
 import '../../features/erp/presentation/erp_report_builder_screen.dart';
 import '../../features/erp/presentation/erp_margin_report_screen.dart';
+import '../../features/erp/presentation/erp_customer_balance_report_screen.dart';
 import '../../features/hr/presentation/hr_employees_screen.dart';
 import '../../features/hr/presentation/hr_attendance_screen.dart';
 import '../../features/hr/presentation/hr_leave_screen.dart';
@@ -212,6 +213,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/production-floor', builder: (_, __) => const ErpProductionFloorScreen()),
       GoRoute(path: '/intelligence/report-builder', builder: (_, __) => const ErpReportBuilderScreen()),
       GoRoute(path: '/reports/margin', builder: (_, __) => const ErpMarginReportScreen()),
+      GoRoute(path: '/reports/customer-balance', builder: (_, __) => const ErpCustomerBalanceReportScreen()),
       GoRoute(path: '/manufacturing/production-inverse-voucher', builder: (_, __) => const ErpProductionInverseVoucherScreen()),
       GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => const ErpDamageStockVoucherScreen()),
       GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => const ErpClaimProcessingVoucherScreen()),

@@ -49,6 +49,12 @@ const List<_AdminToggle> _toggles = [
   ),
 
   // ─── Add more org-level toggles here ─────────────────────────────────────
+  _AdminToggle(
+    'org.cbr_collection_columns',
+    'Collection columns on Customer Balance Report',
+    'Show blank "Receipt #" and "Amount Collected" columns in the Customer '
+        'Balance Report print/PDF — for recording collections during a route run.',
+  ),
   // _AdminToggle('org.some_flag', 'Title shown to admin', 'What it does.'),
 ];
 
