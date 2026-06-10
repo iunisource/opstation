@@ -993,7 +993,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   void _printLedger() {
     try {
       final display = _displayEntries;
-      if (display.isEmpty || _selectedCustomer == null) return;
+      if ((display.isEmpty && _pendingCheques.isEmpty) || _selectedCustomer == null) return;
       final branch = ref.read(selectedBranchProvider);
       double td = 0, tc = 0;
       for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
@@ -1008,6 +1008,31 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
         : '';
       final balColor = netBal > 0 ? '#c62828' : '#2e7d32';
+
+      // Pending PDC cheques memo block (mirrors the on-screen yellow card).
+      String pdcBlock = '';
+      if (_pendingCheques.isNotEmpty) {
+        double pdcTotal = 0;
+        final pb = StringBuffer();
+        for (final c in _pendingCheques) {
+          final amt = c['amount'] as double;
+          pdcTotal += amt;
+          final cd = c['cheque_date'] as String?;
+          final dt = cd != null ? DateTime.tryParse(cd) : null;
+          final cdStr = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
+          final detail = [
+            if ((c['cheque_no'] as String? ?? '').isNotEmpty) 'Chq ' + (c['cheque_no'] as String),
+            if ((c['bank'] as String? ?? '').isNotEmpty) (c['bank'] as String),
+            if ((c['description'] as String? ?? '').isNotEmpty) (c['description'] as String),
+          ].join(' • ');
+          pb.write('<tr><td>' + (c['voucher_number'] as String) + '</td><td>' + cdStr + '</td><td>' + detail + '</td><td class="num">Rs. ' + amt.toStringAsFixed(2) + '</td></tr>');
+        }
+        pdcBlock = '<div class="pdc"><div class="pdc-head"><span class="pdc-title">Pending Cheques (PDC)</span>'
+          '<span class="pdc-note">Memo only &mdash; not included in the balance or aging until cleared</span>'
+          '<span class="pdc-total">Rs. ' + pdcTotal.toStringAsFixed(2) + '</span></div>'
+          '<table class="pdc-table"><thead><tr><th>Voucher</th><th>Cheque Date</th><th>Details</th><th class="num">Amount</th></tr></thead>'
+          '<tbody>' + pb.toString() + '</tbody></table></div>';
+      }
 
       final rowsBuf = StringBuffer();
       for (final e in display) {
@@ -1041,6 +1066,13 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; } '
         '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; } '
         'tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; } '
+        '.pdc { border: 1px solid #f0c040; background: #fff8e1; border-radius: 6px; padding: 8px 10px; margin: 0 0 12px 0; } '
+        '.pdc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; } '
+        '.pdc-title { font-weight: 800; font-size: 11px; color: #b26a00; } '
+        '.pdc-note { flex: 1; font-size: 8.5px; color: #777; } '
+        '.pdc-total { font-weight: 800; font-size: 11px; color: #b26a00; } '
+        '.pdc-table th, .pdc-table td { border-bottom: 1px solid #f0e0b0; font-size: 9px; padding: 3px 6px; text-align: left; } '
+        '.pdc-table th { background: #fdf3d6; border-bottom: 1px solid #e0c060; } '
         '</style></head><body>'
         '<div class="header"><div><h1>Customer Ledger</h1>'
         '<div class="info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
@@ -1051,7 +1083,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + td.toStringAsFixed(2) + '</div></div>'
         '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + tc.toStringAsFixed(2) + '</div></div>'
         '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal">Rs. ' + netBal.toStringAsFixed(2) + '</div></div>'
-        '</div><table>'
+        '</div>' + pdcBlock + '<table>'
         '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
         '<tbody>' + rowsBuf.toString() + '</tbody>'
         '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="num credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="num bal">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
