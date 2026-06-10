@@ -5,16 +5,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
 /// Customer Balance Report — a route-wise collection sheet.
-///
-/// Lists every active customer grouped by sales route (via route_stops),
-/// showing Credit Limit and the net AR balance at three period-ends (3 months
-/// or 3 weeks; rightmost = current). Balances come from
-/// rpc_customer_balance_report, which mirrors the aging/ledger math. Print/PDF
-/// adds blank "Receipt #" and "Amount Collected" columns for recording
-/// collections on the round, gated by the admin toggle org.cbr_collection_columns.
+/// Lists customers grouped by sales route with Credit Limit and net AR balance
+/// at three period-ends (3 months / 3 weeks; rightmost = current). Filters:
+/// Route, Customer Group, Salesperson, Branch (access-scoped), Customer Status.
+/// Print/PDF adds blank Receipt #/Amount Collected columns when the admin toggle
+/// org.cbr_collection_columns is on.
 class ErpCustomerBalanceReportScreen extends ConsumerStatefulWidget {
   const ErpCustomerBalanceReportScreen({super.key});
   @override
@@ -28,16 +27,22 @@ class _ErpCustomerBalanceReportScreenState
 
   DateTime _asOf = DateTime.now();
   String _span = '3M'; // '3M' | '3W'
-  String? _routeFilter; // null = all routes
-  bool _collectionCols = false; // admin toggle (print)
+  String? _routeFilter;
+  String? _groupFilter;
+  String? _salespersonFilter;
+  String? _branchFilter;
+  String _statusFilter = 'active'; // active | inactive | all
+  bool _collectionCols = false;
 
-  List<Map<String, dynamic>> _routes = []; // {id, name}
+  List<Map<String, dynamic>> _routes = [];
+  List<String> _groups = [];
+  List<Map<String, dynamic>> _salespeople = []; // {id, name}
+  Map<String, Set<String>> _routeToSalespeople = {};
   bool _loadingMeta = true;
 
   bool _loading = false;
   bool _loaded = false;
   List<String> _periodLabels = [];
-  // Flattened display items: {'type':'header'|'row', ...}
   List<Map<String, dynamic>> _items = [];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -63,6 +68,52 @@ class _ErpCustomerBalanceReportScreenState
           .eq('org_id', orgId)
           .eq('is_active', true)
           .order('name');
+      final routeList = List<Map<String, dynamic>>.from(routes);
+      final routeIds = routeList.map((r) => r['id'] as String).toList();
+
+      // Salesperson <- route_assignments (scoped to this org's routes) + users.
+      final r2sp = <String, Set<String>>{};
+      final userIds = <String>{};
+      if (routeIds.isNotEmpty) {
+        final ra = await client
+            .from('route_assignments')
+            .select('user_id, route_id')
+            .inFilter('route_id', routeIds);
+        for (final a in ra as List) {
+          final uid = a['user_id'] as String?;
+          final rid = a['route_id'] as String?;
+          if (uid == null || rid == null) continue;
+          userIds.add(uid);
+          (r2sp[rid] ??= <String>{}).add(uid);
+        }
+      }
+      var salespeople = <Map<String, dynamic>>[];
+      if (userIds.isNotEmpty) {
+        final us = await client
+            .from('users')
+            .select('id, name')
+            .inFilter('id', userIds.toList());
+        salespeople = [
+          for (final u in us as List)
+            {'id': u['id'], 'name': (u['name'] as String?) ?? (u['id'] as String)}
+        ];
+        salespeople.sort((a, b) =>
+            (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+      }
+
+      // Customer groups.
+      final cg = await client
+          .from('customers')
+          .select('group_name')
+          .eq('org_id', orgId);
+      final groupSet = <String>{};
+      for (final c in cg as List) {
+        final g = c['group_name'] as String?;
+        if (g != null && g.trim().isNotEmpty) groupSet.add(g);
+      }
+      final groupList = groupSet.toList()..sort();
+
+      // Collection-columns toggle.
       final cfg = await client
           .from('app_config')
           .select('key, value')
@@ -73,9 +124,13 @@ class _ErpCustomerBalanceReportScreenState
           coll = (r['value'] as String?) == 'true';
         }
       }
+
       if (mounted) {
         setState(() {
-          _routes = List<Map<String, dynamic>>.from(routes);
+          _routes = routeList;
+          _routeToSalespeople = r2sp;
+          _salespeople = salespeople;
+          _groups = groupList;
           _collectionCols = coll;
           _loadingMeta = false;
         });
@@ -94,8 +149,8 @@ class _ErpCustomerBalanceReportScreenState
         a,
       ];
     }
-    final d2 = DateTime(a.year, a.month, 0); // last day of previous month
-    final d1 = DateTime(a.year, a.month - 1, 0); // last day of month before
+    final d2 = DateTime(a.year, a.month, 0);
+    final d1 = DateTime(a.year, a.month - 1, 0);
     return [d1, d2, a];
   }
 
@@ -114,6 +169,18 @@ class _ErpCustomerBalanceReportScreenState
     ];
   }
 
+  bool _passesStatus(Map<String, dynamic> row) {
+    final active = row['is_active'] != false;
+    if (_statusFilter == 'active') return active;
+    if (_statusFilter == 'inactive') return !active;
+    return true;
+  }
+
+  bool _passesGroup(Map<String, dynamic> row) {
+    if (_groupFilter == null) return true;
+    return (row['group_name'] as String? ?? '') == _groupFilter;
+  }
+
   Future<void> _loadReport() async {
     final orgId = _orgId;
     if (orgId == null) return;
@@ -121,19 +188,32 @@ class _ErpCustomerBalanceReportScreenState
     try {
       final client = Supabase.instance.client;
       final ends = _periodEnds();
+
+      // Branch scoping.
+      final branches = ref.read(userBranchesProvider).valueOrNull ?? [];
+      final isErp =
+          ref.read(currentUserProvider)?.role == WebUserRole.erpUser;
+      List<String>? branchIds;
+      if (_branchFilter != null) {
+        branchIds = [_branchFilter!];
+      } else if (isErp) {
+        branchIds = branches.map((b) => b['id'] as String).toList();
+      } else {
+        branchIds = null; // admin: all branches
+      }
+
       final res = await client.rpc('rpc_customer_balance_report', params: {
         'p_org_id': orgId,
         'p_d1': DateFormat('yyyy-MM-dd').format(ends[0]),
         'p_d2': DateFormat('yyyy-MM-dd').format(ends[1]),
         'p_d3': DateFormat('yyyy-MM-dd').format(ends[2]),
-        'p_branch_id': null,
+        'p_branch_ids': branchIds,
       });
       final byId = <String, Map<String, dynamic>>{};
       for (final r in res as List) {
         byId[r['customer_id'] as String] = Map<String, dynamic>.from(r as Map);
       }
 
-      // Route membership.
       final routeIds = _routes.map((r) => r['id'] as String).toList();
       final stops = routeIds.isEmpty
           ? <dynamic>[]
@@ -154,9 +234,12 @@ class _ErpCustomerBalanceReportScreenState
         });
       }
 
-      final routeName = {for (final r in _routes) r['id'] as String: r['name'] as String? ?? '(route)'};
+      final routeName = {
+        for (final r in _routes) r['id'] as String: r['name'] as String? ?? '(route)'
+      };
 
       final items = <Map<String, dynamic>>[];
+      int dataRow = 0;
       void addGroup(String name, List<Map<String, dynamic>> rows) {
         if (rows.isEmpty) return;
         double t1 = 0, t2 = 0, t3 = 0;
@@ -166,12 +249,23 @@ class _ErpCustomerBalanceReportScreenState
           t3 += (r['bal3'] as num).toDouble();
         }
         items.add({'type': 'header', 'name': name, 'count': rows.length, 't1': t1, 't2': t2, 't3': t3});
-        items.addAll(rows.map((r) => {'type': 'row', ...r}));
+        for (final r in rows) {
+          items.add({'type': 'row', 'stripe': dataRow % 2 == 1, ...r});
+          dataRow++;
+        }
       }
 
-      final routesToShow = _routeFilter == null
-          ? _routes
-          : _routes.where((r) => r['id'] == _routeFilter).toList();
+      bool custOk(Map<String, dynamic> row) => _passesStatus(row) && _passesGroup(row);
+
+      final routesToShow = _routes.where((r) {
+        if (_routeFilter != null && r['id'] != _routeFilter) return false;
+        if (_salespersonFilter != null) {
+          final sps = _routeToSalespeople[r['id']] ?? <String>{};
+          if (!sps.contains(_salespersonFilter)) return false;
+        }
+        return true;
+      }).toList();
+
       for (final r in routesToShow) {
         final rid = r['id'] as String;
         final stopsForRoute = (byRoute[rid] ?? [])
@@ -179,19 +273,19 @@ class _ErpCustomerBalanceReportScreenState
         final rows = <Map<String, dynamic>>[];
         for (final st in stopsForRoute) {
           final row = byId[st['customer_id']];
-          if (row != null) rows.add(row);
+          if (row != null && custOk(row)) rows.add(row);
         }
         addGroup(routeName[rid] ?? '(route)', rows);
       }
 
-      // Unassigned customers (only when not filtering to a single route).
-      if (_routeFilter == null) {
+      // Unassigned only when not filtering by a route or salesperson.
+      if (_routeFilter == null && _salespersonFilter == null) {
         final unassigned = byId.entries
-            .where((e) => !assigned.contains(e.key))
+            .where((e) => !assigned.contains(e.key) && custOk(e.value))
             .map((e) => e.value)
             .toList()
-          ..sort((a, b) =>
-              (a['shop_name'] as String? ?? '').compareTo(b['shop_name'] as String? ?? ''));
+          ..sort((a, b) => (a['shop_name'] as String? ?? '')
+              .compareTo(b['shop_name'] as String? ?? ''));
         addGroup('Unassigned (no route)', unassigned);
       }
 
@@ -206,8 +300,8 @@ class _ErpCustomerBalanceReportScreenState
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Report error: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Report error: $e')));
       }
     }
   }
@@ -217,7 +311,7 @@ class _ErpCustomerBalanceReportScreenState
     return d < 0 ? '(${_fmt.format(-d)})' : _fmt.format(d);
   }
 
-  // ── Print / PDF ─────────────────────────────────────────────────────────────
+  // ── Print / PDF (full grid lines) ─────────────────────────────────────────
   void _print() {
     if (!_loaded || _items.isEmpty) return;
     final coll = _collectionCols;
@@ -256,11 +350,12 @@ class _ErpCustomerBalanceReportScreenState
         'h1 { font-size: 16px; margin: 0 0 2px 0; } '
         '.info { font-size: 9.5px; color: #444; margin-bottom: 8px; } '
         'table { width: 100%; border-collapse: collapse; } '
-        'th, td { padding: 3px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9px; } '
-        'th { background: #f0f4ff; font-weight: 700; border-bottom: 1.5px solid #000; } '
+        'th, td { padding: 4px 6px; border: 1px solid #888; text-align: left; font-size: 9px; } '
+        'th { background: #f0f4ff; font-weight: 700; } '
         '.num { text-align: right; white-space: nowrap; } '
-        '.grp td { background: #eef2ff; font-weight: 700; border-top: 1px solid #99a; } '
-        '.rcpt { width: 90px; border-left: 1px dashed #bbb; } '
+        '.grp td { background: #e8edff; font-weight: 700; } '
+        '.rcpt { width: 90px; } '
+        '@media print { .no-print { display: none; } } '
         '</style></head><body>'
         '<h1>Customer Balance Report</h1>'
         '<div class="info">Span: $spanLabel &nbsp;|&nbsp; As on: ${DateFormat('d MMM yyyy').format(_asOf)} &nbsp;|&nbsp; Generated: $genTime</div>'
@@ -278,6 +373,7 @@ class _ErpCustomerBalanceReportScreenState
   // ── UI ──────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final branches = ref.watch(userBranchesProvider).valueOrNull ?? [];
     return Container(
       color: AppTheme.background,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -294,7 +390,6 @@ class _ErpCustomerBalanceReportScreenState
                   onPressed: _print),
           ]),
         ),
-        // Filters
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 24),
           padding: const EdgeInsets.all(14),
@@ -308,7 +403,7 @@ class _ErpCustomerBalanceReportScreenState
                       padding: EdgeInsets.all(8),
                       child: CircularProgressIndicator(strokeWidth: 2)))
               : Wrap(
-                  spacing: 20,
+                  spacing: 18,
                   runSpacing: 12,
                   crossAxisAlignment: WrapCrossAlignment.end,
                   children: [
@@ -347,29 +442,64 @@ class _ErpCustomerBalanceReportScreenState
                           setState(() => _span = i == 0 ? '3M' : '3W'),
                       borderRadius: BorderRadius.circular(6),
                       constraints:
-                          const BoxConstraints(minHeight: 38, minWidth: 86),
+                          const BoxConstraints(minHeight: 38, minWidth: 84),
                       children: const [Text('3 Months'), Text('3 Weeks')],
                     )),
-                    _field('Route', SizedBox(
-                      width: 220,
-                      child: DropdownButtonFormField<String?>(
-                        value: _routeFilter,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 10),
-                            border: OutlineInputBorder()),
-                        items: [
-                          const DropdownMenuItem(
-                              value: null, child: Text('All routes')),
-                          ..._routes.map((r) => DropdownMenuItem(
-                              value: r['id'] as String,
-                              child: Text(r['name'] as String? ?? '(route)',
-                                  overflow: TextOverflow.ellipsis))),
-                        ],
-                        onChanged: (v) => setState(() => _routeFilter = v),
-                      ),
+                    _field('Route', _dropdown<String?>(
+                      width: 190,
+                      value: _routeFilter,
+                      items: [
+                        const DropdownMenuItem(value: null, child: Text('All routes')),
+                        ..._routes.map((r) => DropdownMenuItem(
+                            value: r['id'] as String,
+                            child: Text(r['name'] as String? ?? '(route)',
+                                overflow: TextOverflow.ellipsis))),
+                      ],
+                      onChanged: (v) => setState(() => _routeFilter = v),
+                    )),
+                    _field('Customer Group', _dropdown<String?>(
+                      width: 170,
+                      value: _groupFilter,
+                      items: [
+                        const DropdownMenuItem(value: null, child: Text('All groups')),
+                        ..._groups.map((g) => DropdownMenuItem(
+                            value: g, child: Text(g, overflow: TextOverflow.ellipsis))),
+                      ],
+                      onChanged: (v) => setState(() => _groupFilter = v),
+                    )),
+                    _field('Salesperson', _dropdown<String?>(
+                      width: 180,
+                      value: _salespersonFilter,
+                      items: [
+                        const DropdownMenuItem(value: null, child: Text('All salespersons')),
+                        ..._salespeople.map((s) => DropdownMenuItem(
+                            value: s['id'] as String,
+                            child: Text(s['name'] as String,
+                                overflow: TextOverflow.ellipsis))),
+                      ],
+                      onChanged: (v) => setState(() => _salespersonFilter = v),
+                    )),
+                    _field('Branch', _dropdown<String?>(
+                      width: 180,
+                      value: _branchFilter,
+                      items: [
+                        const DropdownMenuItem(value: null, child: Text('All accessible')),
+                        ...branches.map((b) => DropdownMenuItem(
+                            value: b['id'] as String,
+                            child: Text(b['name'] as String? ?? '(branch)',
+                                overflow: TextOverflow.ellipsis))),
+                      ],
+                      onChanged: (v) => setState(() => _branchFilter = v),
+                    )),
+                    _field('Customer Status', _dropdown<String>(
+                      width: 130,
+                      value: _statusFilter,
+                      items: const [
+                        DropdownMenuItem(value: 'active', child: Text('Active')),
+                        DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
+                        DropdownMenuItem(value: 'all', child: Text('All')),
+                      ],
+                      onChanged: (v) => setState(() => _statusFilter = v ?? 'active'),
                     )),
                     ElevatedButton.icon(
                       icon: _loading
@@ -390,7 +520,6 @@ class _ErpCustomerBalanceReportScreenState
                 ),
         ),
         const SizedBox(height: 12),
-        // Report
         Expanded(
           child: !_loaded
               ? const Center(
@@ -419,6 +548,27 @@ class _ErpCustomerBalanceReportScreenState
                     ),
         ),
       ]),
+    );
+  }
+
+  Widget _dropdown<T>({
+    required double width,
+    required T value,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return SizedBox(
+      width: width,
+      child: DropdownButtonFormField<T>(
+        value: value,
+        isExpanded: true,
+        decoration: const InputDecoration(
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            border: OutlineInputBorder()),
+        items: items,
+        onChanged: onChanged,
+      ),
     );
   }
 
@@ -465,7 +615,7 @@ class _ErpCustomerBalanceReportScreenState
   Widget _buildItem(Map<String, dynamic> it) {
     if (it['type'] == 'header') {
       return Container(
-        color: AppTheme.primary.withOpacity(0.06),
+        color: AppTheme.primary.withOpacity(0.10),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(children: [
           Expanded(
@@ -485,7 +635,9 @@ class _ErpCustomerBalanceReportScreenState
     final code = (it['code'] as String?) ?? '';
     final name = (it['shop_name'] as String?) ?? '';
     final disp = code.isNotEmpty ? '$code — $name' : name;
-    return Padding(
+    final stripe = it['stripe'] == true;
+    return Container(
+      color: stripe ? const Color(0xFFF4F5F7) : Colors.white,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
       child: Row(children: [
         Expanded(
