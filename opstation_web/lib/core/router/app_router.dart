@@ -64,6 +64,7 @@ import '../../features/erp/presentation/erp_suppliers_screen.dart';
 import '../../features/erp/presentation/erp_product_classifications_screen.dart';
 import '../../features/erp/presentation/erp_users_screen.dart';
 import '../../features/erp/presentation/erp_admin_settings_screen.dart';
+import '../../features/erp/presentation/erp_bank_receipt_voucher_screen.dart';
 import '../../features/erp/presentation/erp_home_screen.dart';
 import '../../features/erp/presentation/erp_opening_stock_screen.dart';
 import '../../features/erp/presentation/erp_stock_transfers_screen.dart';
@@ -197,6 +198,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => const ErpStockAdjustmentScreen()),
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVoucherScreen()),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => const ErpReceiptVouchersScreen()),
+          GoRoute(path: '/erp/bank-receipt-voucher', builder: (_, __) => const ErpBankReceiptVoucherScreen()),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => const ErpSupplierLedgerScreen()),
                 GoRoute(path: '/financials/journal-vouchers', builder: (_, __) => const ErpJournalVoucherScreen()),
         GoRoute(path: '/financials/trial-balance',  builder: (_, __) => const ErpTrialBalanceScreen()),
