@@ -28,6 +28,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   final _searchFocus = FocusNode();
 
   List<Map<String, dynamic>> _entries = [];
+  List<Map<String, dynamic>> _pendingCheques = [];
   List<String> _errors = [];
   bool _loading = false;
 
@@ -63,11 +64,12 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
   void _selectCustomer(Map<String, dynamic> c) {
     setState(() {
-      _selectedCustomer = c; _entries = []; _showDropdown = false; _highlightIndex = -1;
+      _selectedCustomer = c; _entries = []; _pendingCheques = []; _showDropdown = false; _highlightIndex = -1;
       _searchCtrl.text = '${c['shop_name']}${c['code'] != null ? ' (${c['code']})' : ''}';
     });
     _persist();
     _loadLedger(c['id'] as String);
+    _loadPendingCheques(c['id'] as String);
   }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -332,6 +334,124 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     setState(() { _entries = entries; _loading = false; _errors = errors; });
   }
 
+  // Pending post-dated cheques (BRV lines) for the selected customer. These are
+  // memo-only: they have no GL entry, so they are NOT part of _entries / balance
+  // / aging. Shown in a separate card so collections are visible.
+  Future<void> _loadPendingCheques(String customerId) async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final client = Supabase.instance.client;
+      final hdrs = await client
+          .from('pdc_vouchers')
+          .select('id, voucher_number')
+          .eq('org_id', orgId)
+          .eq('customer_id', customerId);
+      final ids = [for (final h in hdrs as List) h['id'] as String];
+      if (ids.isEmpty) {
+        if (mounted) setState(() => _pendingCheques = []);
+        return;
+      }
+      final numById = {
+        for (final h in hdrs)
+          h['id'] as String: (h['voucher_number'] as String? ?? '')
+      };
+      final lines = await client
+          .from('pdc_voucher_lines')
+          .select('voucher_id, description, cheque_date, amount, status')
+          .inFilter('voucher_id', ids)
+          .eq('status', 'pending');
+      final list = [
+        for (final l in lines as List)
+          {
+            'voucher_number': numById[l['voucher_id']] ?? '',
+            'description': l['description'] as String? ?? '',
+            'cheque_date': l['cheque_date'] as String?,
+            'amount': (l['amount'] as num?)?.toDouble() ?? 0.0,
+          }
+      ];
+      list.sort((a, b) => (a['cheque_date'] as String? ?? '')
+          .compareTo(b['cheque_date'] as String? ?? ''));
+      if (mounted) setState(() => _pendingCheques = list);
+    } catch (_) {
+      if (mounted) setState(() => _pendingCheques = []);
+    }
+  }
+
+  Widget _buildPdcCard() {
+    final total =
+        _pendingCheques.fold<double>(0, (s, c) => s + (c['amount'] as double));
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+          child: Row(children: [
+            const Icon(Icons.schedule, size: 16, color: Colors.orange),
+            const SizedBox(width: 8),
+            const Text('Pending Cheques (PDC)',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+            const SizedBox(width: 10),
+            const Expanded(
+                child: Text(
+                    'Memo only — not included in the balance or aging until cleared',
+                    style:
+                        TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+            Text('Rs. ${total.toStringAsFixed(2)}',
+                style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    color: Colors.orange)),
+          ]),
+        ),
+        const Divider(height: 1),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 150),
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: EdgeInsets.zero,
+            itemCount: _pendingCheques.length,
+            separatorBuilder: (_, __) =>
+                const Divider(height: 1, color: AppTheme.border),
+            itemBuilder: (_, i) {
+              final c = _pendingCheques[i];
+              final cd = c['cheque_date'] as String?;
+              final dt = cd != null ? DateTime.tryParse(cd) : null;
+              final dateStr = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                child: Row(children: [
+                  SizedBox(
+                      width: 110,
+                      child: Text(c['voucher_number'] as String,
+                          style: const TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w600))),
+                  SizedBox(
+                      width: 90,
+                      child: Text(dateStr,
+                          style: const TextStyle(
+                              fontSize: 11, color: AppTheme.textSecondary))),
+                  Expanded(
+                      child: Text(c['description'] as String,
+                          style: const TextStyle(fontSize: 11),
+                          overflow: TextOverflow.ellipsis)),
+                  Text('Rs. ${(c['amount'] as double).toStringAsFixed(2)}',
+                      style: const TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w600)),
+                ]),
+              );
+            },
+          ),
+        ),
+      ]),
+    );
+  }
+
   List<Map<String, dynamic>> get _displayEntries {
     var list = _entries.where((e) {
       if (_typeFilter != 'All' && e['type'] != _typeFilter) return false;
@@ -419,7 +539,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     labelText: 'Search Customer', hintText: 'Name or code...',
                     prefixIcon: const Icon(Icons.search, size: 18), isDense: true,
                     suffixIcon: _selectedCustomer != null ? IconButton(icon: const Icon(Icons.close, size: 16),
-                        onPressed: () { setState(() { _selectedCustomer = null; _entries = []; _searchCtrl.clear(); _showDropdown = false; }); try { html.window.localStorage.remove('ledger_customer_id'); } catch (_) {} }) : null,
+                        onPressed: () { setState(() { _selectedCustomer = null; _entries = []; _pendingCheques = []; _searchCtrl.clear(); _showDropdown = false; }); try { html.window.localStorage.remove('ledger_customer_id'); } catch (_) {} }) : null,
                   ),
                   onTap: () => setState(() { _showDropdown = true; if (_searchCtrl.text.isEmpty) _filteredCustomers = _customers; }),
                 ),
@@ -499,6 +619,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             ]),
             const SizedBox(height: 12),
           ],
+          if (!_loading && _selectedCustomer != null && _pendingCheques.isNotEmpty) _buildPdcCard(),
           if (_loading) const Expanded(child: Center(child: CircularProgressIndicator()))
           else if (_selectedCustomer == null) Expanded(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.person_search_outlined, size: 52, color: AppTheme.textSecondary.withOpacity(0.3)),
