@@ -342,34 +342,38 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     if (orgId == null) return;
     try {
       final client = Supabase.instance.client;
-      final hdrs = await client
-          .from('pdc_vouchers')
-          .select('id, voucher_number')
+      // Customer is per-LINE in the PDC schema, so filter the lines directly.
+      final lines = await client
+          .from('pdc_voucher_lines')
+          .select('voucher_id, bank, description, cheque_no, cheque_date, amount, status')
           .eq('org_id', orgId)
-          .eq('customer_id', customerId);
-      final ids = [for (final h in hdrs as List) h['id'] as String];
-      if (ids.isEmpty) {
+          .eq('customer_id', customerId)
+          .eq('status', 'pending');
+      final lineList = List<Map<String, dynamic>>.from(lines as List);
+      if (lineList.isEmpty) {
         if (mounted) setState(() => _pendingCheques = []);
         return;
       }
+      final vids =
+          lineList.map((l) => l['voucher_id'] as String).toSet().toList();
+      final hdrs = await client
+          .from('pdc_vouchers')
+          .select('id, voucher_number')
+          .inFilter('id', vids);
       final numById = {
-        for (final h in hdrs)
+        for (final h in hdrs as List)
           h['id'] as String: (h['voucher_number'] as String? ?? '')
       };
-      final lines = await client
-          .from('pdc_voucher_lines')
-          .select('voucher_id, description, cheque_date, amount, status')
-          .inFilter('voucher_id', ids)
-          .eq('status', 'pending');
-      final list = [
-        for (final l in lines as List)
-          {
-            'voucher_number': numById[l['voucher_id']] ?? '',
-            'description': l['description'] as String? ?? '',
-            'cheque_date': l['cheque_date'] as String?,
-            'amount': (l['amount'] as num?)?.toDouble() ?? 0.0,
-          }
-      ];
+      final list = lineList
+          .map((l) => {
+                'voucher_number': numById[l['voucher_id']] ?? '',
+                'bank': l['bank'] as String? ?? '',
+                'description': l['description'] as String? ?? '',
+                'cheque_no': l['cheque_no'] as String? ?? '',
+                'cheque_date': l['cheque_date'] as String?,
+                'amount': (l['amount'] as num?)?.toDouble() ?? 0.0,
+              })
+          .toList();
       list.sort((a, b) => (a['cheque_date'] as String? ?? '')
           .compareTo(b['cheque_date'] as String? ?? ''));
       if (mounted) setState(() => _pendingCheques = list);
@@ -437,7 +441,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                           style: const TextStyle(
                               fontSize: 11, color: AppTheme.textSecondary))),
                   Expanded(
-                      child: Text(c['description'] as String,
+                      child: Text(
+                          [
+                            if ((c['cheque_no'] as String? ?? '').isNotEmpty)
+                              'Chq ${c['cheque_no']}',
+                            if ((c['bank'] as String? ?? '').isNotEmpty)
+                              c['bank'] as String,
+                            if ((c['description'] as String? ?? '').isNotEmpty)
+                              c['description'] as String,
+                          ].join(' • '),
                           style: const TextStyle(fontSize: 11),
                           overflow: TextOverflow.ellipsis)),
                   Text('Rs. ${(c['amount'] as double).toStringAsFixed(2)}',
