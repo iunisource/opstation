@@ -248,11 +248,12 @@ class _ErpCustomerBalanceReportScreenState
           t2 += (r['bal2'] as num).toDouble();
           t3 += (r['bal3'] as num).toDouble();
         }
-        items.add({'type': 'header', 'name': name, 'count': rows.length, 't1': t1, 't2': t2, 't3': t3});
+        items.add({'type': 'header', 'name': name, 'count': rows.length});
         for (final r in rows) {
           items.add({'type': 'row', 'stripe': dataRow % 2 == 1, ...r});
           dataRow++;
         }
+        items.add({'type': 'footer', 'name': name, 't1': t1, 't2': t2, 't3': t3});
       }
 
       bool custOk(Map<String, dynamic> row) => _passesStatus(row) && _passesGroup(row);
@@ -315,19 +316,22 @@ class _ErpCustomerBalanceReportScreenState
   void _print() {
     if (!_loaded || _items.isEmpty) return;
     final coll = _collectionCols;
+    final totalCols = 5 + (coll ? 2 : 0);
     final extraHead = coll
         ? '<th class="rcpt">Receipt #</th><th class="rcpt">Amount Collected</th>'
         : '';
     final extraCell = coll ? '<td class="rcpt"></td><td class="rcpt"></td>' : '';
-    final colspanTotal = coll ? 2 : 0;
 
     final buf = StringBuffer();
     for (final it in _items) {
       if (it['type'] == 'header') {
-        buf.write('<tr class="grp"><td colspan="${2 + colspanTotal}"><b>${it['name']}</b> (${it['count']})</td>'
+        buf.write('<tr class="grp"><td colspan="$totalCols"><b>${it['name']}</b> (${it['count']})</td></tr>');
+      } else if (it['type'] == 'footer') {
+        buf.write('<tr class="tot"><td>Total — ${it['name']}</td><td></td>'
             '<td class="num">${_money(it['t1'] as num)}</td>'
             '<td class="num">${_money(it['t2'] as num)}</td>'
-            '<td class="num">${_money(it['t3'] as num)}</td></tr>');
+            '<td class="num">${_money(it['t3'] as num)}</td>'
+            '$extraCell</tr>');
       } else {
         final code = (it['code'] as String?) ?? '';
         final name = (it['shop_name'] as String?) ?? '';
@@ -345,17 +349,19 @@ class _ErpCustomerBalanceReportScreenState
     final spanLabel = _span == '3W' ? '3 Weeks' : '3 Months';
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Customer Balance Report</title>'
         '<style>'
-        '@page { margin: 0.5cm; } '
-        'body { font-family: Arial, sans-serif; padding: 14px; font-size: 10px; color: #000; } '
-        'h1 { font-size: 16px; margin: 0 0 2px 0; } '
+        '@page { size: A4 landscape; margin: 0.6cm; } '
+        '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; } '
+        'body { font-family: Arial, sans-serif; padding: 4px; font-size: 10px; color: #000; } '
+        'h1 { font-size: 15px; margin: 0 0 2px 0; } '
         '.info { font-size: 9.5px; color: #444; margin-bottom: 8px; } '
-        'table { width: 100%; border-collapse: collapse; } '
-        'th, td { padding: 4px 6px; border: 1px solid #888; text-align: left; font-size: 9px; } '
+        'table { width: 100%; border-collapse: collapse; table-layout: fixed; } '
+        'th, td { padding: 3px 6px; border: 1px solid #888; text-align: left; font-size: 9px; word-break: break-word; } '
+        'td:first-child, th:first-child { width: 30%; } '
         'th { background: #f0f4ff; font-weight: 700; } '
-        '.num { text-align: right; white-space: nowrap; } '
+        '.num { text-align: right; } '
         '.grp td { background: #e8edff; font-weight: 700; } '
-        '.rcpt { width: 90px; } '
-        '@media print { .no-print { display: none; } } '
+        '.tot td { background: #f3f6ff; font-weight: 700; border-top: 2px solid #333; } '
+        '.rcpt { width: 11%; } '
         '</style></head><body>'
         '<h1>Customer Balance Report</h1>'
         '<div class="info">Span: $spanLabel &nbsp;|&nbsp; As on: ${DateFormat('d MMM yyyy').format(_asOf)} &nbsp;|&nbsp; Generated: $genTime</div>'
@@ -364,10 +370,24 @@ class _ErpCustomerBalanceReportScreenState
         '<th class="num">${_periodLabels.length > 1 ? _periodLabels[1] : ''}</th>'
         '<th class="num">${_periodLabels.length > 2 ? _periodLabels[2] : ''}</th>'
         '$extraHead</tr></thead><tbody>${buf.toString()}</tbody></table>'
-        '<div class="no-print" style="margin-top:14px"><button onclick="window.print()">Print</button></div>'
+        '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},350);};</script>'
         '</body></html>';
-    final blob = html.Blob([doc], 'text/html;charset=utf-8');
-    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+
+    // Print via a hidden iframe (Safari prints blob: URLs as blank pages).
+    final iframe = html.IFrameElement()
+      ..style.position = 'fixed'
+      ..style.right = '0'
+      ..style.bottom = '0'
+      ..style.width = '0'
+      ..style.height = '0'
+      ..style.border = '0';
+    html.document.body!.append(iframe);
+    iframe.srcdoc = doc;
+    Future.delayed(const Duration(minutes: 2), () {
+      try {
+        iframe.remove();
+      } catch (_) {}
+    });
   }
 
   // ── UI ──────────────────────────────────────────────────────────────────────
@@ -617,14 +637,26 @@ class _ErpCustomerBalanceReportScreenState
       return Container(
         color: AppTheme.primary.withOpacity(0.10),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Text('${it['name']}  (${it['count']})',
+            style: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.primary)),
+      );
+    }
+    if (it['type'] == 'footer') {
+      return Container(
+        decoration: const BoxDecoration(
+            color: Color(0xFFF3F6FF),
+            border: Border(top: BorderSide(color: Color(0xFF8894C4)))),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(children: [
           Expanded(
               flex: 3,
-              child: Text('${it['name']}  (${it['count']})',
+              child: Text('Total — ${it['name']}',
                   style: const TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                      color: AppTheme.primary))),
+                      fontSize: 12.5, fontWeight: FontWeight.w800),
+                  overflow: TextOverflow.ellipsis)),
           const SizedBox(width: 110),
           _amt(it['t1'] as num, 110, bold: true),
           _amt(it['t2'] as num, 110, bold: true),
