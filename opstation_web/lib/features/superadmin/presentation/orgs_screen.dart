@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/auth/password_hasher.dart';
+import '../../../core/modules/app_modules.dart';
 import '../../../core/theme/app_theme.dart';
 
 class OrgsScreen extends ConsumerStatefulWidget {
@@ -492,17 +493,6 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     );
   }
 
-  static const _moduleLabels = {
-    'inventory': 'Inventory',
-    'purchase': 'Purchase',
-    'sales': 'Sales',
-    'pos': 'POS',
-    'hr': 'HR',
-    'assets': 'Asset Management',
-    'production': 'Production',
-    'financial_reporting': 'Financial Reporting',
-  };
-
   Future<void> _showModulesDialog(BuildContext ctx, String orgId, String orgName) async {
     final client = Supabase.instance.client;
     final res = await client
@@ -523,15 +513,32 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
             width: 340,
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: _moduleLabels.entries.map((e) => SwitchListTile(
-                title: Text(e.value),
-                value: states[e.key] ?? false,
+              children: kAppModules.map((m) => SwitchListTile(
+                title: Row(
+                  children: [
+                    Flexible(child: Text(m.label)),
+                    if (!m.live) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppTheme.textSecondary.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text('Soon',
+                            style: TextStyle(
+                                fontSize: 10, fontWeight: FontWeight.w600)),
+                      ),
+                    ],
+                  ],
+                ),
+                value: states[m.key] ?? false,
                 onChanged: (val) async {
-                  setS(() => states[e.key] = val);
+                  setS(() => states[m.key] = val);
                   try {
                     await client.from('org_modules').upsert({
                       'org_id': orgId,
-                      'module': e.key,
+                      'module': m.key,
                       'is_enabled': val,
                       'updated_at': DateTime.now().toUtc().toIso8601String(),
                     }, onConflict: 'org_id,module');
@@ -543,7 +550,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                             Icon(val ? Icons.check_circle : Icons.remove_circle,
                                 color: Colors.white, size: 18),
                             const SizedBox(width: 10),
-                            Text('${e.value} ${val ? 'enabled' : 'disabled'}'),
+                            Text('${m.label} ${val ? 'enabled' : 'disabled'}'),
                           ]),
                           duration: const Duration(milliseconds: 1200),
                           behavior: SnackBarBehavior.floating,
@@ -554,7 +561,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     }
                   } catch (err) {
                     if (dCtx.mounted) {
-                      setS(() => states[e.key] = !val);
+                      setS(() => states[m.key] = !val);
                       ScaffoldMessenger.of(dCtx).showSnackBar(
                         SnackBar(content: Text('Failed: $err')),
                       );
