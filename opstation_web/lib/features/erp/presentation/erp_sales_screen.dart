@@ -981,6 +981,147 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     );
   }
 
+  /// Returns true to proceed with DO creation, false if the user cancels at the
+  /// credit-limit / overdue-aging alert. Reuses the Customer Aging RPCs so the
+  /// figures match the Customer Aging screen exactly. Controlled by the
+  /// org-level toggles in Admin Settings (app_config).
+  Future<bool> _passesCreditAndAgingCheck(
+      BuildContext dctx, String orgId, String? customerId, String customerName) async {
+    if (customerId == null) return true; // walk-in / no customer
+    final client = Supabase.instance.client;
+
+    // 1) Read the org toggles.
+    bool creditOn = false, agingOn = false;
+    int agingDays = 0;
+    try {
+      final cfg = await client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', orgId);
+      final map = {
+        for (final r in cfg as List)
+          r['key'] as String: (r['value'] as String? ?? '')
+      };
+      creditOn = map['org.credit_limit_alert'] == 'true';
+      agingOn = map['org.aging_alert'] == 'true';
+      agingDays = int.tryParse(map['org.aging_alert_days'] ?? '') ?? 0;
+    } catch (_) {}
+    if (!creditOn && !agingOn) return true;
+
+    final fmt = NumberFormat('#,##0');
+    final asOf = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final params = {'p_org_id': orgId, 'p_as_of': asOf};
+    final issues = <_CreditIssue>[];
+
+    // 2) Credit limit: outstanding (GL-true 1210 balance) vs customers.credit_limit.
+    if (creditOn) {
+      double creditLimit = 0;
+      try {
+        final c = await client
+            .from('customers')
+            .select('credit_limit')
+            .eq('id', customerId)
+            .maybeSingle();
+        creditLimit = (c?['credit_limit'] as num?)?.toDouble() ?? 0;
+      } catch (_) {}
+      if (creditLimit > 0) {
+        double balance = 0;
+        try {
+          final agg = await client.rpc('rpc_customer_aging', params: params) as List;
+          for (final a in agg) {
+            if ((a as Map)['customer_id'] == customerId) {
+              balance = (a['total'] as num?)?.toDouble() ?? 0;
+              break;
+            }
+          }
+        } catch (_) {}
+        if (balance > creditLimit) {
+          issues.add(_CreditIssue(
+            'Credit limit exceeded',
+            'Limit ${fmt.format(creditLimit)}  •  Outstanding ${fmt.format(balance)}  •  '
+                'Over by ${fmt.format(balance - creditLimit)}',
+          ));
+        }
+      }
+    }
+
+    // 3) Aging: any open invoice aged at/beyond the threshold.
+    if (agingOn && agingDays > 0) {
+      double agedAmt = 0;
+      int agedCount = 0, oldest = 0;
+      try {
+        final det = await client.rpc('rpc_customer_aging_detail', params: params) as List;
+        for (final d in det) {
+          final m = d as Map;
+          if (m['customer_id'] != customerId) continue;
+          final age = (m['age_days'] as num?)?.toInt() ?? 0;
+          final amt = (m['open_amt'] as num?)?.toDouble() ?? 0;
+          if (age >= agingDays && amt > 0) {
+            agedAmt += amt;
+            agedCount++;
+            if (age > oldest) oldest = age;
+          }
+        }
+      } catch (_) {}
+      if (agedCount > 0) {
+        issues.add(_CreditIssue(
+          'Overdue aging',
+          '$agedCount invoice(s) totaling ${fmt.format(agedAmt)} aged $agingDays+ days  •  '
+              'oldest $oldest days',
+        ));
+      }
+    }
+
+    if (issues.isEmpty) return true;
+    if (!dctx.mounted) return false;
+
+    // 4) Overridable alert.
+    final proceed = await showDialog<bool>(
+      context: dctx,
+      barrierDismissible: false,
+      builder: (adCtx) => AlertDialog(
+        title: Row(children: const [
+          Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
+          SizedBox(width: 10),
+          Text('Credit / Aging Alert'),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(customerName,
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            const SizedBox(height: 12),
+            for (final iss in issues) ...[
+              Text(iss.title,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: AppTheme.danger)),
+              const SizedBox(height: 2),
+              Text(iss.detail,
+                  style: const TextStyle(
+                      fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
+              const SizedBox(height: 12),
+            ],
+            const Text('Create this Delivery Order anyway?',
+                style: TextStyle(fontSize: 12.5)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(adCtx, rootNavigator: true).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: () => Navigator.of(adCtx, rootNavigator: true).pop(true),
+              child: const Text('Proceed anyway')),
+        ],
+      ),
+    );
+    return proceed ?? false;
+  }
+
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
@@ -1062,6 +1203,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   final year = DateTime.now().year;
                   try {
                     final so = sos.firstWhere((s) => s['id'] == soId);
+                    final custName = (so['customers']?['shop_name'] as String?) ?? 'this customer';
+                    final ok = await _passesCreditAndAgingCheck(
+                        ctx, orgId, so['customer_id'] as String?, custName);
+                    if (!ok) return; // user cancelled at the credit/aging alert
+                    if (!ctx.mounted) return;
                     final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
                         params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'DO', 'p_year': year});
                     final id = 'do_${DateTime.now().millisecondsSinceEpoch}';
@@ -2471,4 +2617,11 @@ class _TotalsRow extends StatelessWidget {
       Text(value, style: TextStyle(fontSize: bold ? 15 : 13, fontWeight: bold ? FontWeight.w800 : FontWeight.w600, color: color)),
     ]),
   );
+}
+
+/// A single credit/aging warning line shown in the DO creation alert.
+class _CreditIssue {
+  final String title;
+  final String detail;
+  const _CreditIssue(this.title, this.detail);
 }

@@ -5,16 +5,28 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
+/// An optional numeric parameter attached to a toggle. Shown (and saved) only
+/// while the parent toggle is ON. Stored in `app_config` as a string.
+class _NumberField {
+  final String key; // app_config key, e.g. 'org.aging_alert_days'
+  final String label; // e.g. 'Aging threshold'
+  final int defaultValue;
+  final String suffix; // e.g. 'days'
+  const _NumberField(this.key, this.label, this.defaultValue,
+      {this.suffix = ''});
+}
+
 /// Definition of a single org-level admin toggle.
 /// To add a new setting, append one entry to [_toggles] below — the screen
-/// renders, loads, and persists it automatically. Each value is stored in
-/// `app_config` as the string 'true'/'false' under [key] (org-scoped,
-/// branch_id NULL), matching the existing app_config convention.
+/// renders, loads, and persists it automatically. Boolean values are stored in
+/// `app_config` as 'true'/'false' under [key] (org-scoped, branch_id NULL),
+/// matching the existing app_config convention.
 class _AdminToggle {
-  final String key; // app_config key, e.g. 'org.credit_limit_alert'
+  final String key;
   final String title;
   final String subtitle;
-  const _AdminToggle(this.key, this.title, this.subtitle);
+  final _NumberField? number; // optional numeric companion
+  const _AdminToggle(this.key, this.title, this.subtitle, {this.number});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -24,6 +36,16 @@ const List<_AdminToggle> _toggles = [
     'When a Delivery Order is created for a customer whose outstanding balance '
         'exceeds their credit limit, show an alert with the limit details. '
         'The user can override and proceed.',
+  ),
+  _AdminToggle(
+    'org.aging_alert',
+    'Overdue aging alert on Delivery Order',
+    'When a Delivery Order is created for a customer with outstanding invoices '
+        'aged at or beyond the threshold below, show an alert. The user can '
+        'override and proceed. If both this and the credit limit are exceeded, '
+        'the popup lists both.',
+    number: _NumberField('org.aging_alert_days', 'Aging threshold', 60,
+        suffix: 'days'),
   ),
 
   // ─── Add more org-level toggles here ─────────────────────────────────────
@@ -41,13 +63,28 @@ class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
 class _ErpAdminSettingsScreenState
     extends ConsumerState<ErpAdminSettingsScreen> {
   final Map<String, bool> _values = {};
+  final Map<String, TextEditingController> _numCtrls = {};
   final Set<String> _saving = {};
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
+    for (final t in _toggles) {
+      if (t.number != null) {
+        _numCtrls[t.number!.key] =
+            TextEditingController(text: t.number!.defaultValue.toString());
+      }
+    }
     _load();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _numCtrls.values) {
+      c.dispose();
+    }
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -68,6 +105,13 @@ class _ErpAdminSettingsScreenState
       setState(() {
         for (final t in _toggles) {
           _values[t.key] = cfg[t.key] == 'true';
+          final n = t.number;
+          if (n != null) {
+            final stored = cfg[n.key];
+            if (stored != null && stored.trim().isNotEmpty) {
+              _numCtrls[n.key]!.text = stored.trim();
+            }
+          }
         }
         _loading = false;
       });
@@ -81,19 +125,23 @@ class _ErpAdminSettingsScreenState
     }
   }
 
-  Future<void> _setToggle(String key, bool val) async {
+  Future<void> _persist(String key, String value) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
+    await Supabase.instance.client.from('app_config').upsert({
+      'key': key,
+      'value': value,
+      'org_id': orgId,
+    }, onConflict: 'key,org_id,branch_id');
+  }
+
+  Future<void> _setToggle(String key, bool val) async {
     setState(() {
       _values[key] = val;
       _saving.add(key);
     });
     try {
-      await Supabase.instance.client.from('app_config').upsert({
-        'key': key,
-        'value': val.toString(),
-        'org_id': orgId,
-      }, onConflict: 'key,org_id,branch_id');
+      await _persist(key, val.toString());
     } catch (e) {
       if (mounted) {
         setState(() => _values[key] = !val); // revert on failure
@@ -104,6 +152,75 @@ class _ErpAdminSettingsScreenState
     } finally {
       if (mounted) setState(() => _saving.remove(key));
     }
+  }
+
+  Future<void> _saveNumber(_NumberField n) async {
+    final raw = _numCtrls[n.key]!.text.trim();
+    final parsed = int.tryParse(raw);
+    final clean = (parsed == null || parsed < 0) ? n.defaultValue : parsed;
+    // Normalize the field to the cleaned value.
+    if (_numCtrls[n.key]!.text != clean.toString()) {
+      _numCtrls[n.key]!.text = clean.toString();
+    }
+    setState(() => _saving.add(n.key));
+    try {
+      await _persist(n.key, clean.toString());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving.remove(n.key));
+    }
+  }
+
+  Widget _numberRow(_NumberField n) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Row(
+        children: [
+          Text(n.label,
+              style: const TextStyle(
+                  fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 90,
+            child: TextField(
+              controller: _numCtrls[n.key],
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13),
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _saveNumber(n),
+              onTapOutside: (_) {
+                FocusManager.instance.primaryFocus?.unfocus();
+                _saveNumber(n);
+              },
+            ),
+          ),
+          if (n.suffix.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            Text(n.suffix,
+                style: const TextStyle(
+                    fontSize: 12.5, color: AppTheme.textSecondary)),
+          ],
+          if (_saving.contains(n.key)) ...[
+            const SizedBox(width: 10),
+            const SizedBox(
+                width: 13,
+                height: 13,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -118,11 +235,13 @@ class _ErpAdminSettingsScreenState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('Admin Settings',
-                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                      style:
+                          TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
                   const Text(
                     'Organization-wide toggles. Changes apply to all branches and save immediately.',
-                    style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                    style:
+                        TextStyle(fontSize: 13, color: AppTheme.textSecondary),
                   ),
                   const SizedBox(height: 20),
                   Container(
@@ -170,6 +289,9 @@ class _ErpAdminSettingsScreenState
                             value: _values[_toggles[i].key] ?? false,
                             onChanged: (v) => _setToggle(_toggles[i].key, v),
                           ),
+                          if (_toggles[i].number != null &&
+                              (_values[_toggles[i].key] ?? false))
+                            _numberRow(_toggles[i].number!),
                         ],
                       ],
                     ),

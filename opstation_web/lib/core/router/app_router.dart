@@ -63,6 +63,7 @@ import '../../features/erp/presentation/erp_chart_of_accounts_screen.dart';
 import '../../features/erp/presentation/erp_suppliers_screen.dart';
 import '../../features/erp/presentation/erp_product_classifications_screen.dart';
 import '../../features/erp/presentation/erp_users_screen.dart';
+import '../../features/erp/presentation/erp_admin_settings_screen.dart';
 import '../../features/erp/presentation/erp_home_screen.dart';
 import '../../features/erp/presentation/erp_opening_stock_screen.dart';
 import '../../features/erp/presentation/erp_stock_transfers_screen.dart';
@@ -138,6 +139,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc.startsWith('/manufacturing/') ||
                 loc.startsWith('/hr/');
             if (!inErp) return false;
+            if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/no-access') return true;
             if (access == null) return true;
             final it = kRouteToPerm[loc];
@@ -187,6 +189,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/stock-value-report', builder: (_, __) => const ErpStockValueReportScreen()),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => const ErpProductClassificationsScreen()),
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
+          GoRoute(path: '/erp/admin-settings', builder: (_, __) => const ErpAdminSettingsScreen()),
           GoRoute(path: '/erp/home', builder: (_, __) => const ErpHomeScreen()),
           GoRoute(path: '/erp/no-access', builder: (_, __) => const _NoAccessScreen()),
           GoRoute(path: '/erp/opening-stock', builder: (_, __) => const ErpOpeningStockScreen()),
