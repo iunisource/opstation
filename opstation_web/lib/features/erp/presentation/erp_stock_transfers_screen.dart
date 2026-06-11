@@ -6,13 +6,41 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
+String _stStatusLabel(String s) {
+  switch (s) {
+    case 'in_transit':
+      return 'In Transit';
+    case 'pending':
+      return 'Draft';
+    default:
+      return s.isEmpty ? '' : s[0].toUpperCase() + s.substring(1);
+  }
+}
+
+Color _stStatusColor(String s) {
+  switch (s) {
+    case 'completed':
+      return AppTheme.success;
+    case 'in_transit':
+      return AppTheme.primary;
+    case 'rejected':
+      return AppTheme.danger;
+    case 'cancelled':
+      return Colors.grey;
+    default:
+      return Colors.orange; // draft / pending
+  }
+}
+
 class ErpStockTransfersScreen extends ConsumerStatefulWidget {
   const ErpStockTransfersScreen({super.key});
   @override
-  ConsumerState<ErpStockTransfersScreen> createState() => _ErpStockTransfersScreenState();
+  ConsumerState<ErpStockTransfersScreen> createState() =>
+      _ErpStockTransfersScreenState();
 }
 
-class _ErpStockTransfersScreenState extends ConsumerState<ErpStockTransfersScreen> {
+class _ErpStockTransfersScreenState
+    extends ConsumerState<ErpStockTransfersScreen> {
   List<Map<String, dynamic>> _transfers = [];
   List<Map<String, dynamic>> _allBranches = [];
   bool _loading = true;
@@ -28,261 +56,402 @@ class _ErpStockTransfersScreenState extends ConsumerState<ErpStockTransfersScree
   Future<void> _load() async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     final branchId = _branchId;
-    if (orgId == null) { setState(() => _loading = false); return; }
+    if (orgId == null) {
+      setState(() => _loading = false);
+      return;
+    }
     try {
       final client = Supabase.instance.client;
-      final baseQuery = client
-          .from('stock_transfers')
-          .select('*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')
-          .eq('org_id', orgId);
+      final baseQuery = client.from('stock_transfers').select(
+          '*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)').eq('org_id', orgId);
       final transfers = branchId != null
-          ? await baseQuery.or('from_branch_id.eq.$branchId,to_branch_id.eq.$branchId').order('created_at', ascending: false)
+          ? await baseQuery
+              .or('from_branch_id.eq.$branchId,to_branch_id.eq.$branchId')
+              .order('created_at', ascending: false)
           : await baseQuery.order('created_at', ascending: false);
-      final branches = await client.from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name');
+      final branches = await client
+          .from('branches')
+          .select()
+          .eq('org_id', orgId)
+          .eq('is_active', true)
+          .order('name');
       setState(() {
         _transfers = List<Map<String, dynamic>>.from(transfers);
         _allBranches = List<Map<String, dynamic>>.from(branches);
         _loading = false;
       });
-    } catch (_) { setState(() => _loading = false); }
-  }
-
-  void _showSnack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
-  }
-
-  Color _statusColor(String s) {
-    switch (s) {
-      case 'completed': return AppTheme.success;
-      case 'cancelled': return AppTheme.danger;
-      default: return Colors.orange;
+    } catch (_) {
+      setState(() => _loading = false);
     }
   }
 
-  void _showCreateDialog() {
-    final branchId = _branchId;
-    String? fromBranchId = branchId;
-    String? toBranchId;
-    final notesCtrl = TextEditingController();
-    DateTime transferDate = DateTime.now();
-
-    showDialog(
-      context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('New Stock Transfer'),
-          content: SizedBox(
-            width: 440,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              DropdownButtonFormField<String>(
-                value: fromBranchId,
-                decoration: const InputDecoration(labelText: 'From Branch *'),
-                hint: const Text('Select source branch'),
-                items: _allBranches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String))).toList(),
-                onChanged: (v) => setS(() => fromBranchId = v),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: toBranchId,
-                decoration: const InputDecoration(labelText: 'To Branch *'),
-                hint: const Text('Select destination branch'),
-                items: _allBranches.where((b) => b['id'] != fromBranchId).map((b) =>
-                    DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String))).toList(),
-                onChanged: (v) => setS(() => toBranchId = v),
-              ),
-              const SizedBox(height: 12),
-              TextField(controller: notesCtrl, decoration: const InputDecoration(labelText: 'Notes'), maxLines: 2),
-              const SizedBox(height: 12),
-              InkWell(
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: ctx, initialDate: transferDate,
-                    firstDate: DateTime(2000), lastDate: DateTime.now().add(const Duration(days: 365)),
-                  );
-                  if (picked != null) setS(() => transferDate = picked);
-                },
-                child: InputDecorator(
-                  decoration: const InputDecoration(labelText: 'Transfer Date'),
-                  child: Text(DateFormat('d MMM yyyy').format(transferDate)),
-                ),
-              ),
-            ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                if (fromBranchId == null || toBranchId == null) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Both branches required')));
-                  return;
-                }
-                if (fromBranchId == toBranchId) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Source and destination must be different')));
-                  return;
-                }
-                final orgId = ref.read(currentUserProvider)?.orgId;
-                final userId = ref.read(currentUserProvider)?.id;
-                try {
-                  final id = 'st_${DateTime.now().millisecondsSinceEpoch}';
-                  await Supabase.instance.client.from('stock_transfers').insert({
-                    'id': id, 'org_id': orgId,
-                    'from_branch_id': fromBranchId, 'to_branch_id': toBranchId,
-                    'status': 'pending',
-                    'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
-                    'transfer_date': DateFormat('yyyy-MM-dd').format(transferDate),
-                    'created_by': userId,
-                  });
-                  if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
-                  _showSnack('Transfer created');
-                  await _load();
-                  final transfer = _transfers.firstWhere((t) => t['id'] == id, orElse: () => {});
-                  if (transfer.isNotEmpty && mounted) _openTransfer(transfer);
-                } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
-                }
-              },
-              child: const Text('Create'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _openTransfer(Map<String, dynamic> transfer) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => _StockTransferDetailScreen(transfer: transfer, onUpdated: _load),
-    ));
+  void _openTransfer(Map<String, dynamic>? transfer) {
+    Navigator.of(context)
+        .push(MaterialPageRoute(
+          builder: (_) => _StockTransferVoucherScreen(
+              transfer: transfer, branches: _allBranches, onUpdated: _load),
+        ))
+        .then((_) => _load());
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Text('Stock Transfers', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-          const Spacer(),
-          ElevatedButton.icon(
-            onPressed: _allBranches.length < 2 ? null : _showCreateDialog,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('New Transfer'),
-          ),
-        ]),
-        const SizedBox(height: 8),
-        Text('${_transfers.length} transfers', style: const TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 24),
-        if (_loading)
-          const Center(child: CircularProgressIndicator())
-        else
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
-              child: Column(children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-                  child: const Row(children: [
-                    Expanded(flex: 2, child: Text('From', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('To', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 1, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    SizedBox(width: 48),
-                  ]),
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: _transfers.isEmpty
-                      ? const Center(child: Text('No stock transfers yet.', style: TextStyle(color: AppTheme.textSecondary)))
-                      : ListView.separated(
-                          itemCount: _transfers.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (_, i) {
-                            final t = _transfers[i];
-                            final status = t['status'] as String? ?? 'pending';
-                            final date = t['transfer_date'] != null
-                                ? DateFormat('d MMM yyyy').format(DateTime.parse(t['transfer_date'] as String)) : '-';
-                            return InkWell(
-                              onTap: () => _openTransfer(t),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                child: Row(children: [
-                                  Expanded(flex: 2, child: Text(t['from_branch']?['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600))),
-                                  Expanded(flex: 2, child: Text(t['to_branch']?['name'] as String? ?? '-', style: const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
-                                  Expanded(flex: 2, child: Text(date, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-                                  Expanded(flex: 1, child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-                                    child: Text(status[0].toUpperCase() + status.substring(1),
-                                        style: TextStyle(color: _statusColor(status), fontSize: 12, fontWeight: FontWeight.w600)),
-                                  )),
-                                  const SizedBox(width: 48, child: Icon(Icons.chevron_right, color: AppTheme.textSecondary)),
-                                ]),
-                              ),
-                            );
-                          }),
-                ),
-              ]),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+          child: Row(children: [
+            const Text('Stock Transfers',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            ElevatedButton.icon(
+              onPressed: () => _openTransfer(null),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('New Transfer'),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
             ),
-          ),
+          ]),
+        ),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Container(
+                    decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.border)),
+                    child: Column(children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 12),
+                        decoration: const BoxDecoration(
+                            color: AppTheme.background,
+                            borderRadius:
+                                BorderRadius.vertical(top: Radius.circular(12))),
+                        child: const Row(children: [
+                          Expanded(
+                              flex: 2,
+                              child: Text('Voucher #',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppTheme.textSecondary))),
+                          Expanded(
+                              flex: 2,
+                              child: Text('From',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppTheme.textSecondary))),
+                          Expanded(
+                              flex: 2,
+                              child: Text('To',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppTheme.textSecondary))),
+                          Expanded(
+                              flex: 2,
+                              child: Text('Date',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppTheme.textSecondary))),
+                          SizedBox(
+                              width: 120,
+                              child: Text('Status',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppTheme.textSecondary))),
+                        ]),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: _transfers.isEmpty
+                            ? const Center(
+                                child: Text('No stock transfers yet.',
+                                    style: TextStyle(
+                                        color: AppTheme.textSecondary)))
+                            : ListView.separated(
+                                itemCount: _transfers.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (_, i) {
+                                  final t = _transfers[i];
+                                  final status =
+                                      t['status'] as String? ?? 'pending';
+                                  final date = t['transfer_date'] as String?;
+                                  return InkWell(
+                                    onTap: () => _openTransfer(t),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 20, vertical: 14),
+                                      child: Row(children: [
+                                        Expanded(
+                                            flex: 2,
+                                            child: Text(
+                                                t['voucher_number'] as String? ??
+                                                    '—',
+                                                style: const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w600))),
+                                        Expanded(
+                                            flex: 2,
+                                            child: Text(
+                                                t['from_branch']?['name']
+                                                        as String? ??
+                                                    '-',
+                                                style: const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w600))),
+                                        Expanded(
+                                            flex: 2,
+                                            child: Text(
+                                                t['to_branch']?['name']
+                                                        as String? ??
+                                                    '-',
+                                                style: const TextStyle(
+                                                    color: AppTheme.primary,
+                                                    fontWeight:
+                                                        FontWeight.w600))),
+                                        Expanded(
+                                            flex: 2,
+                                            child: Text(
+                                                date ?? '-',
+                                                style: const TextStyle(
+                                                    color: AppTheme
+                                                        .textSecondary))),
+                                        SizedBox(
+                                          width: 120,
+                                          child: Align(
+                                            alignment: Alignment.centerLeft,
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 4),
+                                              decoration: BoxDecoration(
+                                                  color: _stStatusColor(status)
+                                                      .withOpacity(0.1),
+                                                  borderRadius:
+                                                      BorderRadius.circular(6)),
+                                              child: Text(
+                                                  _stStatusLabel(status),
+                                                  style: TextStyle(
+                                                      color: _stStatusColor(
+                                                          status),
+                                                      fontSize: 12,
+                                                      fontWeight:
+                                                          FontWeight.w600)),
+                                            ),
+                                          ),
+                                        ),
+                                      ]),
+                                    ),
+                                  );
+                                }),
+                      ),
+                    ]),
+                  ),
+                ),
+        ),
+        const SizedBox(height: 16),
       ]),
     );
   }
 }
 
-class _StockTransferDetailScreen extends ConsumerStatefulWidget {
-  final Map<String, dynamic> transfer;
+// ============================================================================
+// Full-screen master-detail voucher (handles new + existing) with the
+// dispatch -> approve workflow.
+// ============================================================================
+class _StockTransferVoucherScreen extends ConsumerStatefulWidget {
+  final Map<String, dynamic>? transfer; // null = new
+  final List<Map<String, dynamic>> branches;
   final VoidCallback onUpdated;
-  const _StockTransferDetailScreen({required this.transfer, required this.onUpdated});
+  const _StockTransferVoucherScreen(
+      {required this.transfer, required this.branches, required this.onUpdated});
   @override
-  ConsumerState<_StockTransferDetailScreen> createState() => _StockTransferDetailScreenState();
+  ConsumerState<_StockTransferVoucherScreen> createState() =>
+      _StockTransferVoucherScreenState();
 }
 
-class _StockTransferDetailScreenState extends ConsumerState<_StockTransferDetailScreen> {
-  late Map<String, dynamic> _transfer;
+class _StockTransferVoucherScreenState
+    extends ConsumerState<_StockTransferVoucherScreen> {
+  Map<String, dynamic>? _transfer;
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _uoms = [];
   bool _loading = true;
+  bool _busy = false;
+
+  // Header edit state (draft only).
+  String? _fromBranchId;
+  String? _toBranchId;
+  DateTime _date = DateTime.now();
+  final _notesCtrl = TextEditingController();
+
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  String? get _userId => ref.read(currentUserProvider)?.id;
+
+  String get _status => (_transfer?['status'] as String?) ?? 'draft';
+  bool get _isNew => _transfer == null;
+  bool get _isDraft =>
+      _isNew || _status == 'draft' || _status == 'pending';
+  bool get _isInTransit => _status == 'in_transit';
 
   @override
   void initState() {
     super.initState();
     _transfer = widget.transfer;
-    _loadItems();
+    if (_transfer != null) {
+      _fromBranchId = _transfer!['from_branch_id'] as String?;
+      _toBranchId = _transfer!['to_branch_id'] as String?;
+      final d = _transfer!['transfer_date'] as String?;
+      if (d != null) _date = DateTime.tryParse(d) ?? DateTime.now();
+      _notesCtrl.text = (_transfer!['notes'] as String?) ?? '';
+    } else {
+      _fromBranchId = ref.read(selectedBranchProvider)?['id'] as String?;
+    }
+    _load();
   }
 
-  Future<void> _loadItems() async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
+  @override
+  void dispose() {
+    _notesCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final orgId = _orgId;
+    if (orgId == null) {
+      setState(() => _loading = false);
+      return;
+    }
     try {
       final client = Supabase.instance.client;
-      final items = await client.from('stock_transfer_items')
-          .select('*, products(name, sku), uoms(name, abbreviation)')
-          .eq('transfer_id', _transfer['id']);
-      final products = await client.from('products').select('id, name, sku, base_uom_id')
-          .eq('org_id', orgId!).eq('is_active', true).order('name').limit(10000);
-      final uoms = await client.from('uoms').select().eq('org_id', orgId).order('name');
-      final transferRes = await client.from('stock_transfers')
-          .select('*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')
-          .eq('id', _transfer['id']).single();
+      final products = await client
+          .from('products')
+          .select('id, name, sku, base_uom_id')
+          .eq('org_id', orgId)
+          .eq('is_active', true)
+          .order('name')
+          .limit(10000);
+      final uoms =
+          await client.from('uoms').select().eq('org_id', orgId).order('name');
+      List<Map<String, dynamic>> items = [];
+      Map<String, dynamic>? fresh = _transfer;
+      if (_transfer != null) {
+        final rows = await client
+            .from('stock_transfer_items')
+            .select('*, products(name, sku), uoms(name, abbreviation)')
+            .eq('transfer_id', _transfer!['id']);
+        items = List<Map<String, dynamic>>.from(rows);
+        fresh = await client
+            .from('stock_transfers')
+            .select(
+                '*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')
+            .eq('id', _transfer!['id'])
+            .single();
+      }
       setState(() {
-        _items = List<Map<String, dynamic>>.from(items);
         _products = List<Map<String, dynamic>>.from(products);
         _uoms = List<Map<String, dynamic>>.from(uoms);
-        _transfer = transferRes;
+        _items = items;
+        if (fresh != null) _transfer = fresh;
         _loading = false;
       });
-    } catch (_) { setState(() => _loading = false); }
+    } catch (_) {
+      setState(() => _loading = false);
+    }
   }
 
-  void _showSnack(String msg) {
+  void _snack(String m) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
   }
 
+  String _branchName(String? id) {
+    final b = widget.branches.firstWhere((e) => e['id'] == id,
+        orElse: () => const {});
+    return (b['name'] as String?) ?? '-';
+  }
+
+  Future<String> _nextVoucherNo() async {
+    final orgId = _orgId!;
+    final year = DateTime.now().year;
+    final existing = await Supabase.instance.client
+        .from('stock_transfers')
+        .select('voucher_number')
+        .eq('org_id', orgId)
+        .like('voucher_number', 'ST-$year-%');
+    final n = (existing as List).length + 1;
+    return 'ST-$year-${n.toString().padLeft(4, '0')}';
+  }
+
+  // ── Save draft (create or update header) ──────────────────────────────────
+  Future<void> _saveDraft() async {
+    if (_fromBranchId == null || _toBranchId == null) {
+      _snack('Both branches are required');
+      return;
+    }
+    if (_fromBranchId == _toBranchId) {
+      _snack('Source and destination must differ');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final client = Supabase.instance.client;
+      final payload = {
+        'from_branch_id': _fromBranchId,
+        'to_branch_id': _toBranchId,
+        'transfer_date': DateFormat('yyyy-MM-dd').format(_date),
+        'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+      if (_isNew) {
+        final id = 'st_${DateTime.now().millisecondsSinceEpoch}';
+        final vno = await _nextVoucherNo();
+        await client.from('stock_transfers').insert({
+          'id': id,
+          'org_id': _orgId,
+          'voucher_number': vno,
+          'status': 'draft',
+          'created_by': _userId,
+          ...payload,
+        });
+        _transfer = {'id': id, 'voucher_number': vno, 'status': 'draft'};
+        _snack('Draft $vno created');
+      } else {
+        await client
+            .from('stock_transfers')
+            .update(payload)
+            .eq('id', _transfer!['id']);
+        _snack('Saved');
+      }
+      widget.onUpdated();
+      await _load();
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ── Items ─────────────────────────────────────────────────────────────────
   void _showAddItemDialog() {
+    if (_transfer == null) {
+      _snack('Save the transfer first');
+      return;
+    }
     String? productId;
     String? uomId;
     final qtyCtrl = TextEditingController(text: '1');
@@ -297,15 +466,21 @@ class _StockTransferDetailScreenState extends ConsumerState<_StockTransferDetail
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               DropdownButtonFormField<String>(
                 value: productId,
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Product *'),
                 hint: const Text('Select product'),
-                items: _products.map((p) => DropdownMenuItem(
-                    value: p['id'] as String,
-                    child: Text('${p['name']}${p['sku'] != null ? ' (${p['sku']})' : ''}'))).toList(),
+                items: _products
+                    .map((p) => DropdownMenuItem(
+                        value: p['id'] as String,
+                        child: Text(
+                            '${p['name']}${p['sku'] != null ? ' (${p['sku']})' : ''}',
+                            overflow: TextOverflow.ellipsis)))
+                    .toList(),
                 onChanged: (v) {
                   setS(() {
                     productId = v;
-                    final prod = _products.firstWhere((p) => p['id'] == v, orElse: () => {});
+                    final prod = _products
+                        .firstWhere((p) => p['id'] == v, orElse: () => {});
                     uomId = prod['base_uom_id'] as String?;
                   });
                 },
@@ -313,51 +488,73 @@ class _StockTransferDetailScreenState extends ConsumerState<_StockTransferDetail
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 value: uomId,
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'UOM *'),
                 hint: const Text('Select UOM'),
-                items: _uoms.map((u) => DropdownMenuItem(
-                    value: u['id'] as String,
-                    child: Text('${u['name']} (${u['abbreviation']})'))).toList(),
+                items: _uoms
+                    .map((u) => DropdownMenuItem(
+                        value: u['id'] as String,
+                        child: Text('${u['name']} (${u['abbreviation']})')))
+                    .toList(),
                 onChanged: (v) => setS(() => uomId = v),
               ),
               const SizedBox(height: 12),
               Row(children: [
-                Expanded(child: TextField(controller: qtyCtrl,
-                    decoration: const InputDecoration(labelText: 'Quantity *'),
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true))),
+                Expanded(
+                    child: TextField(
+                        controller: qtyCtrl,
+                        decoration:
+                            const InputDecoration(labelText: 'Quantity *'),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true))),
                 const SizedBox(width: 12),
-                Expanded(child: TextField(controller: costCtrl,
-                    decoration: const InputDecoration(labelText: 'Unit Cost'),
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true))),
+                Expanded(
+                    child: TextField(
+                        controller: costCtrl,
+                        decoration: const InputDecoration(labelText: 'Unit Cost'),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true))),
               ]),
             ]),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+            TextButton(
+                onPressed: () =>
+                    Navigator.of(ctx, rootNavigator: true).pop(),
+                child: const Text('Cancel')),
             ElevatedButton(
               onPressed: () async {
                 if (productId == null || uomId == null) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Product and UOM required')));
+                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                      content: Text('Product and UOM required')));
                   return;
                 }
                 final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
                 if (qty <= 0) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Quantity must be > 0')));
+                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                      content: Text('Quantity must be > 0')));
                   return;
                 }
                 try {
-                  await Supabase.instance.client.from('stock_transfer_items').insert({
+                  await Supabase.instance.client
+                      .from('stock_transfer_items')
+                      .insert({
                     'id': 'sti_${DateTime.now().millisecondsSinceEpoch}',
-                    'transfer_id': _transfer['id'],
+                    'transfer_id': _transfer!['id'],
                     'product_id': productId,
                     'uom_id': uomId,
                     'quantity': qty,
                     'unit_cost': double.tryParse(costCtrl.text.trim()) ?? 0,
                   });
-                  if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
-                  _loadItems();
+                  if (ctx.mounted) {
+                    Navigator.of(ctx, rootNavigator: true).pop();
+                  }
+                  _load();
                 } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx)
+                        .showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  }
                 }
               },
               child: const Text('Add'),
@@ -368,62 +565,191 @@ class _StockTransferDetailScreenState extends ConsumerState<_StockTransferDetail
     );
   }
 
-  Future<void> _completeTransfer() async {
-    if (_items.isEmpty) { _showSnack('Add items before completing'); return; }
+  Future<void> _removeItem(Map<String, dynamic> item) async {
+    await Supabase.instance.client
+        .from('stock_transfer_items')
+        .delete()
+        .eq('id', item['id']);
+    _load();
+  }
+
+  // ── Dispatch: decrement SOURCE, move to in_transit ────────────────────────
+  Future<void> _dispatch() async {
+    if (_items.isEmpty) {
+      _snack('Add items before dispatching');
+      return;
+    }
+    final client = Supabase.instance.client;
+    final orgId = _orgId!;
+    final fromBranchId = _transfer!['from_branch_id'] as String;
+
+    // Stock availability (informational, non-blocking).
+    final pids = _items.map((i) => i['product_id'] as String).toList();
+    final srcRows = await client
+        .from('inventory_stock')
+        .select('product_id, quantity')
+        .eq('org_id', orgId)
+        .eq('branch_id', fromBranchId)
+        .inFilter('product_id', pids);
+    final srcQty = <String, double>{};
+    for (final s in srcRows as List) {
+      srcQty[s['product_id'] as String] =
+          (s['quantity'] as num?)?.toDouble() ?? 0;
+    }
+    final shortfalls = <String>[];
+    for (final it in _items) {
+      final pid = it['product_id'] as String;
+      final need = (it['quantity'] as num).toDouble();
+      final have = srcQty[pid] ?? 0;
+      if (have < need) {
+        final name = it['products']?['name'] as String? ?? pid;
+        shortfalls.add('$name: have ${_fmtQty(have)}, sending ${_fmtQty(need)}');
+      }
+    }
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Complete Transfer'),
-        content: const Text('Stock will be deducted from source branch and added to destination. This cannot be undone.'),
+        title: const Text('Dispatch Transfer'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+                'Stock will leave ${_branchName(fromBranchId)} now and sit in transit until the destination approves it.'),
+            if (shortfalls.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text('Source stock is short for:',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700, color: AppTheme.danger)),
+              const SizedBox(height: 4),
+              ...shortfalls.map((s) => Text('• $s',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.danger))),
+            ],
+          ],
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Complete')),
+          TextButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+              child: const Text('Dispatch')),
         ],
       ),
     );
     if (confirm != true) return;
-    try {
-      final client = Supabase.instance.client;
-      final orgId = ref.read(currentUserProvider)?.orgId;
-      final userId = ref.read(currentUserProvider)?.id;
-      final fromBranchId = _transfer['from_branch_id'] as String;
-      final toBranchId = _transfer['to_branch_id'] as String;
 
-      for (final item in _items) {
+    setState(() => _busy = true);
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (var i = 0; i < _items.length; i++) {
+        final item = _items[i];
         final qty = (item['quantity'] as num).toDouble();
         final productId = item['product_id'] as String;
         final uomId = item['uom_id'] as String;
-        final now = DateTime.now().toUtc().toIso8601String();
-
-        // Deduct from source
         await client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().millisecondsSinceEpoch}_out',
-          'org_id': orgId, 'product_id': productId,
-          'branch_id': fromBranchId, 'uom_id': uomId,
-          'quantity': -qty, 'movement_type': 'transfer',
-          'reference_id': _transfer['id'], 'reference_type': 'stock_transfer',
-          'moved_at': now, 'created_by': userId,
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_$i',
+          'org_id': orgId,
+          'product_id': productId,
+          'branch_id': fromBranchId,
+          'uom_id': uomId,
+          'quantity': -qty,
+          'movement_type': 'transfer',
+          'reference_id': _transfer!['id'],
+          'reference_type': 'stock_transfer',
+          'moved_at': now,
+          'created_by': _userId,
         });
-        final fromStock = await client.from('inventory_stock').select()
-            .eq('org_id', orgId!).eq('product_id', productId).eq('branch_id', fromBranchId).maybeSingle();
+        final fromStock = await client
+            .from('inventory_stock')
+            .select()
+            .eq('org_id', orgId)
+            .eq('product_id', productId)
+            .eq('branch_id', fromBranchId)
+            .maybeSingle();
         if (fromStock != null) {
           await client.from('inventory_stock').update({
             'quantity': (fromStock['quantity'] as num).toDouble() - qty,
             'updated_at': now,
           }).eq('id', fromStock['id']);
+        } else {
+          await client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_$i',
+            'org_id': orgId,
+            'product_id': productId,
+            'branch_id': fromBranchId,
+            'uom_id': uomId,
+            'quantity': -qty,
+          });
         }
+      }
+      await client.from('stock_transfers').update({
+        'status': 'in_transit',
+        'dispatched_by': _userId,
+        'dispatched_at': now,
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
+      _snack('Dispatched — awaiting approval at destination');
+      widget.onUpdated();
+      await _load();
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
-        // Add to destination
+  // ── Approve / Receive: increment DESTINATION, mark completed ──────────────
+  Future<void> _receive() async {
+    final client = Supabase.instance.client;
+    final orgId = _orgId!;
+    final toBranchId = _transfer!['to_branch_id'] as String;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Approve Transfer'),
+        content: Text(
+            'Confirm receipt at ${_branchName(toBranchId)}. The in-transit stock will be added to this branch.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+              child: const Text('Approve & Receive')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _busy = true);
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (var i = 0; i < _items.length; i++) {
+        final item = _items[i];
+        final qty = (item['quantity'] as num).toDouble();
+        final productId = item['product_id'] as String;
+        final uomId = item['uom_id'] as String;
         await client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().millisecondsSinceEpoch}_in',
-          'org_id': orgId, 'product_id': productId,
-          'branch_id': toBranchId, 'uom_id': uomId,
-          'quantity': qty, 'movement_type': 'transfer',
-          'reference_id': _transfer['id'], 'reference_type': 'stock_transfer',
-          'moved_at': now, 'created_by': userId,
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
+          'org_id': orgId,
+          'product_id': productId,
+          'branch_id': toBranchId,
+          'uom_id': uomId,
+          'quantity': qty,
+          'movement_type': 'transfer',
+          'reference_id': _transfer!['id'],
+          'reference_type': 'stock_transfer',
+          'moved_at': now,
+          'created_by': _userId,
         });
-        final toStock = await client.from('inventory_stock').select()
-            .eq('org_id', orgId).eq('product_id', productId).eq('branch_id', toBranchId).maybeSingle();
+        final toStock = await client
+            .from('inventory_stock')
+            .select()
+            .eq('org_id', orgId)
+            .eq('product_id', productId)
+            .eq('branch_id', toBranchId)
+            .maybeSingle();
         if (toStock != null) {
           await client.from('inventory_stock').update({
             'quantity': (toStock['quantity'] as num).toDouble() + qty,
@@ -431,154 +757,468 @@ class _StockTransferDetailScreenState extends ConsumerState<_StockTransferDetail
           }).eq('id', toStock['id']);
         } else {
           await client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().millisecondsSinceEpoch}',
-            'org_id': orgId, 'product_id': productId,
-            'branch_id': toBranchId, 'uom_id': uomId, 'quantity': qty,
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
+            'org_id': orgId,
+            'product_id': productId,
+            'branch_id': toBranchId,
+            'uom_id': uomId,
+            'quantity': qty,
           });
         }
       }
-
       await client.from('stock_transfers').update({
         'status': 'completed',
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _transfer['id']);
-
-      _showSnack('Transfer completed — stock updated');
+        'approved_by': _userId,
+        'approved_at': now,
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
+      _snack('Approved — stock received at destination');
       widget.onUpdated();
-      _loadItems();
-    } catch (e) { _showSnack('Failed: $e'); }
+      await _load();
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  Future<void> _cancelTransfer() async {
+  // ── Reject (in_transit) / Cancel (draft) ──────────────────────────────────
+  Future<void> _rejectOrCancel() async {
+    final client = Supabase.instance.client;
+    final orgId = _orgId!;
+    final inTransit = _isInTransit;
+    final fromBranchId = _transfer!['from_branch_id'] as String;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(inTransit ? 'Reject Transfer' : 'Cancel Transfer'),
+        content: Text(inTransit
+            ? 'Rejecting will return the in-transit stock to ${_branchName(fromBranchId)}.'
+            : 'Cancel this draft transfer?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
+              child: const Text('No')),
+          ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+              child: Text(inTransit ? 'Reject' : 'Cancel Transfer')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _busy = true);
     try {
-      await Supabase.instance.client.from('stock_transfers').update({
-        'status': 'cancelled', 'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _transfer['id']);
-      _showSnack('Transfer cancelled');
+      final now = DateTime.now().toUtc().toIso8601String();
+      if (inTransit) {
+        // Return stock to source.
+        for (var i = 0; i < _items.length; i++) {
+          final item = _items[i];
+          final qty = (item['quantity'] as num).toDouble();
+          final productId = item['product_id'] as String;
+          final uomId = item['uom_id'] as String;
+          await client.from('inventory_movements').insert({
+            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_ret',
+            'org_id': orgId,
+            'product_id': productId,
+            'branch_id': fromBranchId,
+            'uom_id': uomId,
+            'quantity': qty,
+            'movement_type': 'transfer',
+            'reference_id': _transfer!['id'],
+            'reference_type': 'stock_transfer',
+            'moved_at': now,
+            'created_by': _userId,
+          });
+          final fromStock = await client
+              .from('inventory_stock')
+              .select()
+              .eq('org_id', orgId)
+              .eq('product_id', productId)
+              .eq('branch_id', fromBranchId)
+              .maybeSingle();
+          if (fromStock != null) {
+            await client.from('inventory_stock').update({
+              'quantity': (fromStock['quantity'] as num).toDouble() + qty,
+              'updated_at': now,
+            }).eq('id', fromStock['id']);
+          }
+        }
+      }
+      await client.from('stock_transfers').update({
+        'status': inTransit ? 'rejected' : 'cancelled',
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
+      _snack(inTransit ? 'Rejected — stock returned to source' : 'Cancelled');
       widget.onUpdated();
-      _loadItems();
-    } catch (e) { _showSnack('Failed: $e'); }
+      await _load();
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
+  String _fmtQty(double q) => q % 1 == 0 ? q.toInt().toString() : q.toString();
+
+  // ── UI ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final status = _transfer['status'] as String? ?? 'pending';
-    final isPending = status == 'pending';
+    final editable = _isDraft;
+    final accessibleIds = (ref.watch(userBranchesProvider).valueOrNull ?? const [])
+        .map((b) => b['id'] as String)
+        .toSet();
+    final canApprove = _toBranchId != null && accessibleIds.contains(_toBranchId);
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
-        backgroundColor: Colors.white, elevation: 0,
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).pop()),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop()),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Stock Transfer', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          Text('${_transfer['from_branch']?['name'] ?? ''} → ${_transfer['to_branch']?['name'] ?? ''}',
-              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w400)),
+          Text(
+              _transfer?['voucher_number'] as String? ?? 'New Stock Transfer',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          Text('${_branchName(_fromBranchId)} → ${_branchName(_toBranchId)}',
+              style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w400)),
         ]),
         actions: [
-          if (isPending) ...[
-            ElevatedButton(onPressed: _completeTransfer, child: const Text('Complete Transfer')),
-            const SizedBox(width: 8),
-            TextButton(onPressed: _cancelTransfer,
-                style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
-                child: const Text('Cancel')),
-          ],
-          const SizedBox(width: 8),
+          if (!_isNew)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                    color: _stStatusColor(_status).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(6)),
+                child: Text(_stStatusLabel(_status),
+                    style: TextStyle(
+                        color: _stStatusColor(_status),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12)),
+              ),
+            ),
+          const SizedBox(width: 12),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  _InfoChip(label: 'Status', value: status[0].toUpperCase() + status.substring(1)),
-                  if (_transfer['notes'] != null) ...[
-                    const SizedBox(width: 12),
-                    _InfoChip(label: 'Notes', value: _transfer['notes'] as String),
-                  ],
-                ]),
-                const SizedBox(height: 24),
-                Row(children: [
-                  const Text('Items', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                  const Spacer(),
-                  if (isPending)
-                    ElevatedButton.icon(
-                        onPressed: _showAddItemDialog,
-                        icon: const Icon(Icons.add, size: 16),
-                        label: const Text('Add Item')),
-                ]),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
-                    child: Column(children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                        decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-                        child: const Row(children: [
-                          Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                          Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                          Expanded(flex: 2, child: Text('Quantity', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                          Expanded(flex: 2, child: Text('Unit Cost', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                          SizedBox(width: 48),
-                        ]),
-                      ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: _items.isEmpty
-                            ? const Center(child: Text('No items yet.', style: TextStyle(color: AppTheme.textSecondary)))
-                            : ListView.separated(
-                                itemCount: _items.length,
-                                separatorBuilder: (_, __) => const Divider(height: 1),
-                                itemBuilder: (_, i) {
-                                  final item = _items[i];
-                                  final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
-                                  final cost = (item['unit_cost'] as num?)?.toDouble() ?? 0;
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                    child: Row(children: [
-                                      Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                        Text(item['products']?['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
-                                        if (item['products']?['sku'] != null)
-                                          Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                                      ])),
-                                      Expanded(flex: 2, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary))),
-                                      Expanded(flex: 2, child: Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), style: const TextStyle(fontWeight: FontWeight.w600))),
-                                      Expanded(flex: 2, child: Text(cost.toStringAsFixed(2))),
-                                      SizedBox(width: 48, child: isPending
-                                          ? IconButton(
-                                              icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
-                                              onPressed: () async {
-                                                await Supabase.instance.client.from('stock_transfer_items').delete().eq('id', item['id']);
-                                                _loadItems();
-                                              })
-                                          : const SizedBox.shrink()),
-                                    ]),
-                                  );
-                                }),
-                      ),
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _headerCard(editable),
+                    const SizedBox(height: 20),
+                    Row(children: [
+                      const Text('Items',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      if (editable && !_isNew)
+                        ElevatedButton.icon(
+                            onPressed: _showAddItemDialog,
+                            icon: const Icon(Icons.add, size: 16),
+                            label: const Text('Add Item')),
                     ]),
-                  ),
-                ),
-              ]),
+                    const SizedBox(height: 12),
+                    Expanded(child: _itemsCard(editable)),
+                    const SizedBox(height: 16),
+                    _actionBar(canApprove),
+                  ]),
             ),
     );
   }
-}
 
-class _InfoChip extends StatelessWidget {
-  final String label;
-  final String value;
-  const _InfoChip({required this.label, required this.value});
-  @override
-  Widget build(BuildContext context) {
+  Widget _headerCard(bool editable) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.border)),
+      child: Wrap(
+        spacing: 20,
+        runSpacing: 14,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        children: [
+          _hField(
+              'From Branch',
+              SizedBox(
+                width: 220,
+                child: editable
+                    ? DropdownButtonFormField<String>(
+                        value: _fromBranchId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder()),
+                        items: widget.branches
+                            .map((b) => DropdownMenuItem(
+                                value: b['id'] as String,
+                                child: Text(b['name'] as String,
+                                    overflow: TextOverflow.ellipsis)))
+                            .toList(),
+                        onChanged: (v) => setState(() => _fromBranchId = v),
+                      )
+                    : _readonly(_branchName(_fromBranchId)),
+              )),
+          _hField(
+              'To Branch',
+              SizedBox(
+                width: 220,
+                child: editable
+                    ? DropdownButtonFormField<String>(
+                        value: _toBranchId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder()),
+                        items: widget.branches
+                            .where((b) => b['id'] != _fromBranchId)
+                            .map((b) => DropdownMenuItem(
+                                value: b['id'] as String,
+                                child: Text(b['name'] as String,
+                                    overflow: TextOverflow.ellipsis)))
+                            .toList(),
+                        onChanged: (v) => setState(() => _toBranchId = v),
+                      )
+                    : _readonly(_branchName(_toBranchId)),
+              )),
+          _hField(
+              'Date',
+              SizedBox(
+                width: 160,
+                child: editable
+                    ? InkWell(
+                        onTap: () async {
+                          final p = await showDatePicker(
+                              context: context,
+                              initialDate: _date,
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime.now()
+                                  .add(const Duration(days: 365)));
+                          if (p != null) setState(() => _date = p);
+                        },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                              isDense: true, border: OutlineInputBorder()),
+                          child: Text(DateFormat('d MMM yyyy').format(_date)),
+                        ),
+                      )
+                    : _readonly(DateFormat('d MMM yyyy').format(_date)),
+              )),
+          _hField(
+              'Notes',
+              SizedBox(
+                width: 260,
+                child: editable
+                    ? TextField(
+                        controller: _notesCtrl,
+                        decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder()),
+                      )
+                    : _readonly(_notesCtrl.text.isEmpty ? '—' : _notesCtrl.text),
+              )),
+        ],
+      ),
+    );
+  }
+
+  Widget _hField(String label, Widget child) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label,
+          style: const TextStyle(
+              fontSize: 10,
+              color: AppTheme.textSecondary,
+              fontWeight: FontWeight.w600)),
+      const SizedBox(height: 4),
+      child,
+    ]);
+  }
+
+  Widget _readonly(String v) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+            color: AppTheme.background,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: AppTheme.border)),
+        child: Text(v, overflow: TextOverflow.ellipsis),
+      );
+
+  Widget _itemsCard(bool editable) {
+    return Container(
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.border)),
+      child: Column(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: const BoxDecoration(
+              color: AppTheme.background,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
+          child: const Row(children: [
+            Expanded(
+                flex: 4,
+                child: Text('Product',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppTheme.textSecondary))),
+            Expanded(
+                flex: 2,
+                child: Text('UOM',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppTheme.textSecondary))),
+            Expanded(
+                flex: 2,
+                child: Text('Quantity',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppTheme.textSecondary))),
+            Expanded(
+                flex: 2,
+                child: Text('Unit Cost',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppTheme.textSecondary))),
+            SizedBox(width: 48),
+          ]),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _items.isEmpty
+              ? const Center(
+                  child: Text('No items yet.',
+                      style: TextStyle(color: AppTheme.textSecondary)))
+              : ListView.separated(
+                  itemCount: _items.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final item = _items[i];
+                    final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
+                    final cost = (item['unit_cost'] as num?)?.toDouble() ?? 0;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 12),
+                      child: Row(children: [
+                        Expanded(
+                            flex: 4,
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                      item['products']?['name'] as String? ?? '',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600)),
+                                  if (item['products']?['sku'] != null)
+                                    Text(item['products']['sku'] as String,
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.textSecondary)),
+                                ])),
+                        Expanded(
+                            flex: 2,
+                            child: Text(
+                                item['uoms']?['abbreviation'] as String? ?? '-',
+                                style: const TextStyle(
+                                    color: AppTheme.textSecondary))),
+                        Expanded(
+                            flex: 2,
+                            child: Text(_fmtQty(qty),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w600))),
+                        Expanded(flex: 2, child: Text(cost.toStringAsFixed(2))),
+                        SizedBox(
+                            width: 48,
+                            child: editable
+                                ? IconButton(
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 18, color: AppTheme.danger),
+                                    onPressed: () => _removeItem(item))
+                                : const SizedBox.shrink()),
+                      ]),
+                    );
+                  }),
+        ),
       ]),
     );
+  }
+
+  Widget _actionBar(bool canApprove) {
+    final children = <Widget>[];
+    if (_isNew) {
+      children.add(ElevatedButton.icon(
+        onPressed: _busy ? null : _saveDraft,
+        icon: const Icon(Icons.save_outlined, size: 18),
+        label: const Text('Save Draft'),
+        style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.primary,
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
+      ));
+    } else if (_isDraft) {
+      children.addAll([
+        OutlinedButton.icon(
+            onPressed: _busy ? null : _saveDraft,
+            icon: const Icon(Icons.save_outlined, size: 18),
+            label: const Text('Save')),
+        const SizedBox(width: 10),
+        ElevatedButton.icon(
+          onPressed: _busy ? null : _dispatch,
+          icon: const Icon(Icons.local_shipping_outlined, size: 18),
+          label: const Text('Dispatch'),
+          style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
+        ),
+        const Spacer(),
+        TextButton(
+            onPressed: _busy ? null : _rejectOrCancel,
+            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            child: const Text('Cancel Transfer')),
+      ]);
+    } else if (_isInTransit) {
+      if (canApprove) {
+        children.addAll([
+          ElevatedButton.icon(
+            onPressed: _busy ? null : _receive,
+            icon: const Icon(Icons.check_circle_outline, size: 18),
+            label: const Text('Approve & Receive'),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.success,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton(
+              onPressed: _busy ? null : _rejectOrCancel,
+              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger),
+              child: const Text('Reject')),
+        ]);
+      } else {
+        children.add(Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.hourglass_top,
+              size: 16, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          Text('Awaiting approval at ${_branchName(_toBranchId)}',
+              style: const TextStyle(color: AppTheme.textSecondary)),
+        ]));
+      }
+    } else {
+      children.add(Text(
+          'This transfer is ${_stStatusLabel(_status).toLowerCase()}.',
+          style: const TextStyle(color: AppTheme.textSecondary)));
+    }
+    return Row(children: children);
   }
 }
