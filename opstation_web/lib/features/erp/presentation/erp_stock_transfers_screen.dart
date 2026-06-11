@@ -447,10 +447,10 @@ class _StockTransferVoucherScreenState
   }
 
   // ── Items ─────────────────────────────────────────────────────────────────
-  void _showAddItemDialog() {
+  Future<void> _showAddItemDialog() async {
     if (_transfer == null) {
-      _snack('Save the transfer first');
-      return;
+      await _saveDraft();
+      if (!mounted || _transfer == null) return;
     }
     String? productId;
     String? uomId;
@@ -921,7 +921,7 @@ class _StockTransferVoucherScreenState
                           style: TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w700)),
                       const Spacer(),
-                      if (editable && !_isNew)
+                      if (editable)
                         ElevatedButton.icon(
                             onPressed: _showAddItemDialog,
                             icon: const Icon(Icons.add, size: 16),
@@ -952,21 +952,7 @@ class _StockTransferVoucherScreenState
               'From Branch',
               SizedBox(
                 width: 220,
-                child: editable
-                    ? DropdownButtonFormField<String>(
-                        value: _fromBranchId,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                            isDense: true, border: OutlineInputBorder()),
-                        items: widget.branches
-                            .map((b) => DropdownMenuItem(
-                                value: b['id'] as String,
-                                child: Text(b['name'] as String,
-                                    overflow: TextOverflow.ellipsis)))
-                            .toList(),
-                        onChanged: (v) => setState(() => _fromBranchId = v),
-                      )
-                    : _readonly(_branchName(_fromBranchId)),
+                child: _readonly(_branchName(_fromBranchId)),
               )),
           _hField(
               'To Branch',
