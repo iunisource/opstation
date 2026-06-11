@@ -642,54 +642,10 @@ class _StockTransferVoucherScreenState
 
     setState(() => _busy = true);
     try {
-      final now = DateTime.now().toUtc().toIso8601String();
-      for (var i = 0; i < _items.length; i++) {
-        final item = _items[i];
-        final qty = (item['quantity'] as num).toDouble();
-        final productId = item['product_id'] as String;
-        final uomId = item['uom_id'] as String;
-        await client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_$i',
-          'org_id': orgId,
-          'product_id': productId,
-          'branch_id': fromBranchId,
-          'uom_id': uomId,
-          'quantity': -qty,
-          'movement_type': 'transfer',
-          'reference_id': _transfer!['id'],
-          'reference_type': 'stock_transfer',
-          'moved_at': now,
-          'created_by': _userId,
-        });
-        final fromStock = await client
-            .from('inventory_stock')
-            .select()
-            .eq('org_id', orgId)
-            .eq('product_id', productId)
-            .eq('branch_id', fromBranchId)
-            .maybeSingle();
-        if (fromStock != null) {
-          await client.from('inventory_stock').update({
-            'quantity': (fromStock['quantity'] as num).toDouble() - qty,
-            'updated_at': now,
-          }).eq('id', fromStock['id']);
-        } else {
-          await client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_$i',
-            'org_id': orgId,
-            'product_id': productId,
-            'branch_id': fromBranchId,
-            'uom_id': uomId,
-            'quantity': -qty,
-          });
-        }
-      }
-      await client.from('stock_transfers').update({
-        'status': 'in_transit',
-        'dispatched_by': _userId,
-        'dispatched_at': now,
-        'updated_at': now,
-      }).eq('id', _transfer!['id']);
+      await client.rpc('post_stock_transfer_dispatch', params: {
+        'p_id': _transfer!['id'],
+        'p_user': _userId,
+      });
       _snack('Dispatched — awaiting approval at destination');
       widget.onUpdated();
       await _load();
@@ -703,7 +659,6 @@ class _StockTransferVoucherScreenState
   // ── Approve / Receive: increment DESTINATION, mark completed ──────────────
   Future<void> _receive() async {
     final client = Supabase.instance.client;
-    final orgId = _orgId!;
     final toBranchId = _transfer!['to_branch_id'] as String;
     final confirm = await showDialog<bool>(
       context: context,
@@ -724,54 +679,10 @@ class _StockTransferVoucherScreenState
     if (confirm != true) return;
     setState(() => _busy = true);
     try {
-      final now = DateTime.now().toUtc().toIso8601String();
-      for (var i = 0; i < _items.length; i++) {
-        final item = _items[i];
-        final qty = (item['quantity'] as num).toDouble();
-        final productId = item['product_id'] as String;
-        final uomId = item['uom_id'] as String;
-        await client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
-          'org_id': orgId,
-          'product_id': productId,
-          'branch_id': toBranchId,
-          'uom_id': uomId,
-          'quantity': qty,
-          'movement_type': 'transfer',
-          'reference_id': _transfer!['id'],
-          'reference_type': 'stock_transfer',
-          'moved_at': now,
-          'created_by': _userId,
-        });
-        final toStock = await client
-            .from('inventory_stock')
-            .select()
-            .eq('org_id', orgId)
-            .eq('product_id', productId)
-            .eq('branch_id', toBranchId)
-            .maybeSingle();
-        if (toStock != null) {
-          await client.from('inventory_stock').update({
-            'quantity': (toStock['quantity'] as num).toDouble() + qty,
-            'updated_at': now,
-          }).eq('id', toStock['id']);
-        } else {
-          await client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
-            'org_id': orgId,
-            'product_id': productId,
-            'branch_id': toBranchId,
-            'uom_id': uomId,
-            'quantity': qty,
-          });
-        }
-      }
-      await client.from('stock_transfers').update({
-        'status': 'completed',
-        'approved_by': _userId,
-        'approved_at': now,
-        'updated_at': now,
-      }).eq('id', _transfer!['id']);
+      await client.rpc('post_stock_transfer_receipt', params: {
+        'p_id': _transfer!['id'],
+        'p_user': _userId,
+      });
       _snack('Approved — stock received at destination');
       widget.onUpdated();
       await _load();
@@ -785,7 +696,6 @@ class _StockTransferVoucherScreenState
   // ── Reject (in_transit) / Cancel (draft) ──────────────────────────────────
   Future<void> _rejectOrCancel() async {
     final client = Supabase.instance.client;
-    final orgId = _orgId!;
     final inTransit = _isInTransit;
     final fromBranchId = _transfer!['from_branch_id'] as String;
     final confirm = await showDialog<bool>(
@@ -809,46 +719,17 @@ class _StockTransferVoucherScreenState
     if (confirm != true) return;
     setState(() => _busy = true);
     try {
-      final now = DateTime.now().toUtc().toIso8601String();
       if (inTransit) {
-        // Return stock to source.
-        for (var i = 0; i < _items.length; i++) {
-          final item = _items[i];
-          final qty = (item['quantity'] as num).toDouble();
-          final productId = item['product_id'] as String;
-          final uomId = item['uom_id'] as String;
-          await client.from('inventory_movements').insert({
-            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_ret',
-            'org_id': orgId,
-            'product_id': productId,
-            'branch_id': fromBranchId,
-            'uom_id': uomId,
-            'quantity': qty,
-            'movement_type': 'transfer',
-            'reference_id': _transfer!['id'],
-            'reference_type': 'stock_transfer',
-            'moved_at': now,
-            'created_by': _userId,
-          });
-          final fromStock = await client
-              .from('inventory_stock')
-              .select()
-              .eq('org_id', orgId)
-              .eq('product_id', productId)
-              .eq('branch_id', fromBranchId)
-              .maybeSingle();
-          if (fromStock != null) {
-            await client.from('inventory_stock').update({
-              'quantity': (fromStock['quantity'] as num).toDouble() + qty,
-              'updated_at': now,
-            }).eq('id', fromStock['id']);
-          }
-        }
+        await client.rpc('post_stock_transfer_reject', params: {
+          'p_id': _transfer!['id'],
+          'p_user': _userId,
+        });
+      } else {
+        await client.from('stock_transfers').update({
+          'status': 'cancelled',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _transfer!['id']);
       }
-      await client.from('stock_transfers').update({
-        'status': inTransit ? 'rejected' : 'cancelled',
-        'updated_at': now,
-      }).eq('id', _transfer!['id']);
       _snack(inTransit ? 'Rejected — stock returned to source' : 'Cancelled');
       widget.onUpdated();
       await _load();
