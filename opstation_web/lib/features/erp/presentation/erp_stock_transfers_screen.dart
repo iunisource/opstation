@@ -66,7 +66,7 @@ class _ErpStockTransfersScreenState
           '*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)').eq('org_id', orgId);
       final transfers = branchId != null
           ? await baseQuery
-              .or('from_branch_id.eq.$branchId,to_branch_id.eq.$branchId')
+              .or('from_branch_id.eq.$branchId,and(to_branch_id.eq.$branchId,status.not.in.(draft,pending,cancelled))')
               .order('created_at', ascending: false)
           : await baseQuery.order('created_at', ascending: false);
       final branches = await client
@@ -593,33 +593,49 @@ class _StockTransferVoucherScreenState
       }
     }
 
+    // Hard stop: cannot send stock the source branch doesn't have.
+    if (shortfalls.isNotEmpty) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Cannot dispatch'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                  '${_branchName(fromBranchId)} does not have enough stock to send:'),
+              const SizedBox(height: 8),
+              ...shortfalls.map((s) => Text('• $s',
+                  style:
+                      const TextStyle(fontSize: 12, color: AppTheme.danger))),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () =>
+                    Navigator.of(context, rootNavigator: true).pop(),
+                child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Dispatch Transfer'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-                'Stock will leave ${_branchName(fromBranchId)} now and sit in transit until the destination approves it.'),
-            if (shortfalls.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Text('Source stock is short for:',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w700, color: AppTheme.danger)),
-              const SizedBox(height: 4),
-              ...shortfalls.map((s) => Text('• $s',
-                  style: const TextStyle(fontSize: 12, color: AppTheme.danger))),
-            ],
-          ],
-        ),
+        content: Text(
+            'Stock will leave ${_branchName(fromBranchId)} now and sit in transit until the destination approves it.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
+              onPressed: () =>
+                  Navigator.of(context, rootNavigator: true).pop(false),
               child: const Text('Cancel')),
           ElevatedButton(
-              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+              onPressed: () =>
+                  Navigator.of(context, rootNavigator: true).pop(true),
               child: const Text('Dispatch')),
         ],
       ),
@@ -738,10 +754,10 @@ class _StockTransferVoucherScreenState
   @override
   Widget build(BuildContext context) {
     final editable = _isDraft;
-    final accessibleIds = (ref.watch(userBranchesProvider).valueOrNull ?? const [])
-        .map((b) => b['id'] as String)
-        .toSet();
-    final canApprove = _toBranchId != null && accessibleIds.contains(_toBranchId);
+    final selectedBranchId =
+        ref.watch(selectedBranchProvider)?['id'] as String?;
+    // Approval is only possible while standing in the destination branch.
+    final canApprove = _toBranchId != null && selectedBranchId == _toBranchId;
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
