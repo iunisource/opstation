@@ -756,6 +756,18 @@ class _StockTransferVoucherScreenState
     final editable = _isDraft;
     final selectedBranchId =
         ref.watch(selectedBranchProvider)?['id'] as String?;
+    // On a NEW (unsaved) transfer, the source is "the branch you're in" — so
+    // following the nav toggle here keeps it honest. A saved draft is a document
+    // owned by its source branch and must not silently change source.
+    ref.listen(selectedBranchProvider, (prev, next) {
+      if (!_isNew) return;
+      final nextId = (next is Map) ? next['id'] as String? : null;
+      if (nextId == null || nextId == _fromBranchId) return;
+      setState(() {
+        _fromBranchId = nextId;
+        if (_toBranchId == nextId) _toBranchId = null; // re-ask destination
+      });
+    });
     // Approval is only possible while standing in the destination branch.
     final canApprove = _toBranchId != null && selectedBranchId == _toBranchId;
     return Scaffold(
