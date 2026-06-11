@@ -583,6 +583,17 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
 
   @override
   Widget build(BuildContext context) {
+    // When the app-level branch toggle changes and we're scoped to the current
+    // branch with a product open, re-query that product's movements.
+    ref.listen(selectedBranchProvider, (prev, next) {
+      final prevId = (prev is Map) ? prev['id'] as String? : null;
+      final nextId = (next is Map) ? next['id'] as String? : null;
+      if (prevId == nextId) return;
+      if (_branchMode == 'current' && _selectedProduct != null) {
+        _loadMovements(_selectedProduct!['id'] as String);
+      }
+    });
+    ref.watch(selectedBranchProvider); // keep the "Branch:" label in sync
     return Container(
       color: AppTheme.background,
       padding: const EdgeInsets.all(32),
