@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import 'package:go_router/go_router.dart';
 import 'running_dot.dart';
 
 class _JobMat {
@@ -105,7 +106,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       await _loadJobs();
       if (_pendingJobId != null && mounted) {
         final m = _jobs.where((j) => j['id'] == _pendingJobId).toList();
-        if (m.isNotEmpty) _loadJob(m.first);
+        if (m.isNotEmpty) {
+          _loadJob(m.first);
+        } else {
+          try {
+            final row = await Supabase.instance.client.from('job_cards').select().eq('id', _pendingJobId!).maybeSingle();
+            if (row != null && mounted) _loadJob(Map<String, dynamic>.from(row as Map));
+          } catch (_) {}
+        }
         _pendingJobId = null;
       }
     });
@@ -113,8 +121,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 
   String? _pendingJobId;
   String? _jobIdFromUrl() {
+    try {
+      final id = GoRouterState.of(context).uri.queryParameters['id'];
+      if (id != null && id.isNotEmpty) return id;
+    } catch (_) {}
     final href = html.window.location.href;
-    final qIdx = href.indexOf('?');
+    final qIdx = href.lastIndexOf('?');
     if (qIdx == -1) return null;
     return Uri.splitQueryString(href.substring(qIdx + 1))['id'];
   }
