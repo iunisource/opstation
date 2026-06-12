@@ -194,7 +194,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
     final wc = j['work_center'] as String?;
     final customer = j['customer_id'] != null ? _custLabel[j['customer_id']] : null;
     return InkWell(
-      onTap: () => context.go('/manufacturing/job-card'),
+      onTap: () => context.go('/manufacturing/job-card?id=${j['id']}'),
       child: Container(margin: const EdgeInsets.only(bottom: 8), padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border),
           boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 4, offset: const Offset(0, 1))]),
@@ -251,7 +251,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
           final c = st == 'completed' ? Colors.green : st == 'cancelled' ? Colors.grey : st == 'in_progress' ? Colors.blue : Colors.orange;
           final lbl = st == 'completed' ? 'Completed' : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : 'Queued';
           return DataRow(
-            onSelectChanged: (_) => context.go('/manufacturing/job-card'),
+            onSelectChanged: (_) => context.go('/manufacturing/job-card?id=${j['id']}'),
             cells: [
               DataCell(Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
               DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 240), child: Text(_prodLabel[j['product_id']] ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),

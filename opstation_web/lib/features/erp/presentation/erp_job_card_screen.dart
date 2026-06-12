@@ -94,7 +94,25 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadProducts(); _loadBoms(); _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCustomers(); _loadCheckpoints(); _loadJobs(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _pendingJobId = _jobIdFromUrl();
+      _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCustomers(); _loadCheckpoints();
+      await Future.wait([_loadProducts(), _loadBoms()]);
+      await _loadJobs();
+      if (_pendingJobId != null && mounted) {
+        final m = _jobs.where((j) => j['id'] == _pendingJobId).toList();
+        if (m.isNotEmpty) _loadJob(m.first);
+        _pendingJobId = null;
+      }
+    });
+  }
+
+  String? _pendingJobId;
+  String? _jobIdFromUrl() {
+    final href = html.window.location.href;
+    final qIdx = href.indexOf('?');
+    if (qIdx == -1) return null;
+    return Uri.splitQueryString(href.substring(qIdx + 1))['id'];
   }
 
   @override
