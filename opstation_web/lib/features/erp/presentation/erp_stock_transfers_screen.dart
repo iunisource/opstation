@@ -66,7 +66,7 @@ class _ErpStockTransfersScreenState
           '*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)').eq('org_id', orgId);
       final transfers = branchId != null
           ? await baseQuery
-              .or('from_branch_id.eq.$branchId,and(to_branch_id.eq.$branchId,status.not.in.(draft,pending,cancelled))')
+              .or('from_branch_id.eq.$branchId,to_branch_id.eq.$branchId')
               .order('created_at', ascending: false)
           : await baseQuery.order('created_at', ascending: false);
       final branches = await client
@@ -289,10 +289,6 @@ class _StockTransferVoucherScreenState
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _uoms = [];
-  // Inline line editing
-  int _lineSeq = 0;
-  final Map<String, TextEditingController> _qtyCtrls = {};
-  final List<String> _removedLineIds = [];
   bool _loading = true;
   bool _busy = false;
 
@@ -330,9 +326,6 @@ class _StockTransferVoucherScreenState
   @override
   void dispose() {
     _notesCtrl.dispose();
-    for (final c in _qtyCtrls.values) {
-      c.dispose();
-    }
     super.dispose();
   }
 
@@ -371,12 +364,7 @@ class _StockTransferVoucherScreenState
       setState(() {
         _products = List<Map<String, dynamic>>.from(products);
         _uoms = List<Map<String, dynamic>>.from(uoms);
-        for (final c in _qtyCtrls.values) {
-          c.dispose();
-        }
-        _qtyCtrls.clear();
-        _removedLineIds.clear();
-        _items = items.map(_normalizeLine).toList();
+        _items = items;
         if (fresh != null) _transfer = fresh;
         _loading = false;
       });
@@ -410,90 +398,47 @@ class _StockTransferVoucherScreenState
   }
 
   // ── Save draft (create or update header) ──────────────────────────────────
-  Future<bool> _persistAll() async {
+  Future<void> _saveDraft() async {
     if (_fromBranchId == null || _toBranchId == null) {
       _snack('Both branches are required');
-      return false;
+      return;
     }
     if (_fromBranchId == _toBranchId) {
       _snack('Source and destination must differ');
-      return false;
+      return;
     }
-    final client = Supabase.instance.client;
-    final payload = {
-      'from_branch_id': _fromBranchId,
-      'to_branch_id': _toBranchId,
-      'transfer_date': DateFormat('yyyy-MM-dd').format(_date),
-      'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
-    };
-    if (_isNew) {
-      final id = 'st_${DateTime.now().millisecondsSinceEpoch}';
-      final vno = await _nextVoucherNo();
-      await client.from('stock_transfers').insert({
-        'id': id,
-        'org_id': _orgId,
-        'voucher_number': vno,
-        'status': 'draft',
-        'created_by': _userId,
-        ...payload,
-      });
-      _transfer = {
-        'id': id,
-        'voucher_number': vno,
-        'status': 'draft',
-        'from_branch_id': _fromBranchId,
-        'to_branch_id': _toBranchId,
-      };
-    } else {
-      await client
-          .from('stock_transfers')
-          .update(payload)
-          .eq('id', _transfer!['id']);
-    }
-    await _persistLines();
-    return true;
-  }
-
-  Future<void> _persistLines() async {
-    final client = Supabase.instance.client;
-    for (final id in _removedLineIds) {
-      await client.from('stock_transfer_items').delete().eq('id', id);
-    }
-    _removedLineIds.clear();
-    for (final line in _items) {
-      final pid = line['product_id'] as String?;
-      final qty = (line['quantity'] as num?)?.toDouble() ?? 0;
-      if (pid == null || qty <= 0) continue;
-      final payload = {
-        'transfer_id': _transfer!['id'],
-        'product_id': pid,
-        'uom_id': line['uom_id'],
-        'quantity': qty,
-        'unit_cost': 0,
-      };
-      if (line['id'] == null) {
-        final id = 'sti_${DateTime.now().microsecondsSinceEpoch}_${_lineSeq++}';
-        await client.from('stock_transfer_items').insert({'id': id, ...payload});
-        line['id'] = id;
-      } else {
-        await client
-            .from('stock_transfer_items')
-            .update(payload)
-            .eq('id', line['id']);
-      }
-    }
-  }
-
-  Future<void> _saveDraft() async {
     setState(() => _busy = true);
     try {
-      final ok = await _persistAll();
-      if (ok) {
+      final client = Supabase.instance.client;
+      final payload = {
+        'from_branch_id': _fromBranchId,
+        'to_branch_id': _toBranchId,
+        'transfer_date': DateFormat('yyyy-MM-dd').format(_date),
+        'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+      if (_isNew) {
+        final id = 'st_${DateTime.now().millisecondsSinceEpoch}';
+        final vno = await _nextVoucherNo();
+        await client.from('stock_transfers').insert({
+          'id': id,
+          'org_id': _orgId,
+          'voucher_number': vno,
+          'status': 'draft',
+          'created_by': _userId,
+          ...payload,
+        });
+        _transfer = {'id': id, 'voucher_number': vno, 'status': 'draft'};
+        _snack('Draft $vno created');
+      } else {
+        await client
+            .from('stock_transfers')
+            .update(payload)
+            .eq('id', _transfer!['id']);
         _snack('Saved');
-        widget.onUpdated();
-        await _load();
       }
+      widget.onUpdated();
+      await _load();
     } catch (e) {
       _snack('Failed: $e');
     } finally {
@@ -501,61 +446,136 @@ class _StockTransferVoucherScreenState
     }
   }
 
-  // ── Items (inline line editor) ────────────────────────────────────────────
-  Map<String, dynamic> _normalizeLine(Map<String, dynamic> r) {
-    return {
-      '_k': 'ln_${_lineSeq++}',
-      'id': r['id'],
-      'product_id': r['product_id'],
-      'uom_id': r['uom_id'],
-      'quantity': (r['quantity'] as num?)?.toDouble() ?? 0,
-      'product_name': r['products']?['name'],
-      'sku': r['products']?['sku'],
-      'uom_abbr': r['uoms']?['abbreviation'],
-    };
+  // ── Items ─────────────────────────────────────────────────────────────────
+  void _showAddItemDialog() {
+    if (_transfer == null) {
+      _snack('Save the transfer first');
+      return;
+    }
+    String? productId;
+    String? uomId;
+    final qtyCtrl = TextEditingController(text: '1');
+    final costCtrl = TextEditingController(text: '0');
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Add Item'),
+          content: SizedBox(
+            width: 420,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              DropdownButtonFormField<String>(
+                value: productId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Product *'),
+                hint: const Text('Select product'),
+                items: _products
+                    .map((p) => DropdownMenuItem(
+                        value: p['id'] as String,
+                        child: Text(
+                            '${p['name']}${p['sku'] != null ? ' (${p['sku']})' : ''}',
+                            overflow: TextOverflow.ellipsis)))
+                    .toList(),
+                onChanged: (v) {
+                  setS(() {
+                    productId = v;
+                    final prod = _products
+                        .firstWhere((p) => p['id'] == v, orElse: () => {});
+                    uomId = prod['base_uom_id'] as String?;
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: uomId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'UOM *'),
+                hint: const Text('Select UOM'),
+                items: _uoms
+                    .map((u) => DropdownMenuItem(
+                        value: u['id'] as String,
+                        child: Text('${u['name']} (${u['abbreviation']})')))
+                    .toList(),
+                onChanged: (v) => setS(() => uomId = v),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                    child: TextField(
+                        controller: qtyCtrl,
+                        decoration:
+                            const InputDecoration(labelText: 'Quantity *'),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true))),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: TextField(
+                        controller: costCtrl,
+                        decoration: const InputDecoration(labelText: 'Unit Cost'),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true))),
+              ]),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () =>
+                    Navigator.of(ctx, rootNavigator: true).pop(),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                if (productId == null || uomId == null) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                      content: Text('Product and UOM required')));
+                  return;
+                }
+                final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
+                if (qty <= 0) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                      content: Text('Quantity must be > 0')));
+                  return;
+                }
+                try {
+                  await Supabase.instance.client
+                      .from('stock_transfer_items')
+                      .insert({
+                    'id': 'sti_${DateTime.now().millisecondsSinceEpoch}',
+                    'transfer_id': _transfer!['id'],
+                    'product_id': productId,
+                    'uom_id': uomId,
+                    'quantity': qty,
+                    'unit_cost': double.tryParse(costCtrl.text.trim()) ?? 0,
+                  });
+                  if (ctx.mounted) {
+                    Navigator.of(ctx, rootNavigator: true).pop();
+                  }
+                  _load();
+                } catch (e) {
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx)
+                        .showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  }
+                }
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  String? _uomAbbr(String? id) {
-    if (id == null) return null;
-    final u = _uoms.firstWhere((e) => e['id'] == id, orElse: () => const {});
-    return u['abbreviation'] as String?;
-  }
-
-  TextEditingController _qtyCtrl(Map<String, dynamic> line) {
-    final k = line['_k'] as String;
-    return _qtyCtrls.putIfAbsent(
-        k,
-        () => TextEditingController(
-            text: _fmtQty((line['quantity'] as num?)?.toDouble() ?? 1)));
-  }
-
-  void _addBlankLine() {
-    setState(() {
-      _items.add({
-        '_k': 'ln_${_lineSeq++}',
-        'id': null,
-        'product_id': null,
-        'uom_id': null,
-        'quantity': 1.0,
-        'product_name': null,
-        'sku': null,
-        'uom_abbr': null,
-      });
-    });
-  }
-
-  void _removeLine(Map<String, dynamic> line) {
-    setState(() {
-      final id = line['id'] as String?;
-      if (id != null) _removedLineIds.add(id);
-      _qtyCtrls.remove(line['_k'])?.dispose();
-      _items.remove(line);
-    });
+  Future<void> _removeItem(Map<String, dynamic> item) async {
+    await Supabase.instance.client
+        .from('stock_transfer_items')
+        .delete()
+        .eq('id', item['id']);
+    _load();
   }
 
   // ── Dispatch: decrement SOURCE, move to in_transit ────────────────────────
   Future<void> _dispatch() async {
-    if (_items.where((i) => i['product_id'] != null).isEmpty) {
+    if (_items.isEmpty) {
       _snack('Add items before dispatching');
       return;
     }
@@ -563,14 +583,8 @@ class _StockTransferVoucherScreenState
     final orgId = _orgId!;
     final fromBranchId = _transfer!['from_branch_id'] as String;
 
-    final lines = _items
-        .where((i) =>
-            i['product_id'] != null &&
-            ((i['quantity'] as num?)?.toDouble() ?? 0) > 0)
-        .toList();
-
     // Stock availability (informational, non-blocking).
-    final pids = lines.map((i) => i['product_id'] as String).toList();
+    final pids = _items.map((i) => i['product_id'] as String).toList();
     final srcRows = await client
         .from('inventory_stock')
         .select('product_id, quantity')
@@ -583,59 +597,43 @@ class _StockTransferVoucherScreenState
           (s['quantity'] as num?)?.toDouble() ?? 0;
     }
     final shortfalls = <String>[];
-    for (final it in lines) {
+    for (final it in _items) {
       final pid = it['product_id'] as String;
       final need = (it['quantity'] as num).toDouble();
       final have = srcQty[pid] ?? 0;
       if (have < need) {
-        final name = it['product_name'] as String? ?? pid;
+        final name = it['products']?['name'] as String? ?? pid;
         shortfalls.add('$name: have ${_fmtQty(have)}, sending ${_fmtQty(need)}');
       }
-    }
-
-    // Hard stop: cannot send stock the source branch doesn't have.
-    if (shortfalls.isNotEmpty) {
-      await showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Cannot dispatch'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                  '${_branchName(fromBranchId)} does not have enough stock to send:'),
-              const SizedBox(height: 8),
-              ...shortfalls.map((s) => Text('• $s',
-                  style:
-                      const TextStyle(fontSize: 12, color: AppTheme.danger))),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () =>
-                    Navigator.of(context, rootNavigator: true).pop(),
-                child: const Text('OK')),
-          ],
-        ),
-      );
-      return;
     }
 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Dispatch Transfer'),
-        content: Text(
-            'Stock will leave ${_branchName(fromBranchId)} now and sit in transit until the destination approves it.'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+                'Stock will leave ${_branchName(fromBranchId)} now and sit in transit until the destination approves it.'),
+            if (shortfalls.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text('Source stock is short for:',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700, color: AppTheme.danger)),
+              const SizedBox(height: 4),
+              ...shortfalls.map((s) => Text('• $s',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.danger))),
+            ],
+          ],
+        ),
         actions: [
           TextButton(
-              onPressed: () =>
-                  Navigator.of(context, rootNavigator: true).pop(false),
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
               child: const Text('Cancel')),
           ElevatedButton(
-              onPressed: () =>
-                  Navigator.of(context, rootNavigator: true).pop(true),
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
               child: const Text('Dispatch')),
         ],
       ),
@@ -644,16 +642,54 @@ class _StockTransferVoucherScreenState
 
     setState(() => _busy = true);
     try {
-      // Commit any unsaved header/line edits first — the RPC reads from the DB.
-      final ok = await _persistAll();
-      if (!ok) {
-        setState(() => _busy = false);
-        return;
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (var i = 0; i < _items.length; i++) {
+        final item = _items[i];
+        final qty = (item['quantity'] as num).toDouble();
+        final productId = item['product_id'] as String;
+        final uomId = item['uom_id'] as String;
+        await client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_$i',
+          'org_id': orgId,
+          'product_id': productId,
+          'branch_id': fromBranchId,
+          'uom_id': uomId,
+          'quantity': -qty,
+          'movement_type': 'transfer',
+          'reference_id': _transfer!['id'],
+          'reference_type': 'stock_transfer',
+          'moved_at': now,
+          'created_by': _userId,
+        });
+        final fromStock = await client
+            .from('inventory_stock')
+            .select()
+            .eq('org_id', orgId)
+            .eq('product_id', productId)
+            .eq('branch_id', fromBranchId)
+            .maybeSingle();
+        if (fromStock != null) {
+          await client.from('inventory_stock').update({
+            'quantity': (fromStock['quantity'] as num).toDouble() - qty,
+            'updated_at': now,
+          }).eq('id', fromStock['id']);
+        } else {
+          await client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_$i',
+            'org_id': orgId,
+            'product_id': productId,
+            'branch_id': fromBranchId,
+            'uom_id': uomId,
+            'quantity': -qty,
+          });
+        }
       }
-      await client.rpc('post_stock_transfer_dispatch', params: {
-        'p_id': _transfer!['id'],
-        'p_user': _userId,
-      });
+      await client.from('stock_transfers').update({
+        'status': 'in_transit',
+        'dispatched_by': _userId,
+        'dispatched_at': now,
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
       _snack('Dispatched — awaiting approval at destination');
       widget.onUpdated();
       await _load();
@@ -667,6 +703,7 @@ class _StockTransferVoucherScreenState
   // ── Approve / Receive: increment DESTINATION, mark completed ──────────────
   Future<void> _receive() async {
     final client = Supabase.instance.client;
+    final orgId = _orgId!;
     final toBranchId = _transfer!['to_branch_id'] as String;
     final confirm = await showDialog<bool>(
       context: context,
@@ -687,10 +724,54 @@ class _StockTransferVoucherScreenState
     if (confirm != true) return;
     setState(() => _busy = true);
     try {
-      await client.rpc('post_stock_transfer_receipt', params: {
-        'p_id': _transfer!['id'],
-        'p_user': _userId,
-      });
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (var i = 0; i < _items.length; i++) {
+        final item = _items[i];
+        final qty = (item['quantity'] as num).toDouble();
+        final productId = item['product_id'] as String;
+        final uomId = item['uom_id'] as String;
+        await client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
+          'org_id': orgId,
+          'product_id': productId,
+          'branch_id': toBranchId,
+          'uom_id': uomId,
+          'quantity': qty,
+          'movement_type': 'transfer',
+          'reference_id': _transfer!['id'],
+          'reference_type': 'stock_transfer',
+          'moved_at': now,
+          'created_by': _userId,
+        });
+        final toStock = await client
+            .from('inventory_stock')
+            .select()
+            .eq('org_id', orgId)
+            .eq('product_id', productId)
+            .eq('branch_id', toBranchId)
+            .maybeSingle();
+        if (toStock != null) {
+          await client.from('inventory_stock').update({
+            'quantity': (toStock['quantity'] as num).toDouble() + qty,
+            'updated_at': now,
+          }).eq('id', toStock['id']);
+        } else {
+          await client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
+            'org_id': orgId,
+            'product_id': productId,
+            'branch_id': toBranchId,
+            'uom_id': uomId,
+            'quantity': qty,
+          });
+        }
+      }
+      await client.from('stock_transfers').update({
+        'status': 'completed',
+        'approved_by': _userId,
+        'approved_at': now,
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
       _snack('Approved — stock received at destination');
       widget.onUpdated();
       await _load();
@@ -704,6 +785,7 @@ class _StockTransferVoucherScreenState
   // ── Reject (in_transit) / Cancel (draft) ──────────────────────────────────
   Future<void> _rejectOrCancel() async {
     final client = Supabase.instance.client;
+    final orgId = _orgId!;
     final inTransit = _isInTransit;
     final fromBranchId = _transfer!['from_branch_id'] as String;
     final confirm = await showDialog<bool>(
@@ -727,17 +809,46 @@ class _StockTransferVoucherScreenState
     if (confirm != true) return;
     setState(() => _busy = true);
     try {
+      final now = DateTime.now().toUtc().toIso8601String();
       if (inTransit) {
-        await client.rpc('post_stock_transfer_reject', params: {
-          'p_id': _transfer!['id'],
-          'p_user': _userId,
-        });
-      } else {
-        await client.from('stock_transfers').update({
-          'status': 'cancelled',
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', _transfer!['id']);
+        // Return stock to source.
+        for (var i = 0; i < _items.length; i++) {
+          final item = _items[i];
+          final qty = (item['quantity'] as num).toDouble();
+          final productId = item['product_id'] as String;
+          final uomId = item['uom_id'] as String;
+          await client.from('inventory_movements').insert({
+            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_ret',
+            'org_id': orgId,
+            'product_id': productId,
+            'branch_id': fromBranchId,
+            'uom_id': uomId,
+            'quantity': qty,
+            'movement_type': 'transfer',
+            'reference_id': _transfer!['id'],
+            'reference_type': 'stock_transfer',
+            'moved_at': now,
+            'created_by': _userId,
+          });
+          final fromStock = await client
+              .from('inventory_stock')
+              .select()
+              .eq('org_id', orgId)
+              .eq('product_id', productId)
+              .eq('branch_id', fromBranchId)
+              .maybeSingle();
+          if (fromStock != null) {
+            await client.from('inventory_stock').update({
+              'quantity': (fromStock['quantity'] as num).toDouble() + qty,
+              'updated_at': now,
+            }).eq('id', fromStock['id']);
+          }
+        }
       }
+      await client.from('stock_transfers').update({
+        'status': inTransit ? 'rejected' : 'cancelled',
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
       _snack(inTransit ? 'Rejected — stock returned to source' : 'Cancelled');
       widget.onUpdated();
       await _load();
@@ -754,22 +865,10 @@ class _StockTransferVoucherScreenState
   @override
   Widget build(BuildContext context) {
     final editable = _isDraft;
-    final selectedBranchId =
-        ref.watch(selectedBranchProvider)?['id'] as String?;
-    // On a NEW (unsaved) transfer, the source is "the branch you're in" — so
-    // following the nav toggle here keeps it honest. A saved draft is a document
-    // owned by its source branch and must not silently change source.
-    ref.listen(selectedBranchProvider, (prev, next) {
-      if (!_isNew) return;
-      final nextId = (next is Map) ? next['id'] as String? : null;
-      if (nextId == null || nextId == _fromBranchId) return;
-      setState(() {
-        _fromBranchId = nextId;
-        if (_toBranchId == nextId) _toBranchId = null; // re-ask destination
-      });
-    });
-    // Approval is only possible while standing in the destination branch.
-    final canApprove = _toBranchId != null && selectedBranchId == _toBranchId;
+    final accessibleIds = (ref.watch(userBranchesProvider).valueOrNull ?? const [])
+        .map((b) => b['id'] as String)
+        .toSet();
+    final canApprove = _toBranchId != null && accessibleIds.contains(_toBranchId);
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
@@ -822,11 +921,11 @@ class _StockTransferVoucherScreenState
                           style: TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w700)),
                       const Spacer(),
-                      if (editable)
-                        OutlinedButton.icon(
-                            onPressed: _addBlankLine,
+                      if (editable && !_isNew)
+                        ElevatedButton.icon(
+                            onPressed: _showAddItemDialog,
                             icon: const Icon(Icons.add, size: 16),
-                            label: const Text('Add line')),
+                            label: const Text('Add Item')),
                     ]),
                     const SizedBox(height: 12),
                     Expanded(child: _itemsCard(editable)),
@@ -853,7 +952,21 @@ class _StockTransferVoucherScreenState
               'From Branch',
               SizedBox(
                 width: 220,
-                child: _readonly(_branchName(_fromBranchId)),
+                child: editable
+                    ? DropdownButtonFormField<String>(
+                        value: _fromBranchId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder()),
+                        items: widget.branches
+                            .map((b) => DropdownMenuItem(
+                                value: b['id'] as String,
+                                child: Text(b['name'] as String,
+                                    overflow: TextOverflow.ellipsis)))
+                            .toList(),
+                        onChanged: (v) => setState(() => _fromBranchId = v),
+                      )
+                    : _readonly(_branchName(_fromBranchId)),
               )),
           _hField(
               'To Branch',
@@ -951,7 +1064,7 @@ class _StockTransferVoucherScreenState
               borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
           child: const Row(children: [
             Expanded(
-                flex: 5,
+                flex: 4,
                 child: Text('Product',
                     style: TextStyle(
                         fontWeight: FontWeight.w600,
@@ -971,167 +1084,73 @@ class _StockTransferVoucherScreenState
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                         color: AppTheme.textSecondary))),
+            Expanded(
+                flex: 2,
+                child: Text('Unit Cost',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppTheme.textSecondary))),
             SizedBox(width: 48),
           ]),
         ),
         const Divider(height: 1),
         Expanded(
           child: _items.isEmpty
-              ? Center(
-                  child: editable
-                      ? TextButton.icon(
-                          onPressed: _addBlankLine,
-                          icon: const Icon(Icons.add, size: 16),
-                          label: const Text('Add the first line'))
-                      : const Text('No items.',
-                          style: TextStyle(color: AppTheme.textSecondary)))
+              ? const Center(
+                  child: Text('No items yet.',
+                      style: TextStyle(color: AppTheme.textSecondary)))
               : ListView.separated(
-                  itemCount: _items.length + (editable ? 1 : 0),
+                  itemCount: _items.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (_, i) {
-                    if (editable && i == _items.length) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                              onPressed: _addBlankLine,
-                              icon: const Icon(Icons.add, size: 16),
-                              label: const Text('Add line')),
-                        ),
-                      );
-                    }
-                    return _lineRow(_items[i], editable);
+                    final item = _items[i];
+                    final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
+                    final cost = (item['unit_cost'] as num?)?.toDouble() ?? 0;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 12),
+                      child: Row(children: [
+                        Expanded(
+                            flex: 4,
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                      item['products']?['name'] as String? ?? '',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600)),
+                                  if (item['products']?['sku'] != null)
+                                    Text(item['products']['sku'] as String,
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.textSecondary)),
+                                ])),
+                        Expanded(
+                            flex: 2,
+                            child: Text(
+                                item['uoms']?['abbreviation'] as String? ?? '-',
+                                style: const TextStyle(
+                                    color: AppTheme.textSecondary))),
+                        Expanded(
+                            flex: 2,
+                            child: Text(_fmtQty(qty),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w600))),
+                        Expanded(flex: 2, child: Text(cost.toStringAsFixed(2))),
+                        SizedBox(
+                            width: 48,
+                            child: editable
+                                ? IconButton(
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 18, color: AppTheme.danger),
+                                    onPressed: () => _removeItem(item))
+                                : const SizedBox.shrink()),
+                      ]),
+                    );
                   }),
         ),
       ]),
-    );
-  }
-
-  Widget _lineRow(Map<String, dynamic> line, bool editable) {
-    final hasProduct = line['product_id'] != null;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      child: Row(children: [
-        // Product
-        Expanded(
-          flex: 5,
-          child: (editable && !hasProduct)
-              ? _productPicker(line)
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(line['product_name'] as String? ?? '',
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                    if (line['sku'] != null)
-                      Text(line['sku'] as String,
-                          style: const TextStyle(
-                              fontSize: 12, color: AppTheme.textSecondary)),
-                  ]),
-        ),
-        const SizedBox(width: 8),
-        // UOM (auto base unit, read-only)
-        Expanded(
-          flex: 2,
-          child: Text(line['uom_abbr'] as String? ?? '—',
-              style: const TextStyle(color: AppTheme.textSecondary)),
-        ),
-        const SizedBox(width: 8),
-        // Quantity
-        Expanded(
-          flex: 2,
-          child: editable
-              ? SizedBox(
-                  height: 38,
-                  child: TextField(
-                    controller: _qtyCtrl(line),
-                    keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true),
-                    decoration: const InputDecoration(
-                        isDense: true,
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                        border: OutlineInputBorder()),
-                    onChanged: (v) =>
-                        line['quantity'] = double.tryParse(v.trim()) ?? 0,
-                  ),
-                )
-              : Text(_fmtQty((line['quantity'] as num?)?.toDouble() ?? 0),
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-        ),
-        SizedBox(
-            width: 48,
-            child: editable
-                ? IconButton(
-                    icon: const Icon(Icons.delete_outline,
-                        size: 18, color: AppTheme.danger),
-                    onPressed: () => _removeLine(line))
-                : const SizedBox.shrink()),
-      ]),
-    );
-  }
-
-  Widget _productPicker(Map<String, dynamic> line) {
-    return RawAutocomplete<Map<String, dynamic>>(
-      displayStringForOption: (o) => o['name'] as String? ?? '',
-      optionsBuilder: (tev) {
-        final q = tev.text.toLowerCase().trim();
-        if (q.isEmpty) return _products.take(50);
-        return _products.where((p) {
-          final name = (p['name'] as String? ?? '').toLowerCase();
-          final sku = (p['sku'] as String? ?? '').toLowerCase();
-          return name.contains(q) || sku.contains(q);
-        }).take(50);
-      },
-      fieldViewBuilder: (ctx, ctrl, focus, onSubmit) => SizedBox(
-        height: 38,
-        child: TextField(
-          controller: ctrl,
-          focusNode: focus,
-          decoration: const InputDecoration(
-              isDense: true,
-              hintText: 'Search product…',
-              prefixIcon: Icon(Icons.search, size: 16),
-              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              border: OutlineInputBorder()),
-          onSubmitted: (_) => onSubmit(),
-        ),
-      ),
-      optionsViewBuilder: (ctx, onSelected, options) => Align(
-        alignment: Alignment.topLeft,
-        child: Material(
-          elevation: 4,
-          borderRadius: BorderRadius.circular(8),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 300, maxWidth: 460),
-            child: ListView(
-              padding: EdgeInsets.zero,
-              shrinkWrap: true,
-              children: options
-                  .map((o) => ListTile(
-                        dense: true,
-                        title: Text(o['name'] as String? ?? ''),
-                        subtitle: o['sku'] != null
-                            ? Text(o['sku'] as String,
-                                style: const TextStyle(fontSize: 11))
-                            : null,
-                        onTap: () => onSelected(o),
-                      ))
-                  .toList(),
-            ),
-          ),
-        ),
-      ),
-      onSelected: (o) {
-        setState(() {
-          line['product_id'] = o['id'];
-          line['product_name'] = o['name'];
-          line['sku'] = o['sku'];
-          line['uom_id'] = o['base_uom_id'];
-          line['uom_abbr'] = _uomAbbr(o['base_uom_id'] as String?);
-        });
-      },
     );
   }
 
