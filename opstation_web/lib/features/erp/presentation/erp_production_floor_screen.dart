@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import 'running_dot.dart';
 
 class ErpProductionFloorScreen extends ConsumerStatefulWidget {
   const ErpProductionFloorScreen({super.key});
@@ -20,6 +22,9 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
   List<Map<String, dynamic>> _jobs = [];
   Map<String, String> _prodLabel = {};
   Map<String, String> _userLabel = {};
+  Map<String, String> _custLabel = {};
+  RealtimeChannel? _channel;
+  Timer? _debounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -38,12 +43,55 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       final client = Supabase.instance.client;
       final prods = await client.from('products').select('id, name, sku').eq('org_id', orgId).limit(10000);
       final users = await client.from('users').select('id, name').eq('org_id', orgId).limit(2000);
+      final custs = await client.from('customers').select('id, shop_name, code').eq('org_id', orgId).limit(10000);
       final jobs = await client.from('job_cards').select().eq('org_id', orgId)
           .order('priority', ascending: false).order('created_at', ascending: false).limit(1000);
       _prodLabel = {for (final p in (prods as List)) p['id'] as String: "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} — ' : ''}${p['name'] ?? ''}"};
       _userLabel = {for (final u in (users as List)) u['id'] as String: (u['name'] as String? ?? '-')};
+      _custLabel = {for (final c in (custs as List)) c['id'] as String: "${(c['code'] != null && (c['code'] as String).isNotEmpty) ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}"};
       if (mounted) setState(() { _jobs = List<Map<String, dynamic>>.from(jobs); _loading = false; });
+      _subscribe(orgId);
     } catch (e) { if (mounted) { _snack('Load failed: $e'); setState(() => _loading = false); } }
+  }
+
+  // ── Realtime: keep the board live when job_cards change anywhere ──────────
+  void _subscribe(String orgId) {
+    if (_channel != null) return;
+    final client = Supabase.instance.client;
+    _channel = client
+        .channel('production_floor_$orgId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'job_cards',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
+          callback: (_) => _scheduleReload(),
+        )
+        .subscribe();
+  }
+
+  void _scheduleReload() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), _reloadJobs);
+  }
+
+  // Lightweight refresh: re-pull jobs only (no spinner, labels stay cached).
+  Future<void> _reloadJobs() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final jobs = await Supabase.instance.client.from('job_cards').select().eq('org_id', orgId)
+          .order('priority', ascending: false).order('created_at', ascending: false).limit(1000);
+      if (mounted) setState(() => _jobs = List<Map<String, dynamic>>.from(jobs));
+    } catch (_) { /* transient; next event or manual refresh will recover */ }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    final ch = _channel;
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
+    super.dispose();
   }
 
   List<Map<String, dynamic>> get _visible {
@@ -144,6 +192,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
     final prio = (j['priority'] ?? 0) as int;
     final assignee = j['assigned_to'] != null ? _userLabel[j['assigned_to']] : null;
     final wc = j['work_center'] as String?;
+    final customer = j['customer_id'] != null ? _custLabel[j['customer_id']] : null;
     return InkWell(
       onTap: () => context.go('/manufacturing/job-card'),
       child: Container(margin: const EdgeInsets.only(bottom: 8), padding: const EdgeInsets.all(12),
@@ -151,6 +200,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
           boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 4, offset: const Offset(0, 1))]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
+            if (j['is_running'] == true) const Padding(padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
             Expanded(child: Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
             if (prio > 0) Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), decoration: BoxDecoration(color: Colors.red.withOpacity(0.10), borderRadius: BorderRadius.circular(4)),
               child: Text('P$prio', style: const TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700))),
@@ -167,6 +217,10 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
             if (assignee != null) ...[const SizedBox(width: 8), const Icon(Icons.person_outline, size: 12, color: AppTheme.textSecondary), const SizedBox(width: 3),
               Flexible(child: Text(assignee, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis))],
           ])),
+          if (customer != null && customer.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 4), child: Row(children: [
+            const Icon(Icons.storefront_outlined, size: 12, color: AppTheme.primary), const SizedBox(width: 3),
+            Flexible(child: Text(customer, style: const TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+          ])),
         ]),
       ),
     );
@@ -180,6 +234,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
         columns: const [
           DataColumn(label: Text('Job #', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
           DataColumn(label: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+          DataColumn(label: Text('Customer', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
           DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
           DataColumn(label: Text('Planned', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)), numeric: true),
           DataColumn(label: Text('Produced', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)), numeric: true),
@@ -200,8 +255,12 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
             cells: [
               DataCell(Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
               DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 240), child: Text(_prodLabel[j['product_id']] ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
-              DataCell(Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2), decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                child: Text(lbl, style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w700)))),
+              DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 200), child: Text(j['customer_id'] != null ? (_custLabel[j['customer_id']] ?? '—') : '—', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+              DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+                if (j['is_running'] == true) const Padding(padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2), decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                  child: Text(lbl, style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w700))),
+              ])),
               DataCell(Text(_trim(_planned(j)), style: const TextStyle(fontSize: 12))),
               DataCell(Text(_trim(_produced(j)), style: const TextStyle(fontSize: 12))),
               DataCell(Text(_trim(_remaining(j)), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
