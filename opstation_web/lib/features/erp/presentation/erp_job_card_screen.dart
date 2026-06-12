@@ -455,14 +455,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           'status': 'queued', 'priority': prio, 'is_locked': false,
           'work_center': _wcCtrl.text.trim(), 'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(),
           'customer_id': _customerId,
-          'created_by': userId, 'created_at': DateTime.now().toIso8601String(), 'updated_at': DateTime.now().toIso8601String(),
+          'created_by': userId, 'created_at': DateTime.now().toUtc().toIso8601String(), 'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
         jId = _current!['id'] as String; num = _current!['job_number'] as String? ?? '';
         await client.from('job_cards').update({
           'branch_id': _branchId, 'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId,
           'planned_qty': _plannedQty, 'priority': prio, 'work_center': _wcCtrl.text.trim(),
-          'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(), 'customer_id': _customerId, 'updated_at': DateTime.now().toIso8601String(),
+          'assigned_to': _assignedTo, 'assigned_worker_id': _assignedWorkerId, 'notes': _notesCtrl.text.trim(), 'customer_id': _customerId, 'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', jId);
       }
       await client.from('job_card_materials').delete().eq('job_card_id', jId);
@@ -577,7 +577,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                   'id': runId, 'org_id': orgId, 'branch_id': _branchId, 'job_card_id': jobId,
                   'run_no': nextNo, 'run_date': dateStr, 'produced_qty': produced, 'rejected_qty': rejected,
                   'overhead_amount': double.tryParse(ohCtrl.text) ?? 0, 'status': 'draft',
-                  'operator_id': userId, 'created_by': userId, 'created_at': DateTime.now().toIso8601String(),
+                  'operator_id': userId, 'created_by': userId, 'created_at': DateTime.now().toUtc().toIso8601String(),
                 });
                 // record per-checkpoint QC results for this run
                 int qi = 0;
@@ -588,7 +588,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                     'run_id': runId, 'job_card_id': jobId, 'checkpoint_id': c['id'], 'checkpoint_name': c['name'],
                     'product_id': _fgId, 'inspected_qty': produced, 'accepted_qty': accepted, 'rejected_qty': rejected,
                     'result': results[c['id']] == true ? 'pass' : 'fail', 'disposition': rejected == 0 ? 'accept' : (accepted == 0 ? 'reject' : 'partial'),
-                    'inspector_id': userId, 'inspected_at': DateTime.now().toIso8601String(),
+                    'inspector_id': userId, 'inspected_at': DateTime.now().toUtc().toIso8601String(),
                   });
                 }
                 final res = await client.rpc('post_job_run', params: {'p_run_id': runId});
@@ -979,7 +979,7 @@ $runSection
                 try {
                   await Supabase.instance.client.from('work_centers').insert({
                     'id': 'wc_${DateTime.now().millisecondsSinceEpoch}', 'org_id': orgId, 'name': name, 'is_active': true,
-                    'created_at': DateTime.now().toIso8601String()});
+                    'created_at': DateTime.now().toUtc().toIso8601String()});
                   addCtrl.clear(); await reload();
                 } catch (e) { _snack('Add failed: $e'); }
               }, child: const Text('Add')),
@@ -1018,7 +1018,7 @@ $runSection
                 try {
                   await Supabase.instance.client.from('workers').insert({
                     'id': 'wkr_${DateTime.now().millisecondsSinceEpoch}', 'org_id': orgId, 'name': name, 'is_active': true,
-                    'created_at': DateTime.now().toIso8601String()});
+                    'created_at': DateTime.now().toUtc().toIso8601String()});
                   addCtrl.clear(); await reload();
                 } catch (e) { _snack('Add failed: $e'); }
               }, child: const Text('Add')),
