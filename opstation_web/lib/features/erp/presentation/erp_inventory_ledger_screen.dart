@@ -586,8 +586,8 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     // When the app-level branch toggle changes and we're scoped to the current
     // branch with a product open, re-query that product's movements.
     ref.listen(selectedBranchProvider, (prev, next) {
-      final prevId = (prev is Map) ? prev['id'] as String? : null;
-      final nextId = (next is Map) ? next['id'] as String? : null;
+      final prevId = prev?['id'] as String?;
+      final nextId = next?['id'] as String?;
       if (prevId == nextId) return;
       if (_branchMode == 'current' && _selectedProduct != null) {
         _loadMovements(_selectedProduct!['id'] as String);
