@@ -1,6 +1,7 @@
 import '../../features/inventory/erp_stock_adjustment_screen.dart';
 import '../../features/erp/presentation/erp_trial_balance_screen.dart';
 import '../../features/erp/presentation/erp_journal_voucher_screen.dart';
+import '../../features/erp/presentation/erp_opening_journal_screen.dart';
 import '../../features/erp/presentation/erp_account_activity_screen.dart';
 import '../../features/erp/presentation/erp_profit_loss_screen.dart';
 import '../../features/erp/presentation/erp_balance_sheet_screen.dart';
@@ -202,6 +203,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/pdc-voucher', builder: (_, __) => const ErpPdcVoucherScreen()),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => const ErpSupplierLedgerScreen()),
                 GoRoute(path: '/financials/journal-vouchers', builder: (_, __) => const ErpJournalVoucherScreen()),
+                GoRoute(path: '/financials/opening-journal', builder: (_, __) => const ErpOpeningJournalScreen()),
         GoRoute(path: '/financials/trial-balance',  builder: (_, __) => const ErpTrialBalanceScreen()),
         GoRoute(path: '/financials/account-activity', builder: (_, __) => const ErpAccountActivityScreen()),
       GoRoute(path: '/financials/profit-loss',     builder: (_, __) => const ErpProfitLossScreen()),
