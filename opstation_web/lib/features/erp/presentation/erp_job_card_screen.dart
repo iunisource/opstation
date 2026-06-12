@@ -57,6 +57,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 
   Map<String, dynamic>? _current;
   List<Map<String, dynamic>> _runs = [];
+  List<Map<String, dynamic>> _auditTrail = [];
+  int _auditSeq = 0;
   DateTime _date = DateTime.now();
   String? _bomId; String _bomLabel = '';
   String? _fgId; String _fgLabel = '';
@@ -415,6 +417,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final mats = _materials.where((l) => l.productId != null && l.qty > 0).toList();
     final ohs = _overheads.where((l) => l.amount != 0 || l.descCtrl.text.trim().isNotEmpty).toList();
     final userId = ref.read(currentUserProvider)?.id ?? '';
+    final wasNew = _current == null;
     setState(() => _saving = true);
     String? resultId;
     try {
@@ -459,6 +462,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       resultId = jId;
       final updated = await client.from('job_cards').select().eq('id', jId).single();
       if (mounted) setState(() => _current = updated);
+      if (wasNew) { await _logJobAudit('created'); }
+      else if (!silent) { await _logJobAudit('updated'); }
       if (!silent) _snack('Job $num saved');
       await _loadJobs();
     } catch (e) { _snack('Save failed: ' + e.toString()); }
@@ -606,6 +611,113 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  bool get _isAdminTier {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
+
+  Future<void> _logJobAudit(String action, {String? notes}) async {
+    final jid = _current?['id'] as String?;
+    if (jid == null) return;
+    try {
+      final u = ref.read(currentUserProvider);
+      await Supabase.instance.client.from('job_card_audit_trail').insert({
+        'id': 'jca_' + DateTime.now().millisecondsSinceEpoch.toString() + '_' + (_auditSeq++).toString(),
+        'job_card_id': jid,
+        'action': action,
+        'performed_by': u?.id,
+        'performed_by_name': u?.name,
+        'performed_at': DateTime.now().toIso8601String(),
+        'notes': notes,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _loadJobAudit(String jobId) async {
+    try {
+      final rows = await Supabase.instance.client.from('job_card_audit_trail')
+          .select().eq('job_card_id', jobId).order('performed_at', ascending: false);
+      if (mounted) setState(() => _auditTrail = List<Map<String, dynamic>>.from(rows as List));
+    } catch (_) {
+      if (mounted) setState(() => _auditTrail = []);
+    }
+  }
+
+  Future<void> _openAuditTrail() async {
+    final jid = _current?['id'] as String?;
+    if (jid == null) return;
+    await _loadJobAudit(jid);
+    if (mounted) _showJobAuditTrail();
+  }
+
+  IconData _auditIcon(String a) {
+    switch (a) {
+      case 'created': return Icons.add_circle_outline;
+      case 'updated': return Icons.edit_outlined;
+      case 'started': return Icons.play_circle_outline;
+      case 'paused': return Icons.pause_circle_outline;
+      case 'batch_posted': return Icons.inventory_2_outlined;
+      case 'batch_voided': return Icons.undo;
+      case 'completed': return Icons.check_circle_outline;
+      default: return Icons.circle_outlined;
+    }
+  }
+
+  Color _auditColor(String a) {
+    switch (a) {
+      case 'created': return Colors.blue;
+      case 'updated': return Colors.orange;
+      case 'started': return Colors.green;
+      case 'paused': return Colors.deepOrange;
+      case 'batch_posted': return Colors.teal;
+      case 'batch_voided': return Colors.red;
+      case 'completed': return Colors.green.shade700;
+      default: return Colors.grey;
+    }
+  }
+
+  void _showJobAuditTrail() {
+    showDialog(context: context, builder: (ctx) => Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+            child: Row(children: [
+              const Icon(Icons.history, size: 20), const SizedBox(width: 8),
+              const Text('Audit Trail', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(ctx)),
+            ])),
+          const Divider(height: 1),
+          Flexible(child: _auditTrail.isEmpty
+            ? const Padding(padding: EdgeInsets.all(28), child: Center(child: Text('No history yet', style: TextStyle(color: Colors.grey))))
+            : ListView.separated(
+                shrinkWrap: true, padding: const EdgeInsets.all(8),
+                itemCount: _auditTrail.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (_, i) {
+                  final e = _auditTrail[i];
+                  final a = e['action'] as String? ?? '';
+                  final label = a.isEmpty ? '' : (a[0].toUpperCase() + a.substring(1)).replaceAll('_', ' ');
+                  final who = e['performed_by_name'] as String? ?? 'Unknown';
+                  final notes = e['notes'] as String?;
+                  DateTime? ts; try { ts = DateTime.parse(e['performed_at'] as String).toLocal(); } catch (_) {}
+                  final when = ts != null ? DateFormat('d MMM yyyy, h:mm a').format(ts) : '';
+                  return ListTile(
+                    dense: true,
+                    leading: Icon(_auditIcon(a), color: _auditColor(a), size: 20),
+                    title: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    subtitle: Text([who, if (notes != null && notes.isNotEmpty) notes].join('  ·  '),
+                      style: const TextStyle(fontSize: 11)),
+                    trailing: Text(when, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                  );
+                },
+              )),
+        ]),
+      ),
+    ));
+  }
+
   Future<void> _delete() async {
     if (_current == null) return;
     if ((_runs.any((r) => r['status'] == 'posted'))) { _snack('This job has posted batches — void them before deleting'); return; }
@@ -626,16 +738,22 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     if (_current == null) return;
     final id = _current!['id'] as String;
     final next = !((_current!['is_running'] as bool?) ?? false);
+    final firstStart = next && _current!['started_at'] == null;
+    final nowIso = DateTime.now().toIso8601String();
     setState(() => _busy = true);
     try {
+      final Map<String, dynamic> upd = {'is_running': next, 'updated_at': nowIso};
+      if (firstStart) upd['started_at'] = nowIso;
       await Supabase.instance.client.from('job_cards')
-          .update({'is_running': next, 'updated_at': DateTime.now().toIso8601String()})
+          .update(upd)
           .eq('id', id);
       if (mounted) setState(() {
         _current!['is_running'] = next;
+        if (firstStart) _current!['started_at'] = nowIso;
         final idx = _jobs.indexWhere((j) => j['id'] == id);
         if (idx >= 0) _jobs[idx]['is_running'] = next;
       });
+      await _logJobAudit(next ? 'started' : 'paused');
     } catch (e) { _snack('Could not update status: $e'); }
     if (mounted) setState(() => _busy = false);
   }
@@ -930,6 +1048,7 @@ $runSection
             if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
             if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_trim(_remainingQty)} left',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
+            if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail'),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _printJobCard, tooltip: 'Print / PDF'),
             if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete'),
             if (_editable) OutlinedButton.icon(
