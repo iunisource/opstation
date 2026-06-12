@@ -347,8 +347,9 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
     final startedReal = _ts(j['started_at']);
     DateTime? earliestRun;
     for (final r in _runs) { final t = _ts(r['created_at']) ?? _ts(r['run_date']); if (t != null && (earliestRun == null || t.isBefore(earliestRun))) earliestRun = t; }
-    final started = startedReal ?? earliestRun;
-    final estimated = startedReal == null && started != null;
+    final bool startedBad = startedReal != null && startedReal.isAfter(_now);
+    final started = (startedReal != null && !startedBad) ? startedReal : earliestRun;
+    final estimated = (startedReal == null || startedBad) && started != null;
     final isDone = status == 'completed';
     final isCancelled = status == 'cancelled';
 
@@ -366,7 +367,7 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
 
     final events = <Widget>[];
     events.add(_event(Icons.add_circle, Colors.blue, 'Created', created, null, first: true));
-    if (startedReal != null) events.add(_event(Icons.play_circle_fill, Colors.green, 'Started', startedReal, null));
+    if (startedReal != null && !startedBad) events.add(_event(Icons.play_circle_fill, Colors.green, 'Started', startedReal, null));
     for (final r in _runs) {
       final rt = _ts(r['created_at']) ?? _ts(r['run_date']);
       final prod = _num(r['produced_qty']); final acc = _num(r['accepted_qty']); final rej = _num(r['rejected_qty']);

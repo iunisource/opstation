@@ -639,7 +639,6 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         'action': action,
         'performed_by': u?.id,
         'performed_by_name': u?.name,
-        'performed_at': DateTime.now().toIso8601String(),
         'notes': notes,
       });
     } catch (_) {}
@@ -814,7 +813,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final id = _current!['id'] as String;
     final next = !((_current!['is_running'] as bool?) ?? false);
     final firstStart = next && _current!['started_at'] == null;
-    final nowIso = DateTime.now().toIso8601String();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
     setState(() => _busy = true);
     try {
       final Map<String, dynamic> upd = {'is_running': next, 'updated_at': nowIso};
