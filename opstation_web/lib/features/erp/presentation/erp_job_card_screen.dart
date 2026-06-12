@@ -59,6 +59,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   List<Map<String, dynamic>> _runs = [];
   List<Map<String, dynamic>> _auditTrail = [];
   int _auditSeq = 0;
+  String _origMatSig = '';
+  String _origOhSig = '';
   DateTime _date = DateTime.now();
   String? _bomId; String _bomLabel = '';
   String? _fgId; String _fgLabel = '';
@@ -311,6 +313,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _plannedQtyCtrl.text = '1'; _priorityCtrl.text = '0'; _wcCtrl.clear(); _assignedTo = null; _assignedWorkerId = null; _notesCtrl.clear();
       _customerId = null; _customerLabel = '';
       _materials = []; _overheads = []; _baseComps = []; _baseOh = [];
+      _origMatSig = ''; _origOhSig = '';
     });
   }
 
@@ -322,6 +325,10 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final runs = await client.from('job_card_runs').select().eq('job_card_id', j['id'] as String).order('run_no');
       for (final l in _materials) l.dispose();
       for (final l in _overheads) l.dispose();
+      _origMatSig = (mats as List).where((r) => r['product_id'] != null)
+          .map((r) => '${r['product_id']}:${_trim((r['planned_qty'] as num? ?? r['issued_qty'] as num? ?? 0).toDouble())}').join(';');
+      _origOhSig = (ohs as List)
+          .map((r) => '${r['cost_type'] ?? 'overhead'}|${(r['description'] as String? ?? '').trim()}|${_trim((r['amount'] as num? ?? 0).toDouble())}').join(';');
       final newMats = (mats as List).map((r) {
         final l = _JobMat();
         l.productId = r['product_id'] as String?;
@@ -418,6 +425,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final ohs = _overheads.where((l) => l.amount != 0 || l.descCtrl.text.trim().isNotEmpty).toList();
     final userId = ref.read(currentUserProvider)?.id ?? '';
     final wasNew = _current == null;
+    final old = _current;
     setState(() => _saving = true);
     String? resultId;
     try {
@@ -462,8 +470,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       resultId = jId;
       final updated = await client.from('job_cards').select().eq('id', jId).single();
       if (mounted) setState(() => _current = updated);
-      if (wasNew) { await _logJobAudit('created'); }
-      else if (!silent) { await _logJobAudit('updated'); }
+      if (wasNew) {
+        await _logJobAudit('created', notes: 'Planned qty ${_trim(_plannedQty)} · BOM ${_bomCode(_bomId)}');
+      } else if (!silent) {
+        final note = _describeSaveChanges(old!, mats, ohs, dateStr, prio);
+        if (note.isNotEmpty) await _logJobAudit('updated', notes: note);
+      }
       if (!silent) _snack('Job $num saved');
       await _loadJobs();
     } catch (e) { _snack('Save failed: ' + e.toString()); }
@@ -703,19 +715,82 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                   final notes = e['notes'] as String?;
                   DateTime? ts; try { ts = DateTime.parse(e['performed_at'] as String).toLocal(); } catch (_) {}
                   final when = ts != null ? DateFormat('d MMM yyyy, h:mm a').format(ts) : '';
-                  return ListTile(
-                    dense: true,
-                    leading: Icon(_auditIcon(a), color: _auditColor(a), size: 20),
-                    title: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    subtitle: Text([who, if (notes != null && notes.isNotEmpty) notes].join('  ·  '),
-                      style: const TextStyle(fontSize: 11)),
-                    trailing: Text(when, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                  final changes = (notes != null && notes.isNotEmpty)
+                      ? notes.split(' · ').where((s) => s.trim().isNotEmpty).toList()
+                      : <String>[];
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Padding(padding: const EdgeInsets.only(top: 1, right: 10), child: Icon(_auditIcon(a), color: _auditColor(a), size: 19)),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                          const Spacer(),
+                          Text(when, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        ]),
+                        const SizedBox(height: 1),
+                        Text(who, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        if (changes.isNotEmpty) Padding(
+                          padding: const EdgeInsets.only(top: 5),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                            children: changes.map((c) => Padding(
+                              padding: const EdgeInsets.only(bottom: 2),
+                              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                const Padding(padding: EdgeInsets.only(top: 5, right: 6), child: Icon(Icons.circle, size: 4, color: Colors.grey)),
+                                Expanded(child: Text(c.trim(), style: const TextStyle(fontSize: 12, height: 1.3))),
+                              ]),
+                            )).toList()),
+                        ),
+                      ])),
+                    ]),
                   );
                 },
               )),
         ]),
       ),
     ));
+  }
+
+  String _workerName(String? id) {
+    if (id == null) return '—';
+    final w = _workers.firstWhere((w) => w['id'] == id, orElse: () => <String, dynamic>{});
+    return (w['name'] as String?) ?? id;
+  }
+
+  String _bomCode(String? id) {
+    if (id == null) return '—';
+    final b = _boms.firstWhere((b) => b['id'] == id, orElse: () => <String, dynamic>{});
+    return (b['code'] as String?) ?? id;
+  }
+
+  String _describeSaveChanges(Map<String, dynamic> old, List<_JobMat> mats, List<_JobOh> ohs, String dateStr, int prio) {
+    final ch = <String>[];
+    final oldQty = ((old['planned_qty'] as num?) ?? 0).toDouble();
+    if (oldQty != _plannedQty) ch.add('Planned qty ${_trim(oldQty)} → ${_trim(_plannedQty)}');
+    final oldPrio = (old['priority'] as num?)?.toInt() ?? 0;
+    if (oldPrio != prio) ch.add('Priority $oldPrio → $prio');
+    final oldWc = (old['work_center'] as String?)?.trim() ?? '';
+    final newWc = _wcCtrl.text.trim();
+    if (oldWc != newWc) ch.add('Work center ${oldWc.isEmpty ? '—' : oldWc} → ${newWc.isEmpty ? '—' : newWc}');
+    final oldW = old['assigned_worker_id'] as String?;
+    if (oldW != _assignedWorkerId) ch.add('Assigned to ${_workerName(oldW)} → ${_workerName(_assignedWorkerId)}');
+    final oldCust = old['customer_id'] as String?;
+    if (oldCust != _customerId) {
+      if (_customerId == null) ch.add('Customer cleared');
+      else if (oldCust == null) ch.add('Customer set to ${_custLabel[_customerId] ?? _customerId}');
+      else ch.add('Customer ${_custLabel[oldCust] ?? oldCust} → ${_custLabel[_customerId] ?? _customerId}');
+    }
+    final oldBom = old['bom_id'] as String?;
+    if (oldBom != _bomId) ch.add('BOM ${_bomCode(oldBom)} → ${_bomCode(_bomId)}');
+    final oldDate = old['voucher_date'] as String?;
+    if ((oldDate ?? '') != dateStr) ch.add('Date ${oldDate ?? '—'} → $dateStr');
+    final oldNotes = (old['notes'] as String?)?.trim() ?? '';
+    if (oldNotes != _notesCtrl.text.trim()) ch.add('Notes updated');
+    final newMatSig = mats.map((l) => '${l.productId}:${_trim(l.qty)}').join(';');
+    if (newMatSig != _origMatSig) ch.add('Materials updated');
+    final newOhSig = ohs.map((l) => '${l.costType}|${l.descCtrl.text.trim()}|${_trim(l.amount)}').join(';');
+    if (newOhSig != _origOhSig) ch.add('Labor & overhead updated');
+    return ch.join(' · ');
   }
 
   Future<void> _delete() async {

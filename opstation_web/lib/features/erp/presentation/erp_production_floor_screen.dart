@@ -204,6 +204,9 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
             Expanded(child: Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800))),
             if (prio > 0) Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), decoration: BoxDecoration(color: Colors.red.withOpacity(0.10), borderRadius: BorderRadius.circular(4)),
               child: Text('P$prio', style: const TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700))),
+            const SizedBox(width: 4),
+            InkWell(onTap: () => _showTimeline(j), borderRadius: BorderRadius.circular(12),
+              child: const Padding(padding: EdgeInsets.all(2), child: Icon(Icons.info_outline, size: 15, color: AppTheme.textSecondary))),
           ]),
           const SizedBox(height: 3),
           Text(_prodLabel[j['product_id']] ?? '', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -224,6 +227,13 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
         ]),
       ),
     );
+  }
+
+  void _showTimeline(Map<String, dynamic> j) {
+    showDialog(context: context, builder: (_) => _JobTimelineDialog(
+      job: j,
+      productLabel: _prodLabel[j['product_id']] ?? '',
+    ));
   }
 
   Widget _gridView(List<Map<String, dynamic>> items) {
@@ -253,7 +263,12 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
           return DataRow(
             onSelectChanged: (_) => context.go('/manufacturing/job-card?id=${j['id']}'),
             cells: [
-              DataCell(Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+              DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+                InkWell(onTap: () => _showTimeline(j), borderRadius: BorderRadius.circular(12),
+                  child: const Padding(padding: EdgeInsets.all(2), child: Icon(Icons.info_outline, size: 15, color: AppTheme.textSecondary))),
+                const SizedBox(width: 6),
+                Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+              ])),
               DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 240), child: Text(_prodLabel[j['product_id']] ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
               DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 200), child: Text(j['customer_id'] != null ? (_custLabel[j['customer_id']] ?? '—') : '—', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
               DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
@@ -275,5 +290,131 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
         }).toList(),
       ))),
     );
+  }
+}
+
+class _JobTimelineDialog extends StatefulWidget {
+  final Map<String, dynamic> job;
+  final String productLabel;
+  const _JobTimelineDialog({required this.job, required this.productLabel});
+  @override
+  State<_JobTimelineDialog> createState() => _JobTimelineDialogState();
+}
+
+class _JobTimelineDialogState extends State<_JobTimelineDialog> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _runs = [];
+  Timer? _ticker;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) { if (mounted) setState(() => _now = DateTime.now()); });
+    _load();
+  }
+
+  @override
+  void dispose() { _ticker?.cancel(); super.dispose(); }
+
+  Future<void> _load() async {
+    try {
+      final runs = await Supabase.instance.client.from('job_card_runs')
+          .select().eq('job_card_id', widget.job['id'] as String).order('run_no');
+      if (mounted) setState(() { _runs = List<Map<String, dynamic>>.from(runs as List); _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  DateTime? _ts(dynamic v) { if (v == null) return null; try { return DateTime.parse(v as String).toLocal(); } catch (_) { return null; } }
+  static String _num(dynamic v) { final d = (v as num? ?? 0).toDouble(); return d == d.roundToDouble() ? d.toStringAsFixed(0) : d.toString(); }
+
+  String _fmtDur(Duration d) {
+    if (d.isNegative) d = Duration.zero;
+    final days = d.inDays; final h = d.inHours % 24; final m = d.inMinutes % 60; final s = d.inSeconds % 60;
+    if (days > 0) return '${days}d ${h}h ${m}m';
+    if (h > 0) return '${h}h ${m}m ${s}s';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final j = widget.job;
+    final status = j['status'] as String? ?? 'queued';
+    final created = _ts(j['created_at']);
+    final started = _ts(j['started_at']);
+    final isDone = status == 'completed';
+    final isCancelled = status == 'cancelled';
+
+    DateTime? completed;
+    if (isDone) {
+      for (final r in _runs) { final t = _ts(r['created_at']) ?? _ts(r['run_date']); if (t != null && (completed == null || t.isAfter(completed))) completed = t; }
+      completed ??= _ts(j['updated_at']);
+    }
+
+    String timerLabel; String timerValue; Color timerColor;
+    if (isCancelled) { timerLabel = 'Status'; timerValue = 'Cancelled'; timerColor = Colors.grey; }
+    else if (started == null) { timerLabel = 'Not started'; timerValue = '—'; timerColor = Colors.orange; }
+    else if (isDone && completed != null) { timerLabel = 'Total time'; timerValue = _fmtDur(completed.difference(started)); timerColor = Colors.green.shade700; }
+    else { timerLabel = 'Elapsed'; timerValue = _fmtDur(_now.difference(started)); timerColor = AppTheme.primary; }
+
+    final events = <Widget>[];
+    events.add(_event(Icons.add_circle, Colors.blue, 'Created', created, null, first: true));
+    if (started != null) events.add(_event(Icons.play_circle_fill, Colors.green, 'Started', started, null));
+    for (final r in _runs) {
+      final rt = _ts(r['created_at']) ?? _ts(r['run_date']);
+      final prod = _num(r['produced_qty']); final acc = _num(r['accepted_qty']); final rej = _num(r['rejected_qty']);
+      final rstatus = r['status'] as String? ?? 'draft';
+      events.add(_event(Icons.inventory_2, Colors.teal, 'Batch #${r['run_no'] ?? ''}${rstatus == 'posted' ? '' : ' (draft)'}', rt,
+        'Produced $prod  ·  Accepted $acc  ·  Rejected $rej'));
+    }
+    if (isDone) events.add(_event(Icons.check_circle, Colors.green.shade700, 'Completed', completed, null, last: true));
+    else if (isCancelled) events.add(_event(Icons.cancel, Colors.grey, 'Cancelled', _ts(j['updated_at']), null, last: true));
+
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 540, maxHeight: 620),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(padding: const EdgeInsets.fromLTRB(20, 18, 12, 10), child: Row(children: [
+            const Icon(Icons.timeline, size: 20), const SizedBox(width: 8),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${j['job_number'] ?? ''} — Timeline', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              if (widget.productLabel.isNotEmpty) Text(widget.productLabel, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            ])),
+            IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(context)),
+          ])),
+          Container(width: double.infinity, margin: const EdgeInsets.fromLTRB(20, 0, 20, 8), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(color: timerColor.withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
+            child: Row(children: [
+              Text(timerLabel, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const Spacer(),
+              Text(timerValue, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: timerColor)),
+            ])),
+          const Divider(height: 1),
+          Flexible(child: _loading
+            ? const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()))
+            : SingleChildScrollView(padding: const EdgeInsets.fromLTRB(20, 12, 20, 16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: events))),
+        ]),
+      ),
+    );
+  }
+
+  Widget _event(IconData icon, Color color, String title, DateTime? ts, String? detail, {bool first = false, bool last = false}) {
+    final when = ts != null ? DateFormat('d MMM yyyy, h:mm a').format(ts) : '—';
+    return IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Column(children: [
+        Container(width: 2, height: 6, color: first ? Colors.transparent : AppTheme.border),
+        Icon(icon, size: 18, color: color),
+        Expanded(child: Container(width: 2, color: last ? Colors.transparent : AppTheme.border)),
+      ]),
+      const SizedBox(width: 12),
+      Expanded(child: Padding(padding: const EdgeInsets.only(bottom: 14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+        Text(when, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        if (detail != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(detail, style: const TextStyle(fontSize: 12))),
+      ]))),
+    ]));
   }
 }
