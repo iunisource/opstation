@@ -344,7 +344,11 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
     final j = widget.job;
     final status = j['status'] as String? ?? 'queued';
     final created = _ts(j['created_at']);
-    final started = _ts(j['started_at']);
+    final startedReal = _ts(j['started_at']);
+    DateTime? earliestRun;
+    for (final r in _runs) { final t = _ts(r['created_at']) ?? _ts(r['run_date']); if (t != null && (earliestRun == null || t.isBefore(earliestRun))) earliestRun = t; }
+    final started = startedReal ?? earliestRun;
+    final estimated = startedReal == null && started != null;
     final isDone = status == 'completed';
     final isCancelled = status == 'cancelled';
 
@@ -358,11 +362,11 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
     if (isCancelled) { timerLabel = 'Status'; timerValue = 'Cancelled'; timerColor = Colors.grey; }
     else if (started == null) { timerLabel = 'Not started'; timerValue = '—'; timerColor = Colors.orange; }
     else if (isDone && completed != null) { timerLabel = 'Total time'; timerValue = _fmtDur(completed.difference(started)); timerColor = Colors.green.shade700; }
-    else { timerLabel = 'Elapsed'; timerValue = _fmtDur(_now.difference(started)); timerColor = AppTheme.primary; }
+    else { timerLabel = estimated ? 'Elapsed (since first batch)' : 'Elapsed'; timerValue = _fmtDur(_now.difference(started)); timerColor = AppTheme.primary; }
 
     final events = <Widget>[];
     events.add(_event(Icons.add_circle, Colors.blue, 'Created', created, null, first: true));
-    if (started != null) events.add(_event(Icons.play_circle_fill, Colors.green, 'Started', started, null));
+    if (startedReal != null) events.add(_event(Icons.play_circle_fill, Colors.green, 'Started', startedReal, null));
     for (final r in _runs) {
       final rt = _ts(r['created_at']) ?? _ts(r['run_date']);
       final prod = _num(r['produced_qty']); final acc = _num(r['accepted_qty']); final rej = _num(r['rejected_qty']);
