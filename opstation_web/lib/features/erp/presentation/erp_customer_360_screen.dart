@@ -1,0 +1,928 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../../core/theme/app_theme.dart';
+import '../../auth/auth_controller.dart';
+import 'customer_history_screen.dart';
+
+/// Customer 360 — a unified view of a single shop:
+///  • Overview     : profile, location, credit vs current outstanding
+///  • Receivables  : GL-true aging buckets + open items
+///  • Visits       : recent field visits (+ link into full history)
+///
+/// Receivables are wired to the SAME backend as the Customer Aging report
+/// (`rpc_customer_aging` / `rpc_customer_aging_detail`, all-branches so the
+/// total ties to the GL 1210 balance). We call those org-wide RPCs and filter
+/// to this one customer client-side rather than inventing a parallel calc.
+class Customer360Screen extends ConsumerStatefulWidget {
+  final Map<String, dynamic> customer;
+  const Customer360Screen({super.key, required this.customer});
+
+  @override
+  ConsumerState<Customer360Screen> createState() => _Customer360ScreenState();
+}
+
+class _Customer360ScreenState extends ConsumerState<Customer360Screen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
+
+  bool _loadingAr = true;
+  String? _arError;
+
+  // GL-true aging. current = total - b1 - b2 - b3 - b4 (so credit/overpaid
+  // balances, which carry no open debits, are reflected in `current`).
+  double _current = 0, _b1 = 0, _b2 = 0, _b3 = 0, _b4 = 0, _arTotal = 0;
+  final List<Map<String, dynamic>> _openItems = [];
+
+  bool _loadingVisits = true;
+  List<Map<String, dynamic>> _visits = [];
+
+  final _money = NumberFormat('#,##0');
+  final _money2 = NumberFormat('#,##0.00');
+
+  String get _customerId => widget.customer['id'] as String;
+  String get _shopName => (widget.customer['shop_name'] as String?) ?? '';
+  String? get _code => widget.customer['code'] as String?;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 3, vsync: this);
+    _loadAr();
+    _loadVisits();
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  void _refresh() {
+    _loadAr();
+    _loadVisits();
+  }
+
+  Future<void> _loadAr() async {
+    setState(() {
+      _loadingAr = true;
+      _arError = null;
+    });
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) {
+      setState(() {
+        _loadingAr = false;
+        _arError = 'No organization';
+      });
+      return;
+    }
+    try {
+      final client = Supabase.instance.client;
+      final asOf = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final params = {'p_org_id': orgId, 'p_as_of': asOf};
+
+      // Aggregate buckets + GL-true net per customer (ties to 1210).
+      final agg = await client.rpc('rpc_customer_aging', params: params) as List;
+      Map mine = const {};
+      for (final a in agg) {
+        if ((a as Map)['customer_id'] == _customerId) {
+          mine = a;
+          break;
+        }
+      }
+      final b1 = (mine['b1'] as num?)?.toDouble() ?? 0;
+      final b2 = (mine['b2'] as num?)?.toDouble() ?? 0;
+      final b3 = (mine['b3'] as num?)?.toDouble() ?? 0;
+      final b4 = (mine['b4'] as num?)?.toDouble() ?? 0;
+      final net = (mine['total'] as num?)?.toDouble() ?? 0;
+
+      // Open GL lines for the drill-down (best-effort; optional RPC).
+      final items = <Map<String, dynamic>>[];
+      try {
+        final det =
+            await client.rpc('rpc_customer_aging_detail', params: params)
+                as List;
+        for (final d in det) {
+          final m = d as Map;
+          if (m['customer_id'] != _customerId) continue;
+          items.add({
+            'voucher_number': (m['reference_number'] as String?) ?? '-',
+            'voucher_date':
+                DateTime.tryParse('${m['ref_date']}') ?? DateTime.now(),
+            'outstanding': (m['open_amt'] as num?)?.toDouble() ?? 0,
+            'ageDays': (m['age_days'] as num?)?.toInt() ?? 0,
+          });
+        }
+      } catch (_) {/* detail is optional */}
+
+      items.sort((a, b) => (a['voucher_date'] as DateTime)
+          .compareTo(b['voucher_date'] as DateTime));
+
+      setState(() {
+        _b1 = b1;
+        _b2 = b2;
+        _b3 = b3;
+        _b4 = b4;
+        _arTotal = net;
+        _current = net - b1 - b2 - b3 - b4;
+        _openItems
+          ..clear()
+          ..addAll(items);
+        _loadingAr = false;
+      });
+    } catch (e) {
+      setState(() {
+        _arError = e.toString();
+        _loadingAr = false;
+      });
+    }
+  }
+
+  Future<void> _loadVisits() async {
+    setState(() => _loadingVisits = true);
+    try {
+      final res = await Supabase.instance.client
+          .from('visits')
+          .select()
+          .eq('customer_id', _customerId)
+          .order('timestamp', ascending: false)
+          .limit(10);
+      setState(() {
+        _visits = List<Map<String, dynamic>>.from(res);
+        _loadingVisits = false;
+      });
+    } catch (_) {
+      setState(() {
+        _visits = [];
+        _loadingVisits = false;
+      });
+    }
+  }
+
+  Future<void> _copy(String text, String label) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$label copied'),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _openMaps(double lat, double lng) async {
+    final uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  // -------------------------------------------------------------- build
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppTheme.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _header(),
+            Container(
+              color: Colors.white,
+              child: TabBar(
+                controller: _tabs,
+                labelColor: AppTheme.primary,
+                unselectedLabelColor: AppTheme.textSecondary,
+                indicatorColor: AppTheme.primary,
+                labelStyle:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                tabs: const [
+                  Tab(text: 'Overview'),
+                  Tab(text: 'Receivables'),
+                  Tab(text: 'Visits'),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: TabBarView(
+                controller: _tabs,
+                children: [
+                  _overviewTab(),
+                  _receivablesTab(),
+                  _visitsTab(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(20, 16, 32, 16),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(),
+            tooltip: 'Back',
+          ),
+          const SizedBox(width: 4),
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: AppTheme.primary.withOpacity(0.12),
+            child: Text(
+              _shopName.isNotEmpty ? _shopName[0].toUpperCase() : '?',
+              style: const TextStyle(
+                  color: AppTheme.primary, fontWeight: FontWeight.w800),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_shopName,
+                    style: const TextStyle(
+                        fontSize: 22, fontWeight: FontWeight.w800),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(
+                  [
+                    if (_code != null && _code!.isNotEmpty) _code,
+                    if ((widget.customer['category'] as String?)
+                            ?.isNotEmpty ??
+                        false)
+                      widget.customer['category'],
+                    if ((widget.customer['group_name'] as String?)
+                            ?.isNotEmpty ??
+                        false)
+                      widget.customer['group_name'],
+                  ].whereType<String>().join('  ·  '),
+                  style: const TextStyle(
+                      fontSize: 13, color: AppTheme.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refresh,
+            tooltip: 'Refresh',
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------- Overview
+
+  Widget _overviewTab() {
+    final c = widget.customer;
+    final lat = (c['latitude'] as num?)?.toDouble();
+    final lng = (c['longitude'] as num?)?.toDouble();
+    final creditLimit = (c['credit_limit'] as num?)?.toDouble();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
+      children: [
+        // Credit vs outstanding — the headline.
+        _creditCard(creditLimit),
+        const SizedBox(height: 16),
+        _card(
+          title: 'Profile',
+          icon: Icons.storefront_outlined,
+          child: Column(
+            children: [
+              _infoRow(Icons.person_outline, 'Contact',
+                  (c['contact_person'] as String?)?.trim().isNotEmpty == true
+                      ? c['contact_person'] as String
+                      : '—'),
+              _infoRow(
+                Icons.phone_outlined,
+                'Phone',
+                (c['phone'] as String?)?.trim().isNotEmpty == true
+                    ? c['phone'] as String
+                    : '—',
+                onTap: (c['phone'] as String?)?.trim().isNotEmpty == true
+                    ? () => _copy(c['phone'] as String, 'Phone')
+                    : null,
+              ),
+              _infoRow(Icons.badge_outlined, 'NTN / GST',
+                  (c['ntn_gst'] as String?)?.trim().isNotEmpty == true
+                      ? c['ntn_gst'] as String
+                      : '—'),
+              _infoRow(Icons.home_outlined, 'Address',
+                  (c['address'] as String?)?.trim().isNotEmpty == true
+                      ? c['address'] as String
+                      : '—'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _card(
+          title: 'Location',
+          icon: Icons.location_on_outlined,
+          child: (lat != null && lng != null)
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    TextButton.icon(
+                      icon: const Icon(Icons.copy, size: 15),
+                      label: const Text('Copy'),
+                      onPressed: () => _copy(
+                          '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+                          'Coordinates'),
+                    ),
+                    TextButton.icon(
+                      icon: const Icon(Icons.map_outlined, size: 15),
+                      label: const Text('Open in Maps'),
+                      onPressed: () => _openMaps(lat, lng),
+                    ),
+                  ],
+                )
+              : const Text('No location set for this shop.',
+                  style:
+                      TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+        ),
+      ],
+    );
+  }
+
+  Widget _creditCard(double? creditLimit) {
+    final owed = _arTotal; // positive = receivable, negative = credit balance
+    final isCredit = owed < -0.005;
+    final overLimit =
+        creditLimit != null && creditLimit > 0 && owed > creditLimit + 0.005;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: overLimit ? AppTheme.danger : AppTheme.border,
+            width: overLimit ? 1.4 : 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_balance_wallet_outlined,
+                  size: 18, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              const Text('Outstanding',
+                  style:
+                      TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              const Spacer(),
+              if (_loadingAr)
+                const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            isCredit
+                ? 'Rs ${_money2.format(owed.abs())} CR'
+                : 'Rs ${_money2.format(owed)}',
+            style: TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.w800,
+              color: isCredit
+                  ? AppTheme.success
+                  : (overLimit ? AppTheme.danger : AppTheme.primary),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _miniStat(
+                  'Credit limit',
+                  creditLimit == null || creditLimit == 0
+                      ? 'No limit'
+                      : 'Rs ${_money.format(creditLimit)}'),
+              const SizedBox(width: 24),
+              if (creditLimit != null && creditLimit > 0)
+                _miniStat(
+                  'Available',
+                  'Rs ${_money.format(creditLimit - owed)}',
+                  color: overLimit ? AppTheme.danger : AppTheme.success,
+                ),
+              const SizedBox(width: 24),
+              _miniStat('Open items', '${_openItems.length}'),
+            ],
+          ),
+          if (overLimit) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.danger.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.warning_amber_rounded,
+                      size: 15, color: AppTheme.danger),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Over credit limit by Rs ${_money.format(owed - creditLimit)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.danger,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (!_loadingAr && owed.abs() > 0.005 && !isCredit) ...[
+            const SizedBox(height: 14),
+            _agingBar(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _agingBar() {
+    final segs = <(double, Color)>[
+      (_current.clamp(0, double.infinity), AppTheme.success),
+      (_b1, AppTheme.warning),
+      (_b2, Colors.orange),
+      (_b3, Colors.deepOrange),
+      (_b4, AppTheme.danger),
+    ];
+    final sum = segs.fold<double>(0, (s, e) => s + e.$1);
+    if (sum <= 0) return const SizedBox.shrink();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Row(
+        children: [
+          for (final s in segs)
+            if (s.$1 > 0)
+              Expanded(
+                flex: (s.$1 / sum * 1000).round().clamp(1, 1000000),
+                child: Container(height: 8, color: s.$2),
+              ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------- Receivables
+
+  Widget _receivablesTab() {
+    if (_loadingAr) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_arError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text('Failed to load receivables: $_arError',
+              style: const TextStyle(color: AppTheme.danger)),
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
+      children: [
+        Row(
+          children: [
+            _bucketCard('Current (0-30)', _current, AppTheme.success),
+            const SizedBox(width: 10),
+            _bucketCard('31-60', _b1, AppTheme.warning),
+            const SizedBox(width: 10),
+            _bucketCard('61-90', _b2, Colors.orange),
+            const SizedBox(width: 10),
+            _bucketCard('91-120', _b3, Colors.deepOrange),
+            const SizedBox(width: 10),
+            _bucketCard('120+', _b4, AppTheme.danger),
+            const SizedBox(width: 10),
+            _bucketCard('Total', _arTotal, AppTheme.primary, bold: true),
+          ],
+        ),
+        const SizedBox(height: 20),
+        const Text('Open items',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 10),
+        _openItemsTable(),
+      ],
+    );
+  }
+
+  Widget _openItemsTable() {
+    if (_openItems.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: const Center(
+          child: Text('No open items — nothing outstanding.',
+              style: TextStyle(color: AppTheme.textSecondary)),
+        ),
+      );
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: AppTheme.background,
+            child: Row(children: const [
+              Expanded(
+                  flex: 3,
+                  child: Text('Voucher #',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textSecondary))),
+              Expanded(
+                  flex: 3,
+                  child: Text('Date',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textSecondary))),
+              Expanded(
+                  flex: 2,
+                  child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text('Days',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textSecondary)))),
+              Expanded(
+                  flex: 3,
+                  child: Align(
+                      alignment: Alignment.center,
+                      child: Text('Bucket',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textSecondary)))),
+              Expanded(
+                  flex: 3,
+                  child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text('Outstanding',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textSecondary)))),
+            ]),
+          ),
+          const Divider(height: 1),
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _openItems.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) {
+              final inv = _openItems[i];
+              final age = inv['ageDays'] as int;
+              final (label, color) = _bucketOf(age);
+              final df = DateFormat('d MMM yyyy');
+              return Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                child: Row(children: [
+                  Expanded(
+                      flex: 3,
+                      child: Text(inv['voucher_number'] as String,
+                          style: const TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600))),
+                  Expanded(
+                      flex: 3,
+                      child: Text(df.format(inv['voucher_date'] as DateTime),
+                          style: const TextStyle(
+                              fontSize: 12, color: AppTheme.textSecondary))),
+                  Expanded(
+                      flex: 2,
+                      child: Align(
+                          alignment: Alignment.centerRight,
+                          child: Text('$age',
+                              style: const TextStyle(fontSize: 12)))),
+                  Expanded(
+                      flex: 3,
+                      child: Align(
+                          alignment: Alignment.center,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                                color: color.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(10)),
+                            child: Text(label,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: color)),
+                          ))),
+                  Expanded(
+                      flex: 3,
+                      child: Align(
+                          alignment: Alignment.centerRight,
+                          child: Text(
+                              _money2.format(inv['outstanding'] as double),
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.primary)))),
+                ]),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------- Visits
+
+  Widget _visitsTab() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 16, 32, 8),
+          child: Row(
+            children: [
+              Text('${_visits.length} recent visit${_visits.length == 1 ? "" : "s"}',
+                  style: const TextStyle(
+                      fontSize: 13, color: AppTheme.textSecondary)),
+              const Spacer(),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.history, size: 16),
+                label: const Text('Full visit history'),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => CustomerHistoryScreen(
+                      customerId: _customerId,
+                      customerName: _shopName,
+                      customerCode: _code,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _loadingVisits
+              ? const Center(child: CircularProgressIndicator())
+              : _visits.isEmpty
+                  ? const Center(
+                      child: Text('No visits recorded yet',
+                          style: TextStyle(color: AppTheme.textSecondary)))
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(32, 8, 32, 32),
+                      itemCount: _visits.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (_, i) => _visitCard(_visits[i]),
+                    ),
+        ),
+      ],
+    );
+  }
+
+  Widget _visitCard(Map<String, dynamic> v) {
+    final status = v['status'] as String? ?? '';
+    final ts = v['timestamp'] != null
+        ? DateTime.tryParse(v['timestamp'] as String)?.toLocal()
+        : null;
+    final salesperson = v['user_name'] as String? ?? '—';
+    final role = v['user_role'] as String? ?? '';
+    final amount = (v['amount'] as int?) ?? 0;
+    final receipt = v['receipt_number'] as String?;
+    final notes = v['notes'] as String?;
+    final (icon, color, label) = _statusOf(status);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(label,
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: color,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 8),
+                  if (ts != null)
+                    Text(DateFormat('d MMM y · HH:mm').format(ts),
+                        style: const TextStyle(
+                            fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+                const SizedBox(height: 6),
+                Text(role.isEmpty ? salesperson : '$salesperson · $role',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary)),
+                if (notes != null && notes.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(notes,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontStyle: FontStyle.italic,
+                          color: AppTheme.textSecondary)),
+                ],
+              ],
+            ),
+          ),
+          if (amount > 0) ...[
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text('Rs $amount',
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w800)),
+                if (receipt != null && receipt.isNotEmpty)
+                  Text('#$receipt',
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textSecondary)),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------- shared bits
+
+  (String, Color) _bucketOf(int age) {
+    if (age <= 30) return ('0-30', AppTheme.success);
+    if (age <= 60) return ('31-60', AppTheme.warning);
+    if (age <= 90) return ('61-90', Colors.orange);
+    if (age <= 120) return ('91-120', Colors.deepOrange);
+    return ('120+', AppTheme.danger);
+  }
+
+  (IconData, Color, String) _statusOf(String status) {
+    return switch (status) {
+      'verified' => (Icons.check_circle, AppTheme.success, 'Verified'),
+      'outside' => (Icons.warning_amber_rounded, AppTheme.warning, 'Outside'),
+      'noLocation' => (
+          Icons.location_off_outlined,
+          AppTheme.danger,
+          'No location'
+        ),
+      'skipped' => (Icons.skip_next, AppTheme.textSecondary, 'Skipped'),
+      _ => (Icons.circle_outlined, AppTheme.textSecondary,
+          status.isEmpty ? 'Visit' : status),
+    };
+  }
+
+  Widget _card(
+      {required String title, required IconData icon, required Widget child}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(icon, size: 18, color: AppTheme.textSecondary),
+            const SizedBox(width: 8),
+            Text(title,
+                style:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(IconData icon, String label, String value,
+      {VoidCallback? onTap}) {
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 15, color: AppTheme.textSecondary),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 90,
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: onTap != null ? AppTheme.primary : null)),
+          ),
+          if (onTap != null)
+            const Icon(Icons.copy, size: 13, color: AppTheme.textSecondary),
+        ],
+      ),
+    );
+    return onTap == null
+        ? content
+        : InkWell(onTap: onTap, child: content);
+  }
+
+  Widget _miniStat(String label, String value, {Color? color}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style:
+                const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        const SizedBox(height: 2),
+        Text(value,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: color ?? Colors.black87)),
+      ],
+    );
+  }
+
+  Widget _bucketCard(String label, double v, Color c, {bool bold = false}) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 11, color: AppTheme.textSecondary)),
+            const SizedBox(height: 4),
+            Text(_money2.format(v),
+                style: TextStyle(
+                    fontSize: bold ? 16 : 14,
+                    fontWeight: FontWeight.w800,
+                    color: v.abs() > 0.005 ? c : AppTheme.textSecondary)),
+          ],
+        ),
+      ),
+    );
+  }
+}
