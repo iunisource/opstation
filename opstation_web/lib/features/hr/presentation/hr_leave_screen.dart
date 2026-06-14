@@ -311,7 +311,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
   @override
   Widget build(BuildContext context) {
     final access = ref.watch(accessSyncProvider);
-    _canWrite = (access?.canAddDoc('hr_leave') ?? false) || (access?.canEditDoc('hr_leave') ?? false);
+    _canWrite = ((access?.canAddDoc('hr_leave') ?? false) || (access?.canEditDoc('hr_leave') ?? false)) && !_isApproved;
     final filtered = _requests.where((r) {
       if (_statusFilter != 'all' && (r['status'] as String? ?? 'pending') != _statusFilter) return false;
       if (_listSearch.isEmpty) return true;
