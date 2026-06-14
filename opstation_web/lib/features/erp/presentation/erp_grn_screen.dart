@@ -93,16 +93,26 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     } catch (e) { print('[Audit GRN] $e'); }
   }
 
+  Future<bool> _isPoApprovalRequired(String orgId) async {
+    try {
+      final r = await Supabase.instance.client.from('app_config')
+          .select('value').eq('org_id', orgId).eq('key', 'org.po_approval_required').maybeSingle();
+      return (r?['value'] as String?) == 'true';
+    } catch (_) { return false; }
+  }
+
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     // Fetch confirmed POs not yet fully received
     try {
-      final pos = await Supabase.instance.client.from('purchase_orders')
+      final approvalRequired = await _isPoApprovalRequired(orgId);
+      var poQuery = Supabase.instance.client.from('purchase_orders')
           .select('id,voucher_number,voucher_date,supplier_id,suppliers(name)')
           .eq('org_id', orgId).eq('branch_id', branchId)
-          .inFilter('status', ['ordered', 'partially_received'])
-          .order('voucher_date', ascending: false);
+          .inFilter('status', ['ordered', 'partially_received']);
+      if (approvalRequired) poQuery = poQuery.not('approved_at', 'is', null);
+      final pos = await poQuery.order('voucher_date', ascending: false);
       var available = List<Map<String, dynamic>>.from(pos as List);
       // Hide POs that already have an open (draft) GRN — one open receipt per PO at a time.
       // A PO reappears (with remaining qty) once that GRN's receipt is confirmed, or if the draft is deleted.

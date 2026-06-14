@@ -55,6 +55,22 @@ const List<_AdminToggle> _toggles = [
     'Show blank "Receipt #" and "Amount Collected" columns in the Customer '
         'Balance Report print/PDF — for recording collections during a route run.',
   ),
+
+  _AdminToggle(
+    'org.po_approval_required',
+    'Require approval for Purchase Orders',
+    'When ON, a saved Purchase Order stays "Pending approval" until a user with '
+        'the "Approve Purchase Order" permission approves it. Only approved POs '
+        'appear in the GRN selection. The approval is recorded in the PO audit '
+        'trail and shown on the printed PO.',
+  ),
+  _AdminToggle(
+    'org.po_show_stock_consumption',
+    'Show stock & 3-month consumption on Purchase Order',
+    'On the Purchase Order screen, show each line item\'s current on-hand stock '
+        'for the PO branch and its average monthly consumption (sales/issues) over '
+        'the last 3 months — to guide ordering quantities.',
+  ),
   // _AdminToggle('org.some_flag', 'Title shown to admin', 'What it does.'),
 ];
 

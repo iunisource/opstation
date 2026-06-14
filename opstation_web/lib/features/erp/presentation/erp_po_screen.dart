@@ -8,6 +8,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../../../core/permissions/access_control.dart';
 
 class ErpPurchaseScreen extends ConsumerStatefulWidget {
   const ErpPurchaseScreen({super.key});
@@ -24,6 +25,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
   VoucherMeta _meta = VoucherMeta();
+  bool _approvalRequired = false;
+  bool _showStockConsumption = false;
+  Map<String, Map<String, dynamic>> _lineMetrics = {};
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
@@ -43,6 +47,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _canApprove {
+    final r = ref.read(currentUserProvider)?.role;
+    if (r == WebUserRole.masterAdmin || r == WebUserRole.admin || r == WebUserRole.superAdmin) return true;
+    final access = ref.read(accessSyncProvider);
+    return access?.canAccessRoute('/erp/purchase-approve') ?? false;
+  }
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -86,7 +96,34 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       final po = await client.from('purchase_orders').select('*,suppliers(*),branches(name)').eq('id', id).single();
       final items = await client.from('purchase_order_items').select('*,products(name,sku),uoms(abbreviation)').eq('purchase_order_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: po['created_by'] as String?);
-      setState(() { _detail = Map<String, dynamic>.from(po); _items = List<Map<String, dynamic>>.from(items); _meta = meta; _detailLoading = false; });
+      final cfg = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
+          .inFilter('key', ['org.po_approval_required', 'org.po_show_stock_consumption']);
+      bool approvalReq = false, showSC = false;
+      for (final r in cfg as List) {
+        if (r['key'] == 'org.po_approval_required') approvalReq = r['value'] == 'true';
+        if (r['key'] == 'org.po_show_stock_consumption') showSC = r['value'] == 'true';
+      }
+      final itemList = List<Map<String, dynamic>>.from(items);
+      Map<String, Map<String, dynamic>> metrics = {};
+      if (showSC) {
+        final pids = itemList.map((it) => it['product_id'] as String).toSet().toList();
+        if (pids.isNotEmpty) {
+          try {
+            final m = await client.rpc('rpc_po_line_metrics', params: {
+              'p_org_id': _orgId ?? '', 'p_branch_id': po['branch_id'], 'p_product_ids': pids,
+            });
+            for (final r in m as List) {
+              metrics[r['product_id'] as String] = {
+                'on_hand': (r['on_hand'] as num?)?.toDouble() ?? 0,
+                'avg': (r['avg_monthly_out'] as num?)?.toDouble() ?? 0,
+              };
+            }
+          } catch (_) {}
+        }
+      }
+      setState(() { _detail = Map<String, dynamic>.from(po); _items = itemList; _meta = meta;
+        _approvalRequired = approvalReq; _showStockConsumption = showSC; _lineMetrics = metrics;
+        _detailLoading = false; });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
   }
 
@@ -208,6 +245,30 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  Future<void> _approve() async {
+    final u = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'approved_by': u?.id, 'approved_by_name': u?.name,
+        'approved_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'approved', 'Approved by ${u?.name ?? ''}');
+      _showSnack('Purchase Order approved');
+      _loadDetail(_detail['id'] as String);
+      _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  String? _footerWithApproval(String? base) {
+    final name = _detail['approved_by_name'] as String?;
+    final at = _detail['approved_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['approved_at'] as String).toLocal()) : null;
+    if (name == null || at == null) return base;
+    final line = 'Approved by $name on $at';
+    return (base == null || base.isEmpty) ? line : '$base\n$line';
+  }
+
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
     final lines = _isDraft ? <VoucherLine>[] : _items.map((it) => VoucherLine(
@@ -229,7 +290,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
       lines: lines,
       preparedBy: _meta.preparedBy,
-      footerNote: _meta.purchaseFooterNote ?? _meta.footerNote,
+      footerNote: _footerWithApproval(_meta.purchaseFooterNote ?? _meta.footerNote),
     );
   }
 
@@ -315,6 +376,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 onPressed: _confirmOrder),
             const SizedBox(width: 8),
           ],
+          if (_isLocked && _approvalRequired && _detail['approved_at'] == null && _canApprove) ...[
+            ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                onPressed: _approve),
+            const SizedBox(width: 8),
+          ],
           if (!_isDraft || !_isLocked || _canUnlock)
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
@@ -328,6 +395,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           _PoChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
           _PoChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           _PoChip(label: 'Status', value: _detail['status'] as String? ?? 'draft'),
+          if (_approvalRequired && _isLocked)
+            _PoChip(label: 'Approval', value: _detail['approved_at'] != null
+                ? 'Approved · ${_detail['approved_by_name'] ?? ''}'
+                : 'Pending approval'),
           if (_isLocked) const _PoLockedChip(),
         ]),
         if (sup != null) _PoInfoStrip(
@@ -364,6 +435,14 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   Expanded(flex: 5, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
                     if (it['products']?['sku'] != null) Text(it['products']!['sku'] as String, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                    if (_showStockConsumption) Builder(builder: (_) {
+                      final m = _lineMetrics[it['product_id']];
+                      final oh = (m?['on_hand'] as double?) ?? 0;
+                      final av = (m?['avg'] as double?) ?? 0;
+                      return Padding(padding: const EdgeInsets.only(top: 2), child: Text(
+                        'On-hand: ${oh.toStringAsFixed(oh % 1 == 0 ? 0 : 1)}  ·  3-mo avg: ${av.toStringAsFixed(1)}/mo',
+                        style: const TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600)));
+                    }),
                   ])),
                   Expanded(flex: 2, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   Expanded(flex: 2, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
