@@ -28,6 +28,7 @@ import '../../features/auth/presentation/login_screen.dart';
 import '../../features/dashboard/presentation/dashboard_screen.dart';
 import '../../features/team/presentation/team_screen.dart';
 import '../../features/customers/presentation/customers_screen.dart';
+import '../../features/customers/presentation/follow_ups_screen.dart';
 import '../../features/products/presentation/products_screen.dart';
 import '../../features/competitor_categories/presentation/competitor_categories_screen.dart';
 import '../../features/intelligence/presentation/intelligence_placement_screen.dart';
@@ -169,6 +170,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/team', builder: (_, __) => const TeamScreen()),
           GoRoute(path: '/customers', builder: (_, __) => const CustomersScreen()),
           GoRoute(path: '/customers/import', builder: (_, __) => const BulkImportCustomersScreen()),
+          GoRoute(path: '/crm/follow-ups', builder: (_, __) => const FollowUpsScreen()),
           GoRoute(path: '/products', builder: (_, __) => const ProductsScreen()),
           GoRoute(path: '/competitor-categories', builder: (_, __) => const CompetitorCategoriesScreen()),
           GoRoute(path: '/intelligence/placement', builder: (_, __) => const IntelligencePlacementScreen()),
