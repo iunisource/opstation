@@ -41,6 +41,10 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   bool _loadingVisits = true;
   List<Map<String, dynamic>> _visits = [];
 
+  bool _loadingIntel = true;
+  List<Map<String, dynamic>> _placement = [];
+  List<Map<String, dynamic>> _competitors = [];
+
   final _money = NumberFormat('#,##0');
   final _money2 = NumberFormat('#,##0.00');
 
@@ -51,9 +55,10 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     _loadAr();
     _loadVisits();
+    _loadIntel();
   }
 
   @override
@@ -65,6 +70,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   void _refresh() {
     _loadAr();
     _loadVisits();
+    _loadIntel();
   }
 
   Future<void> _loadAr() async {
@@ -163,6 +169,96 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     }
   }
 
+  Future<void> _loadIntel() async {
+    setState(() => _loadingIntel = true);
+    try {
+      final client = Supabase.instance.client;
+
+      // --- Our product placement (latest per product) ---
+      final pa = await client
+          .from('placement_audit')
+          .select('product_id, is_present, surveyed_at')
+          .eq('customer_id', _customerId)
+          .order('surveyed_at', ascending: false);
+      final seenP = <String>{};
+      final placement = <Map<String, dynamic>>[];
+      for (final r in pa) {
+        final pid = r['product_id'] as String?;
+        if (pid == null || !seenP.add(pid)) continue;
+        placement.add({
+          'product_id': pid,
+          'present': r['is_present'] as bool? ?? false,
+          'surveyed_at': r['surveyed_at'] as String?,
+        });
+      }
+      if (placement.isNotEmpty) {
+        final pids = placement.map((e) => e['product_id'] as String).toList();
+        final prod = await client
+            .from('intelligence_products')
+            .select('id, name, sku_code')
+            .inFilter('id', pids);
+        final names = <String, String>{};
+        final skus = <String, String?>{};
+        for (final p in prod) {
+          names[p['id'] as String] = (p['name'] as String?) ?? '—';
+          skus[p['id'] as String] = p['sku_code'] as String?;
+        }
+        for (final e in placement) {
+          e['name'] = names[e['product_id']] ?? '(removed product)';
+          e['sku'] = skus[e['product_id']];
+        }
+      }
+
+      // --- Competitor presence (latest per category) ---
+      final cs = await client
+          .from('competitor_spotting')
+          .select('category_id, brand_name, price, specs, surveyed_at')
+          .eq('customer_id', _customerId)
+          .order('surveyed_at', ascending: false);
+      final seenC = <String>{};
+      final comps = <Map<String, dynamic>>[];
+      for (final r in cs) {
+        final cid = r['category_id'] as String?;
+        if (cid == null || !seenC.add(cid)) continue;
+        comps.add({
+          'category_id': cid,
+          'brand': r['brand_name'] as String? ?? '—',
+          'price': r['price'],
+          'specs': r['specs'] as String?,
+          'surveyed_at': r['surveyed_at'] as String?,
+        });
+      }
+      if (comps.isNotEmpty) {
+        final cids = comps.map((e) => e['category_id'] as String).toList();
+        final cats = await client
+            .from('competitor_categories')
+            .select('id, name')
+            .inFilter('id', cids);
+        final cnames = <String, String>{};
+        for (final c in cats) {
+          cnames[c['id'] as String] = (c['name'] as String?) ?? '—';
+        }
+        for (final e in comps) {
+          e['category'] = cnames[e['category_id']] ?? '(category)';
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _placement = placement;
+        _competitors = comps;
+        _loadingIntel = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _placement = [];
+        _competitors = [];
+        _loadingIntel = false;
+      });
+    }
+  }
+
   Future<void> _copy(String text, String label) async {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
@@ -204,6 +300,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   Tab(text: 'Overview'),
                   Tab(text: 'Receivables'),
                   Tab(text: 'Visits'),
+                  Tab(text: 'Intel'),
                 ],
               ),
             ),
@@ -215,6 +312,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   _overviewTab(),
                   _receivablesTab(),
                   _visitsTab(),
+                  _intelTab(),
                 ],
               ),
             ),
@@ -796,6 +894,135 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
         ],
       ),
     );
+  }
+
+  // -------------------------------------------------------------- Intel
+
+  Widget _intelTab() {
+    if (_loadingIntel) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_placement.isEmpty && _competitors.isEmpty) {
+      return const Center(
+        child: Text('No survey intel recorded for this shop yet',
+            style: TextStyle(color: AppTheme.textSecondary)),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
+      children: [
+        _card(
+          title: 'Our product placement',
+          icon: Icons.inventory_2_outlined,
+          child: _placement.isEmpty
+              ? const Text('No placement audits yet.',
+                  style:
+                      TextStyle(fontSize: 13, color: AppTheme.textSecondary))
+              : Column(children: [for (final p in _placement) _placementRow(p)]),
+        ),
+        const SizedBox(height: 16),
+        _card(
+          title: 'Competitor presence',
+          icon: Icons.groups_2_outlined,
+          child: _competitors.isEmpty
+              ? const Text('No competitor spottings yet.',
+                  style:
+                      TextStyle(fontSize: 13, color: AppTheme.textSecondary))
+              : Column(
+                  children: [for (final c in _competitors) _competitorRow(c)]),
+        ),
+      ],
+    );
+  }
+
+  Widget _placementRow(Map<String, dynamic> p) {
+    final present = p['present'] as bool? ?? false;
+    final sku = p['sku'] as String?;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          Icon(present ? Icons.check_circle : Icons.cancel,
+              size: 16, color: present ? AppTheme.success : AppTheme.danger),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(p['name'] as String? ?? '—',
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+                if (sku != null && sku.isNotEmpty)
+                  Text(sku,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textSecondary)),
+              ],
+            ),
+          ),
+          Text(present ? 'Present' : 'Absent',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: present ? AppTheme.success : AppTheme.danger)),
+          const SizedBox(width: 10),
+          Text(_intelDate(p['surveyed_at'] as String?),
+              style: const TextStyle(
+                  fontSize: 11, color: AppTheme.textSecondary)),
+        ],
+      ),
+    );
+  }
+
+  Widget _competitorRow(Map<String, dynamic> c) {
+    final price = c['price'];
+    final specs = c['specs'] as String?;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text(c['category'] as String? ?? '—',
+                  style: const TextStyle(
+                      fontSize: 12, color: AppTheme.textSecondary)),
+            ),
+            Text(_intelDate(c['surveyed_at'] as String?),
+                style: const TextStyle(
+                    fontSize: 11, color: AppTheme.textSecondary)),
+          ]),
+          const SizedBox(height: 2),
+          Row(children: [
+            Expanded(
+              child: Text(c['brand'] as String? ?? '—',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+            if (price != null)
+              Text('PKR $price',
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.primary)),
+          ]),
+          if (specs != null && specs.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(specs,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontStyle: FontStyle.italic,
+                    color: AppTheme.textSecondary)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _intelDate(String? iso) {
+    if (iso == null) return '—';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '—';
+    return DateFormat('d MMM y').format(dt);
   }
 
   // -------------------------------------------------------------- shared bits

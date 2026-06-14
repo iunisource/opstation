@@ -10,7 +10,10 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
 
-import 'customer_history_screen.dart';class CustomersScreen extends ConsumerStatefulWidget {
+import 'customer_history_screen.dart';
+import 'erp_customer_360_screen.dart';
+
+class CustomersScreen extends ConsumerStatefulWidget {
   const CustomersScreen({super.key});
   @override
   ConsumerState<CustomersScreen> createState() => _CustomersScreenState();
@@ -279,6 +282,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                       (c['longitude'] as num).toDouble(),
                                     ),
                                   ),
+                                IconButton(
+                                  icon: const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary),
+                                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => Customer360Screen(customer: c),
+                                  )),
+                                  tooltip: 'Customer 360',
+                                ),
                                 IconButton(
                                   icon: const Icon(Icons.history, size: 18, color: AppTheme.success),
                                   onPressed: () => Navigator.of(context).push(MaterialPageRoute(
