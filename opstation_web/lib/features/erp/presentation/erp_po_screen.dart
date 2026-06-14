@@ -48,10 +48,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canApprove {
-    final r = ref.read(currentUserProvider)?.role;
-    if (r == WebUserRole.masterAdmin || r == WebUserRole.admin || r == WebUserRole.superAdmin) return true;
     final access = ref.read(accessSyncProvider);
-    return access?.canAccessRoute('/erp/purchase-approve') ?? false;
+    if (access == null) {
+      final r = ref.read(currentUserProvider)?.role;
+      return r == WebUserRole.masterAdmin || r == WebUserRole.admin || r == WebUserRole.superAdmin;
+    }
+    return access.canViewReportAt('po_approve', _detail['branch_id'] as String?);
   }
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
@@ -246,6 +248,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   Future<void> _approve() async {
+    if (!_canApprove) { _showSnack('You do not have permission to approve.'); return; }
     final u = ref.read(currentUserProvider);
     try {
       await Supabase.instance.client.from('purchase_orders').update({
