@@ -359,7 +359,7 @@ class _TopNav extends ConsumerWidget {
             [
               _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location),
               _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
-              _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location),
+              _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location, badge: crmOverdue),
             ],
             badge: crmOverdue,
           ),
@@ -625,7 +625,7 @@ void _openInNewTab(BuildContext context, String path, Offset pos) {
   );
 }
 
-Widget _menuItem(BuildContext context, String label, IconData icon, String path, String location) {
+Widget _menuItem(BuildContext context, String label, IconData icon, String path, String location, {int badge = 0}) {
   final isActive = location == path;
   return GestureDetector(
     onSecondaryTapDown: (d) => _openInNewTab(context, path, d.globalPosition),
@@ -641,6 +641,20 @@ Widget _menuItem(BuildContext context, String label, IconData icon, String path,
         minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
       ),
       leadingIcon: Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white54),
+      trailingIcon: badge > 0
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: AppTheme.danger,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Text(badge > 99 ? '99+' : '$badge',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700)),
+            )
+          : null,
       onPressed: () => GoRouter.of(context).go(path),
       child: Text(label, style: TextStyle(fontSize: 13, fontWeight: isActive ? FontWeight.w600 : FontWeight.w400)),
     ),
