@@ -295,11 +295,27 @@ class _PasswordCard extends ConsumerWidget {
       ),
     );
     if (newPw != null && newPw.length >= 6) {
-      await ref.read(teamControllerProvider.notifier).resetPassword(user.id, newPw);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Password reset. Share it securely.')),
-        );
+      try {
+        await ref
+            .read(teamControllerProvider.notifier)
+            .resetPassword(user.id, newPw);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Password updated. The user can sign in with it now.'),
+            ),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppColors.danger,
+              content: Text(e is StateError ? e.message : 'Reset failed: $e'),
+            ),
+          );
+        }
       }
     }
   }

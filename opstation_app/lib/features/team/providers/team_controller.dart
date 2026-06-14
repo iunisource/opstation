@@ -225,17 +225,91 @@ class TeamController extends AsyncNotifier<TeamState> {
     await refresh();
   }
 
+  /// Admin-triggered reset of ANOTHER user's password.
+  ///
+  /// The credential that actually gates login is the row in Supabase Auth
+  /// (auth.users), NOT public.users. The old code called
+  /// supabaseAuthService.updatePassword() -> auth.updateUser(), which only
+  /// changes the CURRENTLY SIGNED-IN session's password — i.e. the admin's
+  /// own. That (a) never touched the target's auth.users row, so the reset
+  /// password never worked, and (b) silently overwrote the admin's own Auth
+  /// credential, locking the admin out on their next login.
+  ///
+  /// Resetting another user's Auth password requires the service role
+  /// (auth.admin.updateUserById), which must run server-side. We invoke the
+  /// `reset-team-user-password` Edge Function FIRST; only if Auth updates
+  /// successfully do we mirror the new hash into local + public.users, so the
+  /// two never diverge. Throws (with a readable message) on failure so the UI
+  /// can surface it instead of reporting a false success.
   Future<void> resetPassword(String id, String newPassword) async {
-    await _repo.resetPassword(id: id, newPassword: newPassword);
-
-    // Sync new password to Supabase Auth best-effort.
-    try {
-      await ref.read(supabaseAuthServiceProvider).updatePassword(newPassword);
-    } catch (_) {
-      // Best-effort — local password is always the fallback.
+    final user = await _repo.byId(id);
+    if (user == null) {
+      throw StateError('User not found.');
     }
 
+    // 1) Update Supabase Auth (the real login credential) server-side.
+    final supa = Supabase.instance.client;
+    dynamic res;
+    try {
+      res = await supa.functions.invoke(
+        'reset-team-user-password',
+        body: {'email': user.email, 'newPassword': newPassword},
+      );
+    } on StateError {
+      rethrow;
+    } catch (e) {
+      // FunctionException (non-2xx) or a network error. Try to pull the
+      // server's error code out of the exception's details, else assume
+      // we couldn't reach the function at all.
+      final mapped = _resetErrorFrom(_detailsOf(e));
+      throw StateError(mapped ??
+          'Could not reach the server. Connect to the internet and try again.');
+    }
+
+    final status = (res?.status as int?) ?? 0;
+    if (status != 200) {
+      throw StateError(_resetErrorFrom(res?.data) ??
+          'Password reset failed (status $status).');
+    }
+
+    // 2) Auth is updated — mirror into local + public.users so offline login
+    //    and the next pull agree with Auth.
+    await _repo.resetPassword(id: id, newPassword: newPassword);
+
     await refresh();
+  }
+
+  /// Best-effort extraction of `.details` from a thrown FunctionException
+  /// without depending on the concrete type across supabase_flutter versions.
+  dynamic _detailsOf(Object e) {
+    try {
+      return (e as dynamic).details;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Map the Edge Function's error payload to a human message.
+  String? _resetErrorFrom(dynamic data) {
+    try {
+      final code = (data is Map) ? data['error']?.toString() : null;
+      if (code == null) return null;
+      switch (code) {
+        case 'forbidden':
+          return "You are not allowed to reset this user's password.";
+        case 'weak_password':
+          return 'Password must be at least 6 characters.';
+        case 'user_not_found':
+          return 'That user no longer exists on the server.';
+        case 'invalid_auth':
+        case 'missing_auth':
+          return 'Your session expired. Sign in again and retry.';
+        default:
+          return 'Password reset failed ($code).';
+      }
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<bool> changeOwnPassword({
