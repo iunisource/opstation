@@ -322,8 +322,24 @@ class TeamController extends AsyncNotifier<TeamState> {
       currentPassword: currentPassword,
       newPassword: newPassword,
     );
-    if (ok) await refresh();
-    return ok;
+    if (!ok) return false;
+
+    // Mirror the change into Supabase Auth (auth.users). This is the ONE place
+    // auth.updateUser is correct: it changes the CURRENT session's password,
+    // and the current session IS this user. Without it a self-change updates
+    // only the app-side hash — the app still logs in via its local copy, but
+    // the WEB panel authenticates purely against Supabase Auth and would keep
+    // rejecting the new password. Best-effort: if there's no live Supabase
+    // session (logged in via local fallback) it can't sync, and an admin reset
+    // / SQL realign of auth.users is needed.
+    try {
+      await ref.read(supabaseAuthServiceProvider).updatePassword(newPassword);
+    } catch (_) {
+      // No session or offline — the local change still holds for the app.
+    }
+
+    await refresh();
+    return true;
   }
 }
 

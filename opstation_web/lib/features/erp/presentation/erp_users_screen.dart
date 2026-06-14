@@ -427,6 +427,28 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   } else {
                     userId = user['id'] as String;
                     await client.from('users').update({'name': nameCtrl.text.trim()}).eq('id', userId);
+                    // Apply the "New Password" field through the admin-API Edge
+                    // Function so it lands in auth.users — the login source of
+                    // truth for both web and mobile. The old code ignored this
+                    // field entirely, so resets here silently did nothing.
+                    final newPass = passCtrl.text;
+                    if (newPass.isNotEmpty) {
+                      if (newPass.length < 6) {
+                        throw Exception('Password must be at least 6 characters');
+                      }
+                      final rp = await client.functions.invoke(
+                        'reset-team-user-password',
+                        body: {
+                          'email': (user['email'] as String?) ??
+                              emailCtrl.text.trim().toLowerCase(),
+                          'newPassword': newPass,
+                        },
+                      );
+                      final rd = rp.data as Map<String, dynamic>?;
+                      if (rd == null || rd['ok'] != true) {
+                        throw Exception(rd?['error'] ?? 'Password reset failed');
+                      }
+                    }
                   }
 
                   // Branch assignments — diff against existing (avoids the

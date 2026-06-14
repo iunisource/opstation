@@ -114,6 +114,33 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     }
   }
 
+  String _adminApiErr(dynamic data, int status) {
+    String code = '';
+    String detail = '';
+    if (data is Map) {
+      if (data['error'] is String) code = data['error'] as String;
+      if (data['detail'] is String) detail = data['detail'] as String;
+    }
+    switch (code) {
+      case 'forbidden':
+        return 'You do not have permission to do this.';
+      case 'weak_password':
+        return 'Password must be at least 6 characters.';
+      case 'user_not_found':
+        return 'That user no longer exists on the server.';
+      case 'email_exists':
+      case 'email_exists_public':
+        return 'A user with this email already exists.';
+      case 'invalid_auth':
+      case 'missing_auth':
+        return 'Your session expired. Sign in again and retry.';
+      default:
+        return code.isEmpty
+            ? 'Operation failed (status $status).'
+            : '$code: $detail';
+    }
+  }
+
   Future<String?> _saveOrg({
     required bool isEdit,
     required Map<String, dynamic>? existingOrg,
@@ -204,22 +231,37 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
       // Note: costing_method is intentionally NOT updated here — it is fixed at creation.
 
       if (existingMaster != null) {
+        // Profile fields ONLY. Never write password_hash here — login reads
+        // Supabase Auth (auth.users), not public.users, so a hash written here
+        // silently locks the master admin out. The password goes through the
+        // admin-API Edge Function below so it lands in auth.users.
         final updates = <String, dynamic>{
           'name': maName,
           'email': maEmail,
           'updated_at': now.toIso8601String(),
         };
+        await client.from('users').update(updates).eq('id', existingMaster['id']);
+
         if (maPassword.isNotEmpty) {
           if (maPassword.length < 6) {
             throw Exception('Password must be at least 6 characters.');
           }
-          final salt = PasswordHasher.newSalt();
-          final hash = PasswordHasher.hash(maPassword, salt);
-          updates['password_hash'] = hash;
-          updates['password_salt'] = salt;
-          updates['password_temporary'] = false;
+          // Target the master's CURRENT auth email so the reset hits the right
+          // auth.users row even if the profile email was just edited.
+          final authEmail =
+              (existingMaster['email'] as String?) ?? maEmail;
+          try {
+            final resp = await client.functions.invoke(
+              'reset-team-user-password',
+              body: {'email': authEmail, 'newPassword': maPassword},
+            );
+            if (resp.status != 200) {
+              throw Exception(_adminApiErr(resp.data, resp.status));
+            }
+          } on FunctionException catch (e) {
+            throw Exception(_adminApiErr(e.details, e.status));
+          }
         }
-        await client.from('users').update(updates).eq('id', existingMaster['id']);
       } else {
         await _enforceMaxUsers(client, orgId);
         final existing = await client
@@ -233,23 +275,36 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
         if (maPassword.length < 6) {
           throw Exception('Password must be at least 6 characters.');
         }
-        final maId = 'user_${now.millisecondsSinceEpoch}';
-        final salt = PasswordHasher.newSalt();
-        final hash = PasswordHasher.hash(maPassword, salt);
-        await client.from('users').insert({
-          'id': maId,
-          'name': maName,
-          'email': maEmail,
-          'phone': '',
-          'role': 'masterAdmin',
-          'is_active': true,
-          'password_hash': hash,
-          'password_salt': salt,
-          'password_temporary': false,
-          'org_id': orgId,
-          'created_at': now.toIso8601String(),
-        });
-        await client.from('orgs').update({'master_admin_id': maId}).eq('id', orgId);
+        // Create through the admin-API Edge Function so the new master admin
+        // gets a real auth.users credential (the login source of truth), not
+        // just a public.users row that no surface can authenticate against.
+        String? maId;
+        try {
+          final resp = await client.functions.invoke('create-team-user', body: {
+            'name': maName,
+            'email': maEmail,
+            'password': maPassword,
+            'role': 'masterAdmin',
+            'orgId': orgId,
+          });
+          if (resp.status != 200) {
+            throw Exception(_adminApiErr(resp.data, resp.status));
+          }
+          final d = resp.data;
+          if (d is Map && d['userId'] is String) maId = d['userId'] as String;
+        } on FunctionException catch (e) {
+          throw Exception(_adminApiErr(e.details, e.status));
+        }
+        // Resolve the id if the function didn't return it, then link the org.
+        maId ??= (await client
+            .from('users')
+            .select('id')
+            .eq('email', maEmail)
+            .limit(1)
+            .maybeSingle())?['id'] as String?;
+        if (maId != null) {
+          await client.from('orgs').update({'master_admin_id': maId}).eq('id', orgId);
+        }
       }
     }
   }
