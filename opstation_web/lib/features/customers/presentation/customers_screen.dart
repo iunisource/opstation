@@ -423,6 +423,18 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         'user_id': ref.read(currentUserProvider)?.id,
       });
     } catch (_) {/* audit is best-effort */}
+
+    // Optional email alert — the Edge Function decides whether to actually
+    // send, based on the org's Admin Settings toggle + recipient list.
+    try {
+      await Supabase.instance.client.functions.invoke(
+        'notify-customer-edit',
+        body: {
+          'customerName': newC['shop_name'] ?? oldC['shop_name'],
+          'changes': changed,
+        },
+      );
+    } catch (_) {/* alert is best-effort */}
   }
 
   void _showDialog(BuildContext context, Map<String, dynamic>? customer) async {

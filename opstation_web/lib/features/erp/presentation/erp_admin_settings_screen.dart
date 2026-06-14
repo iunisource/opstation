@@ -16,6 +16,16 @@ class _NumberField {
       {this.suffix = ''});
 }
 
+/// An optional free-text parameter attached to a toggle (e.g. a recipient
+/// email list). Shown (and saved) only while the parent toggle is ON. Stored
+/// in `app_config` as a string.
+class _TextSetting {
+  final String key; // app_config key
+  final String label;
+  final String hint;
+  const _TextSetting(this.key, this.label, {this.hint = ''});
+}
+
 /// Definition of a single org-level admin toggle.
 /// To add a new setting, append one entry to [_toggles] below — the screen
 /// renders, loads, and persists it automatically. Boolean values are stored in
@@ -26,7 +36,8 @@ class _AdminToggle {
   final String title;
   final String subtitle;
   final _NumberField? number; // optional numeric companion
-  const _AdminToggle(this.key, this.title, this.subtitle, {this.number});
+  final _TextSetting? text; // optional free-text companion
+  const _AdminToggle(this.key, this.title, this.subtitle, {this.number, this.text});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -72,6 +83,17 @@ const List<_AdminToggle> _toggles = [
         'the last 3 months — to guide ordering quantities.',
   ),
   // _AdminToggle('org.some_flag', 'Title shown to admin', 'What it does.'),
+
+  _AdminToggle(
+    'org.customer_edit_alert',
+    'Email alert when a customer is edited',
+    'When an existing customer record is edited (not newly created), email the '
+        'recipients below a note of who changed which fields on which customer. '
+        'A lightweight event-audit notification. Leave recipients blank to send '
+        'to no one.',
+    text: _TextSetting('org.customer_edit_alert_emails', 'Alert recipients',
+        hint: 'Comma- or newline-separated email addresses'),
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
@@ -86,6 +108,7 @@ class _ErpAdminSettingsScreenState
     extends ConsumerState<ErpAdminSettingsScreen> {
   final Map<String, bool> _values = {};
   final Map<String, TextEditingController> _numCtrls = {};
+  final Map<String, TextEditingController> _textCtrls = {};
   final Set<String> _saving = {};
   bool _loading = true;
 
@@ -97,6 +120,9 @@ class _ErpAdminSettingsScreenState
         _numCtrls[t.number!.key] =
             TextEditingController(text: t.number!.defaultValue.toString());
       }
+      if (t.text != null) {
+        _textCtrls[t.text!.key] = TextEditingController();
+      }
     }
     _load();
   }
@@ -104,6 +130,9 @@ class _ErpAdminSettingsScreenState
   @override
   void dispose() {
     for (final c in _numCtrls.values) {
+      c.dispose();
+    }
+    for (final c in _textCtrls.values) {
       c.dispose();
     }
     super.dispose();
@@ -132,6 +161,13 @@ class _ErpAdminSettingsScreenState
             final stored = cfg[n.key];
             if (stored != null && stored.trim().isNotEmpty) {
               _numCtrls[n.key]!.text = stored.trim();
+            }
+          }
+          final tx = t.text;
+          if (tx != null) {
+            final storedT = cfg[tx.key];
+            if (storedT != null) {
+              _textCtrls[tx.key]!.text = storedT;
             }
           }
         }
@@ -245,6 +281,63 @@ class _ErpAdminSettingsScreenState
     );
   }
 
+  Future<void> _saveText(_TextSetting t) async {
+    final val = _textCtrls[t.key]!.text.trim();
+    setState(() => _saving.add(t.key));
+    try {
+      await _persist(t.key, val);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving.remove(t.key));
+    }
+  }
+
+  Widget _textRow(_TextSetting t) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Text(t.label,
+                style: const TextStyle(
+                    fontSize: 12.5, color: AppTheme.textSecondary)),
+            if (_saving.contains(t.key)) ...[
+              const SizedBox(width: 10),
+              const SizedBox(
+                  width: 13,
+                  height: 13,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          ]),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _textCtrls[t.key],
+            maxLines: 2,
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: t.hint,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              border: const OutlineInputBorder(),
+            ),
+            onSubmitted: (_) => _saveText(t),
+            onTapOutside: (_) {
+              FocusManager.instance.primaryFocus?.unfocus();
+              _saveText(t);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -314,6 +407,9 @@ class _ErpAdminSettingsScreenState
                           if (_toggles[i].number != null &&
                               (_values[_toggles[i].key] ?? false))
                             _numberRow(_toggles[i].number!),
+                          if (_toggles[i].text != null &&
+                              (_values[_toggles[i].key] ?? false))
+                            _textRow(_toggles[i].text!),
                         ],
                       ],
                     ),
