@@ -45,6 +45,11 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   List<Map<String, dynamic>> _placement = [];
   List<Map<String, dynamic>> _competitors = [];
 
+  bool _loadingActs = true;
+  List<Map<String, dynamic>> _activities = [];
+  List<Map<String, dynamic>> _orgUsers = [];
+  Map<String, String> _userNames = {};
+
   final _money = NumberFormat('#,##0');
   final _money2 = NumberFormat('#,##0.00');
 
@@ -55,10 +60,11 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 4, vsync: this);
+    _tabs = TabController(length: 5, vsync: this);
     _loadAr();
     _loadVisits();
     _loadIntel();
+    _loadActivities();
   }
 
   @override
@@ -71,6 +77,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadAr();
     _loadVisits();
     _loadIntel();
+    _loadActivities();
   }
 
   Future<void> _loadAr() async {
@@ -301,6 +308,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   Tab(text: 'Receivables'),
                   Tab(text: 'Visits'),
                   Tab(text: 'Intel'),
+                  Tab(text: 'Activities'),
                 ],
               ),
             ),
@@ -313,6 +321,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   _receivablesTab(),
                   _visitsTab(),
                   _intelTab(),
+                  _activitiesTab(),
                 ],
               ),
             ),
@@ -1023,6 +1032,445 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     final dt = DateTime.tryParse(iso)?.toLocal();
     if (dt == null) return '—';
     return DateFormat('d MMM y').format(dt);
+  }
+
+  // -------------------------------------------------------------- Activities
+
+  Future<void> _loadActivities() async {
+    setState(() => _loadingActs = true);
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) {
+      setState(() => _loadingActs = false);
+      return;
+    }
+    try {
+      final client = Supabase.instance.client;
+      final users = await client
+          .from('users')
+          .select('id, name, role')
+          .eq('org_id', orgId)
+          .order('name');
+      final names = <String, String>{};
+      for (final u in users) {
+        names[u['id'] as String] = (u['name'] as String?) ?? 'Unknown';
+      }
+      final rows = await client
+          .from('customer_activities')
+          .select()
+          .eq('customer_id', _customerId)
+          .order('created_at', ascending: false);
+      if (!mounted) return;
+      setState(() {
+        _orgUsers = List<Map<String, dynamic>>.from(users);
+        _userNames = names;
+        _activities = List<Map<String, dynamic>>.from(rows);
+        _loadingActs = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _activities = [];
+        _loadingActs = false;
+      });
+    }
+  }
+
+  Future<void> _toggleActivityDone(Map<String, dynamic> a) async {
+    final done = (a['status'] as String?) == 'done';
+    try {
+      await Supabase.instance.client.from('customer_activities').update({
+        'status': done ? 'open' : 'done',
+        'completed_at': done ? null : DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', a['id']);
+      _loadActivities();
+    } catch (_) {/* ignore */}
+  }
+
+  Future<void> _deleteActivity(String id) async {
+    try {
+      await Supabase.instance.client
+          .from('customer_activities')
+          .delete()
+          .eq('id', id);
+      _loadActivities();
+    } catch (_) {/* ignore */}
+  }
+
+  Future<void> _activityDialog(bool isFollowup) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    String type = isFollowup ? 'call' : 'note';
+    final noteCtrl = TextEditingController();
+    DateTime? due =
+        isFollowup ? DateTime.now().add(const Duration(days: 1)) : null;
+    String? assignee;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: Text(isFollowup ? 'Add follow-up' : 'Log activity'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: type,
+                    decoration: const InputDecoration(labelText: 'Type'),
+                    items: const [
+                      DropdownMenuItem(value: 'note', child: Text('Note')),
+                      DropdownMenuItem(value: 'call', child: Text('Call')),
+                      DropdownMenuItem(value: 'visit', child: Text('Visit')),
+                      DropdownMenuItem(
+                          value: 'collection', child: Text('Collection')),
+                      DropdownMenuItem(value: 'other', child: Text('Other')),
+                    ],
+                    onChanged: (v) => setS(() => type = v ?? type),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    maxLines: 3,
+                    decoration: InputDecoration(
+                      labelText: isFollowup ? 'What needs doing?' : 'Note',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (isFollowup) ...[
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: due ?? DateTime.now(),
+                          firstDate:
+                              DateTime.now().subtract(const Duration(days: 1)),
+                          lastDate:
+                              DateTime.now().add(const Duration(days: 365)),
+                        );
+                        if (picked != null) setS(() => due = picked);
+                      },
+                      child: InputDecorator(
+                        decoration:
+                            const InputDecoration(labelText: 'Due date'),
+                        child: Text(
+                          due == null
+                              ? 'Pick a date'
+                              : DateFormat('d MMM y').format(due!),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  DropdownButtonFormField<String?>(
+                    value: assignee,
+                    decoration: const InputDecoration(labelText: 'Assign to'),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                          value: null, child: Text('Unassigned')),
+                      for (final u in _orgUsers)
+                        DropdownMenuItem<String?>(
+                          value: u['id'] as String,
+                          child: Text(
+                            (u['role'] != null &&
+                                    (u['role'] as String).isNotEmpty)
+                                ? '${u['name'] ?? 'Unknown'}  ·  ${u['role']}'
+                                : '${u['name'] ?? 'Unknown'}',
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) => setS(() => assignee = v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(ctx, rootNavigator: true).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (noteCtrl.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text('Add a note first')));
+                  return;
+                }
+                try {
+                  await Supabase.instance.client
+                      .from('customer_activities')
+                      .insert({
+                    'id': 'act_${DateTime.now().millisecondsSinceEpoch}',
+                    'org_id': orgId,
+                    'customer_id': _customerId,
+                    'type': type,
+                    'note': noteCtrl.text.trim(),
+                    'due_date': (isFollowup && due != null)
+                        ? DateFormat('yyyy-MM-dd').format(due!)
+                        : null,
+                    'assigned_to': assignee,
+                    'status': 'open',
+                    'created_by':
+                        Supabase.instance.client.auth.currentUser?.id,
+                  });
+                  if (ctx.mounted) {
+                    Navigator.of(ctx, rootNavigator: true).pop();
+                  }
+                  _loadActivities();
+                } catch (e) {
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                        content: Text(
+                            'Failed: ${e.toString().split('\n').first}')));
+                  }
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _activitiesTab() {
+    if (_loadingActs) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final open = _activities
+        .where((a) =>
+            a['due_date'] != null && (a['status'] as String?) == 'open')
+        .toList()
+      ..sort((a, b) =>
+          (a['due_date'] as String).compareTo(b['due_date'] as String));
+    final log = _activities
+        .where((a) =>
+            !(a['due_date'] != null && (a['status'] as String?) == 'open'))
+        .toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 16, 32, 8),
+          child: Row(
+            children: [
+              const Text('Activities & follow-ups',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+              const Spacer(),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.note_add_outlined, size: 16),
+                label: const Text('Log activity'),
+                onPressed: () => _activityDialog(false),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.add_task, size: 16),
+                label: const Text('Add follow-up'),
+                onPressed: () => _activityDialog(true),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: (open.isEmpty && log.isEmpty)
+              ? const Center(
+                  child: Text(
+                      'No activities yet — log a note or add a follow-up',
+                      style: TextStyle(color: AppTheme.textSecondary)))
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(32, 8, 32, 32),
+                  children: [
+                    if (open.isNotEmpty) ...[
+                      const Text('Open follow-ups',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 8),
+                      for (final a in open) _followupCard(a),
+                      const SizedBox(height: 20),
+                    ],
+                    if (log.isNotEmpty) ...[
+                      const Text('Activity log',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 8),
+                      for (final a in log) _activityCard(a),
+                    ],
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _followupCard(Map<String, dynamic> a) {
+    final due = DateTime.tryParse('${a['due_date']}');
+    final now = DateTime.now();
+    final overdue =
+        due != null && due.isBefore(DateTime(now.year, now.month, now.day));
+    final assignee = a['assigned_to'] as String?;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: overdue
+                ? AppTheme.danger.withOpacity(0.5)
+                : AppTheme.border),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => _toggleActivityDone(a),
+            child: const Icon(Icons.radio_button_unchecked,
+                size: 20, color: AppTheme.textSecondary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  _typeChip(a['type'] as String?),
+                  const SizedBox(width: 8),
+                  if (due != null)
+                    Text(DateFormat('d MMM y').format(due),
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: overdue
+                                ? AppTheme.danger
+                                : AppTheme.textSecondary)),
+                  if (overdue)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 6),
+                      child: Text('overdue',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.danger,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                ]),
+                const SizedBox(height: 4),
+                Text(a['note'] as String? ?? '',
+                    style: const TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                Row(children: [
+                  const Icon(Icons.person_outline,
+                      size: 13, color: AppTheme.textSecondary),
+                  const SizedBox(width: 4),
+                  Text(
+                      assignee == null
+                          ? 'Unassigned'
+                          : (_userNames[assignee] ?? 'Unknown'),
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textSecondary)),
+                ]),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline,
+                size: 16, color: AppTheme.textSecondary),
+            onPressed: () => _deleteActivity(a['id'] as String),
+            tooltip: 'Delete',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _activityCard(Map<String, dynamic> a) {
+    final isTask = a['due_date'] != null;
+    final done = (a['status'] as String?) == 'done';
+    final created = DateTime.tryParse('${a['created_at']}')?.toLocal();
+    final assignee = a['assigned_to'] as String?;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(done ? Icons.check_circle : Icons.notes,
+              size: 18,
+              color: done ? AppTheme.success : AppTheme.textSecondary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  _typeChip(a['type'] as String?),
+                  const SizedBox(width: 8),
+                  if (created != null)
+                    Text(DateFormat('d MMM y · HH:mm').format(created),
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textSecondary)),
+                  if (isTask && done)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 6),
+                      child: Text('done',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.success,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                ]),
+                const SizedBox(height: 4),
+                Text(a['note'] as String? ?? '',
+                    style: const TextStyle(fontSize: 13)),
+                if (assignee != null) ...[
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    const Icon(Icons.person_outline,
+                        size: 13, color: AppTheme.textSecondary),
+                    const SizedBox(width: 4),
+                    Text(_userNames[assignee] ?? 'Unknown',
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textSecondary)),
+                  ]),
+                ],
+              ],
+            ),
+          ),
+          if (isTask && done)
+            IconButton(
+              icon: const Icon(Icons.undo,
+                  size: 16, color: AppTheme.textSecondary),
+              onPressed: () => _toggleActivityDone(a),
+              tooltip: 'Reopen',
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _typeChip(String? type) {
+    final t = (type == null || type.isEmpty) ? 'note' : type;
+    final label = t[0].toUpperCase() + t.substring(1);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(label,
+          style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.primary)),
+    );
   }
 
   // -------------------------------------------------------------- shared bits
