@@ -105,6 +105,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('cpv', 'Payment Vouchers', PermKind.doc, '/erp/payment-vouchers'),
     PermItem('crv', 'Receipt Vouchers', PermKind.doc, '/erp/receipt-vouchers'),
     PermItem('pdc', 'PDC Voucher', PermKind.doc, '/erp/pdc-voucher'),
+    PermItem('opening_journal', 'Opening Journal', PermKind.doc, '/financials/opening-journal'),
     PermItem('trial_balance', 'Trial Balance', PermKind.report, '/financials/trial-balance'),
     PermItem('account_activity', 'Account Activity', PermKind.report, '/financials/account-activity'),
     PermItem('profit_loss', 'Profit & Loss', PermKind.report, '/financials/profit-loss'),
