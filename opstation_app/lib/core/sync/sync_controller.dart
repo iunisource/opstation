@@ -92,13 +92,16 @@ class SyncController extends Notifier<SyncStatus> {
     final rejected = await (_db.select(_db.visits)
           ..where((v) => v.syncStatus.equals('rejected')))
         .get();
+    final pendingCustomers = await (_db.select(_db.customers)
+          ..where((c) => c.syncStatus.equals('pending')))
+        .get();
 
     SyncState s;
     if (!_currentlyOnline) {
       s = SyncState.offline;
     } else if (rejected.isNotEmpty) {
       s = SyncState.error;
-    } else if (pending.isNotEmpty) {
+    } else if (pending.isNotEmpty || pendingCustomers.isNotEmpty) {
       s = SyncState.syncing;
     } else {
       s = SyncState.synced;
@@ -106,7 +109,7 @@ class SyncController extends Notifier<SyncStatus> {
 
     state = state.copyWith(
       state: s,
-      pendingCount: pending.length,
+      pendingCount: pending.length + pendingCustomers.length,
       rejectedCount: rejected.length,
     );
   }
@@ -147,6 +150,10 @@ class SyncController extends Notifier<SyncStatus> {
       for (final c in customers) {
         try {
           await _supabase.pushCustomer(c);
+          if (c.syncStatus != 'synced') {
+            await (_db.update(_db.customers)..where((t) => t.id.equals(c.id)))
+                .write(const CustomersCompanion(syncStatus: Value('synced')));
+          }
         } catch (e) {
           print('pushCustomer FAILED: $e');
         }
@@ -324,6 +331,13 @@ class SyncController extends Notifier<SyncStatus> {
       await _refreshCounts();
       if (!_currentlyOnline) return;
 
+      // Push locally-edited customers (location capture, create, update, active
+      // toggle) before visits. Mirrors the visit dirty-flag pattern so customer
+      // edits drain automatically on reconnect / timer / kick, not only on the
+      // manual sync button.
+      await _pushPendingCustomers();
+      if (!_currentlyOnline) return;
+
       final pending = await (_db.select(_db.visits)
             ..where((v) => v.syncStatus.equals('pending')))
           .get();
@@ -487,6 +501,36 @@ class SyncController extends Notifier<SyncStatus> {
   void noteNewPendingVisit() {
     _refreshCounts();
     flushPending();
+  }
+
+  /// Kick an immediate flush after a customer write (location / create / update
+  /// / active toggle). Online → pushes the change now; offline → flushPending
+  /// bails and it drains on reconnect via the connectivity listener.
+  void noteCustomerChanged() {
+    _refreshCounts();
+    flushPending();
+  }
+
+  /// Push locally-edited customers (sync_status = 'pending') and mark them
+  /// synced. Called from flushPending, so it fires on reconnect, on the 30s
+  /// retry, and on a noteCustomerChanged() kick.
+  Future<void> _pushPendingCustomers() async {
+    final pending = await (_db.select(_db.customers)
+          ..where((c) => c.syncStatus.equals('pending')))
+        .get();
+    if (pending.isEmpty) return;
+    state = state.copyWith(state: SyncState.syncing);
+    for (final c in pending) {
+      try {
+        await _supabase.pushCustomer(c);
+        await (_db.update(_db.customers)..where((t) => t.id.equals(c.id)))
+            .write(const CustomersCompanion(syncStatus: Value('synced')));
+        state = state.copyWith(lastSyncedAt: DateTime.now());
+      } catch (e, st) {
+        print('pushCustomer FAILED for ${c.id}: $e');
+        await Sentry.captureException(e, stackTrace: st);
+      }
+    }
   }
 
   /// Manual refresh — pushes pending writes AND pulls fresh route_assignments

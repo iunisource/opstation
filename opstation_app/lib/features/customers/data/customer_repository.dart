@@ -117,6 +117,7 @@ class CustomerRepository {
       CustomersCompanion(
         isActive: Value(active),
         updatedAt: Value(now),
+        syncStatus: const Value('pending'),
       ),
     );
     await _writeAudit(
@@ -178,6 +179,7 @@ class CustomerRepository {
       updatedAt: Value(c.updatedAt),
       ntnGst: Value(c.ntnGst),
       orgId: Value(_orgId),
+      syncStatus: const Value('pending'),
     );
   }
 

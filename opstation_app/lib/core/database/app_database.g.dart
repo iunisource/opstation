@@ -92,6 +92,14 @@ class $CustomersTable extends Customers
   late final GeneratedColumn<String> orgId = GeneratedColumn<String>(
       'org_id', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _syncStatusMeta =
+      const VerificationMeta('syncStatus');
+  @override
+  late final GeneratedColumn<String> syncStatus = GeneratedColumn<String>(
+      'sync_status', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('synced'));
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -107,7 +115,8 @@ class $CustomersTable extends Customers
         isActive,
         updatedAt,
         ntnGst,
-        orgId
+        orgId,
+        syncStatus
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -188,6 +197,12 @@ class $CustomersTable extends Customers
       context.handle(
           _orgIdMeta, orgId.isAcceptableOrUnknown(data['org_id']!, _orgIdMeta));
     }
+    if (data.containsKey('sync_status')) {
+      context.handle(
+          _syncStatusMeta,
+          syncStatus.isAcceptableOrUnknown(
+              data['sync_status']!, _syncStatusMeta));
+    }
     return context;
   }
 
@@ -225,6 +240,8 @@ class $CustomersTable extends Customers
           .read(DriftSqlType.string, data['${effectivePrefix}ntn_gst']),
       orgId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}org_id']),
+      syncStatus: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sync_status'])!,
     );
   }
 
@@ -249,6 +266,11 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
   final DateTime? updatedAt;
   final String? ntnGst;
   final String? orgId;
+
+  /// Offline-first sync state: 'pending' (local edit awaiting push) | 'synced'.
+  /// Defaults to 'synced' so rows pulled from the server are clean; local
+  /// writes set 'pending' and flushPending pushes them like visits/deliveries.
+  final String syncStatus;
   const CustomersData(
       {required this.id,
       required this.code,
@@ -263,7 +285,8 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
       required this.isActive,
       this.updatedAt,
       this.ntnGst,
-      this.orgId});
+      this.orgId,
+      required this.syncStatus});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -295,6 +318,7 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
     if (!nullToAbsent || orgId != null) {
       map['org_id'] = Variable<String>(orgId);
     }
+    map['sync_status'] = Variable<String>(syncStatus);
     return map;
   }
 
@@ -326,6 +350,7 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
           ntnGst == null && nullToAbsent ? const Value.absent() : Value(ntnGst),
       orgId:
           orgId == null && nullToAbsent ? const Value.absent() : Value(orgId),
+      syncStatus: Value(syncStatus),
     );
   }
 
@@ -347,6 +372,7 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
       updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
       ntnGst: serializer.fromJson<String?>(json['ntnGst']),
       orgId: serializer.fromJson<String?>(json['orgId']),
+      syncStatus: serializer.fromJson<String>(json['syncStatus']),
     );
   }
   @override
@@ -367,6 +393,7 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
       'updatedAt': serializer.toJson<DateTime?>(updatedAt),
       'ntnGst': serializer.toJson<String?>(ntnGst),
       'orgId': serializer.toJson<String?>(orgId),
+      'syncStatus': serializer.toJson<String>(syncStatus),
     };
   }
 
@@ -384,7 +411,8 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
           bool? isActive,
           Value<DateTime?> updatedAt = const Value.absent(),
           Value<String?> ntnGst = const Value.absent(),
-          Value<String?> orgId = const Value.absent()}) =>
+          Value<String?> orgId = const Value.absent(),
+          String? syncStatus}) =>
       CustomersData(
         id: id ?? this.id,
         code: code ?? this.code,
@@ -400,6 +428,7 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
         updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
         ntnGst: ntnGst.present ? ntnGst.value : this.ntnGst,
         orgId: orgId.present ? orgId.value : this.orgId,
+        syncStatus: syncStatus ?? this.syncStatus,
       );
   CustomersData copyWithCompanion(CustomersCompanion data) {
     return CustomersData(
@@ -419,6 +448,8 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       ntnGst: data.ntnGst.present ? data.ntnGst.value : this.ntnGst,
       orgId: data.orgId.present ? data.orgId.value : this.orgId,
+      syncStatus:
+          data.syncStatus.present ? data.syncStatus.value : this.syncStatus,
     );
   }
 
@@ -438,7 +469,8 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
           ..write('isActive: $isActive, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('ntnGst: $ntnGst, ')
-          ..write('orgId: $orgId')
+          ..write('orgId: $orgId, ')
+          ..write('syncStatus: $syncStatus')
           ..write(')'))
         .toString();
   }
@@ -458,7 +490,8 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
       isActive,
       updatedAt,
       ntnGst,
-      orgId);
+      orgId,
+      syncStatus);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -476,7 +509,8 @@ class CustomersData extends DataClass implements Insertable<CustomersData> {
           other.isActive == this.isActive &&
           other.updatedAt == this.updatedAt &&
           other.ntnGst == this.ntnGst &&
-          other.orgId == this.orgId);
+          other.orgId == this.orgId &&
+          other.syncStatus == this.syncStatus);
 }
 
 class CustomersCompanion extends UpdateCompanion<CustomersData> {
@@ -494,6 +528,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
   final Value<DateTime?> updatedAt;
   final Value<String?> ntnGst;
   final Value<String?> orgId;
+  final Value<String> syncStatus;
   final Value<int> rowid;
   const CustomersCompanion({
     this.id = const Value.absent(),
@@ -510,6 +545,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
     this.updatedAt = const Value.absent(),
     this.ntnGst = const Value.absent(),
     this.orgId = const Value.absent(),
+    this.syncStatus = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   CustomersCompanion.insert({
@@ -527,6 +563,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
     this.updatedAt = const Value.absent(),
     this.ntnGst = const Value.absent(),
     this.orgId = const Value.absent(),
+    this.syncStatus = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         code = Value(code),
@@ -549,6 +586,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
     Expression<DateTime>? updatedAt,
     Expression<String>? ntnGst,
     Expression<String>? orgId,
+    Expression<String>? syncStatus,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -566,6 +604,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
       if (updatedAt != null) 'updated_at': updatedAt,
       if (ntnGst != null) 'ntn_gst': ntnGst,
       if (orgId != null) 'org_id': orgId,
+      if (syncStatus != null) 'sync_status': syncStatus,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -585,6 +624,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
       Value<DateTime?>? updatedAt,
       Value<String?>? ntnGst,
       Value<String?>? orgId,
+      Value<String>? syncStatus,
       Value<int>? rowid}) {
     return CustomersCompanion(
       id: id ?? this.id,
@@ -601,6 +641,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
       updatedAt: updatedAt ?? this.updatedAt,
       ntnGst: ntnGst ?? this.ntnGst,
       orgId: orgId ?? this.orgId,
+      syncStatus: syncStatus ?? this.syncStatus,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -650,6 +691,9 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
     if (orgId.present) {
       map['org_id'] = Variable<String>(orgId.value);
     }
+    if (syncStatus.present) {
+      map['sync_status'] = Variable<String>(syncStatus.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -673,6 +717,7 @@ class CustomersCompanion extends UpdateCompanion<CustomersData> {
           ..write('updatedAt: $updatedAt, ')
           ..write('ntnGst: $ntnGst, ')
           ..write('orgId: $orgId, ')
+          ..write('syncStatus: $syncStatus, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -9323,6 +9368,7 @@ typedef $$CustomersTableCreateCompanionBuilder = CustomersCompanion Function({
   Value<DateTime?> updatedAt,
   Value<String?> ntnGst,
   Value<String?> orgId,
+  Value<String> syncStatus,
   Value<int> rowid,
 });
 typedef $$CustomersTableUpdateCompanionBuilder = CustomersCompanion Function({
@@ -9340,6 +9386,7 @@ typedef $$CustomersTableUpdateCompanionBuilder = CustomersCompanion Function({
   Value<DateTime?> updatedAt,
   Value<String?> ntnGst,
   Value<String?> orgId,
+  Value<String> syncStatus,
   Value<int> rowid,
 });
 
@@ -9443,6 +9490,9 @@ class $$CustomersTableFilterComposer
 
   ColumnFilters<String> get orgId => $composableBuilder(
       column: $table.orgId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get syncStatus => $composableBuilder(
+      column: $table.syncStatus, builder: (column) => ColumnFilters(column));
 
   Expression<bool> routeStopsRefs(
       Expression<bool> Function($$RouteStopsTableFilterComposer f) f) {
@@ -9559,6 +9609,9 @@ class $$CustomersTableOrderingComposer
 
   ColumnOrderings<String> get orgId => $composableBuilder(
       column: $table.orgId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get syncStatus => $composableBuilder(
+      column: $table.syncStatus, builder: (column) => ColumnOrderings(column));
 }
 
 class $$CustomersTableAnnotationComposer
@@ -9611,6 +9664,9 @@ class $$CustomersTableAnnotationComposer
 
   GeneratedColumn<String> get orgId =>
       $composableBuilder(column: $table.orgId, builder: (column) => column);
+
+  GeneratedColumn<String> get syncStatus => $composableBuilder(
+      column: $table.syncStatus, builder: (column) => column);
 
   Expression<T> routeStopsRefs<T extends Object>(
       Expression<T> Function($$RouteStopsTableAnnotationComposer a) f) {
@@ -9714,6 +9770,7 @@ class $$CustomersTableTableManager extends RootTableManager<
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<String?> ntnGst = const Value.absent(),
             Value<String?> orgId = const Value.absent(),
+            Value<String> syncStatus = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               CustomersCompanion(
@@ -9731,6 +9788,7 @@ class $$CustomersTableTableManager extends RootTableManager<
             updatedAt: updatedAt,
             ntnGst: ntnGst,
             orgId: orgId,
+            syncStatus: syncStatus,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -9748,6 +9806,7 @@ class $$CustomersTableTableManager extends RootTableManager<
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<String?> ntnGst = const Value.absent(),
             Value<String?> orgId = const Value.absent(),
+            Value<String> syncStatus = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               CustomersCompanion.insert(
@@ -9765,6 +9824,7 @@ class $$CustomersTableTableManager extends RootTableManager<
             updatedAt: updatedAt,
             ntnGst: ntnGst,
             orgId: orgId,
+            syncStatus: syncStatus,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

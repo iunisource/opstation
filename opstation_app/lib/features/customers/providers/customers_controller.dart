@@ -4,6 +4,7 @@ import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../salesperson/models/customer.dart';
 import '../data/customer_repository.dart';
+import '../../../core/sync/sync_controller.dart';
 
 enum CustomerActiveFilter { all, active, inactive }
 
@@ -160,21 +161,30 @@ class CustomersController extends AsyncNotifier<CustomersState> {
     );
   }
 
+  /// Push customer edits up right away when online (and let flushPending drain
+  /// them on reconnect when offline) — instead of waiting for the manual sync.
+  void _kickSync() {
+    ref.read(syncControllerProvider.notifier).noteCustomerChanged();
+  }
+
   Future<Customer> create(Customer c) async {
     final result = await _repo.create(c, _currentActor());
     await refresh();
+    _kickSync();
     return result;
   }
 
   Future<Customer> updateCustomer(Customer updated, Customer previous) async {
     final result = await _repo.update(updated, previous, _currentActor());
     await refresh();
+    _kickSync();
     return result;
   }
 
   Future<void> setActive(String id, bool active) async {
     await _repo.setActive(id: id, active: active, actor: _currentActor());
     await refresh();
+    _kickSync();
   }
 
   Future<Customer> setLocation(
@@ -186,6 +196,7 @@ class CustomersController extends AsyncNotifier<CustomersState> {
       actor: _currentActor(),
     );
     await refresh();
+    _kickSync();
     return result;
   }
 }

@@ -25,6 +25,11 @@ class Customers extends Table {
   DateTimeColumn get updatedAt => dateTime().nullable()();
   TextColumn get ntnGst => text().nullable()();
   TextColumn get orgId => text().nullable()();
+  /// Offline-first sync state: 'pending' (local edit awaiting push) | 'synced'.
+  /// Defaults to 'synced' so rows pulled from the server are clean; local
+  /// writes set 'pending' and flushPending pushes them like visits/deliveries.
+  TextColumn get syncStatus =>
+      text().withDefault(const Constant('synced'))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -432,11 +437,14 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => 19;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
+          if (from < 19) {
+            await m.addColumn(customers, customers.syncStatus);
+          }
           if (from < 17) {
             await m.addColumn(deliveryStops, deliveryStops.syncStatus);
           }
