@@ -68,6 +68,28 @@ final userBranchesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
   }
 });
 
+// Count of overdue open CRM follow-ups for the current org (sidebar badge).
+final crmOverdueCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final now = DateTime.now();
+    final today =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final res = await client
+        .from('customer_activities')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'open')
+        .not('due_date', 'is', null)
+        .lt('due_date', today);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 
 class MainLayout extends ConsumerWidget {
@@ -101,6 +123,7 @@ class _TopNav extends ConsumerWidget {
     final location = GoRouterState.of(context).matchedLocation;
     final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
     final access = ref.watch(accessSyncProvider);
+    final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
     bool show(String route) {
       final mod = kRouteToModule[route];
       if (mod != null && !modules.contains(mod)) return false;
@@ -331,6 +354,14 @@ class _TopNav extends ConsumerWidget {
                 _menuItem(context, 'Settings', Icons.settings_outlined, '/settings', location),
             ],
           ),
+          _navMenu(context, 'CRM', Icons.contacts_outlined, location,
+            ['/customers', '/crm/follow-ups'],
+            [
+              _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location),
+              _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location),
+            ],
+            badge: crmOverdue,
+          ),
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
             ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors', '/intelligence/report-builder'],
             [
@@ -508,8 +539,9 @@ Widget _navMenu(
   IconData icon,
   String location,
   List<String> activePaths,
-  List<Widget> items,
-) {
+  List<Widget> items, {
+  int badge = 0,
+}) {
   final isActive = activePaths.any((p) => location.startsWith(p));
   return MenuAnchor(
     style: MenuStyle(
@@ -542,6 +574,21 @@ Widget _navMenu(
               fontSize: 13,
               fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
             )),
+            if (badge > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: AppTheme.danger,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(badge > 99 ? '99+' : '$badge',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700)),
+              ),
+            ],
             const SizedBox(width: 3),
             Icon(
               controller.isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,

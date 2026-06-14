@@ -83,7 +83,9 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
       setState(() {
         _rows = list;
         _orgUsers = List<Map<String, dynamic>>.from(users);
-        _userNames = names;
+        _userNames
+          ..clear()
+          ..addAll(names);
         _custById
           ..clear()
           ..addAll(cust);
