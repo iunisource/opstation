@@ -355,9 +355,10 @@ class _TopNav extends ConsumerWidget {
             ],
           ),
           _navMenu(context, 'CRM', Icons.contacts_outlined, location,
-            ['/customers', '/crm/follow-ups'],
+            ['/customers', '/crm/follow-ups', '/crm/pipeline'],
             [
               _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location),
+              _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
               _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location),
             ],
             badge: crmOverdue,
