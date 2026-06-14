@@ -175,6 +175,7 @@ class _GpsTab extends ConsumerStatefulWidget {
 class _GpsTabState extends ConsumerState<_GpsTab> {
   DeviceFix? _fix;
   bool _loading = false;
+  bool _stale = false;
   String? _error;
 
   Future<void> _capture() async {
@@ -182,26 +183,49 @@ class _GpsTabState extends ConsumerState<_GpsTab> {
       _loading = true;
       _error = null;
     });
-    final fix = await ref.read(deviceGpsServiceProvider).getFix();
+    final res = await ref.read(deviceGpsServiceProvider).getFixResult();
     if (!mounted) return;
-    if (fix == null) {
+    if (!res.ok) {
       setState(() {
         _loading = false;
-        _error =
-            'Location unavailable. Check that GPS is enabled and permission is granted.';
+        _stale = false;
+        _error = _messageFor(res.outcome);
       });
       return;
     }
+    final fix = res.fix!;
     setState(() {
       _loading = false;
+      _stale = res.isStale;
       _fix = fix;
     });
     widget.onCoords(
       lat: fix.lat,
       lng: fix.lng,
       accuracy: fix.accuracy,
-      source: 'Device GPS',
+      source: res.isStale ? 'Device GPS (last known)' : 'Device GPS',
     );
+  }
+
+  String _messageFor(GpsOutcome outcome) {
+    switch (outcome) {
+      case GpsOutcome.serviceDisabled:
+        return 'Location is turned off on this phone. Switch on GPS / Location '
+            'in your phone settings, then tap Capture again.';
+      case GpsOutcome.permissionDenied:
+        return 'Location permission was denied. Tap Capture again and allow it '
+            'when prompted.';
+      case GpsOutcome.permissionBlocked:
+        return 'Location permission is blocked for Opstation. Enable it in '
+            'Settings → Apps → Opstation → Permissions, then retry.';
+      case GpsOutcome.timeout:
+        return "Couldn't get a GPS fix here — the signal is weak. Step toward "
+            'open sky (a doorway or outside) and tap Capture again, or use the '
+            'Map / Manual tab.';
+      case GpsOutcome.error:
+      case GpsOutcome.success:
+        return 'Location unavailable. Try again, or use the Map / Manual tab.';
+    }
   }
 
   @override
@@ -298,20 +322,116 @@ class _GpsTabState extends ConsumerState<_GpsTab> {
                     'Lat ${_fix!.lat.toStringAsFixed(6)}, Lng ${_fix!.lng.toStringAsFixed(6)}',
                     style: const TextStyle(fontSize: 13),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Accuracy: ±${_fix!.accuracy.round()}m',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondaryLight,
-                    ),
+                  const SizedBox(height: 10),
+                  _AccuracyMeter(
+                    accuracyMeters: _fix!.accuracy,
+                    stale: _stale,
                   ),
+                  if (_stale) ...[
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Last known position (a live fix timed out here). If the '
+                      'pin looks off, move toward open sky and capture again.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppColors.dangerDark,
+                      ),
+                    ),
+                  ] else if (_fix!.accuracy > 50) ...[
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Accuracy is low here. For a tighter pin, move toward open '
+                      'sky and capture again.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFFB45309),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
         ],
       ),
+    );
+  }
+}
+
+// ---- GPS accuracy health meter ----------------------------------------
+
+/// A 4-segment signal-strength-style meter that grades a captured fix's
+/// accuracy so a surveyor can tell at a glance whether the pin is trustworthy
+/// or worth re-capturing. Bands (radius in metres):
+///   <=10  Excellent (4)   <=25 Good (3)   <=50 Fair (2)   >50 Poor (1)
+/// A stale (last-known) fix is shown greyed at one bar regardless of radius.
+class _AccuracyMeter extends StatelessWidget {
+  final double accuracyMeters;
+  final bool stale;
+  const _AccuracyMeter({required this.accuracyMeters, this.stale = false});
+
+  int get _band {
+    if (accuracyMeters <= 10) return 4;
+    if (accuracyMeters <= 25) return 3;
+    if (accuracyMeters <= 50) return 2;
+    return 1;
+  }
+
+  String get _label {
+    if (stale) return 'Last known';
+    switch (_band) {
+      case 4:
+        return 'Excellent';
+      case 3:
+        return 'Good';
+      case 2:
+        return 'Fair';
+      default:
+        return 'Poor';
+    }
+  }
+
+  Color get _color {
+    if (stale) return const Color(0xFF6B7280); // grey
+    switch (_band) {
+      case 4:
+        return const Color(0xFF16A34A); // green
+      case 3:
+        return const Color(0xFF22C55E); // light green
+      case 2:
+        return const Color(0xFFF59E0B); // amber
+      default:
+        return const Color(0xFFDC2626); // red
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = stale ? 1 : _band;
+    return Row(
+      children: [
+        for (var i = 0; i < 4; i++)
+          Container(
+            margin: const EdgeInsets.only(right: 4),
+            width: 20,
+            height: 8,
+            decoration: BoxDecoration(
+              color: i < filled ? _color : const Color(0xFFE5E7EB),
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            '$_label  ·  ±${accuracyMeters.round()}m',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: _color,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
