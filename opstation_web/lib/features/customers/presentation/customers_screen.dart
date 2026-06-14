@@ -14,7 +14,8 @@ import 'customer_history_screen.dart';
 import 'erp_customer_360_screen.dart';
 
 class CustomersScreen extends ConsumerStatefulWidget {
-  const CustomersScreen({super.key});
+  final bool crmMode;
+  const CustomersScreen({super.key, this.crmMode = false});
   @override
   ConsumerState<CustomersScreen> createState() => _CustomersScreenState();
 }
@@ -162,17 +163,19 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           Row(children: [
             const Text('Customers', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const Spacer(),
-            OutlinedButton.icon(
-              onPressed: () => context.push('/customers/import'),
-              icon: const Icon(Icons.upload_file, size: 18),
-              label: const Text('Bulk Import'),
-            ),
-            const SizedBox(width: 8),
-            ElevatedButton.icon(
-              onPressed: () => _showDialog(context, null),
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add Customer'),
-            ),
+            if (!widget.crmMode) ...[
+              OutlinedButton.icon(
+                onPressed: () => context.push('/customers/import'),
+                icon: const Icon(Icons.upload_file, size: 18),
+                label: const Text('Bulk Import'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () => _showDialog(context, null),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add Customer'),
+              ),
+            ],
           ]),
           const SizedBox(height: 8),
           Text('${_filtered.length} customers', style: const TextStyle(color: AppTheme.textSecondary)),
@@ -272,8 +275,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                               Expanded(flex: 2, child: Text(c['contact_person'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                               Expanded(flex: 2, child: Text(c['phone'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
                               Expanded(flex: 2, child: Text(c['category'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
-                              SizedBox(width: 264, child: Row(children: [
-                                if (c['latitude'] != null && c['longitude'] != null)
+                              SizedBox(width: widget.crmMode ? 56 : 264, child: Row(children: [
+                                if (!widget.crmMode && c['latitude'] != null && c['longitude'] != null)
                                   IconButton(
                                     icon: const Icon(Icons.place, size: 18, color: AppTheme.primary),
                                     tooltip: 'Show location',
@@ -289,19 +292,21 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                   )),
                                   tooltip: 'Customer 360',
                                 ),
-                                IconButton(
-                                  icon: const Icon(Icons.history, size: 18, color: AppTheme.success),
-                                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (_) => CustomerHistoryScreen(
-                                      customerId: c['id'] as String,
-                                      customerName: c['shop_name'] as String? ?? '',
-                                      customerCode: c['code'] as String?,
-                                    ),
-                                  )),
-                                  tooltip: 'View History',
-                                ),
-                                IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, c)),
-                                if (_canDeactivateCustomer(ref.watch(currentUserProvider)?.role))
+                                if (!widget.crmMode)
+                                  IconButton(
+                                    icon: const Icon(Icons.history, size: 18, color: AppTheme.success),
+                                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => CustomerHistoryScreen(
+                                        customerId: c['id'] as String,
+                                        customerName: c['shop_name'] as String? ?? '',
+                                        customerCode: c['code'] as String?,
+                                      ),
+                                    )),
+                                    tooltip: 'View History',
+                                  ),
+                                if (!widget.crmMode)
+                                  IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, c)),
+                                if (!widget.crmMode && _canDeactivateCustomer(ref.watch(currentUserProvider)?.role))
                                   IconButton(
                                     icon: Icon(
                                       (c['is_active'] as bool? ?? true)
@@ -317,7 +322,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                         ? 'Deactivate'
                                         : 'Activate',
                                   ),
-                                if (_canDeleteCustomer(ref.watch(currentUserProvider)?.role))
+                                if (!widget.crmMode && _canDeleteCustomer(ref.watch(currentUserProvider)?.role))
                                   IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => _delete(c['id'] as String)),
                               ])),
                             ]),

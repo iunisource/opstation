@@ -170,6 +170,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/dashboard', builder: (_, __) => const DashboardScreen()),
           GoRoute(path: '/team', builder: (_, __) => const TeamScreen()),
           GoRoute(path: '/customers', builder: (_, __) => const CustomersScreen()),
+          GoRoute(path: '/crm/customers', builder: (_, __) => const CustomersScreen(crmMode: true)),
           GoRoute(path: '/customers/import', builder: (_, __) => const BulkImportCustomersScreen()),
           GoRoute(path: '/crm/follow-ups', builder: (_, __) => const FollowUpsScreen()),
           GoRoute(path: '/crm/pipeline', builder: (_, __) => const CrmPipelineScreen()),
