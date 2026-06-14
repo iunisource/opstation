@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/permissions/access_control.dart';
+import '../../../core/widgets/product_picker.dart';
 
 class ErpPurchaseScreen extends ConsumerStatefulWidget {
   const ErpPurchaseScreen({super.key});
@@ -456,13 +457,27 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
               const Divider(height: 1),
               Container(color: AppTheme.background, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(children: [
-                  Expanded(flex: 5, child: DropdownButtonFormField<String>(
-                    value: _addProductId, isDense: true, isExpanded: true,
-                    decoration: const InputDecoration(hintText: 'Pick product', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
-                    items: _products.map((p) => DropdownMenuItem<String>(value: p['id'] as String,
-                        child: Text('${p['name']}${p['sku'] != null ? " · ${p['sku']}" : ""}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)))).toList(),
-                    onChanged: (v) => setState(() { _addProductId = v; final p = _products.firstWhere((x) => x['id'] == v, orElse: () => {}); _addUomId = p['base_uom_id'] as String?; }),
-                  )),
+                  Expanded(flex: 5, child: Builder(builder: (ctx) {
+                    final sel = _addProductId == null ? null : _products.firstWhere((x) => x['id'] == _addProductId, orElse: () => <String, dynamic>{});
+                    final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
+                    return InkWell(
+                      onTap: () async {
+                        final p = await pickProduct(ctx, _products, title: 'Select product');
+                        if (p != null && p.isNotEmpty) setState(() {
+                          _addProductId = p['id'] as String?;
+                          _addUomId = p['base_uom_id'] as String?;
+                        });
+                      },
+                      child: InputDecorator(
+                        decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder()),
+                        child: Row(children: [
+                          Expanded(child: Text(name ?? 'Pick product', maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 12.5, color: name == null ? AppTheme.textSecondary : Colors.black87))),
+                          const Icon(Icons.arrow_drop_down, size: 20, color: AppTheme.textSecondary),
+                        ]),
+                      ),
+                    );
+                  })),
                   Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: DropdownButtonFormField<String>(value: _addUomId, isDense: true, isExpanded: true,
                       decoration: const InputDecoration(hintText: 'UOM', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 6)),
