@@ -144,16 +144,25 @@ class SyncController extends Notifier<SyncStatus> {
         } catch (_) {}
       }
 
+      // Only push customers that actually changed. Pushing the entire local
+      // customer table row-by-row on every login / manual sync was the cause
+      // of multi-minute syncs — thousands of sequential round-trips to flush
+      // a single real edit. Pending-only mirrors the visits / deliveryStops
+      // loops below and _pushPendingCustomers(); the backlog still self-heals
+      // because any dirty row is 'pending'.
       final customers = orgId == null
-          ? await _db.select(_db.customers).get()
-          : await (_db.select(_db.customers)..where((c) => c.orgId.equals(orgId))).get();
+          ? await (_db.select(_db.customers)
+                ..where((c) => c.syncStatus.equals('pending')))
+              .get()
+          : await (_db.select(_db.customers)
+                ..where((c) =>
+                    c.orgId.equals(orgId) & c.syncStatus.equals('pending')))
+              .get();
       for (final c in customers) {
         try {
           await _supabase.pushCustomer(c);
-          if (c.syncStatus != 'synced') {
-            await (_db.update(_db.customers)..where((t) => t.id.equals(c.id)))
-                .write(const CustomersCompanion(syncStatus: Value('synced')));
-          }
+          await (_db.update(_db.customers)..where((t) => t.id.equals(c.id)))
+              .write(const CustomersCompanion(syncStatus: Value('synced')));
         } catch (e) {
           print('pushCustomer FAILED: $e');
         }
