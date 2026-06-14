@@ -33,22 +33,7 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     final now = DateTime.now();
     _to = DateTime(now.year, now.month, now.day);
     _from = _to.subtract(const Duration(days: 30));
-    _loadUsers();
     _load();
-  }
-
-  Future<void> _loadUsers() async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
-    if (orgId == null) return;
-    try {
-      final users = await Supabase.instance.client
-          .from('users')
-          .select('id, name')
-          .eq('org_id', orgId)
-          .order('name');
-      if (!mounted) return;
-      setState(() => _orgUsers = List<Map<String, dynamic>>.from(users));
-    } catch (_) {/* best effort */}
   }
 
   Future<void> _load() async {
@@ -60,24 +45,38 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     }
     try {
       final client = Supabase.instance.client;
+
+      // Org users (for the dropdown AND to scope the audit by user-id set —
+      // voucher_audit_log has no org_id column, so we scope via its acting
+      // users. This is the same embed pattern the per-voucher audit uses.)
+      final users = await client
+          .from('users')
+          .select('id, name')
+          .eq('org_id', orgId)
+          .order('name');
+      final userList = List<Map<String, dynamic>>.from(users);
+      final ids = [for (final u in userList) u['id'] as String];
+
       final fromIso = DateFormat('yyyy-MM-dd').format(_from);
       final toIso =
           DateFormat('yyyy-MM-dd').format(_to.add(const Duration(days: 1)));
 
       var q = client
           .from('voucher_audit_log')
-          .select('*, users!inner(name, org_id)')
-          .eq('users.org_id', orgId)
-          .gte('created_at', fromIso)
-          .lt('created_at', toIso);
+          .select('*, users(name)')
+          .gte('performed_at', fromIso)
+          .lt('performed_at', toIso);
       if (_user != 'all') {
         q = q.eq('user_id', _user);
+      } else {
+        q = q.inFilter('user_id', ids);
       }
       final rows =
-          await q.order('created_at', ascending: false).limit(1000);
+          await q.order('performed_at', ascending: false).limit(1000);
 
       if (!mounted) return;
       setState(() {
+        _orgUsers = userList;
         _entries = List<Map<String, dynamic>>.from(rows);
         _loading = false;
       });
@@ -330,9 +329,9 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     final type = e['voucher_type'] as String? ?? '-';
     final details = e['details'] as String? ?? '';
     final userName = e['users']?['name'] as String? ?? '—';
-    final ts = e['created_at'] != null
+    final ts = e['performed_at'] != null
         ? DateFormat('d MMM y · HH:mm')
-            .format(DateTime.parse(e['created_at'] as String).toLocal())
+            .format(DateTime.parse(e['performed_at'] as String).toLocal())
         : '';
     final (icon, color) = _actionStyle(action);
     return Padding(
