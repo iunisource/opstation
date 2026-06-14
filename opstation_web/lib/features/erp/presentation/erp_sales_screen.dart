@@ -85,6 +85,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   final _addQtyCtrl = TextEditingController(text: '1');
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
+  bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
 
   @override
   void initState() { super.initState(); _loadList(); _loadMeta(); }
@@ -149,10 +150,16 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         customerId: order['customer_id'] as String?,
         createdById: order['created_by'] as String?,
       );
+      bool hasDo = false;
+      try {
+        final d = await client.from('delivery_orders').select('id').eq('so_id', id).limit(1);
+        hasDo = (d as List).isNotEmpty;
+      } catch (_) {}
       setState(() {
         _detail = Map<String,dynamic>.from(order);
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
+        _hasDo = hasDo;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -166,6 +173,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   bool get _isDraft => (_detail['status'] as String? ?? 'draft') == 'draft';
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _canEdit => _isDraft && !_isLocked;
+  // Line items can be added/edited/deleted as long as no Delivery Order exists
+  // against this SO (standalone) — even on a confirmed/locked SO, and even for
+  // admins once a DO exists they are cascade-locked. Header fields stay on
+  // _canEdit (draft only). Whole-SO delete has the same DO guard.
+  bool get _canEditLines => !_hasDo;
   bool get _canDelete {
     final role = ref.read(currentUserProvider)?.role;
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
@@ -289,6 +301,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   }
 
   Future<void> _addItem() async {
+    if (!_canEditLines) { _showSnack('Cannot add: a Delivery Order exists against this SO. Delete the DO first.'); return; }
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _showSnack('Enter valid qty'); return; }
@@ -323,6 +336,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   }
 
   Future<void> _deleteItem(String itemId) async {
+    if (!_canEditLines) { _showSnack('Cannot remove: a Delivery Order exists against this SO. Delete the DO first.'); return; }
     try {
       await Supabase.instance.client.from('sales_order_items').delete().eq('id', itemId);
       setState(() {
@@ -622,7 +636,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                     const Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     const Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     const Expanded(flex: 2, child: Text('Qty Ordered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    SizedBox(width: _canEdit ? 40 : 0),
+                    SizedBox(width: _canEditLines ? 40 : 0),
                   ]),
                 ),
                 const Divider(height: 1),
@@ -639,7 +653,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                             Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                         ])),
                         Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-                        Expanded(flex: 2, child: _canEdit
+                        Expanded(flex: 2, child: _canEditLines
                             ? SizedBox(height: 32, child: TextField(
                                 controller: _qtyControllers[item['id'] as String],
                                 decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
@@ -651,7 +665,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                 },
                               ))
                             : Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), style: const TextStyle(fontWeight: FontWeight.w600))),
-                        if (_canEdit) SizedBox(width: 40, child: IconButton(
+                        if (_canEditLines) SizedBox(width: 40, child: IconButton(
                           icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
                           onPressed: () => _deleteItem(item['id'] as String),
                         )),
@@ -661,7 +675,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                   ]);
                 }),
                 // Add row
-                if (_canEdit) Padding(
+                if (_canEditLines) Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(children: [
                     Expanded(flex: 4, child: Builder(builder: (ctx) {

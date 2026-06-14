@@ -29,6 +29,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool _approvalRequired = false;
   bool _showStockConsumption = false;
   Map<String, Map<String, dynamic>> _lineMetrics = {};
+  bool _hasGrn = false; // true if any GRN exists against this PO (cascade lock)
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
@@ -46,6 +47,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
+  // Line items can be added/deleted as long as no GRN exists against this PO
+  // (standalone). Once a GRN is raised, lines are cascade-locked — even for
+  // admins — to keep the GRN consistent. The whole-PO delete has the same guard.
+  bool get _canEditLines => !_hasGrn;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canApprove {
@@ -124,8 +129,14 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           } catch (_) {}
         }
       }
+      bool hasGrn = false;
+      try {
+        final g = await client.from('purchase_grns').select('id').eq('po_id', id).limit(1);
+        hasGrn = (g as List).isNotEmpty;
+      } catch (_) {}
       setState(() { _detail = Map<String, dynamic>.from(po); _items = itemList; _meta = meta;
         _approvalRequired = approvalReq; _showStockConsumption = showSC; _lineMetrics = metrics;
+        _hasGrn = hasGrn;
         _detailLoading = false; });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
   }
@@ -164,6 +175,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   Future<void> _addItem() async {
+    if (!_canEditLines) { _showSnack('Cannot add: a GRN exists against this PO. Delete the GRN first.'); return; }
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
     if (_items.any((i) => i['product_id'] == _addProductId)) { _showSnack('Already added'); return; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
@@ -187,6 +199,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   Future<void> _deleteItem(String itemId) async {
+    if (!_canEditLines) { _showSnack('Cannot remove: a GRN exists against this PO. Delete the GRN first.'); return; }
     try {
       await Supabase.instance.client.from('purchase_order_items').delete().eq('id', itemId);
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
@@ -450,10 +463,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   ])),
                   Expanded(flex: 2, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   Expanded(flex: 2, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
-                  SizedBox(width: 44, child: !_isLocked ? IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => _deleteItem(it['id'] as String)) : null),
+                  SizedBox(width: 44, child: _canEditLines ? IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => _deleteItem(it['id'] as String)) : null),
                 ]));
             }),
-            if (!_isLocked) ...[
+            if (_canEditLines) ...[
               const Divider(height: 1),
               Container(color: AppTheme.background, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(children: [
