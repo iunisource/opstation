@@ -6,6 +6,7 @@ import '../../../core/database/app_database.dart';
 import '../../../core/supabase/supabase_sync_service.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/models/user_role.dart';
+import '../../../core/constants/auth_constants.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../models/team_user.dart';
 
@@ -35,9 +36,9 @@ class TeamRepository {
     final hash = PasswordHasher.hash(kDefaultDemoPassword, salt);
     await _db.into(_db.users).insertOnConflictUpdate(
           UsersCompanion.insert(
-            id: 'u_super',
+            id: kSuperAdminLocalId,
             name: 'Super Admin',
-            email: 'superadmin@opstation.app',
+            email: kSuperAdminEmail,
             role: UserRole.superAdmin.name,
             createdAt: now,
             passwordHash: Value(hash),

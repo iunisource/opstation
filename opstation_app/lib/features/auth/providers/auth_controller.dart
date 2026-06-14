@@ -14,6 +14,7 @@ import '../data/mock_auth_repository.dart';
 import '../../admin_settings/providers/org_settings_controller.dart';
 import '../models/auth_user.dart' as app;
 import '../models/user_role.dart';
+import '../../../core/constants/auth_constants.dart';
 
 const _kSessionKey = 'opstation_session';
 
@@ -55,7 +56,7 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
       final supabaseAuth = ref.read(supabaseAuthServiceProvider);
       final pullService = ref.read(supabasePullServiceProvider);
       final db = ref.read(appDatabaseProvider);
-      final isSuper = email.trim().toLowerCase() == 'superadmin@opstation.app';
+      final isSuper = email.trim().toLowerCase() == kSuperAdminEmail;
 
       app.AuthUser? user;
 
@@ -222,7 +223,7 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
 
         // Build session from the local superadmin record (seeded at app boot).
         final localSuperAdmin = await (db.select(db.users)
-              ..where((u) => u.email.equals('superadmin@opstation.app')))
+              ..where((u) => u.id.equals(kSuperAdminLocalId)))
             .getSingleOrNull();
         if (localSuperAdmin == null) {
           throw Exception('Local superadmin record missing. Restart the app.');
@@ -230,7 +231,7 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
         user = app.AuthUser(
           id: localSuperAdmin.id,
           name: localSuperAdmin.name,
-          email: localSuperAdmin.email,
+          email: email.trim().toLowerCase(),
           role: UserRoleX.fromKey(localSuperAdmin.role) ?? UserRole.superAdmin,
           organizationId: null,
           organizationName: null,
