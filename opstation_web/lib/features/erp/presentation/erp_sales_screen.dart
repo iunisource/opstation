@@ -86,6 +86,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
   bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
+  List<String> _doRefs = []; // DO voucher numbers against this SO (for messages)
 
   @override
   void initState() { super.initState(); _loadList(); _loadMeta(); }
@@ -151,8 +152,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         createdById: order['created_by'] as String?,
       );
       bool hasDo = false;
+      List<String> doRefs = [];
       try {
-        final d = await client.from('delivery_orders').select('id').eq('so_id', id).limit(1);
+        final d = await client.from('delivery_orders').select('voucher_number').eq('so_id', id);
+        doRefs = [for (final x in d as List) (x['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
         hasDo = (d as List).isNotEmpty;
       } catch (_) {}
       setState(() {
@@ -160,6 +163,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
         _hasDo = hasDo;
+        _doRefs = doRefs;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -178,6 +182,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   // admins once a DO exists they are cascade-locked. Header fields stay on
   // _canEdit (draft only). Whole-SO delete has the same DO guard.
   bool get _canEditLines => !_hasDo;
+  // Human-readable DO reference(s) for cascade-lock messages.
+  String get _doMsg => _doRefs.isEmpty
+      ? 'a Delivery Order exists against this SO. Delete it first.'
+      : 'Delivery Order ${_doRefs.join(', ')} exists against this SO. Delete it first.';
   bool get _canDelete {
     final role = ref.read(currentUserProvider)?.role;
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
@@ -188,7 +196,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     try {
       final dos = await Supabase.instance.client.from('delivery_orders').select('id, voucher_number').eq('so_id', _detail['id']);
       if ((dos as List).isNotEmpty) {
-        _showSnack('Cannot delete: ${dos.length} Delivery Order(s) exist. Delete them first.');
+        final refs = [for (final d in dos) (d['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
+        _showSnack(refs.isEmpty
+            ? 'Cannot delete: ${dos.length} Delivery Order(s) exist. Delete them first.'
+            : 'Cannot delete: Delivery Order ${refs.join(', ')} exists. Delete it first.');
         return;
       }
     } catch (e) { _showSnack('Failed to check: $e'); return; }
@@ -301,7 +312,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   }
 
   Future<void> _addItem() async {
-    if (!_canEditLines) { _showSnack('Cannot add: a Delivery Order exists against this SO. Delete the DO first.'); return; }
+    if (!_canEditLines) { _showSnack('Cannot add: $_doMsg'); return; }
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _showSnack('Enter valid qty'); return; }
@@ -336,7 +347,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   }
 
   Future<void> _deleteItem(String itemId) async {
-    if (!_canEditLines) { _showSnack('Cannot remove: a Delivery Order exists against this SO. Delete the DO first.'); return; }
+    if (!_canEditLines) { _showSnack('Cannot remove: $_doMsg'); return; }
     try {
       await Supabase.instance.client.from('sales_order_items').delete().eq('id', itemId);
       setState(() {

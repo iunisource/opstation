@@ -110,7 +110,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       var poQuery = Supabase.instance.client.from('purchase_orders')
           .select('id,voucher_number,voucher_date,supplier_id,suppliers(name)')
           .eq('org_id', orgId).eq('branch_id', branchId)
-          .inFilter('status', ['ordered', 'partially_received']);
+          .inFilter('status', ['ordered', 'partially_received'])
+          .filter('voided_at', 'is', null);
       if (approvalRequired) poQuery = poQuery.not('approved_at', 'is', null);
       final pos = await poQuery.order('voucher_date', ascending: false);
       var available = List<Map<String, dynamic>>.from(pos as List);

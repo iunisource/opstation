@@ -47,10 +47,11 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
-  // Line items can be added/deleted as long as no GRN exists against this PO
-  // (standalone). Once a GRN is raised, lines are cascade-locked — even for
-  // admins — to keep the GRN consistent. The whole-PO delete has the same guard.
-  bool get _canEditLines => !_hasGrn;
+  bool get _isVoided => _detail['voided_at'] != null;
+  // Line items can be added/deleted while no GRN exists (standalone) and the PO
+  // isn't voided. Once a GRN is raised, lines are cascade-locked — even for
+  // admins. Editing an approved PO clears its approval (re-approval required).
+  bool get _canEditLines => !_hasGrn && !_isVoided;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canApprove {
@@ -89,7 +90,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_orders')
-          .select('id,voucher_number,voucher_date,status,is_locked,supplier_id,suppliers(name),branches(name)')
+          .select('id,voucher_number,voucher_date,status,is_locked,voided_at,supplier_id,suppliers(name),branches(name)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -195,6 +196,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           'products': {'name': prod['name'], 'sku': prod['sku']}, 'uoms': {'abbreviation': uom['abbreviation']}});
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
       });
+      await _resetApprovalIfNeeded();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -203,6 +205,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       await Supabase.instance.client.from('purchase_order_items').delete().eq('id', itemId);
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
+      await _resetApprovalIfNeeded();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -272,6 +275,46 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'approved', 'Approved by ${u?.name ?? ''}');
       _showSnack('Purchase Order approved');
+      _loadDetail(_detail['id'] as String);
+      _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Clears approval after any line-item change, forcing re-approval.
+  Future<void> _resetApprovalIfNeeded() async {
+    if (_detail['approved_at'] == null) return;
+    final id = _detail['id'] as String;
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'approved_by': null, 'approved_by_name': null, 'approved_at': null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', id);
+      await _logAudit(id, 'approval_reset', 'Line items changed — approval cleared, re-approval required');
+      setState(() { _detail['approved_by'] = null; _detail['approved_by_name'] = null; _detail['approved_at'] = null; });
+      _showSnack('Line changed — approval reset, this PO must be approved again');
+    } catch (e) { _showSnack('Approval reset failed: $e'); }
+  }
+
+  // Approved POs are voided instead of hard-deleted (keeps the audit record).
+  Future<void> _void() async {
+    if (!_canDelete) return;
+    if (_hasGrn) { _showSnack('Cannot void: a GRN exists against this PO. Delete the GRN first.'); return; }
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Void Purchase Order?'),
+      content: Text('Void ${_detail['voucher_number']}? It will be kept for the record but marked void and cannot be received.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade800), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void'))],
+    ));
+    if (ok != true) return;
+    final u = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'voided_by': u?.id, 'voided_by_name': u?.name,
+        'voided_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'voided', 'PO ${_detail['voucher_number']} voided by ${u?.name ?? ''}');
+      _showSnack('Purchase Order voided');
       _loadDetail(_detail['id'] as String);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -364,10 +407,11 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 itemBuilder: (_, i) {
                   final r = filtered[i]; final sel = r['id'] == _selectedId;
                   final status = r['status'] as String? ?? 'draft';
+                  final voided = r['voided_at'] != null;
                   return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                     title: Row(children: [
-                      Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null))),
-                      _PoStatusBadge(status: status),
+                      Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
+                      voided ? const _PoVoidChip() : _PoStatusBadge(status: status),
                     ]),
                     subtitle: Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
                     onTap: () => _loadDetail(r['id'] as String));
@@ -393,7 +437,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 onPressed: _confirmOrder),
             const SizedBox(width: 8),
           ],
-          if (_isLocked && _approvalRequired && _detail['approved_at'] == null && _canApprove) ...[
+          if (_isLocked && _approvalRequired && _detail['approved_at'] == null && !_isVoided && _canApprove) ...[
             ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve'),
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                 onPressed: _approve),
@@ -403,7 +447,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print', onPressed: _print),
-          if (_canDelete) IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), tooltip: 'Delete', onPressed: _delete),
+          if (_canDelete && !_isVoided)
+            IconButton(
+              icon: Icon(_detail['approved_at'] != null ? Icons.block : Icons.delete_outline,
+                  color: _detail['approved_at'] != null ? Colors.orange.shade800 : AppTheme.danger),
+              tooltip: _detail['approved_at'] != null ? 'Void (approved PO cannot be deleted)' : 'Delete',
+              onPressed: _detail['approved_at'] != null ? _void : _delete),
         ]),
       ),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -417,6 +466,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 ? 'Approved · ${_detail['approved_by_name'] ?? ''}'
                 : 'Pending approval'),
           if (_isLocked) const _PoLockedChip(),
+          if (_isVoided) const _PoVoidChip(),
         ]),
         if (sup != null) _PoInfoStrip(
           address: sup['address'] as String?,
@@ -592,6 +642,14 @@ class _PoLockedChip extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
     child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))]));
+}
+
+class _PoVoidChip extends StatelessWidget {
+  const _PoVoidChip();
+  @override Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.danger.withOpacity(0.4))),
+    child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.block, size: 12, color: AppTheme.danger), SizedBox(width: 4), Text('Voided', style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w600))]));
 }
 
 class _PoStatusBadge extends StatelessWidget {
