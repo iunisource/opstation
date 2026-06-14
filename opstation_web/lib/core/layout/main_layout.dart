@@ -243,6 +243,8 @@ class _TopNav extends ConsumerWidget {
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
         _menuItem(context, 'ERP Users', Icons.manage_accounts_outlined, '/erp/users', location),
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+        _menuItem(context, 'Audit Trail', Icons.history_toggle_off_outlined, '/erp/audit-log', location),
+      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
         _menuItem(context, 'Admin Settings', Icons.admin_panel_settings_outlined, '/erp/admin-settings', location),
     ];
 
@@ -295,7 +297,7 @@ class _TopNav extends ConsumerWidget {
           ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
       if (_hasItems(erpAdminItems))
         _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-          ['/erp/users', '/erp/admin-settings'], _trimDividers(erpAdminItems)),
+          ['/erp/users', '/erp/admin-settings', '/erp/audit-log'], _trimDividers(erpAdminItems)),
     ];
 
     return Container(

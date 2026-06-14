@@ -381,6 +381,50 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     }
   }
 
+  String _norm(dynamic v) {
+    if (v == null) return '';
+    if (v is num) return v.toString();
+    return v.toString().trim();
+  }
+
+  /// Logs a customer edit into the shared voucher_audit_log (voucher_type
+  /// 'CUSTOMER'), recording which fields changed. Best-effort; never blocks
+  /// the save.
+  Future<void> _logCustomerEdit(
+      Map<String, dynamic> oldC, Map<String, dynamic> newC) async {
+    const labels = {
+      'shop_name': 'shop name',
+      'code': 'code',
+      'contact_person': 'contact',
+      'phone': 'phone',
+      'address': 'address',
+      'category': 'category',
+      'group_name': 'group',
+      'credit_limit': 'credit limit',
+      'ntn_gst': 'NTN',
+    };
+    final changed = <String>[];
+    labels.forEach((k, label) {
+      if (_norm(oldC[k]) != _norm(newC[k])) changed.add(label);
+    });
+    if (_norm(oldC['latitude']) != _norm(newC['latitude']) ||
+        _norm(oldC['longitude']) != _norm(newC['longitude'])) {
+      changed.add('location');
+    }
+    if (changed.isEmpty) return;
+    try {
+      await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'voucher_id': oldC['id'],
+        'voucher_type': 'CUSTOMER',
+        'action': 'edited',
+        'details':
+            '${newC['shop_name'] ?? oldC['shop_name']}: changed ${changed.join(', ')}',
+        'user_id': ref.read(currentUserProvider)?.id,
+      });
+    } catch (_) {/* audit is best-effort */}
+  }
+
   void _showDialog(BuildContext context, Map<String, dynamic>? customer) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     final allBranches = orgId != null ? await Supabase.instance.client
@@ -582,6 +626,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                     await Supabase.instance.client.from('customers').insert({...data, 'id': id, 'updated_at': DateTime.now().toIso8601String()});
                   } else {
                     await Supabase.instance.client.from('customers').update(data).eq('id', customer['id']);
+                    await _logCustomerEdit(customer, data);
                   }
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                   _showSnack(isNew ? 'Customer added' : 'Customer updated');
