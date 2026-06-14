@@ -366,6 +366,10 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
   bool get _isDraft => (_order['status'] as String? ?? 'draft') == 'draft';
   bool get _isLocked => _order['is_locked'] as bool? ?? false;
   bool get _canEdit => _isDraft && !_isLocked;
+  // Line-item deletion is gated on the lock ONLY — not on approval/status.
+  // Unlock the PO and lines can be deleted regardless of whether it's been
+  // marked ordered/approved; while locked, deletion is blocked.
+  bool get _canDeleteLine => !_isLocked;
 
   void _showAddItemDialog() {
     String? productId;
@@ -617,10 +621,12 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
                                     Expanded(flex: 2, child: Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
                                     Expanded(flex: 2, child: Text(cost.toStringAsFixed(2))),
                                     Expanded(flex: 2, child: Text((qty * cost).toStringAsFixed(2), style: const TextStyle(fontWeight: FontWeight.w600))),
-                                    SizedBox(width: 48, child: _canEdit
+                                    SizedBox(width: 48, child: _canDeleteLine
                                         ? IconButton(
                                             icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                                            tooltip: 'Delete item',
                                             onPressed: () async {
+                                              if (_isLocked) { _showSnack('Unlock the PO to delete items'); return; }
                                               await Supabase.instance.client.from('purchase_order_items').delete().eq('id', item['id']);
                                               _load();
                                             })
