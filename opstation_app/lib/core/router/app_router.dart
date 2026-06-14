@@ -54,12 +54,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final auth = ref.read(authControllerProvider);
       final loggedIn = auth.valueOrNull != null;
       final loc = state.matchedLocation;
-
-      // While auth is loading, stay on splash.
-      if (auth.isLoading) return '/';
-
       final atSplash = loc == '/';
       final atLogin = loc == '/login';
+
+      // While auth is loading, stay on splash for the initial boot — but if a
+      // login attempt is in flight (we're on /login), stay there so the login
+      // screen remains mounted and can surface auth errors instead of being
+      // swapped to splash, which silently drops the error.
+      if (auth.isLoading) return atLogin ? null : '/';
 
       if (!loggedIn) {
         return atLogin ? null : '/login';

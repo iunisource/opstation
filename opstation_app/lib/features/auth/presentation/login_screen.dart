@@ -55,16 +55,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           password: _passwordCtrl.text,
           rememberMe: _rememberMe,
         );
-    if (!mounted) return;
-    final err = ref.read(authControllerProvider).error;
-    if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(err.toString()),
-          backgroundColor: AppColors.danger,
-        ),
-      );
-    }
+    // Errors surface via the ref.listen in build(); no need to read here, and
+    // reading after the await was unreliable (the screen could be unmounted).
   }
 
   void _showForgotPassword() {
@@ -82,6 +74,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Surface auth failures (wrong password, disabled org, data-load errors)
+    // as a snackbar. Lives here so it fires whenever the auth state flips to
+    // error, independent of _submit's mount timing.
+    ref.listen(authControllerProvider, (prev, next) {
+      if (next.hasError && !next.isLoading) {
+        final msg = next.error.toString().replaceFirst('Exception: ', '');
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text(msg),
+            backgroundColor: AppColors.danger,
+          ));
+      }
+    });
     final auth = ref.watch(authControllerProvider);
     final loading = auth.isLoading;
 
