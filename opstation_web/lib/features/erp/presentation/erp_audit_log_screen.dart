@@ -46,9 +46,7 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     try {
       final client = Supabase.instance.client;
 
-      // Org users (for the dropdown AND to scope the audit by user-id set —
-      // voucher_audit_log has no org_id column, so we scope via its acting
-      // users. This is the same embed pattern the per-voucher audit uses.)
+      // Org users — populate the dropdown and resolve names for legacy rows.
       final users = await client
           .from('users')
           .select('id, name')
@@ -56,6 +54,7 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
           .order('name');
       final userList = List<Map<String, dynamic>>.from(users);
       final ids = [for (final u in userList) u['id'] as String];
+      final idsCsv = ids.join(',');
 
       final fromIso = DateFormat('yyyy-MM-dd').format(_from);
       final toIso =
@@ -67,9 +66,23 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
           .gte('performed_at', fromIso)
           .lt('performed_at', toIso);
       if (_user != 'all') {
-        q = q.eq('user_id', _user);
+        // A selected user may be attributed either way: modern rows carry the
+        // actor in performed_by (name/email), legacy rows in user_id.
+        final selName = userList.firstWhere(
+          (u) => u['id'] == _user,
+          orElse: () => const <String, dynamic>{},
+        )['name'] as String?;
+        final parts = <String>['user_id.eq.$_user', 'performed_by.eq.$_user'];
+        if (selName != null && selName.isNotEmpty) {
+          parts.add('performed_by.eq."$selName"');
+        }
+        q = q.or(parts.join(','));
       } else {
-        q = q.inFilter('user_id', ids);
+        // Org scope across both eras: modern rows carry org_id; legacy rows
+        // carry only user_id (one of our org users).
+        q = idsCsv.isEmpty
+            ? q.eq('org_id', orgId)
+            : q.or('org_id.eq.$orgId,user_id.in.($idsCsv)');
       }
       final rows =
           await q.order('performed_at', ascending: false).limit(1000);
@@ -328,7 +341,10 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     final action = e['action'] as String? ?? '-';
     final type = e['voucher_type'] as String? ?? '-';
     final details = e['details'] as String? ?? '';
-    final userName = e['users']?['name'] as String? ?? '—';
+    final userName = (e['users']?['name'] as String?) ??
+        (e['performed_by'] as String?) ??
+        (e['user_id'] as String?) ??
+        '—';
     final ts = e['performed_at'] != null
         ? DateFormat('d MMM y · HH:mm')
             .format(DateTime.parse(e['performed_at'] as String).toLocal())
