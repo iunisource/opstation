@@ -2075,7 +2075,7 @@ class _AuditTrailList extends StatelessWidget {
     return FutureBuilder<List<dynamic>>(
       future: Supabase.instance.client.from('voucher_audit_log')
           .select('*, users(name)').eq('voucher_id', voucherId).eq('voucher_type', voucherType)
-          .order('created_at', ascending: false).limit(50),
+          .order('performed_at', ascending: false).limit(50),
       builder: (ctx, snap) {
         if (!snap.hasData) return const SizedBox.shrink();
         final entries = List<Map<String, dynamic>>.from(snap.data!);
@@ -2096,8 +2096,8 @@ class _AuditTrailList extends StatelessWidget {
               final action = e['action'] as String? ?? '-';
               final details = e['details'] as String? ?? '';
               final userName = e['users']?['name'] as String? ?? '—';
-              final ts = e['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+              final ts = e['performed_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
               IconData icon;
               Color color;
               switch (action) {

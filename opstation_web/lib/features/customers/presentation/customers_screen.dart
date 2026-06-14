@@ -415,12 +415,14 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
         'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': ref.read(currentUserProvider)?.orgId,
         'voucher_id': oldC['id'],
         'voucher_type': 'CUSTOMER',
         'action': 'edited',
         'details':
             '${newC['shop_name'] ?? oldC['shop_name']}: changed ${changed.join(', ')}',
         'user_id': ref.read(currentUserProvider)?.id,
+        'performed_by': Supabase.instance.client.auth.currentUser?.email,
       });
     } catch (_) {/* audit is best-effort */}
 
