@@ -85,6 +85,9 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
+      if (prev?['id'] != next?['id']) _load();
+    });
     if (_loading) return const Center(child: CircularProgressIndicator());
     return SingleChildScrollView(padding: const EdgeInsets.all(32),
       child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720),

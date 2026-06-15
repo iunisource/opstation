@@ -407,7 +407,15 @@ class _TopNav extends ConsumerWidget {
           if (branches.isEmpty) return const SizedBox.shrink();
           if (selected == null && branches.isNotEmpty) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              ref.read(selectedBranchProvider.notifier).state = branches.first;
+              if (ref.read(selectedBranchProvider) != null) return;
+              final savedId = html.window.localStorage['op_selected_branch_id'];
+              Map<String, dynamic>? restored;
+              if (savedId != null) {
+                for (final b in branches) {
+                  if (b['id'] == savedId) { restored = Map<String, dynamic>.from(b); break; }
+                }
+              }
+              ref.read(selectedBranchProvider.notifier).state = restored ?? branches.first;
             });
           }
           return Container(
@@ -436,6 +444,7 @@ class _TopNav extends ConsumerWidget {
                   if (id == null) return;
                   final branch = branches.firstWhere((b) => b['id'] == id);
                   ref.read(selectedBranchProvider.notifier).state = branch;
+                  html.window.localStorage['op_selected_branch_id'] = id;
                   ScaffoldMessenger.of(ctx)
                     ..clearSnackBars()
                     ..showSnackBar(SnackBar(
