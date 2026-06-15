@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'erp_pos_held_bills_screen.dart';
@@ -496,11 +497,62 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   bool _allowPriceEdit = false;         // org setting: allow editing price at POS
   Map<String, String> _posConfig = {};
 
-  @override void initState() { super.initState(); _session = Map.from(widget.session); _loadData(); }
+  @override void initState() { super.initState(); _session = Map.from(widget.session); WidgetsBinding.instance.addPostFrameCallback((_) => _syncSelectorToSession()); _loadData(); }
   @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedPriceCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
+
+  // A POS session belongs to one branch. Keep the global branch selector pointed
+  // at this session's branch while the till is open, so the indicator never lies.
+  void _syncSelectorToSession() {
+    if (!mounted) return;
+    final sessId = _session['branch_id'] as String?;
+    if (sessId == null) return;
+    if ((ref.read(selectedBranchProvider)?['id'] as String?) == sessId) return;
+    final ub = ref.read(userBranchesProvider).valueOrNull;
+    if (ub == null) return;
+    for (final b in ub) {
+      if (b['id'] == sessId) {
+        ref.read(selectedBranchProvider.notifier).state = Map<String, dynamic>.from(b);
+        return;
+      }
+    }
+  }
+
+  // Selected branch diverged from this session's branch → leave the till.
+  // The session stays OPEN (cash reconciliation belongs to its own branch);
+  // guard against losing an in-progress cart first.
+  Future<void> _handleBranchSwitch(Map<String, dynamic> newBranch) async {
+    if (!mounted) return;
+    final newName = newBranch['name'] as String? ?? 'the other branch';
+    final thisName = _session['branches']?['name'] as String? ?? 'this branch';
+    if (_cart.isNotEmpty) {
+      final choice = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: const Text('Leave this POS session?'),
+          content: Text('You have items in the cart for the "$thisName" till. Switching to "$newName" '
+              'will leave this session — it stays open and you can resume it from the POS list.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, 'cancel'), child: const Text('Stay here')),
+            TextButton(
+                onPressed: () => Navigator.pop(context, 'discard'),
+                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                child: const Text('Discard & leave')),
+            ElevatedButton(onPressed: () => Navigator.pop(context, 'hold'), child: const Text('Hold bill & leave')),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (choice == null || choice == 'cancel') { _syncSelectorToSession(); return; } // revert selector, stay
+      if (choice == 'hold') { await _holdBill(); if (!mounted) return; }
+      // 'discard' → leave the cart behind
+    }
+    widget.onUpdated();
+    if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
+  }
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -1184,6 +1236,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
+      final nextId = next?['id'] as String?;
+      final sessId = _session['branch_id'] as String?;
+      if (nextId == null || nextId == sessId || prev?['id'] == nextId) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _handleBranchSwitch(next!); });
+    });
     return Scaffold(
       backgroundColor: const Color(0xFFF0F2F5),
       appBar: AppBar(
