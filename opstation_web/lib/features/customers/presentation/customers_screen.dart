@@ -428,19 +428,10 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       );
     }
     if (changed.isEmpty) return;
-    try {
-      await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'al_${DateTime.now().microsecondsSinceEpoch}',
-        'org_id': ref.read(currentUserProvider)?.orgId,
-        'voucher_id': oldC['id'],
-        'voucher_type': 'CUSTOMER',
-        'action': 'edited',
-        'details':
-            '${newC['shop_name'] ?? oldC['shop_name']}: changed ${changed.join(', ')}',
-        'user_id': ref.read(currentUserProvider)?.id,
-        'performed_by': Supabase.instance.client.auth.currentUser?.email,
-      });
-    } catch (_) {/* audit is best-effort */}
+
+    // NOTE: the audit-trail row is written by the DB trigger
+    // fn_audit_master_change on public.customers (covers web, mobile, API and
+    // SQL), so we no longer insert into voucher_audit_log here.
 
     // Optional email alert — the Edge Function decides whether to actually
     // send, based on the org's Admin Settings toggle + recipient list.
