@@ -200,6 +200,7 @@ class _TopNav extends ConsumerWidget {
     final posItems = <Widget>[
       if (modules.contains('pos')) ...[
         if (show('/erp/pos-config')) _menuItem(context, 'Configuration', Icons.tune_outlined, '/erp/pos-config', location),
+        if (show('/erp/promoters')) _menuItem(context, 'Promoters', Icons.badge_outlined, '/erp/promoters', location),
         if (show('/erp/pos')) _menuItem(context, 'POS',         Icons.storefront_outlined, '/erp/pos',         location),
         if (show('/erp/pos-catalog')) _menuItem(context, 'POS Catalog',    Icons.list_alt_outlined,     '/erp/pos-catalog',           location),
         if (show('/erp/pos-customer-history')) _menuItem(context, 'Customer History', Icons.manage_accounts_outlined, '/erp/pos-customer-history', location),

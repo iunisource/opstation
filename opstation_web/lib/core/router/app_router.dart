@@ -62,6 +62,7 @@ import '../../features/erp/presentation/erp_grn_screen.dart';
 import '../../features/erp/presentation/erp_pi_screen.dart';
 import '../../features/erp/presentation/erp_sales_screen.dart';
 import '../../features/erp/presentation/erp_pos_screen.dart';
+import '../../features/erp/presentation/erp_promoters_screen.dart';
 import '../../features/erp/presentation/erp_chart_of_accounts_screen.dart';
 import '../../features/erp/presentation/erp_chart_of_accounts_screen.dart';
 import '../../features/erp/presentation/erp_suppliers_screen.dart';
@@ -254,6 +255,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/customer-aging', builder: (_, __) => const ErpCustomerAgingScreen()),
           GoRoute(path: '/erp/supplier-aging', builder: (_, __) => const ErpSupplierAgingScreen()),
           GoRoute(path: '/erp/pos',       builder: (_, __) => const ErpPosScreen()),
+          GoRoute(path: '/erp/promoters', builder: (_, __) => const ErpPromotersScreen()),
           GoRoute(path: '/erp/chart-of-accounts', builder: (_, __) => const ErpChartOfAccountsScreen()),
         ],
       ),
