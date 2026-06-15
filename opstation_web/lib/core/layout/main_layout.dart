@@ -162,6 +162,8 @@ class _TopNav extends ConsumerWidget {
         if (show('/erp/supplier-ledger')) _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
       if (modules.contains('sales') || modules.contains('pos'))
         if (show('/erp/customer-ledger')) _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
+      if (modules.contains('sales') || modules.contains('pos'))
+        if (show('/erp/promoter-ledger')) _menuItem(context, 'Promoter Ledger', Icons.badge_outlined, '/erp/promoter-ledger', location),
       if (modules.contains('inventory'))
         if (show('/erp/inventory-ledger')) _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
       if (modules.contains('sales') || modules.contains('pos'))
