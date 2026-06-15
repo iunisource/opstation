@@ -185,7 +185,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
           '<td class="r b">${_money(bal)}</td></tr>';
     }).join();
     final doc = '''
-<!DOCTYPE html><html><head><title>Promoter Ledger — ${p['name']}</title>
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Promoter Ledger — ${p['name']}</title>
 <style>
  body{font-family:Arial,sans-serif;padding:24px;color:#222}
  h2{margin:0 0 2px} .sub{color:#666;font-size:12px;margin-bottom:16px}
@@ -206,7 +206,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
 <tbody>$body</tbody></table>
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
-    final blob = html.Blob([doc], 'text/html');
+    final blob = html.Blob([doc], 'text/html;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.window.open(url, '_blank');
   }
