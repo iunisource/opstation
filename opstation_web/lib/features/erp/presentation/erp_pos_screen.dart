@@ -491,8 +491,6 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _filteredCustomers = [];
   List<Map<String, dynamic>> _posCustomers = [];
   Map<String, dynamic>? _selectedPosCustomer;  // quick POS customer
-  List<Map<String, dynamic>> _promoters = [];
-  Map<String, dynamic>? _selectedPromoter;  // optional commission promoter for this sale
   Map<String, double> _stockMap = {};  // product_id → qty in stock
   bool _allowNoStock = false;           // org setting: allow selling without stock
   bool _allowPriceEdit = false;         // org setting: allow editing price at POS
@@ -520,7 +518,6 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId),
         client.from('pos_customers').select('id, name, phone, cnic').eq('org_id', orgId).eq('branch_id', branchId).order('name'),
         client.from('pos_held_bills').select('*').eq('session_id', _session['id']).eq('status', 'held').order('held_at', ascending: false),
-        client.from('sales_promoters').select('id, name, phone').eq('org_id', orgId).eq('is_active', true).order('name'),
       ]);
       final prods = List<Map<String, dynamic>>.from(results[1] as List);
       final stockRows = List<Map<String, dynamic>>.from(results[4] as List);
@@ -541,6 +538,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         allowPriceEdit = s != null && s['allow_price_edit'] == true;
       } catch (_) {}
 
+      Map<String, String> posCfg = {};
+      try {
+        final cfgRows = await Supabase.instance.client
+            .from('app_config').select('key, value').eq('org_id', orgId).like('key', 'pos.%');
+        for (final row in (cfgRows as List)) {
+          final k = row['key'] as String?;
+          if (k != null) posCfg[k] = row['value']?.toString() ?? '';
+        }
+      } catch (_) {}
+
       setState(() {
         _expenses = expenseList;
         _expenses = expenseList;
@@ -553,7 +560,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _allowPriceEdit = allowPriceEdit;
         _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
         _heldBills = List<Map<String, dynamic>>.from(results[6] as List);
-        _promoters = List<Map<String, dynamic>>.from(results[7] as List);
+        _posConfig = posCfg;
         _loading = false;
       });
     } catch (e) { _showSnack('Load error: $e'); setState(() => _loading = false); }
@@ -833,7 +840,6 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'id': txnId, 'transaction_number': txnNumber, 'org_id': orgId, 'session_id': _session['id'],
         'customer_id': _selectedCustomer?['id'],
         'pos_customer_id': _selectedPosCustomer?['id'],
-        'promoter_id': _selectedPromoter?['id'],
         'total': totalAmt, 'discount': discountAmt,
         'payment_method': _paymentMethod == 'other' ? (_customPaymentCtrl.text.trim().isEmpty ? 'other' : _customPaymentCtrl.text.trim()) : _paymentMethod,
         'amount_paid': _splitPayment ? (double.tryParse(_amountPaidCtrl.text.trim()) ?? totalAmt) : totalAmt,
@@ -879,11 +885,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           } catch (_) {}
         }
       }
-      // Mature promoter commission now that items + money GL are written (instant accrual)
-      if (_selectedPromoter != null && orgId != null) {
-        try { await client.rpc('fn_mature_promoter_commission', params: {'p_org_id': orgId}); } catch (_) {}
-      }
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _selectedPromoter = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); _syncFocusNodes(); }); _playSuccessSound();
+      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); _syncFocusNodes(); }); _playSuccessSound();
       await _loadData();
       // Show receipt
       if (mounted) {
@@ -940,9 +942,6 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'reference_id': retId, 'reference_type': 'pos_return',
           'moved_at': now, 'created_by': userId,
         });
-      }
-      if ((originalTxn['promoter_id']) != null && orgId != null) {
-        try { await client.rpc('fn_mature_promoter_commission', params: {'p_org_id': orgId}); } catch (_) {}
       }
       _showSnack('Return processed — Rs. ${returnTotal.toStringAsFixed(2)} refunded');
       await _loadData();
@@ -1352,37 +1351,6 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     }),
                   ])),
             ])),
-            // Promoter (optional) — tags the sale for commission accrual
-            Padding(padding: const EdgeInsets.fromLTRB(12, 10, 12, 0), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Promoter', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary, letterSpacing: 0.5)),
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _selectedPromoter != null ? AppTheme.primary : AppTheme.border),
-                ),
-                child: DropdownButtonHideUnderline(child: DropdownButton<String?>(
-                  isDense: true, isExpanded: true,
-                  value: _selectedPromoter?['id'] as String?,
-                  icon: Icon(Icons.badge_outlined, size: 18, color: _selectedPromoter != null ? AppTheme.primary : AppTheme.textSecondary),
-                  items: <DropdownMenuItem<String?>>[
-                    const DropdownMenuItem<String?>(value: null, child: Text('No promoter (optional)', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
-                    ..._promoters.map((p) => DropdownMenuItem<String?>(
-                      value: p['id'] as String,
-                      child: Text(
-                        (p['name'] as String? ?? '-') + (((p['phone'] as String?) ?? '').isNotEmpty ? '  ·  ${p['phone']}' : ''),
-                        style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis,
-                      ),
-                    )),
-                  ],
-                  onChanged: _isOpen ? (v) => setState(() {
-                    final hit = _promoters.where((p) => p['id'] == v).toList();
-                    _selectedPromoter = hit.isEmpty ? null : hit.first;
-                  }) : null,
-                )),
-              ),
-            ])),
             // Bill search
             if (_cart.length > 3) Padding(padding: const EdgeInsets.fromLTRB(10, 6, 10, 0), child: TextField(
               decoration: const InputDecoration(hintText: 'Filter bill items...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 8)),
@@ -1718,7 +1686,6 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       setState(() {
         _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null;
         _customerSearchCtrl.clear(); _paymentMethod = 'cash';
-        _selectedPromoter = null;
         _stagedProduct = null; _stagedCartIndex = null;
         _holdsPanelExpanded = true;
       });
@@ -1799,9 +1766,29 @@ class _ReceiptDialog extends StatelessWidget {
     final customer = (transaction['pos_customers']?['name'] ?? transaction['customers']?['shop_name'] ?? 'Walk-in') as String;
     final method = (transaction['payment_method'] as String? ?? 'cash').toUpperCase();
     final ts = transaction['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(transaction['transacted_at'] as String).toLocal()) : DateFormat('d MMM yyyy  HH:mm').format(DateTime.now());
+    final company = posConfig['pos.company_name']?.isNotEmpty == true ? posConfig['pos.company_name']! : orgName;
+    final ntn = posConfig['pos.ntn'] ?? '';
+    final contact = posConfig['pos.contact'] ?? '';
+    final terms = posConfig['pos.terms'] ?? '';
+    final effFooter = (footerNote != null && footerNote!.isNotEmpty) ? footerNote! : (posConfig['pos.footer_note'] ?? '');
+    final logo = posConfig['pos.logo'] ?? '';
+    Widget? logoWidget;
+    if (logo.isNotEmpty) {
+      try {
+        if (logo.startsWith('data:')) {
+          final b64 = logo.contains(',') ? logo.split(',').last : logo;
+          logoWidget = Image.memory(base64Decode(b64), height: 56, errorBuilder: (_, __, ___) => const SizedBox.shrink());
+        } else {
+          logoWidget = Image.network(logo, height: 56, errorBuilder: (_, __, ___) => const SizedBox.shrink());
+        }
+      } catch (_) { logoWidget = null; }
+    }
     return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Text(orgName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+      if (logoWidget != null) ...[Padding(padding: const EdgeInsets.only(bottom: 8), child: logoWidget)],
+      Text(company, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
       Text(branchName, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      if (ntn.isNotEmpty) Text(ntn, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      if (contact.isNotEmpty) Text(contact, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
       const SizedBox(height: 4),
       const Text('SALES RECEIPT', style: TextStyle(fontSize: 11, letterSpacing: 2, color: AppTheme.textSecondary)),
       if ((transaction['transaction_number'] as String?)?.isNotEmpty == true) Text('Ref: ' + (transaction['transaction_number'] as String? ?? ''), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
@@ -1855,9 +1842,13 @@ class _ReceiptDialog extends StatelessWidget {
       const SizedBox(height: 4),
       Text('Payment: $method', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       Text('Cashier: $cashierName', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
-      if (footerNote != null && footerNote!.isNotEmpty) ...[
+      if (effFooter.isNotEmpty) ...[
         const Divider(),
-        Text(footerNote!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        Text(effFooter, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ],
+      if (terms.isNotEmpty) ...[
+        const SizedBox(height: 6),
+        Text(terms, textAlign: TextAlign.center, style: const TextStyle(fontSize: 9, color: AppTheme.textSecondary)),
       ],
       const SizedBox(height: 20),
       Row(children: [
