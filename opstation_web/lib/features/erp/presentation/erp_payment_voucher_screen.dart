@@ -63,10 +63,17 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       final coa  = List<Map<String, dynamic>>.from((data['coa']       as List?) ?? []);
       final sup  = List<Map<String, dynamic>>.from((data['suppliers'] as List?) ?? []);
       final cus  = List<Map<String, dynamic>>.from((data['customers'] as List?) ?? []);
+      List<Map<String, dynamic>> prom = [];
+      try {
+        final pr = await Supabase.instance.client.from('sales_promoters')
+            .select('id, name, phone').eq('org_id', orgId).eq('is_active', true).order('name');
+        prom = List<Map<String, dynamic>>.from(pr as List);
+      } catch (_) {}
       final all = <Map<String, dynamic>>[
         ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
         ...sup.map((s) => {'id': s['id'], 'label': '${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}', 'sub': 'Supplier', 'type': 'supplier'}),
         ...cus.map((c) => {'id': c['id'], 'label': '${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}', 'sub': 'Customer', 'type': 'customer'}),
+        ...prom.map((p) => {'id': p['id'], 'label': '${p['name']}${(p['phone'] as String?)?.isNotEmpty == true ? ' (${p['phone']})' : ''}', 'sub': 'Promoter', 'type': 'promoter'}),
       ];
       if (mounted) setState(() { _coaList = coa; _supplierList = sup; _customerList = cus; _allAccounts = all; _loadingMaster = false; });
     } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loadingMaster = false); } }
@@ -217,6 +224,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     if (cashCoaId == null || cashCoaId.isEmpty) { _snack('GL error: no cash account'); return; }
       final apId = 'coa_' + orgId + '_2110';
       final arId  = 'coa_' + orgId + '_1210';
+      final commPayId = 'coa_' + orgId + '_2150';
     final vid    = _currentVoucher?['id']            as String? ?? '';
     final vNum   = _currentVoucher?['voucher_number'] as String? ?? '';
     final eId    = 'je_cpv_' + vid;
@@ -254,13 +262,13 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         final l = lines[i];
         final amt   = double.tryParse(l.amtCtrl.text) ?? 0.0;
         if (amt == 0) continue;
-        final accId = l.accountType == 'supplier' ? apId : l.accountType == 'customer' ? arId : (l.accountId ?? apId);
+        final accId = l.accountType == 'supplier' ? apId : l.accountType == 'customer' ? arId : l.accountType == 'promoter' ? commPayId : (l.accountId ?? apId);
         await client.from('journal_lines').insert({
           'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
           'account_id': accId, 'debit': amt, 'credit': 0.0, 'line_order': i + 1,
           // Attribute the payable/party leg so it nets against the supplier
           // (or customer) in the ledger & aging. GL-account lines stay null.
-          'party_id': (l.accountType == 'customer' || l.accountType == 'supplier') ? l.accountId : null,
+          'party_id': (l.accountType == 'customer' || l.accountType == 'supplier' || l.accountType == 'promoter') ? l.accountId : null,
         });
       }
     } catch (e) { _snack('GL error: ' + e.toString()); }
