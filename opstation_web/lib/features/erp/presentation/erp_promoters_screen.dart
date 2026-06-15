@@ -44,7 +44,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
         client.from('sales_promoters').select('*').eq('org_id', orgId).order('name'),
         client
             .from('products')
-            .select('id, name, product_main_group, product_group, product_sub_group')
+            .select('id, name, selling_price, product_main_group, product_group, product_sub_group')
             .eq('org_id', orgId)
             .order('name'),
       ]);
@@ -249,18 +249,27 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
             width: 440,
             child: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  value: productId,
-                  decoration: const InputDecoration(labelText: 'Product *'),
-                  items: _products
-                      .map((pr) => DropdownMenuItem<String>(
+                DropdownMenu<String>(
+                  expandedInsets: EdgeInsets.zero,
+                  enableFilter: true,
+                  requestFocusOnTap: true,
+                  menuHeight: 320,
+                  initialSelection: productId,
+                  label: const Text('Product *'),
+                  hintText: 'Type to search…',
+                  dropdownMenuEntries: _products
+                      .map((pr) => DropdownMenuEntry<String>(
                             value: pr['id'] as String,
-                            child: Text(pr['name'] as String? ?? '-',
-                                overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+                            label: pr['name'] as String? ?? '-',
                           ))
                       .toList(),
-                  onChanged: (v) => setLocal(() => productId = v),
+                  onSelected: (v) => setLocal(() {
+                    productId = v;
+                    // default the floor price to the product's selling price
+                    final m = _products.where((p) => p['id'] == v).toList();
+                    final sp = m.isEmpty ? 0.0 : ((m.first['selling_price'] as num?)?.toDouble() ?? 0.0);
+                    if (v != null) baseCtrl.text = sp == sp.roundToDouble() ? sp.toStringAsFixed(0) : sp.toStringAsFixed(2);
+                  }),
                 ),
                 const SizedBox(height: 8),
                 Row(children: [
@@ -269,7 +278,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
                     controller: baseCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(labelText: 'Floor price *'),
+                    decoration: const InputDecoration(labelText: 'Floor price *', helperText: 'Defaults to selling price'),
                     onChanged: (_) => setLocal(() {}),
                   )),
                   const SizedBox(width: 8),
@@ -393,15 +402,18 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
                   }),
                 ),
                 const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  value: category,
-                  decoration: const InputDecoration(labelText: 'Category *'),
-                  items: opts
-                      .map((c) => DropdownMenuItem<String>(
-                          value: c, child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))))
-                      .toList(),
-                  onChanged: (v) => setLocal(() => category = v),
+                DropdownMenu<String>(
+                  key: ValueKey(level),
+                  expandedInsets: EdgeInsets.zero,
+                  enableFilter: true,
+                  requestFocusOnTap: true,
+                  menuHeight: 320,
+                  initialSelection: category,
+                  label: const Text('Category *'),
+                  hintText: 'Type to search…',
+                  dropdownMenuEntries:
+                      opts.map((c) => DropdownMenuEntry<String>(value: c, label: c)).toList(),
+                  onSelected: (v) => setLocal(() => category = v),
                 ),
                 if (opts.isEmpty)
                   const Padding(
@@ -413,19 +425,10 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
                 Row(children: [
                   Expanded(
                       child: TextField(
-                    controller: baseCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(labelText: 'Floor price *'),
-                    onChanged: (_) => setLocal(() {}),
-                  )),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: TextField(
                     controller: discCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(labelText: 'Discount %'),
+                    decoration: const InputDecoration(labelText: 'Discount %', helperText: 'Optional'),
                     onChanged: (_) => setLocal(() {}),
                   )),
                   const SizedBox(width: 8),
@@ -434,12 +437,24 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
                     controller: taxCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(labelText: 'Tax %'),
+                    decoration: const InputDecoration(labelText: 'Tax %', helperText: 'Optional'),
                     onChanged: (_) => setLocal(() {}),
                   )),
                 ]),
                 const SizedBox(height: 10),
-                _effRow(eff),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                      color: AppTheme.primary.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppTheme.primary.withOpacity(0.25))),
+                  child: Text(
+                    'Floor = each product\u2019s selling price'
+                        '${disc != 0 ? ' \u2212 ${disc.toStringAsFixed(disc == disc.roundToDouble() ? 0 : 2)}%' : ''}'
+                        '${tax != 0 ? ' + ${tax.toStringAsFixed(tax == tax.roundToDouble() ? 0 : 2)}% tax' : ''}',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w600),
+                  ),
+                ),
                 const SizedBox(height: 6),
                 _effFromRow(effFrom, (d) => setLocal(() => effFrom = d)),
                 SwitchListTile(
@@ -474,10 +489,10 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
       'promoter_id': p['id'],
       'taxonomy_level': level,
       'category_id': category,
-      'floor_price': base,
+      'floor_price': 0,
       'discount_pct': disc,
       'tax_pct': tax,
-      'effective_floor': _eff(base, disc, tax),
+      'effective_floor': 0,
       'effective_from': DateFormat('yyyy-MM-dd').format(effFrom),
       'is_active': active,
     };
@@ -729,6 +744,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
               target: '${f['category_id'] ?? '-'}',
               tag: lvl.toUpperCase(),
               tagColor: Colors.purple,
+              isCategory: true,
               floorPrice: (f['floor_price'] as num?)?.toDouble() ?? 0,
               eff: (f['effective_floor'] as num?)?.toDouble() ?? 0,
               disc: (f['discount_pct'] as num?)?.toDouble() ?? 0,
@@ -778,6 +794,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
     required String target,
     required String tag,
     required Color tagColor,
+    bool isCategory = false,
     required double floorPrice,
     required double eff,
     required double disc,
@@ -787,9 +804,14 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
     required VoidCallback onEdit,
     required VoidCallback onDelete,
   }) {
-    final adj = (disc != 0 || tax != 0)
-        ? '  (base ${floorPrice.toStringAsFixed(2)}${disc != 0 ? ', -$disc%' : ''}${tax != 0 ? ', +$tax% tax' : ''})'
-        : '';
+    String pct(double v) => v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2);
+    final tail = '${effFrom != null ? '  ·  from $effFrom' : ''}${active ? '' : '  ·  inactive'}';
+    final valueText = isCategory
+        ? 'Each product price'
+            '${disc != 0 ? ' \u2212 ${pct(disc)}%' : ''}'
+            '${tax != 0 ? ' + ${pct(tax)}% tax' : ''}$tail'
+        : 'Floor Rs. ${eff.toStringAsFixed(2)}'
+            '${(disc != 0 || tax != 0) ? '  (base ${floorPrice.toStringAsFixed(2)}${disc != 0 ? ', -${pct(disc)}%' : ''}${tax != 0 ? ', +${pct(tax)}% tax' : ''})' : ''}$tail';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -813,7 +835,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
                     color: active ? null : AppTheme.textSecondary),
                 overflow: TextOverflow.ellipsis),
             Text(
-                'Floor Rs. ${eff.toStringAsFixed(2)}$adj${effFrom != null ? '  ·  from $effFrom' : ''}${active ? '' : '  ·  inactive'}',
+                valueText,
                 style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ]),
         ),
