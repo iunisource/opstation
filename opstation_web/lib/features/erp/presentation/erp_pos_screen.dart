@@ -538,15 +538,27 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         allowPriceEdit = s != null && s['allow_price_edit'] == true;
       } catch (_) {}
 
-      Map<String, String> posCfg = {};
+      // Receipt config from app_config (pos.*). Branch-scoped: a branch's own
+      // config (branch_id == this branch) takes precedence as a complete set;
+      // otherwise fall back to the org-level default (branch_id null/empty).
+      Map<String, String> orgCfg = {};
+      Map<String, String> brCfg = {};
       try {
         final cfgRows = await Supabase.instance.client
-            .from('app_config').select('key, value').eq('org_id', orgId).like('key', 'pos.%');
+            .from('app_config').select('key, value, branch_id').eq('org_id', orgId).like('key', 'pos.%');
         for (final row in (cfgRows as List)) {
           final k = row['key'] as String?;
-          if (k != null) posCfg[k] = row['value']?.toString() ?? '';
+          if (k == null) continue;
+          final v = row['value']?.toString() ?? '';
+          final b = row['branch_id'] as String?;
+          if (b == null || b.isEmpty) {
+            orgCfg[k] = v;
+          } else if (b == branchId) {
+            brCfg[k] = v;
+          }
         }
       } catch (_) {}
+      final posCfg = brCfg.isNotEmpty ? brCfg : orgCfg;
 
       setState(() {
         _expenses = expenseList;
