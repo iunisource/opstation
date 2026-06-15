@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -121,6 +123,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
           'date': (h['entry_date'] as String?) ?? ((h['posted_at'] as String?)?.split('T').first ?? ''),
           'voucher': h['entry_number'] ?? '',
           'type': h['reference_type'] ?? '',
+          'detail': (h['description'] as String?) ?? '',
           'earned': cr,
           'paid': dr,
           'balance': bal,
@@ -159,6 +162,53 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
       default:
         return t.isEmpty ? '—' : t;
     }
+  }
+
+  void _print() {
+    final p = _selected;
+    if (p == null || _rows.isEmpty) {
+      _snack('Nothing to print');
+      return;
+    }
+    final org = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+    final outstanding = _earned - _paid;
+    final body = _rows.map((r) {
+      final earned = r['earned'] as double;
+      final paid = r['paid'] as double;
+      final bal = r['balance'] as double;
+      final detail = ((r['detail'] as String?)?.isNotEmpty == true)
+          ? r['detail'] as String
+          : _typeLabel(r['type'] as String? ?? '');
+      return '<tr><td>${r['date']}</td><td>${r['voucher']}</td><td>$detail</td>'
+          '<td class="r">${earned > 0 ? _money(earned) : ''}</td>'
+          '<td class="r">${paid > 0 ? _money(paid) : ''}</td>'
+          '<td class="r b">${_money(bal)}</td></tr>';
+    }).join();
+    final doc = '''
+<!DOCTYPE html><html><head><title>Promoter Ledger — ${p['name']}</title>
+<style>
+ body{font-family:Arial,sans-serif;padding:24px;color:#222}
+ h2{margin:0 0 2px} .sub{color:#666;font-size:12px;margin-bottom:16px}
+ .stats{display:flex;gap:28px;margin:12px 0 18px}
+ .stat .l{font-size:11px;color:#666} .stat .v{font-size:16px;font-weight:bold}
+ table{width:100%;border-collapse:collapse;font-size:12px}
+ th{text-align:left;border-bottom:2px solid #333;padding:6px 8px;background:#f5f5f5}
+ td{padding:6px 8px;border-bottom:1px solid #eee} .r{text-align:right} .b{font-weight:bold}
+</style></head><body>
+<h2>$org — Promoter Ledger</h2>
+<div class="sub">${p['name']}${(p['phone'] as String?)?.isNotEmpty == true ? '  ·  ${p['phone']}' : ''}  ·  Commission Payable (2150)  ·  ${DateFormat('dd MMM yyyy').format(DateTime.now())}</div>
+<div class="stats">
+ <div class="stat"><div class="l">Earned</div><div class="v">Rs. ${_money(_earned)}</div></div>
+ <div class="stat"><div class="l">Paid</div><div class="v">Rs. ${_money(_paid)}</div></div>
+ <div class="stat"><div class="l">Outstanding</div><div class="v">Rs. ${_money(outstanding)}</div></div>
+</div>
+<table><thead><tr><th>Date</th><th>Voucher</th><th>Detail</th><th class="r">Earned</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+<tbody>$body</tbody></table>
+<script>window.onload=function(){window.print();}</script>
+</body></html>''';
+    final blob = html.Blob([doc], 'text/html');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
   }
 
   @override
@@ -267,6 +317,12 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
           _stat('Paid', _paid, AppTheme.textSecondary),
           const SizedBox(width: 18),
           _stat('Outstanding', outstanding, AppTheme.success),
+          const SizedBox(width: 16),
+          IconButton(
+            icon: const Icon(Icons.print_outlined, size: 20),
+            tooltip: 'Print / Save as PDF',
+            onPressed: _rows.isEmpty ? null : _print,
+          ),
         ]),
       ),
       const Divider(height: 1),
@@ -315,7 +371,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
       child: Row(children: [
         Expanded(flex: 2, child: Text(r['date'] as String? ?? '', style: const TextStyle(fontSize: 12))),
         Expanded(flex: 2, child: Text(r['voucher'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-        Expanded(flex: 3, child: Text(_typeLabel(r['type'] as String? ?? ''), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+        Expanded(flex: 3, child: Text(((r['detail'] as String?)?.isNotEmpty == true) ? r['detail'] as String : _typeLabel(r['type'] as String? ?? ''), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
         Expanded(flex: 2, child: Text(earned > 0 ? _money(earned) : '', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.primary))),
         Expanded(flex: 2, child: Text(paid > 0 ? _money(paid) : '', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
         Expanded(flex: 2, child: Text(_money(bal), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
