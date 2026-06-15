@@ -242,24 +242,28 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     // 6. Journal Vouchers (JV) touching this party (posted only)
     try {
       final jvHeaders = await client.from('journal_entries')
-          .select('id, entry_number, entry_date, description, posted_at, created_at, status')
-          .eq('org_id', orgId).eq('reference_type', 'jv').eq('status', 'posted');
+          .select('id, entry_number, entry_date, description, posted_at, created_at, status, reference_type')
+          .eq('org_id', orgId)
+          .inFilter('reference_type', const ['jv', 'opening_jv', 'opening_balance'])
+          .eq('status', 'posted');
       final jvMap = {for (final v in jvHeaders as List) v['id'] as String: v};
       if (jvMap.isNotEmpty) {
         final jvLines = await client.from('journal_lines')
             .select('entry_id, debit, credit, description, party_id, account_type')
-            .eq('party_id', supplierId).eq('account_type', 'supplier').inFilter('entry_id', jvMap.keys.toList());
+            .eq('party_id', supplierId).inFilter('entry_id', jvMap.keys.toList());
         for (final line in jvLines as List) {
           final v = jvMap[line['entry_id'] as String]; if (v == null) continue;
+          final refType = (v['reference_type'] as String?) ?? 'jv';
+          final isOpening = refType == 'opening_jv' || refType == 'opening_balance';
           final date = extractDate(v as Map, const ['entry_date', 'posted_at', 'created_at']);
           final vno = (v['entry_number'] as String?) ?? '';
           final lineDesc = (line['description'] as String?) ?? '';
           entries.add({
             'date': date, 'voucher': vno,
-            'description': 'Journal — ' + (lineDesc.isNotEmpty ? lineDesc : (v['description'] as String? ?? vno)),
+            'description': (isOpening ? 'Opening Balance — ' : 'Journal — ') + (lineDesc.isNotEmpty ? lineDesc : (v['description'] as String? ?? vno)),
             'debit': (line['debit'] as num?)?.toDouble() ?? 0,
             'credit': (line['credit'] as num?)?.toDouble() ?? 0,
-            'id': v['id'] as String?, 'type': 'Journal (JV)',
+            'id': v['id'] as String?, 'type': isOpening ? 'Opening Balance' : 'Journal (JV)',
           });
         }
       }
