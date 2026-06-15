@@ -403,13 +403,29 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       'credit_limit': 'credit limit',
       'ntn_gst': 'NTN',
     };
+    String disp(dynamic v) {
+      final s = v?.toString().trim() ?? '';
+      return s.isEmpty ? '—' : s;
+    }
+
     final changed = <String>[];
+    final changeTrail = <Map<String, String>>[];
+    void track(String label, dynamic oldV, dynamic newV) {
+      changed.add(label);
+      changeTrail
+          .add({'field': label, 'from': disp(oldV), 'to': disp(newV)});
+    }
+
     labels.forEach((k, label) {
-      if (_norm(oldC[k]) != _norm(newC[k])) changed.add(label);
+      if (_norm(oldC[k]) != _norm(newC[k])) track(label, oldC[k], newC[k]);
     });
     if (_norm(oldC['latitude']) != _norm(newC['latitude']) ||
         _norm(oldC['longitude']) != _norm(newC['longitude'])) {
-      changed.add('location');
+      track(
+        'location',
+        '${disp(oldC['latitude'])}, ${disp(oldC['longitude'])}',
+        '${disp(newC['latitude'])}, ${disp(newC['longitude'])}',
+      );
     }
     if (changed.isEmpty) return;
     try {
@@ -433,7 +449,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         'notify-customer-edit',
         body: {
           'customerName': newC['shop_name'] ?? oldC['shop_name'],
-          'changes': changed,
+          'changes': changeTrail,
         },
       );
     } catch (_) {/* alert is best-effort */}
