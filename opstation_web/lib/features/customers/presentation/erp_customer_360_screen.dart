@@ -50,6 +50,9 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   List<Map<String, dynamic>> _orgUsers = [];
   Map<String, String> _userNames = {};
 
+  bool _loadingComplaints = true;
+  List<Map<String, dynamic>> _complaints = [];
+
   final _money = NumberFormat('#,##0');
   final _money2 = NumberFormat('#,##0.00');
 
@@ -60,11 +63,12 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 5, vsync: this);
+    _tabs = TabController(length: 6, vsync: this);
     _loadAr();
     _loadVisits();
     _loadIntel();
     _loadActivities();
+    _loadComplaints();
   }
 
   @override
@@ -78,6 +82,116 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadVisits();
     _loadIntel();
     _loadActivities();
+    _loadComplaints();
+  }
+
+  Future<void> _loadComplaints() async {
+    setState(() => _loadingComplaints = true);
+    try {
+      final rows = await Supabase.instance.client
+          .from('crm_complaints')
+          .select()
+          .eq('customer_id', _customerId)
+          .order('created_at', ascending: false);
+      if (!mounted) return;
+      setState(() {
+        _complaints = List<Map<String, dynamic>>.from(rows);
+        _loadingComplaints = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _complaints = [];
+        _loadingComplaints = false;
+      });
+    }
+  }
+
+  int get _openComplaints => _complaints
+      .where((c) => (c['status'] as String?) == 'open' || (c['status'] as String?) == 'in_progress')
+      .length;
+
+  Widget _complaintsTab() {
+    if (_loadingComplaints) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_complaints.isEmpty) {
+      return const Center(
+          child: Text('No complaints logged.',
+              style: TextStyle(color: AppTheme.textSecondary)));
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: _complaints.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        final c = _complaints[i];
+        final status = (c['status'] as String?) ?? 'open';
+        final open = status == 'open' || status == 'in_progress';
+        final created = DateTime.tryParse('${c['created_at']}');
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppTheme.border),
+          ),
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Expanded(
+                  child: Text(c['subject'] as String? ?? '',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: (open ? AppTheme.warning : AppTheme.success).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(status,
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: open ? AppTheme.warning : AppTheme.success)),
+                ),
+              ]),
+              if ((c['description'] as String?)?.isNotEmpty == true) ...[
+                const SizedBox(height: 6),
+                Text(c['description'] as String,
+                    style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              ],
+              const SizedBox(height: 8),
+              Row(children: [
+                Text(
+                    created == null
+                        ? ''
+                        : DateFormat('d MMM y, h:mm a').format(created.toLocal()),
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                const Spacer(),
+                if (open)
+                  TextButton(
+                    onPressed: () => _resolveComplaint(c),
+                    child: const Text('Mark resolved'),
+                  ),
+              ]),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _resolveComplaint(Map<String, dynamic> c) async {
+    try {
+      await Supabase.instance.client.from('crm_complaints').update({
+        'status': 'resolved',
+        'resolved_at': DateTime.now().toIso8601String(),
+      }).eq('id', c['id']);
+      _loadComplaints();
+      _loadActivities(); // linked follow-up auto-closes via trigger
+    } catch (_) {/* ignore */}
   }
 
   Future<void> _loadAr() async {
@@ -303,12 +417,32 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                 indicatorColor: AppTheme.primary,
                 labelStyle:
                     const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                tabs: const [
-                  Tab(text: 'Overview'),
-                  Tab(text: 'Receivables'),
-                  Tab(text: 'Visits'),
-                  Tab(text: 'Intel'),
-                  Tab(text: 'Activities'),
+                tabs: [
+                  const Tab(text: 'Overview'),
+                  const Tab(text: 'Receivables'),
+                  const Tab(text: 'Visits'),
+                  const Tab(text: 'Intel'),
+                  const Tab(text: 'Activities'),
+                  Tab(
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Text('Complaints'),
+                      if (_openComplaints > 0) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: AppTheme.danger,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text('$_openComplaints',
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      ],
+                    ]),
+                  ),
                 ],
               ),
             ),
@@ -322,6 +456,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   _visitsTab(),
                   _intelTab(),
                   _activitiesTab(),
+                  _complaintsTab(),
                 ],
               ),
             ),
