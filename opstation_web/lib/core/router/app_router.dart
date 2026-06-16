@@ -48,6 +48,7 @@ import '../../features/live_map/presentation/live_map_screen.dart';
 import '../../features/compliance/presentation/compliance_screen.dart';
 import '../../features/operations/presentation/retailer_files_screen.dart';
 import '../../features/operations/presentation/notifications_composer_screen.dart';
+import '../../features/operations/presentation/retailers_admin_screen.dart';
 import '../layout/main_layout.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
@@ -198,6 +199,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
           GoRoute(path: '/operations/files', builder: (_, __) => const RetailerFilesScreen()),
           GoRoute(path: '/operations/notifications', builder: (_, __) => const NotificationsComposerScreen()),
+          GoRoute(path: '/operations/retailers', builder: (_, __) => const RetailersAdminScreen()),
           GoRoute(path: '/orgs', builder: (_, __) => const OrgsScreen()),
           GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
           GoRoute(path: '/erp/low-stock-report', builder: (_, __) => const ErpLowStockReportScreen()),

@@ -1,0 +1,279 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../auth/auth_controller.dart';
+
+/// Admin "Retailers" screen (Operations). Search a customer, create a retailer
+/// login for them (calls the provision-retailer Edge Function), and toggle
+/// whether they may share their location. A retailer is a single users row
+/// with role='retailer' linked to the customer — created once, here.
+class RetailersAdminScreen extends ConsumerStatefulWidget {
+  const RetailersAdminScreen({super.key});
+  @override
+  ConsumerState<RetailersAdminScreen> createState() => _RetailersAdminScreenState();
+}
+
+class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
+  final _searchCtrl = TextEditingController();
+  bool _searching = false;
+  List<Map<String, dynamic>> _results = [];
+  // customer_id -> existing retailer login row (email, etc.)
+  final Map<String, Map<String, dynamic>> _logins = {};
+
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _search() async {
+    final orgId = _orgId;
+    final q = _searchCtrl.text.trim();
+    if (orgId == null || q.isEmpty) return;
+    setState(() => _searching = true);
+    try {
+      final client = Supabase.instance.client;
+      final rows = await client
+          .from('customers')
+          .select('id, shop_name, code, phone, location_capture_allowed')
+          .eq('org_id', orgId)
+          .or('shop_name.ilike.%$q%,code.ilike.%$q%')
+          .limit(25);
+      final results = List<Map<String, dynamic>>.from(rows);
+      final ids = [for (final c in results) c['id'] as String];
+
+      _logins.clear();
+      if (ids.isNotEmpty) {
+        final loginRows = await client
+            .from('users')
+            .select('customer_id, email, password_temporary, is_active')
+            .inFilter('customer_id', ids)
+            .eq('role', 'retailer');
+        for (final l in loginRows as List) {
+          _logins[l['customer_id'] as String] = Map<String, dynamic>.from(l);
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _results = results;
+        _searching = false;
+      });
+    } catch (e) {
+      setState(() => _searching = false);
+      _snack('Search error: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _provision(Map<String, dynamic> c) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Create retailer login'),
+        content: Text(
+            'Create a portal/app login for "${c['shop_name']}" (code ${c['code']})?\n\n'
+            'Default password is their code; they will be asked to change it on first login.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Create')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('provision-retailer', body: {'customerId': c['id']});
+      final data = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null;
+      if (data == null || data['error'] != null) {
+        _snack('Could not create login: ${data?['error'] ?? 'unknown error'}');
+        return;
+      }
+      await _showCredentials(c, data);
+      _search(); // refresh login status
+    } on FunctionException catch (e) {
+      final detail = e.details is Map ? (e.details as Map)['error'] : e.details;
+      _snack('Could not create login: ${detail ?? e.reasonPhrase ?? 'failed'}');
+    } catch (e) {
+      _snack('Could not create login: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _showCredentials(Map<String, dynamic> c, Map<String, dynamic> data) async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Login created'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${c['shop_name']} can now sign in to the retailer portal.'),
+            const SizedBox(height: 12),
+            _credRow('Login code', '${data['loginCode'] ?? c['code']}'),
+            _credRow('Temp password', '${data['tempPassword'] ?? c['code']}'),
+            const SizedBox(height: 8),
+            const Text('They will be prompted to set a new password on first login.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          ],
+        ),
+        actions: [
+          ElevatedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done')),
+        ],
+      ),
+    );
+  }
+
+  Widget _credRow(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          SizedBox(
+              width: 120,
+              child: Text(label,
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          Expanded(
+              child: SelectableText(value,
+                  style: const TextStyle(fontWeight: FontWeight.w700))),
+        ]),
+      );
+
+  Future<void> _toggleLocation(Map<String, dynamic> c, bool val) async {
+    final prev = c['location_capture_allowed'] == true;
+    setState(() => c['location_capture_allowed'] = val); // optimistic
+    try {
+      await Supabase.instance.client
+          .from('customers')
+          .update({'location_capture_allowed': val}).eq('id', c['id']);
+    } catch (e) {
+      setState(() => c['location_capture_allowed'] = prev);
+      _snack('Could not update: ${e.toString().split('\n').first}');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final role = ref.watch(currentUserProvider)?.role;
+    final canProvision =
+        role == WebUserRole.masterAdmin || role == WebUserRole.superAdmin;
+
+    return Container(
+      color: AppTheme.background,
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Retailers',
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          const Text(
+              'Give a customer a portal/app login and control whether they can share their location.',
+              style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+          if (!canProvision) ...[
+            const SizedBox(height: 8),
+            const Text(
+                'Note: creating logins requires a master-admin account.',
+                style: TextStyle(fontSize: 12, color: AppTheme.warning)),
+          ],
+          const SizedBox(height: 16),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: TextField(
+              controller: _searchCtrl,
+              decoration: InputDecoration(
+                hintText: 'Search a customer by shop name or code',
+                filled: true,
+                fillColor: Colors.white,
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searching
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                            width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)))
+                    : IconButton(icon: const Icon(Icons.arrow_forward), onPressed: _search),
+              ),
+              onSubmitted: (_) => _search(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: _results.isEmpty
+                ? const Center(
+                    child: Text('Search for a customer to begin.',
+                        style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView.separated(
+                    itemCount: _results.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      final c = _results[i];
+                      final login = _logins[c['id']];
+                      final hasLogin = login != null;
+                      final locOn = c['location_capture_allowed'] == true;
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.border),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Row(children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(c['shop_name'] as String? ?? '',
+                                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 2),
+                                Text(
+                                  [
+                                    c['code'] as String? ?? '',
+                                    if (hasLogin)
+                                      'Login active'
+                                    else
+                                      'No login',
+                                  ].join('  •  '),
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: hasLogin ? AppTheme.success : AppTheme.textSecondary),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Text('Location',
+                                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                            Switch(
+                              value: locOn,
+                              onChanged: (v) => _toggleLocation(c, v),
+                            ),
+                          ]),
+                          const SizedBox(width: 12),
+                          if (hasLogin)
+                            const Chip(
+                              label: Text('Login', style: TextStyle(fontSize: 11)),
+                              avatar: Icon(Icons.check_circle, size: 16, color: AppTheme.success),
+                              visualDensity: VisualDensity.compact,
+                            )
+                          else
+                            ElevatedButton.icon(
+                              icon: const Icon(Icons.person_add_alt, size: 16),
+                              label: const Text('Create login'),
+                              onPressed: canProvision ? () => _provision(c) : null,
+                            ),
+                        ]),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
