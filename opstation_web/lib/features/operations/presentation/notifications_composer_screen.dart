@@ -22,8 +22,9 @@ class NotificationsComposerScreen extends ConsumerStatefulWidget {
 
 class _NotificationsComposerScreenState
     extends ConsumerState<NotificationsComposerScreen> {
-  // CONFIRM: name of your existing push Edge Function + payload it expects.
-  static const _pushFunction = 'send-push';
+  // Batch push Edge Function (deploy send-notification-batch alongside your
+  // existing send-notification). Reuses users.fcm_token + your FCM auth.
+  static const _pushFunction = 'send-notification-batch';
   // Public bucket reused for notification images (URL must be directly usable
   // by push + drawer); 'opstation-photos' is already public in this project.
   static const _imageBucket = 'opstation-photos';
@@ -289,13 +290,14 @@ class _NotificationsComposerScreenState
 
               // 4) hand off to push (best-effort; drawer already populated)
               try {
+                final data = <String, String>{'notification_id': notifId};
+                if (imageUrl != null) data['image_url'] = imageUrl;
+                if (link.isNotEmpty) data['link_url'] = link;
                 await client.functions.invoke(_pushFunction, body: {
-                  'notification_id': notifId,
+                  'recipient_user_ids': ids,
                   'title': title,
                   'body': bodyCtrl.text.trim(),
-                  'image_url': imageUrl,
-                  'link_url': link.isEmpty ? null : link,
-                  'recipient_user_ids': ids,
+                  'data': data,
                 });
               } catch (_) {/* push delivery is best-effort */}
 
