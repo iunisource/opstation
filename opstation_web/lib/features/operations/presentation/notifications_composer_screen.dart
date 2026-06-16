@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:async';
 import 'dart:html' as html;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -96,6 +97,7 @@ class _NotificationsComposerScreenState
     final searchCtrl = TextEditingController();
     List<Map<String, dynamic>> results = [];
     bool searching = false;
+    Timer? debounce;
 
     Future<void> run(StateSetter setS) async {
       final orgId = _orgId;
@@ -135,6 +137,10 @@ class _NotificationsComposerScreenState
                   suffixIcon: IconButton(
                       icon: const Icon(Icons.search), onPressed: () => run(setS)),
                 ),
+                onChanged: (_) {
+                  debounce?.cancel();
+                  debounce = Timer(const Duration(milliseconds: 350), () => run(setS));
+                },
                 onSubmitted: (_) => run(setS),
               ),
               const SizedBox(height: 12),
