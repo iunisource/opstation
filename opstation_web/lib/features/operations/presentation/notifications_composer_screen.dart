@@ -1,0 +1,550 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../auth/auth_controller.dart';
+
+/// Admin "Notifications" composer (Operations menu). Sends a push + saves a
+/// drawer entry to any combination of user groups (roles) or a specific
+/// customer. Recipients are resolved at send time and fanned out into
+/// `notification_recipients` (which backs each user's drawer + read-state);
+/// the existing push Edge Function is then invoked to deliver.
+class NotificationsComposerScreen extends ConsumerStatefulWidget {
+  const NotificationsComposerScreen({super.key});
+  @override
+  ConsumerState<NotificationsComposerScreen> createState() =>
+      _NotificationsComposerScreenState();
+}
+
+class _NotificationsComposerScreenState
+    extends ConsumerState<NotificationsComposerScreen> {
+  // CONFIRM: name of your existing push Edge Function + payload it expects.
+  static const _pushFunction = 'send-push';
+  // Public bucket reused for notification images (URL must be directly usable
+  // by push + drawer); 'opstation-photos' is already public in this project.
+  static const _imageBucket = 'opstation-photos';
+  static const _maxImageBytes = 5 * 1024 * 1024; // 5 MB
+
+  bool _loading = true;
+  List<Map<String, dynamic>> _recent = [];
+  List<String> _roles = [];
+  final _df = DateFormat('d MMM y, h:mm a');
+
+  String? get _orgId => ref.read(currentUserProvider)?.orgId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final orgId = _orgId;
+    if (orgId == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final client = Supabase.instance.client;
+      final recent = await client
+          .from('notifications')
+          .select()
+          .eq('org_id', orgId)
+          .order('created_at', ascending: false)
+          .limit(50);
+      final userRows =
+          await client.from('users').select('role').eq('org_id', orgId);
+      final roles = <String>{};
+      for (final r in userRows as List) {
+        final role = (r['role'] as String?)?.trim();
+        if (role != null && role.isNotEmpty) roles.add(role);
+      }
+      if (!mounted) return;
+      setState(() {
+        _recent = List<Map<String, dynamic>>.from(recent);
+        _roles = roles.toList()..sort();
+        _loading = false;
+      });
+    } catch (e) {
+      _snack('Load error: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  }
+
+  String _mimeFor(String name) {
+    final n = name.toLowerCase();
+    if (n.endsWith('.png')) return 'image/png';
+    if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
+    if (n.endsWith('.webp')) return 'image/webp';
+    if (n.endsWith('.gif')) return 'image/gif';
+    return 'application/octet-stream';
+  }
+
+  Future<Map<String, dynamic>?> _pickCustomer() async {
+    final searchCtrl = TextEditingController();
+    List<Map<String, dynamic>> results = [];
+    bool searching = false;
+
+    Future<void> run(StateSetter setS) async {
+      final orgId = _orgId;
+      final q = searchCtrl.text.trim();
+      if (orgId == null || q.isEmpty) return;
+      setS(() => searching = true);
+      try {
+        final rows = await Supabase.instance.client
+            .from('customers')
+            .select('id, shop_name, code')
+            .eq('org_id', orgId)
+            .or('shop_name.ilike.%$q%,code.ilike.%$q%')
+            .limit(25);
+        setS(() {
+          results = List<Map<String, dynamic>>.from(rows);
+          searching = false;
+        });
+      } catch (e) {
+        setS(() => searching = false);
+        _snack('Search error: $e');
+      }
+    }
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Choose customer'),
+          content: SizedBox(
+            width: 460,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: searchCtrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Search by shop name or code',
+                  suffixIcon: IconButton(
+                      icon: const Icon(Icons.search), onPressed: () => run(setS)),
+                ),
+                onSubmitted: (_) => run(setS),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 320,
+                child: searching
+                    ? const Center(child: CircularProgressIndicator())
+                    : results.isEmpty
+                        ? const Center(
+                            child: Text('Type a name or code and search',
+                                style: TextStyle(color: AppTheme.textSecondary)))
+                        : ListView.builder(
+                            itemCount: results.length,
+                            itemBuilder: (_, i) {
+                              final c = results[i];
+                              return ListTile(
+                                dense: true,
+                                leading: const Icon(Icons.store_outlined, size: 18),
+                                title: Text(c['shop_name'] as String? ?? ''),
+                                subtitle: Text(c['code'] as String? ?? ''),
+                                onTap: () => Navigator.pop(ctx, c),
+                              );
+                            },
+                          ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── compose + send ─────────────────────────────────────────────────────
+  Future<void> _composeDialog() async {
+    final titleCtrl = TextEditingController();
+    final bodyCtrl = TextEditingController();
+    final linkCtrl = TextEditingController();
+    String audience = 'all';
+    final Set<String> selectedRoles = {};
+    Map<String, dynamic>? customer;
+    Uint8List? imageBytes;
+    String? imageName;
+    bool sending = false;
+
+    void pickImage(StateSetter setS) {
+      final input = html.FileUploadInputElement()
+        ..accept = 'image/png,image/jpeg,image/webp,image/gif';
+      input.click();
+      input.onChange.listen((_) {
+        final files = input.files;
+        if (files == null || files.isEmpty) return;
+        final f = files[0];
+        if (f.size > _maxImageBytes) {
+          _snack('Image too large — max 5 MB');
+          return;
+        }
+        final reader = html.FileReader();
+        reader.readAsArrayBuffer(f);
+        reader.onLoad.listen((_) {
+          final result = reader.result;
+          final data =
+              result is ByteBuffer ? result.asUint8List() : result as Uint8List;
+          setS(() {
+            imageBytes = data;
+            imageName = f.name;
+          });
+        });
+      });
+    }
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          Future<void> send() async {
+            final orgId = _orgId;
+            if (orgId == null) return;
+            final title = titleCtrl.text.trim();
+            if (title.isEmpty) {
+              _snack('Give the notification a title');
+              return;
+            }
+            if (audience == 'roles' && selectedRoles.isEmpty) {
+              _snack('Pick at least one group');
+              return;
+            }
+            if (audience == 'customer' && customer == null) {
+              _snack('Pick the customer');
+              return;
+            }
+            setS(() => sending = true);
+            try {
+              final client = Supabase.instance.client;
+
+              // optional image -> public bucket
+              String? imageUrl;
+              if (imageBytes != null && imageName != null) {
+                final safe = imageName!.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+                final path =
+                    'notifications/$orgId/${DateTime.now().millisecondsSinceEpoch}_$safe';
+                await client.storage.from(_imageBucket).uploadBinary(
+                      path,
+                      imageBytes!,
+                      fileOptions:
+                          FileOptions(contentType: _mimeFor(imageName!), upsert: false),
+                    );
+                imageUrl = client.storage.from(_imageBucket).getPublicUrl(path);
+              }
+
+              final link = linkCtrl.text.trim();
+
+              // 1) notification row
+              final inserted = await client
+                  .from('notifications')
+                  .insert({
+                    'org_id': orgId,
+                    'title': title,
+                    'body': bodyCtrl.text.trim().isEmpty ? null : bodyCtrl.text.trim(),
+                    'audience': audience,
+                    'audience_ref': audience == 'customer' ? customer!['id'] : null,
+                    'audience_roles':
+                        audience == 'roles' ? selectedRoles.toList() : null,
+                    'image_url': imageUrl,
+                    'link_url': link.isEmpty ? null : link,
+                    'created_by': client.auth.currentUser?.id,
+                  })
+                  .select('id')
+                  .single();
+              final notifId = inserted['id'] as String;
+
+              // 2) resolve recipients
+              var q = client.from('users').select('id').eq('org_id', orgId);
+              if (audience == 'roles') {
+                q = q.inFilter('role', selectedRoles.toList());
+              } else if (audience == 'customer') {
+                q = q.eq('customer_id', customer!['id']);
+              }
+              final recips = await q;
+              final ids = [
+                for (final r in recips as List) r['id'] as String,
+              ];
+
+              // 3) fan out drawer rows
+              if (ids.isNotEmpty) {
+                await client.from('notification_recipients').insert([
+                  for (final uid in ids)
+                    {'notification_id': notifId, 'recipient_user_id': uid},
+                ]);
+              }
+
+              // 4) hand off to push (best-effort; drawer already populated)
+              try {
+                await client.functions.invoke(_pushFunction, body: {
+                  'notification_id': notifId,
+                  'title': title,
+                  'body': bodyCtrl.text.trim(),
+                  'image_url': imageUrl,
+                  'link_url': link.isEmpty ? null : link,
+                  'recipient_user_ids': ids,
+                });
+              } catch (_) {/* push delivery is best-effort */}
+
+              if (mounted) Navigator.pop(ctx);
+              _snack('Sent to ${ids.length} recipient${ids.length == 1 ? '' : 's'}');
+              _load();
+            } catch (e) {
+              setS(() => sending = false);
+              _snack('Send failed: ${e.toString().split('\n').first}');
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('New notification'),
+            content: SizedBox(
+              width: 500,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: titleCtrl,
+                      decoration: const InputDecoration(labelText: 'Title *'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: bodyCtrl,
+                      maxLines: 3,
+                      decoration: const InputDecoration(labelText: 'Message'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: linkCtrl,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                          labelText: 'Link (optional)',
+                          hintText: 'https://…',
+                          prefixIcon: Icon(Icons.link, size: 18)),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.image_outlined, size: 18),
+                        label: Text(imageName == null ? 'Add image' : 'Change image'),
+                        onPressed: sending ? null : () => pickImage(setS),
+                      ),
+                      const SizedBox(width: 10),
+                      if (imageName != null)
+                        Expanded(
+                          child: Text(imageName!,
+                              style: const TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                    ]),
+                    const Divider(height: 28),
+                    const Text('Send to',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 8, children: [
+                      ChoiceChip(
+                        label: const Text('All users'),
+                        selected: audience == 'all',
+                        onSelected: (_) => setS(() => audience = 'all'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('Groups'),
+                        selected: audience == 'roles',
+                        onSelected: (_) => setS(() => audience = 'roles'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('Specific customer'),
+                        selected: audience == 'customer',
+                        onSelected: (_) => setS(() => audience = 'customer'),
+                      ),
+                    ]),
+                    if (audience == 'roles') ...[
+                      const SizedBox(height: 12),
+                      if (_roles.isEmpty)
+                        const Text('No user groups found.',
+                            style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final role in _roles)
+                              FilterChip(
+                                label: Text(role),
+                                selected: selectedRoles.contains(role),
+                                onSelected: (s) => setS(() {
+                                  if (s) {
+                                    selectedRoles.add(role);
+                                  } else {
+                                    selectedRoles.remove(role);
+                                  }
+                                }),
+                              ),
+                          ],
+                        ),
+                    ],
+                    if (audience == 'customer') ...[
+                      const SizedBox(height: 12),
+                      InkWell(
+                        onTap: () async {
+                          final c = await _pickCustomer();
+                          if (c != null) setS(() => customer = c);
+                        },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(labelText: 'Customer'),
+                          child: Text(customer == null
+                              ? 'Choose a customer'
+                              : (customer!['shop_name'] as String? ?? '')),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: sending ? null : () => Navigator.pop(ctx),
+                  child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: sending ? null : send,
+                child: sending
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Text('Send'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  String _audienceLabel(Map<String, dynamic> n) {
+    switch (n['audience']) {
+      case 'roles':
+        final r = (n['audience_roles'] as List?)?.cast<String>() ?? [];
+        return r.isEmpty ? 'Groups' : r.join(', ');
+      case 'customer':
+        return 'Specific customer';
+      default:
+        return 'All users';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppTheme.background,
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Text('Notifications',
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            const Spacer(),
+            IconButton(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh'),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.campaign_outlined, size: 18),
+              label: const Text('New notification'),
+              onPressed: _composeDialog,
+            ),
+          ]),
+          const SizedBox(height: 8),
+          const Text(
+              'Push a message to any group of app users; it is also saved in their notification drawer.',
+              style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+          const SizedBox(height: 16),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _recent.isEmpty
+                    ? const Center(
+                        child: Text('No notifications sent yet.',
+                            style: TextStyle(color: AppTheme.textSecondary)))
+                    : ListView.separated(
+                        itemCount: _recent.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (_, i) {
+                          final n = _recent[i];
+                          final hasImg =
+                              (n['image_url'] as String?)?.isNotEmpty == true;
+                          final hasLink =
+                              (n['link_url'] as String?)?.isNotEmpty == true;
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: AppTheme.border),
+                            ),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: AppTheme.primary.withOpacity(0.1),
+                                child: const Icon(Icons.campaign_outlined,
+                                    color: AppTheme.primary),
+                              ),
+                              title: Text(n['title'] as String? ?? '',
+                                  style: const TextStyle(fontWeight: FontWeight.w700)),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if ((n['body'] as String?)?.isNotEmpty == true)
+                                    Text(n['body'] as String,
+                                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    [
+                                      _audienceLabel(n),
+                                      if (n['created_at'] != null)
+                                        _df.format(
+                                            DateTime.parse('${n['created_at']}')
+                                                .toLocal()),
+                                    ].join('  •  '),
+                                    style: const TextStyle(
+                                        fontSize: 12, color: AppTheme.textSecondary),
+                                  ),
+                                ],
+                              ),
+                              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                                if (hasImg)
+                                  const Icon(Icons.image_outlined,
+                                      size: 18, color: AppTheme.textSecondary),
+                                if (hasLink)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 6),
+                                    child: Icon(Icons.link,
+                                        size: 18, color: AppTheme.textSecondary),
+                                  ),
+                              ]),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+}

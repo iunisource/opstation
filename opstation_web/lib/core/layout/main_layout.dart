@@ -345,7 +345,7 @@ class _TopNav extends ConsumerWidget {
 
         if (isAdminTier) ...[
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/live-map', '/reports', '/compliance', '/operations/files', '/settings'],
+            ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/live-map', '/reports', '/compliance', '/operations/files', '/operations/notifications', '/settings'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
               _menuItem(context, 'Team', Icons.people_outline, '/team', location),
@@ -356,6 +356,7 @@ class _TopNav extends ConsumerWidget {
               _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
               _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
               _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
+              _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
               if (user?.role == WebUserRole.masterAdmin)
                 _menuItem(context, 'Settings', Icons.settings_outlined, '/settings', location),
             ],
