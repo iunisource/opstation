@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../erp/services/asset_pdf.dart';
 
 /// Assets Management — operational register (no GL yet).
 /// Master list (left) with search + filters; detail panel (right) with full
@@ -72,6 +73,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   String _branchFilter = 'all';
   String _statusFilter = 'all';
   String _custodianFilter = 'all';
+  bool _dueOnly = false;
 
   // detail sub-data
   bool _detailLoading = false;
@@ -229,6 +231,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           return false;
         }
       }
+      if (_dueOnly && _dueState(a) == null) return false;
       if (q.isNotEmpty) {
         final hay = [
           a['asset_code'],
@@ -248,6 +251,142 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
+  /// 'overdue' if next maintenance date has passed, 'soon' if within 14 days.
+  String? _dueState(Map<String, dynamic> a) {
+    final d = DateTime.tryParse('${a['next_maintenance_due']}');
+    if (d == null) return null;
+    final now = DateTime.now();
+    final day = DateTime(now.year, now.month, now.day);
+    if (!d.isAfter(day)) return 'overdue';
+    if (d.isBefore(day.add(const Duration(days: 14)))) return 'soon';
+    return null;
+  }
+
+  int get _dueCount => _assets.where((a) => _dueState(a) == 'overdue').length;
+
+  Widget _dueBadgeButton() {
+    final on = _dueOnly;
+    return InkWell(
+      onTap: () => setState(() => _dueOnly = !_dueOnly),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: on ? AppTheme.danger : AppTheme.danger.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(20),
+          border:
+              Border.all(color: AppTheme.danger.withOpacity(on ? 1 : 0.4)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.build_outlined,
+              size: 14, color: on ? Colors.white : AppTheme.danger),
+          const SizedBox(width: 6),
+          Text('$_dueCount overdue',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: on ? Colors.white : AppTheme.danger)),
+          if (on) ...[
+            const SizedBox(width: 6),
+            const Icon(Icons.close, size: 13, color: Colors.white),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget _nextDueBanner(Map<String, dynamic> a) {
+    final st = _dueState(a);
+    final due = _fmtDate(a['next_maintenance_due']);
+    final color = st == 'overdue'
+        ? AppTheme.danger
+        : (st == 'soon' ? AppTheme.warning : AppTheme.textSecondary);
+    final tail =
+        st == 'overdue' ? '  ·  overdue' : (st == 'soon' ? '  ·  due soon' : '');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Row(children: [
+        Icon(Icons.event_outlined, size: 15, color: color),
+        const SizedBox(width: 8),
+        Text('Next due: ${due ?? '—'}$tail',
+            style: TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
+      ]),
+    );
+  }
+
+  Future<void> _printSheet(Map<String, dynamic> a) async {
+    final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+    final hist = _history.map((h) {
+      final when = DateTime.tryParse('${h['performed_at']}');
+      final parts = <String>[
+        if (h['branch_id'] != null) '→ ${_branchNames[h['branch_id']] ?? '—'}',
+        if (h['location_text'] != null) '${h['location_text']}',
+        if (h['assigned_to'] != null)
+          '@ ${_custodianNames[h['assigned_to']] ?? '—'}',
+        if (h['status'] != null) _statusLabel(h['status'] as String?),
+      ];
+      final text =
+          '${_capitalize((h['action'] as String?)?.replaceAll('_', ' '))}'
+          '${parts.isEmpty ? '' : '  ·  ${parts.join('  ·  ')}'}'
+          '${(h['note'] as String?)?.isNotEmpty == true ? '  —  ${h['note']}' : ''}';
+      final whenStr = [
+        if (when != null) DateFormat('d MMM y, h:mm a').format(when),
+        if (h['performed_by'] != null)
+          'by ${_userNames[h['performed_by']] ?? '—'}',
+      ].join('  ·  ');
+      return {'text': text, 'when': whenStr};
+    }).toList();
+
+    final maint = _maint.map((m) {
+      final text = '${_capitalize(m['type'] as String?)}'
+          '${m['cost'] == null ? '' : '  ·  Rs ${_money.format(m['cost'])}'}'
+          '${m['vendor'] != null ? '  ·  ${m['vendor']}' : ''}'
+          '${(m['note'] as String?)?.isNotEmpty == true ? '  —  ${m['note']}' : ''}';
+      return {
+        'text': text,
+        'date': _fmtDate(m['service_date']) ?? '',
+        'next': _fmtDate(m['next_due']) ?? '',
+      };
+    }).toList();
+
+    final cond = _capitalize(a['condition'] as String?);
+    await AssetPdf.printSheet(
+      orgName: orgName,
+      code: a['asset_code'] as String? ?? '-',
+      name: a['name'] as String? ?? '-',
+      status: _statusLabel(a['status'] as String?),
+      condition: cond == '—' ? null : cond,
+      category: a['category_id'] == null ? null : _catNames[a['category_id']],
+      branch: a['branch_id'] == null ? null : _branchNames[a['branch_id']],
+      location: a['location_text'] as String?,
+      custodian: a['assigned_to'] == null
+          ? null
+          : _custodianNames[a['assigned_to']],
+      serial: a['serial_no'] as String?,
+      model: a['model'] as String?,
+      manufacturer: a['manufacturer'] as String?,
+      supplier: a['supplier_id'] as String?,
+      purchased: _fmtDate(a['purchase_date']),
+      cost: a['purchase_cost'] == null
+          ? null
+          : 'Rs ${_money.format(a['purchase_cost'])}',
+      warranty: _fmtDate(a['warranty_expiry']),
+      description: a['description'] as String?,
+      notes: a['notes'] as String?,
+      nextDue: _fmtDate(a['next_maintenance_due']),
+      nextDueOverdue: _dueState(a) == 'overdue',
+      history: List<Map<String, String>>.from(hist),
+      maintenance: List<Map<String, String>>.from(maint),
+    );
+  }
+
   // ───────────────────────────────────────────────────── build
   @override
   Widget build(BuildContext context) {
@@ -265,6 +404,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               Text('${_assets.length} total',
                   style: const TextStyle(
                       fontSize: 13, color: AppTheme.textSecondary)),
+            if (!_loading && (_dueCount > 0 || _dueOnly)) ...[
+              const SizedBox(width: 10),
+              _dueBadgeButton(),
+            ],
             const Spacer(),
             OutlinedButton.icon(
               icon: const Icon(Icons.category_outlined, size: 18),
@@ -411,7 +554,17 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        trailing: _statusChip(a['status'] as String?),
+                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                          if (_dueState(a) != null) ...[
+                            Icon(Icons.build_circle,
+                                size: 16,
+                                color: _dueState(a) == 'overdue'
+                                    ? AppTheme.danger
+                                    : AppTheme.warning),
+                            const SizedBox(width: 6),
+                          ],
+                          _statusChip(a['status'] as String?),
+                        ]),
                       );
                     },
                   ),
@@ -496,6 +649,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               ),
               _statusChip(a['status'] as String?),
               const SizedBox(width: 8),
+              IconButton(
+                  onPressed: () => _printSheet(a),
+                  icon: const Icon(Icons.picture_as_pdf_outlined),
+                  tooltip: 'Print / PDF'),
               IconButton(
                   onPressed: () => _assetDialog(existing: a),
                   icon: const Icon(Icons.edit_outlined),
@@ -822,6 +979,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           ),
         ]),
         const SizedBox(height: 4),
+        if (a['next_maintenance_due'] != null) _nextDueBanner(a),
         if (_maint.isEmpty)
           const Text('No maintenance recorded.',
               style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))
