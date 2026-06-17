@@ -362,10 +362,25 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     }).toList();
 
     final cond = _capitalize(a['condition'] as String?);
+
+    Uint8List? imgBytes;
+    final imgFile = _files.firstWhere(
+        (f) => (f['file_type'] as String?) == 'image',
+        orElse: () => <String, dynamic>{});
+    final imgPath =
+        (a['image_path'] as String?) ?? (imgFile['storage_path'] as String?);
+    if (imgPath != null && imgPath.isNotEmpty) {
+      try {
+        imgBytes =
+            await Supabase.instance.client.storage.from(_bucket).download(imgPath);
+      } catch (_) {/* skip image if it can't be fetched */}
+    }
+
     await AssetPdf.printSheet(
       orgName: orgName,
       code: a['asset_code'] as String? ?? '-',
       name: a['name'] as String? ?? '-',
+      imageBytes: imgBytes,
       status: _statusLabel(a['status'] as String?),
       condition: cond == '—' ? null : cond,
       category: a['category_id'] == null ? null : _catNames[a['category_id']],

@@ -17,6 +17,7 @@ class AssetPdf {
     required String orgName,
     required String code,
     required String name,
+    Uint8List? imageBytes,
     String? status,
     String? condition,
     String? category,
@@ -68,12 +69,12 @@ class AssetPdf {
                   child: pw.Column(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text(orgName,
+                        pw.Text(_s(orgName),
                             style: pw.TextStyle(
                                 fontSize: 18,
                                 fontWeight: pw.FontWeight.bold)),
                         pw.SizedBox(height: 2),
-                        pw.Text(name,
+                        pw.Text(_s(name),
                             style: pw.TextStyle(fontSize: 12, color: _muted)),
                       ]),
                 ),
@@ -87,20 +88,35 @@ class AssetPdf {
                               fontWeight: pw.FontWeight.bold,
                               letterSpacing: 1.2)),
                       pw.SizedBox(height: 4),
-                      pw.Text(code,
+                      pw.Text(_s(code),
                           style: pw.TextStyle(
                               fontSize: 20,
                               fontWeight: pw.FontWeight.bold,
                               color: _accent)),
                       if (status != null) ...[
                         pw.SizedBox(height: 4),
-                        pw.Text(status,
+                        pw.Text(_s(status),
                             style: pw.TextStyle(fontSize: 10, color: _muted)),
                       ],
                     ]),
               ]),
         ),
         pw.SizedBox(height: 14),
+
+        if (imageBytes != null) ...[
+          pw.Align(
+            alignment: pw.Alignment.centerLeft,
+            child: pw.Container(
+              padding: const pw.EdgeInsets.all(4),
+              decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: _border),
+                  borderRadius: pw.BorderRadius.circular(6)),
+              child: pw.Image(pw.MemoryImage(imageBytes),
+                  height: 150, fit: pw.BoxFit.contain),
+            ),
+          ),
+          pw.SizedBox(height: 12),
+        ],
 
         _block('Current placement', [
           _kv('Branch', branch),
@@ -139,7 +155,7 @@ class AssetPdf {
                       fontWeight: pw.FontWeight.bold,
                       letterSpacing: 0.8)),
               pw.SizedBox(width: 10),
-              pw.Text(nextDue + (nextDueOverdue ? '  (overdue)' : ''),
+              pw.Text(_s(nextDue) + (nextDueOverdue ? '  (overdue)' : ''),
                   style: pw.TextStyle(
                       fontSize: 11,
                       fontWeight: pw.FontWeight.bold,
@@ -160,11 +176,11 @@ class AssetPdf {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   if (description != null && description.isNotEmpty)
-                    pw.Text('Description: $description',
+                    pw.Text('Description: ${_s(description)}',
                         style: const pw.TextStyle(fontSize: 10)),
                   if (notes != null && notes.isNotEmpty) ...[
                     pw.SizedBox(height: 3),
-                    pw.Text('Notes: $notes',
+                    pw.Text('Notes: ${_s(notes)}',
                         style: const pw.TextStyle(fontSize: 10)),
                   ],
                 ]),
@@ -185,10 +201,10 @@ class AssetPdf {
                 child: pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
-                      pw.Text(h['text'] ?? '',
+                      pw.Text(_s(h['text']),
                           style: const pw.TextStyle(fontSize: 10)),
                       if ((h['when'] ?? '').isNotEmpty)
-                        pw.Text(h['when']!,
+                        pw.Text(_s(h['when']),
                             style:
                                 pw.TextStyle(fontSize: 8.5, color: _muted)),
                     ]),
@@ -243,8 +259,30 @@ class AssetPdf {
 
   static pw.Widget _cell(String s) => pw.Padding(
         padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-        child: pw.Text(s, style: const pw.TextStyle(fontSize: 9.5)),
+        child: pw.Text(_s(s), style: const pw.TextStyle(fontSize: 9.5)),
       );
+
+  /// Map common Unicode punctuation to ASCII and drop any glyph outside the
+  /// built-in Helvetica (Latin-1) range so nothing renders as tofu boxes.
+  static String _s(String? v) {
+    if (v == null) return '';
+    final mapped = v
+        .replaceAll('→', '->')
+        .replaceAll('←', '<-')
+        .replaceAll('—', '-')
+        .replaceAll('–', '-')
+        .replaceAll('•', '-')
+        .replaceAll('…', '...')
+        .replaceAll('“', '"')
+        .replaceAll('”', '"')
+        .replaceAll('‘', "'")
+        .replaceAll('’', "'");
+    final sb = StringBuffer();
+    for (final r in mapped.runes) {
+      if (r <= 0xFF) sb.writeCharCode(r);
+    }
+    return sb.toString();
+  }
 
   static pw.Widget _block(String title, List<pw.Widget> cells) {
     return pw.Container(
@@ -274,7 +312,7 @@ class AssetPdf {
       child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
         pw.Text(k, style: pw.TextStyle(fontSize: 8, color: _muted)),
         pw.SizedBox(height: 2),
-        pw.Text((v == null || v.isEmpty) ? '-' : v,
+        pw.Text((v == null || v.isEmpty) ? '-' : _s(v),
             style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold)),
       ]),
     );
