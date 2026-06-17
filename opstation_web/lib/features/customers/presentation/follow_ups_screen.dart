@@ -54,7 +54,7 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
           .from('customer_activities')
           .select()
           .eq('org_id', orgId)
-          .eq('status', 'open')
+          .inFilter('status', ['open', 'done'])
           .not('due_date', 'is', null)
           .order('due_date', ascending: true);
       final list = List<Map<String, dynamic>>.from(rows);
@@ -133,16 +133,23 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
 
   List<Map<String, dynamic>> get _filtered {
     final q = _searchCtrl.text.toLowerCase();
+    final showCompleted = _due == 'completed';
     return _rows.where((a) {
-      final due = DateTime.tryParse('${a['due_date']}');
+      final status = a['status'] as String?;
+      if (showCompleted) {
+        if (status != 'done') return false;
+      } else {
+        if (status != 'open') return false;
+        final due = DateTime.tryParse('${a['due_date']}');
+        if (_due == 'overdue' && !_isOverdue(due)) return false;
+        if (_due == 'today' && !_isToday(due)) return false;
+        if (_due == 'week' && !_isWithin7(due)) return false;
+      }
       final asg = a['assigned_to'] as String?;
       if (_assignee == 'unassigned' && asg != null) return false;
       if (_assignee != 'all' && _assignee != 'unassigned' && asg != _assignee) {
         return false;
       }
-      if (_due == 'overdue' && !_isOverdue(due)) return false;
-      if (_due == 'today' && !_isToday(due)) return false;
-      if (_due == 'week' && !_isWithin7(due)) return false;
       if (q.isNotEmpty) {
         final c = _custById[a['customer_id']];
         final name = (c?['shop_name'] as String? ?? '').toLowerCase();
@@ -154,11 +161,17 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
   }
 
   int get _overdueCount => _rows
-      .where((a) => _isOverdue(DateTime.tryParse('${a['due_date']}')))
+      .where((a) =>
+          a['status'] == 'open' &&
+          _isOverdue(DateTime.tryParse('${a['due_date']}')))
       .length;
-  int get _todayCount =>
-      _rows.where((a) => _isToday(DateTime.tryParse('${a['due_date']}'))).length;
+  int get _todayCount => _rows
+      .where((a) =>
+          a['status'] == 'open' &&
+          _isToday(DateTime.tryParse('${a['due_date']}')))
+      .length;
   int get _upcomingCount => _rows.where((a) {
+        if (a['status'] != 'open') return false;
         final d = DateTime.tryParse('${a['due_date']}');
         return d != null && !_isOverdue(d) && !_isToday(d);
       }).length;
@@ -236,6 +249,8 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
                   DropdownMenuItem(value: 'overdue', child: Text('Overdue')),
                   DropdownMenuItem(value: 'today', child: Text('Due today')),
                   DropdownMenuItem(value: 'week', child: Text('Next 7 days')),
+                  DropdownMenuItem(
+                      value: 'completed', child: Text('Completed')),
                 ],
                 onChanged: (v) => setState(() => _due = v ?? 'all'),
               ),
@@ -314,11 +329,13 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(children: [
-          InkWell(
-            onTap: () => _markDone(a),
-            child: const Icon(Icons.radio_button_unchecked,
-                size: 20, color: AppTheme.textSecondary),
-          ),
+          (a['status'] == 'done')
+              ? const Icon(Icons.check_circle, size: 20, color: Colors.green)
+              : InkWell(
+                  onTap: () => _markDone(a),
+                  child: const Icon(Icons.radio_button_unchecked,
+                      size: 20, color: AppTheme.textSecondary),
+                ),
           const SizedBox(width: 12),
           SizedBox(
             width: 64,

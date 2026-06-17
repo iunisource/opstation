@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../../auth/retailer_auth_controller.dart';
+import '../../erp/services/voucher_pdf.dart';
 import '../../../core/theme/app_theme.dart';
 
 /// Badge counters shared between the tabs (which load the data) and the shell
@@ -32,7 +33,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
   static const _tabs = [
     (icon: Icons.notifications_outlined, label: 'Updates'),
     (icon: Icons.folder_outlined, label: 'Files'),
-    (icon: Icons.receipt_long_outlined, label: 'Orders'),
+    (icon: Icons.receipt_long_outlined, label: 'Invoices'),
     (icon: Icons.report_problem_outlined, label: 'Complaints'),
     (icon: Icons.location_on_outlined, label: 'Location'),
   ];
@@ -672,7 +673,7 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Orders (read-only for now)
+// Invoices (read-only list + openable PDF, same renderer as staff)
 // ════════════════════════════════════════════════════════════════════
 class _OrdersTab extends ConsumerStatefulWidget {
   const _OrdersTab();
@@ -682,7 +683,8 @@ class _OrdersTab extends ConsumerStatefulWidget {
 
 class _OrdersTabState extends ConsumerState<_OrdersTab> {
   bool _loading = true;
-  List<Map<String, dynamic>> _orders = [];
+  String? _openingId;
+  List<Map<String, dynamic>> _invoices = [];
 
   @override
   void initState() {
@@ -693,51 +695,82 @@ class _OrdersTabState extends ConsumerState<_OrdersTab> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final res = await Supabase.instance.client.rpc('retailer_my_orders');
+      final res = await Supabase.instance.client.rpc('retailer_my_invoices');
       final list = (res as List?) ?? [];
       if (!mounted) return;
       setState(() {
-        _orders = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        _invoices =
+            list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
         _loading = false;
       });
     } catch (e) {
       if (mounted) setState(() => _loading = false);
-      if (mounted) _snack(context, 'Could not load orders');
+      if (mounted) _snack(context, 'Could not load invoices');
     }
   }
 
-  String _orderNo(Map<String, dynamic> o) {
-    for (final k in ['order_number', 'number', 'voucher_number', 'id']) {
-      final v = o[k];
-      if (v != null && '$v'.isNotEmpty) return '$v';
-    }
-    return '—';
-  }
+  Future<void> _openPdf(Map<String, dynamic> inv) async {
+    setState(() => _openingId = inv['id'] as String?);
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_invoice_detail',
+          params: {'p_invoice_id': inv['id']});
+      final m = Map<String, dynamic>.from(res as Map);
+      final header = Map<String, dynamic>.from(m['invoice'] as Map);
+      final lines = (m['lines'] as List?) ?? [];
+      final orgName = m['org_name'] as String? ?? 'Opstation';
 
-  String? _total(Map<String, dynamic> o) {
-    for (final k in ['total', 'grand_total', 'net_total', 'total_amount', 'amount']) {
-      final v = o[k];
-      if (v != null) return '$v';
+      final vlines = lines.map((e) {
+        final l = Map<String, dynamic>.from(e as Map);
+        return VoucherLine(
+          product: l['product'] as String? ?? '-',
+          sku: l['sku'] as String?,
+          uom: l['uom'] as String?,
+          qty: (l['qty'] as num?)?.toDouble() ?? 0,
+          unitPrice: (l['unit_price'] as num?)?.toDouble(),
+          discountPct: (l['discount'] as num?)?.toDouble(),
+          lineTotal: (l['line_total'] as num?)?.toDouble(),
+        );
+      }).toList();
+
+      final dateStr = header['voucher_date'] != null
+          ? DateFormat('d MMM yyyy')
+              .format(DateTime.parse('${header['voucher_date']}'))
+          : null;
+
+      await VoucherPdf.printVoucher(
+        voucherNumber: header['voucher_number'] as String? ?? '-',
+        voucherTypeLabel: 'Sales Invoice',
+        orgName: orgName,
+        date: dateStr,
+        customerOrSupplier: ref.read(currentRetailerProvider)?.name,
+        lines: vlines,
+        subtotal: (header['subtotal'] as num?)?.toDouble(),
+        discountTotal: (header['discount_total'] as num?)?.toDouble(),
+        grandTotal: (header['grand_total'] as num?)?.toDouble(),
+      );
+    } catch (e) {
+      if (mounted) _snack(context, 'Could not open invoice');
+    } finally {
+      if (mounted) setState(() => _openingId = null);
     }
-    return null;
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_orders.isEmpty) {
-      return _empty('No orders yet.', Icons.receipt_long_outlined);
+    if (_invoices.isEmpty) {
+      return _empty('No invoices yet.', Icons.receipt_long_outlined);
     }
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.separated(
         padding: const EdgeInsets.all(16),
-        itemCount: _orders.length,
+        itemCount: _invoices.length,
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (_, i) {
-          final o = _orders[i];
-          final status = o['status'] as String? ?? '';
-          final total = _total(o);
+          final inv = _invoices[i];
+          final total = (inv['grand_total'] as num?)?.toStringAsFixed(2);
+          final opening = _openingId == inv['id'];
           return Container(
             decoration: BoxDecoration(
               color: Colors.white,
@@ -745,25 +778,30 @@ class _OrdersTabState extends ConsumerState<_OrdersTab> {
               border: Border.all(color: AppTheme.border),
             ),
             child: ListTile(
+              onTap: opening ? null : () => _openPdf(inv),
               leading: CircleAvatar(
                 backgroundColor: AppTheme.primary.withOpacity(0.1),
-                child: const Icon(Icons.receipt_long_outlined,
+                child: const Icon(Icons.description_outlined,
                     color: AppTheme.primary),
               ),
-              title: Text('Order ${_orderNo(o)}',
+              title: Text(inv['voucher_number'] as String? ?? 'Invoice',
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text(
                 [
-                  if (status.isNotEmpty) status,
-                  if (o['created_at'] != null)
-                    _df.format(DateTime.parse('${o['created_at']}').toLocal()),
+                  if (total != null) 'Rs $total',
+                  if (inv['voucher_date'] != null)
+                    DateFormat('d MMM yyyy')
+                        .format(DateTime.parse('${inv['voucher_date']}')),
                 ].join('  •  '),
                 style: const TextStyle(fontSize: 12),
               ),
-              trailing: total == null
-                  ? null
-                  : Text(total,
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
+              trailing: opening
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.picture_as_pdf_outlined,
+                      size: 20, color: AppTheme.primary),
             ),
           );
         },

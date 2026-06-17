@@ -35,6 +35,8 @@ class _NotificationsComposerScreenState
   List<Map<String, dynamic>> _recent = [];
   List<String> _roles = [];
   final _df = DateFormat('d MMM y, h:mm a');
+  DateTime? _from;
+  DateTime? _to;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
@@ -457,6 +459,111 @@ class _NotificationsComposerScreenState
     }
   }
 
+  List<Map<String, dynamic>> get _filteredRecent {
+    if (_from == null && _to == null) return _recent;
+    return _recent.where((n) {
+      final ts = DateTime.tryParse('${n['created_at']}');
+      if (ts == null) return false;
+      final d = ts.toLocal();
+      if (_from != null &&
+          d.isBefore(DateTime(_from!.year, _from!.month, _from!.day))) {
+        return false;
+      }
+      if (_to != null &&
+          d.isAfter(DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59))) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Future<void> _pickRange(bool isFrom) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: (isFrom ? _from : _to) ?? DateTime.now(),
+      firstDate: DateTime(2023),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+    );
+    if (picked != null) setState(() => isFrom ? _from = picked : _to = picked);
+  }
+
+  void _openDetail(Map<String, dynamic> n) {
+    final img = n['image_url'] as String?;
+    final link = n['link_url'] as String?;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(n['title'] as String? ?? 'Notification'),
+        content: SizedBox(
+          width: 460,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  [
+                    _audienceLabel(n),
+                    if (n['created_at'] != null)
+                      _df.format(
+                          DateTime.parse('${n['created_at']}').toLocal()),
+                  ].join('  •  '),
+                  style: const TextStyle(
+                      fontSize: 12, color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: 12),
+                if ((n['body'] as String?)?.isNotEmpty == true)
+                  Text(n['body'] as String),
+                if (img != null && img.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(img,
+                        height: 180,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('Open image'),
+                      onPressed: () => html.window.open(img, '_blank'),
+                    ),
+                  ),
+                ],
+                if (link != null && link.isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.link, size: 16),
+                      label: Text(link, overflow: TextOverflow.ellipsis),
+                      onPressed: () => html.window.open(link, '_blank'),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  Widget _dateChip(String label, DateTime? value, VoidCallback onTap) {
+    return OutlinedButton.icon(
+      icon: const Icon(Icons.calendar_today_outlined, size: 15),
+      label: Text(value == null
+          ? label
+          : '$label: ${DateFormat('d MMM y').format(value)}'),
+      onPressed: onTap,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -485,18 +592,39 @@ class _NotificationsComposerScreenState
               'Push a message to any group of app users; it is also saved in their notification drawer.',
               style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           const SizedBox(height: 16),
+          Row(children: [
+            _dateChip('From', _from, () => _pickRange(true)),
+            const SizedBox(width: 8),
+            _dateChip('To', _to, () => _pickRange(false)),
+            if (_from != null || _to != null) ...[
+              const SizedBox(width: 8),
+              TextButton.icon(
+                icon: const Icon(Icons.clear, size: 16),
+                label: const Text('Clear'),
+                onPressed: () => setState(() {
+                  _from = null;
+                  _to = null;
+                }),
+              ),
+            ],
+            const Spacer(),
+            Text('${_filteredRecent.length} shown',
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary)),
+          ]),
+          const SizedBox(height: 12),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : _recent.isEmpty
+                : _filteredRecent.isEmpty
                     ? const Center(
                         child: Text('No notifications sent yet.',
                             style: TextStyle(color: AppTheme.textSecondary)))
                     : ListView.separated(
-                        itemCount: _recent.length,
+                        itemCount: _filteredRecent.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (_, i) {
-                          final n = _recent[i];
+                          final n = _filteredRecent[i];
                           final hasImg =
                               (n['image_url'] as String?)?.isNotEmpty == true;
                           final hasLink =
@@ -508,6 +636,7 @@ class _NotificationsComposerScreenState
                               border: Border.all(color: AppTheme.border),
                             ),
                             child: ListTile(
+                              onTap: () => _openDetail(n),
                               leading: CircleAvatar(
                                 backgroundColor: AppTheme.primary.withOpacity(0.1),
                                 child: const Icon(Icons.campaign_outlined,

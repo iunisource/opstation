@@ -1,3 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -184,14 +187,139 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   }
 
   Future<void> _resolveComplaint(Map<String, dynamic> c) async {
-    try {
-      await Supabase.instance.client.from('crm_complaints').update({
-        'status': 'resolved',
-        'resolved_at': DateTime.now().toIso8601String(),
-      }).eq('id', c['id']);
-      _loadComplaints();
-      _loadActivities(); // linked follow-up auto-closes via trigger
-    } catch (_) {/* ignore */}
+    final noteCtrl = TextEditingController();
+    Uint8List? bytes;
+    String? fileName;
+    bool saving = false;
+    const bucket = 'retailer-files';
+
+    void pick(StateSetter setS) {
+      final input = html.FileUploadInputElement()
+        ..accept = 'image/png,image/jpeg,image/webp,application/pdf';
+      input.click();
+      input.onChange.listen((_) {
+        final files = input.files;
+        if (files == null || files.isEmpty) return;
+        final f = files[0];
+        if (f.size > 10 * 1024 * 1024) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('File too large — max 10 MB')));
+          return;
+        }
+        final reader = html.FileReader();
+        reader.readAsArrayBuffer(f);
+        reader.onLoad.listen((_) {
+          final r = reader.result;
+          final data = r is ByteBuffer ? r.asUint8List() : r as Uint8List;
+          setS(() {
+            bytes = data;
+            fileName = f.name;
+          });
+        });
+      });
+    }
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          Future<void> save() async {
+            setS(() => saving = true);
+            try {
+              final client = Supabase.instance.client;
+              String? path;
+              if (bytes != null && fileName != null) {
+                final orgId = ref.read(currentUserProvider)?.orgId ?? 'org';
+                final safe =
+                    fileName!.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+                path =
+                    'complaints/$orgId/${DateTime.now().millisecondsSinceEpoch}_$safe';
+                await client.storage.from(bucket).uploadBinary(path, bytes!,
+                    fileOptions: const FileOptions(upsert: false));
+              }
+              await client.from('crm_complaints').update({
+                'status': 'resolved',
+                'resolved_at': DateTime.now().toIso8601String(),
+                'resolution_note': noteCtrl.text.trim().isEmpty
+                    ? null
+                    : noteCtrl.text.trim(),
+                'resolution_file_path': path,
+              }).eq('id', c['id']);
+              if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+              _loadComplaints();
+              _loadActivities(); // linked follow-up auto-closes via trigger
+            } catch (e) {
+              setS(() => saving = false);
+              if (ctx.mounted) {
+                ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                    content:
+                        Text('Failed: ${e.toString().split('\n').first}')));
+              }
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('Resolve complaint'),
+            content: SizedBox(
+              width: 440,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(c['subject'] as String? ?? '',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                        labelText: 'Resolution note (optional)',
+                        alignLabelWithHint: true),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.attach_file, size: 18),
+                    label: Text(
+                        fileName == null ? 'Attach file (optional)' : 'Change file'),
+                    onPressed: saving ? null : () => pick(setS),
+                  ),
+                  if (fileName != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(fileName!,
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'The retailer is notified when you resolve. Your note rides along.',
+                    style:
+                        TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: saving
+                      ? null
+                      : () => Navigator.of(ctx, rootNavigator: true).pop(),
+                  child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: saving ? null : save,
+                child: saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Text('Resolve'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _loadAr() async {
@@ -1232,6 +1360,133 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     } catch (_) {/* ignore */}
   }
 
+  Future<void> _editFollowUp(Map<String, dynamic> a) async {
+    String type = (a['type'] as String?) ?? 'call';
+    const types = ['note', 'call', 'visit', 'collection', 'other'];
+    if (!types.contains(type)) type = 'other';
+    final noteCtrl = TextEditingController(text: a['note'] as String? ?? '');
+    DateTime? due = DateTime.tryParse('${a['due_date']}');
+    String? assignee = a['assigned_to'] as String?;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Edit follow-up'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: type,
+                    decoration: const InputDecoration(labelText: 'Type'),
+                    items: const [
+                      DropdownMenuItem(value: 'note', child: Text('Note')),
+                      DropdownMenuItem(value: 'call', child: Text('Call')),
+                      DropdownMenuItem(value: 'visit', child: Text('Visit')),
+                      DropdownMenuItem(
+                          value: 'collection', child: Text('Collection')),
+                      DropdownMenuItem(value: 'other', child: Text('Other')),
+                    ],
+                    onChanged: (v) => setS(() => type = v ?? type),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                        labelText: 'What needs doing?',
+                        alignLabelWithHint: true),
+                  ),
+                  const SizedBox(height: 12),
+                  InkWell(
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: due ?? DateTime.now(),
+                        firstDate:
+                            DateTime.now().subtract(const Duration(days: 365)),
+                        lastDate: DateTime.now().add(const Duration(days: 365)),
+                      );
+                      if (picked != null) setS(() => due = picked);
+                    },
+                    child: InputDecorator(
+                      decoration: const InputDecoration(labelText: 'Due date'),
+                      child: Text(due == null
+                          ? 'Pick a date'
+                          : DateFormat('d MMM y').format(due!)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String?>(
+                    value: assignee,
+                    decoration: const InputDecoration(labelText: 'Assign to'),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                          value: null, child: Text('Unassigned')),
+                      for (final u in _orgUsers)
+                        DropdownMenuItem<String?>(
+                          value: u['id'] as String,
+                          child: Text(
+                            (u['role'] != null &&
+                                    (u['role'] as String).isNotEmpty)
+                                ? '${u['name'] ?? 'Unknown'}  ·  ${u['role']}'
+                                : '${u['name'] ?? 'Unknown'}',
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) => setS(() => assignee = v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (noteCtrl.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text('Add a note first')));
+                  return;
+                }
+                try {
+                  await Supabase.instance.client
+                      .from('customer_activities')
+                      .update({
+                    'type': type,
+                    'note': noteCtrl.text.trim(),
+                    'due_date': due != null
+                        ? DateFormat('yyyy-MM-dd').format(due!)
+                        : null,
+                    'assigned_to': assignee,
+                    'updated_at': DateTime.now().toIso8601String(),
+                  }).eq('id', a['id']);
+                  if (ctx.mounted) {
+                    Navigator.of(ctx, rootNavigator: true).pop();
+                  }
+                  _loadActivities();
+                } catch (e) {
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                        content: Text(
+                            'Failed: ${e.toString().split('\n').first}')));
+                  }
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _activityDialog(bool isFollowup) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     String type = isFollowup ? 'call' : 'note';
@@ -1509,6 +1764,12 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                 ]),
               ],
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined,
+                size: 16, color: AppTheme.textSecondary),
+            onPressed: () => _editFollowUp(a),
+            tooltip: 'Edit',
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline,
