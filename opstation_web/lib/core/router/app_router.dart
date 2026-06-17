@@ -50,6 +50,9 @@ import '../../features/operations/presentation/retailer_files_screen.dart';
 import '../../features/operations/presentation/notifications_composer_screen.dart';
 import '../../features/operations/presentation/retailers_admin_screen.dart';
 import '../layout/main_layout.dart';
+import '../../features/auth/retailer_auth_controller.dart';
+import '../../features/auth/presentation/retailer_login_screen.dart';
+import '../../features/retailer/presentation/retailer_portal_screen.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart';
@@ -100,6 +103,7 @@ class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
     _ref.listen(authControllerProvider, (_, __) => notifyListeners());
     _ref.listen(accessProvider, (_, __) => notifyListeners());
+    _ref.listen(retailerAuthControllerProvider, (_, __) => notifyListeners());
   }
   final Ref _ref;
 }
@@ -116,10 +120,24 @@ final webRouterProvider = Provider<GoRouter>((ref) {
     refreshListenable: notifier,
     redirect: (context, state) {
       final auth = ref.read(authControllerProvider);
-      if (auth.isLoading) return null;
+      final rAuth = ref.read(retailerAuthControllerProvider);
+      if (auth.isLoading || rAuth.isLoading) return null;
+
+      final loc = state.matchedLocation;
+      final retailer = rAuth.valueOrNull;
+      final inRetailerArea = loc == '/r' || loc.startsWith('/r/');
+
+      // Retailer portal is a separate world from the staff panel.
+      if (retailer != null) {
+        if (!inRetailerArea || loc == '/r/login') return '/r';
+        return null;
+      }
+      if (inRetailerArea) {
+        return loc == '/r/login' ? null : '/r/login';
+      }
+
       final user = auth.valueOrNull;
       final loggedIn = user != null;
-      final loc = state.matchedLocation;
       final onLogin = loc == '/login';
       if (!loggedIn && !onLogin) return '/login';
       if (loggedIn) {
@@ -169,6 +187,14 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         builder: (_, __) => const LoginScreen(),
+      ),
+      GoRoute(
+        path: '/r/login',
+        builder: (_, __) => const RetailerLoginScreen(),
+      ),
+      GoRoute(
+        path: '/r',
+        builder: (_, __) => const RetailerPortalScreen(),
       ),
       ShellRoute(
         builder: (context, state, child) => MainLayout(child: child),
