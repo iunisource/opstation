@@ -4,8 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../../auth/retailer_auth_controller.dart';
 import '../../../core/theme/app_theme.dart';
+
+/// Badge counters shared between the tabs (which load the data) and the shell
+/// (which paints the badges). Set by the tabs on load / mutation.
+final _unreadUpdatesProvider = StateProvider<int>((_) => 0);
+final _openComplaintsProvider = StateProvider<int>((_) => 0);
 
 /// The retailer portal (web). A self-contained shell — NOT inside the staff
 /// MainLayout. Tabs read/write only through the retailer_* SECURITY DEFINER
@@ -220,6 +227,11 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                         icon: _tabs[i].icon,
                         label: _tabs[i].label,
                         selected: _tab == i,
+                        badge: i == 0
+                            ? ref.watch(_unreadUpdatesProvider)
+                            : i == 3
+                                ? ref.watch(_openComplaintsProvider)
+                                : 0,
                         onTap: () => setState(() => _tab = i),
                       ),
                   ],
@@ -250,12 +262,14 @@ class _TabButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool selected;
+  final int badge;
   final VoidCallback onTap;
   const _TabButton({
     required this.icon,
     required this.label,
     required this.selected,
     required this.onTap,
+    this.badge = 0,
   });
   @override
   Widget build(BuildContext context) {
@@ -279,6 +293,21 @@ class _TabButton extends StatelessWidget {
                   color: c,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                   fontSize: 14)),
+          if (badge > 0) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppTheme.danger,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text('$badge',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700)),
+            ),
+          ],
         ]),
       ),
     );
@@ -314,12 +343,18 @@ class _NotificationsTab extends ConsumerStatefulWidget {
 
 class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
   bool _loading = true;
+  bool _unreadOnly = false;
   List<Map<String, dynamic>> _items = [];
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  void _syncBadge() {
+    final unread = _items.where((n) => n['read_at'] == null).length;
+    ref.read(_unreadUpdatesProvider.notifier).state = unread;
   }
 
   Future<void> _load() async {
@@ -332,95 +367,196 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
         _items = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
         _loading = false;
       });
+      _syncBadge();
     } catch (e) {
       if (mounted) setState(() => _loading = false);
       if (mounted) _snack(context, 'Could not load updates');
     }
   }
 
+  Future<void> _markRead(Map<String, dynamic> n) async {
+    if (n['read_at'] != null) return;
+    try {
+      await Supabase.instance.client.rpc('retailer_mark_notification_read',
+          params: {'p_notification_id': n['id']});
+      if (!mounted) return;
+      setState(() => n['read_at'] = DateTime.now().toIso8601String());
+      _syncBadge();
+    } catch (_) {}
+  }
+
   Future<void> _open(Map<String, dynamic> n) async {
-    if (n['read_at'] == null) {
-      try {
-        await Supabase.instance.client.rpc('retailer_mark_notification_read',
-            params: {'p_notification_id': n['id']});
-        setState(() => n['read_at'] = DateTime.now().toIso8601String());
-      } catch (_) {}
-    }
+    await _markRead(n);
     final link = n['link_url'] as String?;
-    if (link != null && link.isNotEmpty) html.window.open(link, '_blank');
+    final img = n['image_url'] as String?;
+    if (link != null && link.isNotEmpty) {
+      html.window.open(link, '_blank');
+    } else if (img != null && img.isNotEmpty) {
+      html.window.open(img, '_blank');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_items.isEmpty) {
-      return _empty('No updates yet.', Icons.notifications_off_outlined);
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: _items.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
-        itemBuilder: (_, i) {
-          final n = _items[i];
-          final unread = n['read_at'] == null;
-          final img = n['image_url'] as String?;
-          final link = (n['link_url'] as String?)?.isNotEmpty == true;
-          return Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: unread ? AppTheme.primary.withOpacity(0.4) : AppTheme.border),
+    final visible =
+        _unreadOnly ? _items.where((n) => n['read_at'] == null).toList() : _items;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(children: [
+            ChoiceChip(
+              label: const Text('All'),
+              selected: !_unreadOnly,
+              onSelected: (_) => setState(() => _unreadOnly = false),
             ),
-            child: ListTile(
-              onTap: () => _open(n),
-              leading: CircleAvatar(
-                backgroundColor: AppTheme.primary.withOpacity(0.1),
-                child: Icon(
-                    unread ? Icons.mark_email_unread_outlined : Icons.email_outlined,
-                    color: AppTheme.primary, size: 20),
-              ),
-              title: Text(n['title'] as String? ?? '',
-                  style: TextStyle(
-                      fontWeight: unread ? FontWeight.w800 : FontWeight.w600)),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if ((n['body'] as String?)?.isNotEmpty == true)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(n['body'] as String),
-                    ),
-                  if (img != null && img.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.network(img,
-                            height: 140,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const SizedBox()),
+            const SizedBox(width: 8),
+            ChoiceChip(
+              label: const Text('Unread'),
+              selected: _unreadOnly,
+              onSelected: (_) => setState(() => _unreadOnly = true),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: _load,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Refresh'),
+            ),
+          ]),
+        ),
+        Expanded(
+          child: visible.isEmpty
+              ? _empty(_unreadOnly ? 'No unread updates.' : 'No updates yet.',
+                  Icons.notifications_off_outlined)
+              : ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  itemCount: visible.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) {
+                    final n = visible[i];
+                    final unread = n['read_at'] == null;
+                    final img = n['image_url'] as String?;
+                    final link = (n['link_url'] as String?)?.isNotEmpty == true;
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: unread
+                                ? AppTheme.primary.withOpacity(0.4)
+                                : AppTheme.border),
                       ),
-                    ),
-                  const SizedBox(height: 4),
-                  Text(
-                    n['created_at'] != null
-                        ? _df.format(DateTime.parse('${n['created_at']}').toLocal())
-                        : '',
-                    style: const TextStyle(
-                        fontSize: 11, color: AppTheme.textSecondary),
-                  ),
-                ],
-              ),
-              trailing: link
-                  ? const Icon(Icons.open_in_new, size: 16, color: AppTheme.textSecondary)
-                  : null,
-            ),
-          );
-        },
-      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ListTile(
+                            onTap: () => _open(n),
+                            leading: CircleAvatar(
+                              backgroundColor:
+                                  AppTheme.primary.withOpacity(0.1),
+                              child: Icon(
+                                  unread
+                                      ? Icons.mark_email_unread_outlined
+                                      : Icons.mark_email_read_outlined,
+                                  color: AppTheme.primary,
+                                  size: 20),
+                            ),
+                            title: Text(n['title'] as String? ?? '',
+                                style: TextStyle(
+                                    fontWeight: unread
+                                        ? FontWeight.w800
+                                        : FontWeight.w600)),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if ((n['body'] as String?)?.isNotEmpty == true)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Text(n['body'] as String),
+                                  ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  n['created_at'] != null
+                                      ? _df.format(
+                                          DateTime.parse('${n['created_at']}')
+                                              .toLocal())
+                                      : '',
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      color: AppTheme.textSecondary),
+                                ),
+                              ],
+                            ),
+                            trailing: unread
+                                ? IconButton(
+                                    tooltip: 'Mark read',
+                                    icon: const Icon(
+                                        Icons.radio_button_unchecked,
+                                        size: 18,
+                                        color: AppTheme.textSecondary),
+                                    onPressed: () => _markRead(n),
+                                  )
+                                : const Icon(Icons.check_circle,
+                                    size: 18, color: Colors.green),
+                          ),
+                          if (img != null && img.isNotEmpty)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              child: InkWell(
+                                onTap: () {
+                                  _markRead(n);
+                                  html.window.open(img, '_blank');
+                                },
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      Image.network(img,
+                                          width: double.infinity,
+                                          height: 160,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, __, ___) =>
+                                              const SizedBox()),
+                                      Container(
+                                        padding: const EdgeInsets.all(6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black54,
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                        ),
+                                        child: const Icon(Icons.zoom_out_map,
+                                            color: Colors.white, size: 18),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (link)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                              child: Row(children: const [
+                                Icon(Icons.open_in_new,
+                                    size: 14, color: AppTheme.primary),
+                                SizedBox(width: 6),
+                                Text('Open link',
+                                    style: TextStyle(
+                                        color: AppTheme.primary,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600)),
+                              ]),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 }
@@ -665,6 +801,10 @@ class _ComplaintsTabState extends ConsumerState<_ComplaintsTab> {
         _items = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
         _loading = false;
       });
+      final open = _items
+          .where((c) => c['status'] == 'open' || c['status'] == 'in_progress')
+          .length;
+      ref.read(_openComplaintsProvider.notifier).state = open;
     } catch (e) {
       if (mounted) setState(() => _loading = false);
       if (mounted) _snack(context, 'Could not load complaints');
@@ -936,6 +1076,43 @@ class _LocationTabState extends ConsumerState<_LocationTab> {
                     style: const TextStyle(
                         fontSize: 11, color: AppTheme.textSecondary),
                   ),
+                const SizedBox(height: 16),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    width: MediaQuery.of(context).size.width < 600
+                        ? MediaQuery.of(context).size.width - 48
+                        : 520,
+                    height: 260,
+                    child: FlutterMap(
+                      options: MapOptions(
+                        initialCenter: LatLng(
+                            (lat as num).toDouble(), (lng as num).toDouble()),
+                        initialZoom: 16,
+                        interactionOptions: const InteractionOptions(
+                            flags: InteractiveFlag.pinchZoom |
+                                InteractiveFlag.drag |
+                                InteractiveFlag.doubleTapZoom),
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate:
+                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'app.opstation.web',
+                        ),
+                        MarkerLayer(markers: [
+                          Marker(
+                            point: LatLng((lat).toDouble(), (lng).toDouble()),
+                            width: 40,
+                            height: 40,
+                            child: const Icon(Icons.location_on,
+                                color: AppTheme.danger, size: 40),
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                ),
               ],
               const SizedBox(height: 20),
               ElevatedButton.icon(
