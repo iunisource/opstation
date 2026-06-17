@@ -60,15 +60,18 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   List<Map<String, dynamic>> _categories = [];
   List<Map<String, dynamic>> _branches = [];
   List<Map<String, dynamic>> _users = [];
+  List<Map<String, dynamic>> _custodians = [];
   final Map<String, String> _catNames = {};
   final Map<String, String> _branchNames = {};
   final Map<String, String> _userNames = {};
+  final Map<String, String> _custodianNames = {};
 
   String? _selectedId;
   final _searchCtrl = TextEditingController();
   String _catFilter = 'all';
   String _branchFilter = 'all';
   String _statusFilter = 'all';
+  String _custodianFilter = 'all';
 
   // detail sub-data
   bool _detailLoading = false;
@@ -123,6 +126,12 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           .select('id, name, role')
           .eq('org_id', orgId)
           .order('name');
+      final custodians = await client
+          .from('asset_custodians')
+          .select()
+          .eq('org_id', orgId)
+          .eq('is_active', true)
+          .order('name');
 
       if (!mounted) return;
       setState(() {
@@ -130,6 +139,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         _categories = List<Map<String, dynamic>>.from(cats);
         _branches = List<Map<String, dynamic>>.from(branches);
         _users = List<Map<String, dynamic>>.from(users);
+        _custodians = List<Map<String, dynamic>>.from(custodians);
         _catNames
           ..clear()
           ..addEntries(_categories.map((c) =>
@@ -142,6 +152,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           ..clear()
           ..addEntries(_users.map((u) =>
               MapEntry(u['id'] as String, (u['name'] as String?) ?? '—')));
+        _custodianNames
+          ..clear()
+          ..addEntries(_custodians.map((c) =>
+              MapEntry(c['id'] as String, (c['name'] as String?) ?? '—')));
         _loading = false;
         if (_selectedId != null &&
             !_assets.any((a) => a['id'] == _selectedId)) {
@@ -208,6 +222,13 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         return false;
       }
       if (_statusFilter != 'all' && a['status'] != _statusFilter) return false;
+      if (_custodianFilter != 'all') {
+        if (_custodianFilter == 'unassigned') {
+          if (a['assigned_to'] != null) return false;
+        } else if (a['assigned_to'] != _custodianFilter) {
+          return false;
+        }
+      }
       if (q.isNotEmpty) {
         final hay = [
           a['asset_code'],
@@ -249,6 +270,12 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               icon: const Icon(Icons.category_outlined, size: 18),
               label: const Text('Categories'),
               onPressed: _categoriesDialog,
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.badge_outlined, size: 18),
+              label: const Text('Custodians'),
+              onPressed: _custodiansDialog,
             ),
             const SizedBox(width: 8),
             ElevatedButton.icon(
@@ -338,6 +365,18 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                     b['id'] as String: b['name'] as String? ?? '—',
                 },
                 onChanged: (v) => setState(() => _branchFilter = v),
+              ),
+              const SizedBox(height: 8),
+              _filterDropdown(
+                value: _custodianFilter,
+                hint: 'Custodian',
+                items: {
+                  'all': 'All custodians',
+                  'unassigned': 'Unassigned',
+                  for (final c in _custodians)
+                    c['id'] as String: c['name'] as String? ?? '—',
+                },
+                onChanged: (v) => setState(() => _custodianFilter = v),
               ),
             ]),
           ),
@@ -476,7 +515,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                   'Custodian',
                   a['assigned_to'] == null
                       ? 'Unassigned'
-                      : _userNames[a['assigned_to']]),
+                      : _custodianNames[a['assigned_to']]),
               _kv('Condition', _capitalize(a['condition'] as String?)),
             ]),
             const SizedBox(height: 16),
@@ -728,7 +767,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     final parts = <String>[
       if (h['branch_id'] != null) '→ ${_branchNames[h['branch_id']] ?? '—'}',
       if (h['location_text'] != null) '${h['location_text']}',
-      if (h['assigned_to'] != null) '@ ${_userNames[h['assigned_to']] ?? '—'}',
+      if (h['assigned_to'] != null) '@ ${_custodianNames[h['assigned_to']] ?? '—'}',
       if (h['status'] != null) _statusLabel(h['status'] as String?),
     ];
     return Padding(
@@ -1023,10 +1062,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                       items: [
                         const DropdownMenuItem<String?>(
                             value: null, child: Text('Unassigned')),
-                        for (final u in _users)
+                        for (final cu in _custodians)
                           DropdownMenuItem<String?>(
-                              value: u['id'] as String,
-                              child: Text(u['name'] as String? ?? '—')),
+                              value: cu['id'] as String,
+                              child: Text(cu['name'] as String? ?? '—')),
                       ],
                       onChanged: (v) => setS(() => custodian = v),
                     ),
@@ -1203,10 +1242,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 items: [
                   const DropdownMenuItem<String?>(
                       value: null, child: Text('Unassigned')),
-                  for (final u in _users)
+                  for (final cu in _custodians)
                     DropdownMenuItem<String?>(
-                        value: u['id'] as String,
-                        child: Text(u['name'] as String? ?? '—')),
+                        value: cu['id'] as String,
+                        child: Text(cu['name'] as String? ?? '—')),
                 ],
                 onChanged: (v) => setS(() => custodian = v),
               ),
@@ -1356,6 +1395,145 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
                     : const Text('Save')),
+          ],
+        );
+      }),
+    );
+  }
+
+  Future<void> _custodiansDialog() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+        Future<void> addOrEdit({Map<String, dynamic>? existing}) async {
+          final nameCtrl =
+              TextEditingController(text: existing?['name'] as String? ?? '');
+          final phoneCtrl =
+              TextEditingController(text: existing?['phone'] as String? ?? '');
+          final desigCtrl = TextEditingController(
+              text: existing?['designation'] as String? ?? '');
+          final ok = await showDialog<bool>(
+            context: ctx,
+            builder: (c2) => AlertDialog(
+              title:
+                  Text(existing == null ? 'New custodian' : 'Edit custodian'),
+              content: Column(mainAxisSize: MainAxisSize.min, children: [
+                TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Name *')),
+                const SizedBox(height: 10),
+                TextField(
+                    controller: phoneCtrl,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(labelText: 'Phone')),
+                const SizedBox(height: 10),
+                TextField(
+                    controller: desigCtrl,
+                    decoration:
+                        const InputDecoration(labelText: 'Designation')),
+              ]),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(c2, false),
+                    child: const Text('Cancel')),
+                ElevatedButton(
+                    onPressed: () => Navigator.pop(c2, true),
+                    child: const Text('Save')),
+              ],
+            ),
+          );
+          if (ok == true && nameCtrl.text.trim().isNotEmpty) {
+            final client = Supabase.instance.client;
+            if (existing == null) {
+              await client.from('asset_custodians').insert({
+                'id': 'acus_${DateTime.now().millisecondsSinceEpoch}',
+                'org_id': orgId,
+                'name': nameCtrl.text.trim(),
+                'phone': _nz(phoneCtrl.text),
+                'designation': _nz(desigCtrl.text),
+              });
+            } else {
+              await client.from('asset_custodians').update({
+                'name': nameCtrl.text.trim(),
+                'phone': _nz(phoneCtrl.text),
+                'designation': _nz(desigCtrl.text),
+              }).eq('id', existing['id']);
+            }
+            await _load();
+            setS(() {});
+          }
+        }
+
+        int countFor(String id) =>
+            _assets.where((a) => a['assigned_to'] == id).length;
+
+        return AlertDialog(
+          title: const Text('Custodians'),
+          content: SizedBox(
+            width: 420,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                    'Tap a custodian to see the assets currently with them.',
+                    style: TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
+              ),
+              const SizedBox(height: 8),
+              if (_custodians.isEmpty)
+                const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text('No custodians yet.',
+                        style: TextStyle(color: AppTheme.textSecondary)))
+              else
+                ..._custodians.map((c) {
+                  final n = countFor(c['id'] as String);
+                  final sub = [c['designation'], c['phone']]
+                      .whereType<String>()
+                      .where((s) => s.trim().isNotEmpty)
+                      .join('  ·  ');
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    onTap: () {
+                      setState(() => _custodianFilter = c['id'] as String);
+                      Navigator.of(ctx, rootNavigator: true).pop();
+                    },
+                    title: Text(c['name'] as String? ?? '—'),
+                    subtitle: sub.isEmpty
+                        ? null
+                        : Text(sub, style: const TextStyle(fontSize: 12)),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                            color: AppTheme.primary.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(10)),
+                        child: Text('$n assets',
+                            style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.primary)),
+                      ),
+                      IconButton(
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          onPressed: () => addOrEdit(existing: c)),
+                    ]),
+                  );
+                }),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(),
+                child: const Text('Close')),
+            ElevatedButton.icon(
+                onPressed: () => addOrEdit(),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add custodian')),
           ],
         );
       }),
