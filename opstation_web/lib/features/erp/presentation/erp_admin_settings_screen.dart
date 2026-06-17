@@ -94,6 +94,21 @@ const List<_AdminToggle> _toggles = [
     text: _TextSetting('org.customer_edit_alert_emails', 'Alert recipients',
         hint: 'Comma- or newline-separated email addresses'),
   ),
+
+  _AdminToggle(
+    'org.asset_maintenance_reminder',
+    'Email reminders for due asset maintenance',
+    'When ON, a daily digest of assets whose next scheduled maintenance is '
+        'overdue or falls within the lead time below is emailed to the '
+        'recipients. Servicing an asset (which sets its next due date) clears it '
+        'from the reminder automatically. Leave recipients blank to send to no one.',
+    number: _NumberField(
+        'org.asset_maintenance_reminder_days', 'Remind ahead by', 7,
+        suffix: 'days'),
+    text: _TextSetting(
+        'org.asset_maintenance_reminder_emails', 'Reminder recipients',
+        hint: 'Comma- or newline-separated email addresses'),
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
