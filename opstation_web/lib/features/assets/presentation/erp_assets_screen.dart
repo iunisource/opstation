@@ -73,7 +73,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   String _branchFilter = 'all';
   String _statusFilter = 'all';
   String _custodianFilter = 'all';
-  bool _dueOnly = false;
+  String _dueFilter = 'all'; // all | due | overdue | soon
 
   // detail sub-data
   bool _detailLoading = false;
@@ -231,7 +231,12 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           return false;
         }
       }
-      if (_dueOnly && _dueState(a) == null) return false;
+      if (_dueFilter != 'all') {
+        final st = _dueState(a);
+        if (_dueFilter == 'due' && st == null) return false;
+        if (_dueFilter == 'overdue' && st != 'overdue') return false;
+        if (_dueFilter == 'soon' && st != 'soon') return false;
+      }
       if (q.isNotEmpty) {
         final hay = [
           a['asset_code'],
@@ -262,12 +267,12 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     return null;
   }
 
-  int get _dueCount => _assets.where((a) => _dueState(a) == 'overdue').length;
+  int get _dueCount => _assets.where((a) => _dueState(a) != null).length;
 
   Widget _dueBadgeButton() {
-    final on = _dueOnly;
+    final on = _dueFilter != 'all';
     return InkWell(
-      onTap: () => setState(() => _dueOnly = !_dueOnly),
+      onTap: () => setState(() => _dueFilter = on ? 'all' : 'due'),
       borderRadius: BorderRadius.circular(20),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -281,7 +286,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           Icon(Icons.build_outlined,
               size: 14, color: on ? Colors.white : AppTheme.danger),
           const SizedBox(width: 6),
-          Text('$_dueCount overdue',
+          Text('$_dueCount due',
               style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -404,7 +409,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               Text('${_assets.length} total',
                   style: const TextStyle(
                       fontSize: 13, color: AppTheme.textSecondary)),
-            if (!_loading && (_dueCount > 0 || _dueOnly)) ...[
+            if (!_loading && (_dueCount > 0 || _dueFilter != 'all')) ...[
               const SizedBox(width: 10),
               _dueBadgeButton(),
             ],
@@ -520,6 +525,18 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                     c['id'] as String: c['name'] as String? ?? '—',
                 },
                 onChanged: (v) => setState(() => _custodianFilter = v),
+              ),
+              const SizedBox(height: 8),
+              _filterDropdown(
+                value: _dueFilter,
+                hint: 'Maintenance',
+                items: const {
+                  'all': 'All',
+                  'due': 'Due (overdue + soon)',
+                  'overdue': 'Overdue only',
+                  'soon': 'Due soon',
+                },
+                onChanged: (v) => setState(() => _dueFilter = v),
               ),
             ]),
           ),

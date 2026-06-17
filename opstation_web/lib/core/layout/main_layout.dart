@@ -90,6 +90,28 @@ final crmOverdueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of assets with maintenance overdue for the current org (nav badge).
+final assetsDueCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cutoff = DateTime.now().add(const Duration(days: 14));
+    final c =
+        '${cutoff.year.toString().padLeft(4, '0')}-${cutoff.month.toString().padLeft(2, '0')}-${cutoff.day.toString().padLeft(2, '0')}';
+    final res = await client
+        .from('assets')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('is_active', true)
+        .not('next_maintenance_due', 'is', null)
+        .lte('next_maintenance_due', c);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 
 class MainLayout extends ConsumerWidget {
@@ -124,6 +146,7 @@ class _TopNav extends ConsumerWidget {
     final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
     final access = ref.watch(accessSyncProvider);
     final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
+    final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
     bool show(String route) {
       final mod = kRouteToModule[route];
       if (mod != null && !modules.contains(mod)) return false;
@@ -382,7 +405,7 @@ class _TopNav extends ConsumerWidget {
             ],
           ),
           if (show('/assets'))
-            _navButton(context, 'Assets', Icons.chair_outlined, '/assets', location),
+            _navButton(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
           ...splitErpMenus(),
         ],
 
@@ -528,7 +551,7 @@ class _TopNav extends ConsumerWidget {
 
 // ─── Nav helpers ──────────────────────────────────────────────────────────────
 
-Widget _navButton(BuildContext context, String label, IconData icon, String path, String location) {
+Widget _navButton(BuildContext context, String label, IconData icon, String path, String location, {int badge = 0}) {
   final isActive = location == path || location.startsWith('$path/');
   return InkWell(
     onTap: () => GoRouter.of(context).go(path),
@@ -548,6 +571,19 @@ Widget _navButton(BuildContext context, String label, IconData icon, String path
           fontSize: 13,
           fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
         )),
+        if (badge > 0) ...[
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: AppTheme.danger,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(badge > 99 ? '99+' : '$badge',
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700)),
+          ),
+        ],
       ]),
     ),
   );
