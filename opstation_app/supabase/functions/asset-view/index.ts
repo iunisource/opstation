@@ -113,7 +113,7 @@ function page(title: string, body: string, status = 200): Response {
     `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
       `<meta name="viewport" content="width=device-width, initial-scale=1">` +
       `<title>${H(title)}</title><style>${CSS}</style></head>` +
-      `<body><div class="wrap">${body}<div class="foot">Opstation · Asset register</div></div></body></html>`,
+      `<body><div class="wrap">${body}<div class="foot">Opstation &middot; Asset register</div></div></body></html>`,
     {
       status,
       headers: {
@@ -172,13 +172,13 @@ Deno.serve(async (req) => {
     const due = new Date(a.next_maintenance_due + "T00:00:00");
     const days = Math.round((due.getTime() - today.getTime()) / 86400000);
     const cls = days < 0 ? "bad" : days <= 14 ? "warn" : "ok";
-    const tail = days < 0 ? " · overdue" : days <= 14 ? " · due soon" : "";
+    const tail = days < 0 ? " &middot; overdue" : days <= 14 ? " &middot; due soon" : "";
     dueHtml =
       `<div class="due ${cls}">Next maintenance due: ${fmtDate(a.next_maintenance_due)}${tail}</div>`;
   }
 
   const kv = (k: string, v: string) =>
-    `<div class="kv"><p class="k">${H(k)}</p><p class="v">${v || "—"}</p></div>`;
+    `<div class="kv"><p class="k">${H(k)}</p><p class="v">${v || "&mdash;"}</p></div>`;
 
   let maintHtml: string;
   if (!maint.length) {
@@ -190,11 +190,9 @@ Deno.serve(async (req) => {
           title(m.type),
           m.cost != null ? money(m.cost) : "",
           m.vendor ? H(m.vendor) : "",
-        ].filter(Boolean).join(" · ") +
-          (m.note ? ` — ${H(m.note)}` : "");
-        return `<tr><td>${detail || "—"}</td><td class="r">${
-          fmtDate(m.service_date)
-        }</td><td class="r">${fmtDate(m.next_due)}</td></tr>`;
+        ].filter(Boolean).join(" &middot; ") +
+          (m.note ? ` &mdash; ${H(m.note)}` : "");
+        return `<tr><td>${detail || "&mdash;"}</td><td class="r">${fmtDate(m.service_date)}</td><td class="r">${fmtDate(m.next_due)}</td></tr>`;
       })
       .join("");
     maintHtml =
@@ -238,5 +236,5 @@ Deno.serve(async (req) => {
     </div>
   `;
 
-  return page(`${a.asset_code} · ${a.name}`, body);
+  return page(`${a.asset_code} - ${a.name}`, body);
 });
