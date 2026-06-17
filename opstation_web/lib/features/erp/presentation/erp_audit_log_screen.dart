@@ -154,6 +154,8 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
         return (Icons.save_outlined, AppTheme.primary);
       case 'confirmed':
         return (Icons.check_circle_outline, AppTheme.success);
+      case 'posted':
+        return (Icons.check_circle, AppTheme.success);
       case 'locked':
         return (Icons.lock_outline, Colors.orange);
       case 'unlocked':
@@ -352,12 +354,13 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     final type = e['voucher_type'] as String? ?? '-';
     final details = e['details'] as String? ?? '';
     final pb = (e['performed_by'] as String?)?.trim();
-    final mapped = _userNames[e['user_id']];
-    final userName = (pb != null && pb.isNotEmpty)
-        ? pb
-        : (mapped != null && mapped.isNotEmpty)
-            ? mapped
-            : (e['user_id'] as String?) ?? '—';
+    final uid = (e['user_id'] as String?)?.trim();
+    // performed_by may hold a user id (voucher screens) or an already-resolved
+    // name (master-data trigger). Map ids through the user list; pass names through.
+    final token = (pb != null && pb.isNotEmpty) ? pb : uid;
+    final userName = (token == null || token.isEmpty)
+        ? '—'
+        : (_userNames[token] ?? token);
     final ts = e['performed_at'] != null
         ? DateFormat('d MMM y · HH:mm')
             .format(DateTime.parse(e['performed_at'] as String).toLocal())
