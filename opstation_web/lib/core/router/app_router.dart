@@ -49,6 +49,7 @@ import '../../features/compliance/presentation/compliance_screen.dart';
 import '../../features/operations/presentation/retailer_files_screen.dart';
 import '../../features/operations/presentation/notifications_composer_screen.dart';
 import '../../features/operations/presentation/retailers_admin_screen.dart';
+import '../../features/assets/presentation/erp_assets_screen.dart';
 import '../layout/main_layout.dart';
 import '../../features/auth/retailer_auth_controller.dart';
 import '../../features/auth/presentation/retailer_login_screen.dart';
@@ -226,6 +227,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/operations/files', builder: (_, __) => const RetailerFilesScreen()),
           GoRoute(path: '/operations/notifications', builder: (_, __) => const NotificationsComposerScreen()),
           GoRoute(path: '/operations/retailers', builder: (_, __) => const RetailersAdminScreen()),
+          GoRoute(path: '/assets', builder: (_, __) => const ErpAssetsScreen()),
           GoRoute(path: '/orgs', builder: (_, __) => const OrgsScreen()),
           GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
           GoRoute(path: '/erp/low-stock-report', builder: (_, __) => const ErpLowStockReportScreen()),

@@ -381,6 +381,8 @@ class _TopNav extends ConsumerWidget {
               _menuItem(context, 'Report Builder', Icons.table_chart_outlined, '/intelligence/report-builder', location),
             ],
           ),
+          if (show('/assets'))
+            _navButton(context, 'Assets', Icons.chair_outlined, '/assets', location),
           ...splitErpMenus(),
         ],
 
