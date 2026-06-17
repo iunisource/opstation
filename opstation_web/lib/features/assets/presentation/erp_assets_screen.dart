@@ -10,6 +10,11 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../erp/services/asset_pdf.dart';
 
+/// Base URL of the public asset-view Edge Function. The QR encodes
+/// "$_kAssetViewBase?t=<public_token>"; scanning opens the public page.
+const String _kAssetViewBase =
+    'https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/asset-view';
+
 /// Assets Management — operational register (no GL yet).
 /// Master list (left) with search + filters; detail panel (right) with full
 /// spec, current placement & custodian, placement/custody history, photos,
@@ -402,8 +407,30 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       notes: a['notes'] as String?,
       nextDue: _fmtDate(a['next_maintenance_due']),
       nextDueOverdue: _dueState(a) == 'overdue',
+      nextDueSoon: _dueState(a) == 'soon',
+      qrData: _assetUrl(a),
       history: List<Map<String, String>>.from(hist),
       maintenance: List<Map<String, String>>.from(maint),
+    );
+  }
+
+  String? _assetUrl(Map<String, dynamic> a) {
+    final t = a['public_token'] as String?;
+    if (t == null || t.isEmpty) return null;
+    return '$_kAssetViewBase?t=$t';
+  }
+
+  Future<void> _printLabel(Map<String, dynamic> a) async {
+    final url = _assetUrl(a);
+    if (url == null) {
+      _snack('This asset has no QR token yet — reload after the migration.');
+      return;
+    }
+    await AssetPdf.printLabel(
+      code: a['asset_code'] as String? ?? '-',
+      name: a['name'] as String? ?? '-',
+      url: url,
+      orgName: ref.read(currentUserProvider)?.orgName,
     );
   }
 
@@ -685,6 +712,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                   onPressed: () => _printSheet(a),
                   icon: const Icon(Icons.picture_as_pdf_outlined),
                   tooltip: 'Print / PDF'),
+              IconButton(
+                  onPressed: () => _printLabel(a),
+                  icon: const Icon(Icons.qr_code_2),
+                  tooltip: 'QR label (print & stick on asset)'),
               IconButton(
                   onPressed: () => _assetDialog(existing: a),
                   icon: const Icon(Icons.edit_outlined),

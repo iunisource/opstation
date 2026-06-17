@@ -41,6 +41,7 @@ class AssetPdf {
     String? nextDue,
     bool nextDueOverdue = false,
     bool nextDueSoon = false,
+    String? qrData,
     required List<Map<String, String>> history,
     required List<Map<String, String>> maintenance,
     String? generatedBy,
@@ -114,6 +115,10 @@ class AssetPdf {
                       if (status != null && status.isNotEmpty) ...[
                         pw.SizedBox(height: 6),
                         _statusPill(status),
+                      ],
+                      if (qrData != null && qrData.isNotEmpty) ...[
+                        pw.SizedBox(height: 10),
+                        _qr(qrData, 60),
                       ],
                     ]),
               ]),
@@ -214,6 +219,71 @@ class AssetPdf {
       name: '$code.pdf',
     );
   }
+
+  /// A small, print-ready QR label (~70x50mm) to stick on the physical asset.
+  /// Scanning it opens the public asset page.
+  static Future<void> printLabel({
+    required String code,
+    required String name,
+    required String url,
+    String? orgName,
+  }) async {
+    final doc = pw.Document();
+    doc.addPage(pw.Page(
+      pageFormat: PdfPageFormat(
+          70 * PdfPageFormat.mm, 50 * PdfPageFormat.mm,
+          marginAll: 4 * PdfPageFormat.mm),
+      build: (ctx) => pw.Container(
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: _border, width: 0.8),
+          borderRadius: pw.BorderRadius.circular(6),
+        ),
+        padding: const pw.EdgeInsets.all(8),
+        child: pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
+            children: [
+              _qr(url, 80),
+              pw.SizedBox(width: 10),
+              pw.Expanded(
+                child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    mainAxisAlignment: pw.MainAxisAlignment.center,
+                    children: [
+                      if (orgName != null && orgName.isNotEmpty)
+                        pw.Text(_s(orgName),
+                            style: pw.TextStyle(fontSize: 8, color: _muted)),
+                      pw.SizedBox(height: 1),
+                      pw.Text(_s(code),
+                          style: pw.TextStyle(
+                              fontSize: 16,
+                              fontWeight: pw.FontWeight.bold,
+                              color: _accent)),
+                      pw.SizedBox(height: 2),
+                      pw.Text(_s(name),
+                          maxLines: 2,
+                          style: pw.TextStyle(fontSize: 9.5, color: _ink)),
+                      pw.SizedBox(height: 5),
+                      pw.Text('Scan for asset details',
+                          style: pw.TextStyle(fontSize: 7, color: _muted)),
+                    ]),
+              ),
+            ]),
+      ),
+    ));
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => doc.save(),
+      name: '$code-label.pdf',
+    );
+  }
+
+  static pw.Widget _qr(String data, double size) => pw.BarcodeWidget(
+        barcode: pw.Barcode.qrCode(),
+        data: data,
+        width: size,
+        height: size,
+        drawText: false,
+        color: _ink,
+      );
 
   // ── Status pill ────────────────────────────────────────────────────
   static pw.Widget _statusPill(String status) {
