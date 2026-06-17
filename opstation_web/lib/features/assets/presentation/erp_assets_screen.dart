@@ -10,10 +10,11 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../erp/services/asset_pdf.dart';
 
-/// Base URL of the public asset-view Edge Function. The QR encodes
-/// "$_kAssetViewBase?t=<public_token>"; scanning opens the public page.
-const String _kAssetViewBase =
-    'https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/asset-view';
+/// Public asset page (static, Firebase-hosted). The QR encodes
+/// "$_kAssetViewBase?t=<public_token>"; the page fetches the asset-view
+/// function (JSON) and renders. Edge Functions can't serve HTML, so the page
+/// lives on Firebase, not on the function domain.
+const String _kAssetViewBase = 'https://opstation-f06c7.web.app/asset.html';
 
 /// Assets Management — operational register (no GL yet).
 /// Master list (left) with search + filters; detail panel (right) with full

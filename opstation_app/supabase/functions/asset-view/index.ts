@@ -1,24 +1,24 @@
-// Public asset view — opened when someone scans an asset's QR tag.
+// Public asset data API — backs the scannable asset page.
+//
+// Supabase Edge Functions cannot serve HTML (text/html GETs are rewritten to
+// text/plain by the runtime), so this returns JSON. The rendered page is a
+// static file hosted on Firebase (web/asset.html) that fetches this endpoint.
 //
 // No auth (deploy with --no-verify-jwt). Looks the asset up by its opaque
-// public_token using the service role, then renders a clean, mobile-friendly
-// HTML page. Only non-sensitive fields are shown (name, code, serial, spec,
-// placement, maintenance log) — purchase cost / supplier are deliberately
-// omitted. RLS on the underlying tables stays fully closed to the public.
+// public_token using the service role; only non-sensitive fields are returned
+// (no purchase cost / supplier). RLS on the tables stays fully closed.
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const enc = (s: string) => encodeURIComponent(s);
+const CORS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers": "*",
+  "access-control-allow-methods": "GET, OPTIONS",
+};
 
-const H = (s: unknown) =>
-  String(s ?? "").replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[
-        c
-      ]!),
-  );
+const enc = (s: string) => encodeURIComponent(s);
+const BUCKET = "asset-files";
 
 async function rest(path: string): Promise<any[]> {
   try {
@@ -32,6 +32,41 @@ async function rest(path: string): Promise<any[]> {
   }
 }
 
+async function imagePathFor(
+  assetId: string,
+  imagePath?: string | null,
+): Promise<string | null> {
+  if (imagePath) return imagePath;
+  const f = await rest(
+    `asset_files?asset_id=eq.${enc(assetId)}&file_type=eq.image` +
+      `&order=created_at.desc&limit=1&select=storage_path`,
+  );
+  return f[0]?.storage_path ?? null;
+}
+
+async function signedUrl(path: string): Promise<string | null> {
+  try {
+    const objectPath = path.split("/").map(encodeURIComponent).join("/");
+    const r = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/sign/${BUCKET}/${objectPath}`,
+      {
+        method: "POST",
+        headers: {
+          apikey: SERVICE_KEY,
+          Authorization: `Bearer ${SERVICE_KEY}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ expiresIn: 3600 }),
+      },
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j?.signedURL ? `${SUPABASE_URL}/storage/v1${j.signedURL}` : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -40,15 +75,13 @@ const MONTHS = [
 function fmtDate(d?: string | null): string {
   if (!d) return "—";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
-  if (!m) return H(d);
+  if (!m) return d;
   return `${parseInt(m[3], 10)} ${MONTHS[parseInt(m[2], 10) - 1]} ${m[1]}`;
 }
 
 function title(s?: string | null): string {
   if (!s) return "";
-  return s
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function money(n: unknown): string {
@@ -59,182 +92,105 @@ function money(n: unknown): string {
 
 function statusClass(s?: string | null): string {
   switch ((s ?? "").toLowerCase().replace(/_/g, " ").trim()) {
-    case "in use":
-      return "ok";
-    case "in storage":
-      return "info";
-    case "under repair":
-      return "warn";
-    case "lost":
-      return "bad";
+    case "in use": return "ok";
+    case "in storage": return "info";
+    case "under repair": return "warn";
+    case "lost": return "bad";
     case "retired":
-    case "disposed":
-      return "muted";
-    default:
-      return "muted";
+    case "disposed": return "muted";
+    default: return "muted";
   }
 }
 
-const CSS = `
-*{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f1f5f9;color:#0f172a;-webkit-text-size-adjust:100%}
-.wrap{max-width:560px;margin:0 auto;padding:16px}
-.head{background:#fff;border-radius:14px;padding:18px 18px 16px;border:1px solid #e2e8f0;border-left:4px solid #2563eb}
-.org{font-size:12px;color:#64748b;margin:0 0 6px}
-.name{font-size:22px;font-weight:800;margin:0;line-height:1.15}
-.code{font-size:14px;color:#2563eb;font-weight:700;margin:4px 0 0}
-.pill{display:inline-block;margin-top:10px;padding:4px 11px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
-.pill.ok{background:#dcfce7;color:#15803d}
-.pill.info{background:#dbeafe;color:#2563eb}
-.pill.warn{background:#fef3c7;color:#b45309}
-.pill.bad{background:#fee2e2;color:#b91c1c}
-.pill.muted{background:#f1f5f9;color:#475569}
-.card{background:#fff;border-radius:14px;padding:16px 18px;border:1px solid #e2e8f0;margin-top:14px}
-.card h2{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:#64748b;margin:0 0 12px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px}
-.kv .k{font-size:11px;color:#64748b;margin:0 0 2px}
-.kv .v{font-size:14px;font-weight:700;margin:0}
-.due{margin-top:14px;padding:12px 14px;border-radius:12px;font-weight:700;font-size:13px;border:1px solid}
-.due.ok{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}
-.due.warn{background:#fef3c7;border-color:#b45309;color:#b45309}
-.due.bad{background:#fee2e2;border-color:#dc2626;color:#dc2626}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-size:11px;color:#64748b;font-weight:700;padding:6px 8px;border-bottom:1px solid #e2e8f0}
-td{padding:9px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
-tr:last-child td{border-bottom:0}
-td.r,th.r{text-align:right;white-space:nowrap}
-.muted-row td{color:#64748b}
-.empty{color:#64748b;font-size:13px}
-.foot{text-align:center;color:#94a3b8;font-size:11px;margin:18px 0 4px}
-`;
-
-function page(title: string, body: string, status = 200): Response {
-  return new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
-      `<meta name="viewport" content="width=device-width, initial-scale=1">` +
-      `<title>${H(title)}</title><style>${CSS}</style></head>` +
-      `<body><div class="wrap">${body}<div class="foot">Opstation &middot; Asset register</div></div></body></html>`,
-    {
-      status,
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-      },
+function json(obj: unknown, status = 200): Response {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      ...CORS,
     },
-  );
+  });
 }
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+
   const token = new URL(req.url).searchParams.get("t") ?? "";
-  if (!token) {
-    return page("Invalid", `<div class="card empty">Invalid asset link.</div>`, 400);
-  }
+  if (!token) return json({ error: "missing_token" }, 400);
 
   const assets = await rest(
     `assets?public_token=eq.${enc(token)}&is_active=eq.true&limit=1&select=` +
       `id,asset_code,name,description,status,condition,serial_no,model,manufacturer,` +
-      `category_id,branch_id,location_text,assigned_to,org_id,next_maintenance_due`,
+      `category_id,branch_id,location_text,assigned_to,org_id,next_maintenance_due,image_path`,
   );
   const a = assets[0];
-  if (!a) {
-    return page(
-      "Not found",
-      `<div class="card empty"><strong>Asset not found.</strong><br>This tag may have been removed or replaced.</div>`,
-      404,
-    );
-  }
+  if (!a) return json({ error: "not_found" }, 404);
 
   const [branch] = a.branch_id
     ? await rest(`branches?id=eq.${enc(a.branch_id)}&select=name&limit=1`)
     : [];
   const [cust] = a.assigned_to
-    ? await rest(
-      `asset_custodians?id=eq.${enc(a.assigned_to)}&select=name,phone&limit=1`,
-    )
+    ? await rest(`asset_custodians?id=eq.${enc(a.assigned_to)}&select=name&limit=1`)
     : [];
   const [cat] = a.category_id
     ? await rest(`asset_categories?id=eq.${enc(a.category_id)}&select=name&limit=1`)
     : [];
-  let orgName = "";
   const org = await rest(`organizations?id=eq.${enc(a.org_id)}&select=name&limit=1`);
-  if (org[0]?.name) orgName = org[0].name;
+  const orgName = org[0]?.name ?? null;
 
-  const maint = await rest(
+  const maintRows = await rest(
     `asset_maintenance?asset_id=eq.${enc(a.id)}&order=service_date.desc` +
       `&select=service_date,type,cost,vendor,note,next_due`,
   );
 
-  // Next-maintenance banner state
-  let dueHtml = "";
+  const imgPath = await imagePathFor(a.id, a.image_path);
+  const imageUrl = imgPath ? await signedUrl(imgPath) : null;
+
+  // Next-maintenance banner
+  let dueLabel: string | null = null;
+  let dueClass = "ok";
   if (a.next_maintenance_due) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const due = new Date(a.next_maintenance_due + "T00:00:00");
     const days = Math.round((due.getTime() - today.getTime()) / 86400000);
-    const cls = days < 0 ? "bad" : days <= 14 ? "warn" : "ok";
-    const tail = days < 0 ? " &middot; overdue" : days <= 14 ? " &middot; due soon" : "";
-    dueHtml =
-      `<div class="due ${cls}">Next maintenance due: ${fmtDate(a.next_maintenance_due)}${tail}</div>`;
+    dueClass = days < 0 ? "bad" : days <= 14 ? "warn" : "ok";
+    const tail = days < 0 ? " · overdue" : days <= 14 ? " · due soon" : "";
+    dueLabel = `Next maintenance due: ${fmtDate(a.next_maintenance_due)}${tail}`;
   }
 
-  const kv = (k: string, v: string) =>
-    `<div class="kv"><p class="k">${H(k)}</p><p class="v">${v || "&mdash;"}</p></div>`;
+  const maintenance = maintRows.map((m) => {
+    const detail = [
+      title(m.type),
+      m.cost != null ? money(m.cost) : "",
+      m.vendor ?? "",
+    ].filter(Boolean).join(" · ") + (m.note ? ` — ${m.note}` : "");
+    return {
+      detail: detail || "—",
+      date: fmtDate(m.service_date),
+      next: fmtDate(m.next_due),
+    };
+  });
 
-  let maintHtml: string;
-  if (!maint.length) {
-    maintHtml = `<p class="empty">No maintenance recorded.</p>`;
-  } else {
-    const rows = maint
-      .map((m) => {
-        const detail = [
-          title(m.type),
-          m.cost != null ? money(m.cost) : "",
-          m.vendor ? H(m.vendor) : "",
-        ].filter(Boolean).join(" &middot; ") +
-          (m.note ? ` &mdash; ${H(m.note)}` : "");
-        return `<tr><td>${detail || "&mdash;"}</td><td class="r">${fmtDate(m.service_date)}</td><td class="r">${fmtDate(m.next_due)}</td></tr>`;
-      })
-      .join("");
-    maintHtml =
-      `<table><thead><tr><th>Detail</th><th class="r">Date</th><th class="r">Next due</th></tr></thead><tbody>${rows}</tbody></table>`;
-  }
-
-  const body = `
-    <div class="head">
-      ${orgName ? `<p class="org">${H(orgName)}</p>` : ""}
-      <h1 class="name">${H(a.name)}</h1>
-      <p class="code">${H(a.asset_code)}</p>
-      ${a.status ? `<span class="pill ${statusClass(a.status)}">${H(title(a.status))}</span>` : ""}
-    </div>
-
-    ${dueHtml}
-
-    <div class="card">
-      <h2>Placement</h2>
-      <div class="grid">
-        ${kv("Branch", H(branch?.name))}
-        ${kv("Location", H(a.location_text))}
-        ${kv("Custodian", H(cust?.name))}
-        ${kv("Condition", H(title(a.condition)))}
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Specification</h2>
-      <div class="grid">
-        ${kv("Serial no.", H(a.serial_no))}
-        ${kv("Category", H(cat?.name))}
-        ${kv("Model", H(a.model))}
-        ${kv("Manufacturer", H(a.manufacturer))}
-      </div>
-      ${a.description ? `<div class="kv" style="margin-top:14px"><p class="k">Description</p><p class="v" style="font-weight:500">${H(a.description)}</p></div>` : ""}
-    </div>
-
-    <div class="card">
-      <h2>Maintenance log</h2>
-      ${maintHtml}
-    </div>
-  `;
-
-  return page(`${a.asset_code} - ${a.name}`, body);
+  return json({
+    code: a.asset_code ?? "",
+    name: a.name ?? "",
+    statusLabel: title(a.status),
+    statusClass: statusClass(a.status),
+    condition: title(a.condition) || null,
+    serial: a.serial_no ?? null,
+    category: cat?.name ?? null,
+    model: a.model ?? null,
+    manufacturer: a.manufacturer ?? null,
+    description: a.description ?? null,
+    branch: branch?.name ?? null,
+    location: a.location_text ?? null,
+    custodian: cust?.name ?? null,
+    orgName,
+    dueLabel,
+    dueClass,
+    imageUrl,
+    maintenance,
+  });
 });

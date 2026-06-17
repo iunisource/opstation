@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asset</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f1f5f9;color:#0f172a;-webkit-text-size-adjust:100%}
+.wrap{max-width:560px;margin:0 auto;padding:16px}
+.head{background:#fff;border-radius:14px;padding:18px 18px 16px;border:1px solid #e2e8f0;border-left:4px solid #2563eb}
+.photo{width:100%;max-height:300px;object-fit:contain;background:#fff;border:1px solid #e2e8f0;border-radius:14px;display:block;margin-bottom:14px;padding:8px}
+.org{font-size:12px;color:#64748b;margin:0 0 6px}
+.name{font-size:22px;font-weight:800;margin:0;line-height:1.15}
+.code{font-size:14px;color:#2563eb;font-weight:700;margin:4px 0 0}
+.pill{display:inline-block;margin-top:10px;padding:4px 11px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+.pill.ok{background:#dcfce7;color:#15803d}
+.pill.info{background:#dbeafe;color:#2563eb}
+.pill.warn{background:#fef3c7;color:#b45309}
+.pill.bad{background:#fee2e2;color:#b91c1c}
+.pill.muted{background:#f1f5f9;color:#475569}
+.card{background:#fff;border-radius:14px;padding:16px 18px;border:1px solid #e2e8f0;margin-top:14px}
+.card h2{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:#64748b;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px}
+.kv .k{font-size:11px;color:#64748b;margin:0 0 2px}
+.kv .v{font-size:14px;font-weight:700;margin:0}
+.due{margin-top:14px;padding:12px 14px;border-radius:12px;font-weight:700;font-size:13px;border:1px solid}
+.due.ok{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}
+.due.warn{background:#fef3c7;border-color:#b45309;color:#b45309}
+.due.bad{background:#fee2e2;border-color:#dc2626;color:#dc2626}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11px;color:#64748b;font-weight:700;padding:6px 8px;border-bottom:1px solid #e2e8f0}
+td{padding:9px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.r,th.r{text-align:right;white-space:nowrap}
+.empty{color:#64748b;font-size:13px}
+.foot{text-align:center;color:#94a3b8;font-size:11px;margin:18px 0 4px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="card empty">Loading…</div></div>
+<script>
+var EF = 'https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/asset-view';
+var app = document.getElementById('app');
+var t = new URLSearchParams(location.search).get('t');
+
+function el(tag, cls, txt) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (txt != null) e.textContent = txt;
+  return e;
+}
+function kv(k, v) {
+  var d = el('div', 'kv');
+  d.appendChild(el('p', 'k', k));
+  d.appendChild(el('p', 'v', v || '—'));
+  return d;
+}
+function showError(msg) {
+  app.innerHTML = '';
+  var c = el('div', 'card empty');
+  c.appendChild(el('strong', null, msg));
+  app.appendChild(c);
+}
+
+function render(d) {
+  app.innerHTML = '';
+
+  if (d.imageUrl) {
+    var img = el('img', 'photo');
+    img.src = d.imageUrl;
+    img.alt = d.name || '';
+    img.onerror = function () { img.remove(); };
+    app.appendChild(img);
+  }
+
+  var head = el('div', 'head');
+  if (d.orgName) head.appendChild(el('p', 'org', d.orgName));
+  head.appendChild(el('h1', 'name', d.name || '—'));
+  head.appendChild(el('p', 'code', d.code || ''));
+  if (d.statusLabel) head.appendChild(el('span', 'pill ' + (d.statusClass || 'muted'), d.statusLabel));
+  app.appendChild(head);
+
+  if (d.dueLabel) app.appendChild(el('div', 'due ' + (d.dueClass || 'ok'), d.dueLabel));
+
+  var pc = el('div', 'card');
+  pc.appendChild(el('h2', null, 'Placement'));
+  var pg = el('div', 'grid');
+  pg.appendChild(kv('Branch', d.branch));
+  pg.appendChild(kv('Location', d.location));
+  pg.appendChild(kv('Custodian', d.custodian));
+  pg.appendChild(kv('Condition', d.condition));
+  pc.appendChild(pg);
+  app.appendChild(pc);
+
+  var sc = el('div', 'card');
+  sc.appendChild(el('h2', null, 'Specification'));
+  var sg = el('div', 'grid');
+  sg.appendChild(kv('Serial no.', d.serial));
+  sg.appendChild(kv('Category', d.category));
+  sg.appendChild(kv('Model', d.model));
+  sg.appendChild(kv('Manufacturer', d.manufacturer));
+  sc.appendChild(sg);
+  if (d.description) {
+    var dd = el('div', 'kv');
+    dd.style.marginTop = '14px';
+    dd.appendChild(el('p', 'k', 'Description'));
+    var v = el('p', 'v', d.description);
+    v.style.fontWeight = '500';
+    dd.appendChild(v);
+    sc.appendChild(dd);
+  }
+  app.appendChild(sc);
+
+  var mc = el('div', 'card');
+  mc.appendChild(el('h2', null, 'Maintenance log'));
+  if (!d.maintenance || !d.maintenance.length) {
+    mc.appendChild(el('p', 'empty', 'No maintenance recorded.'));
+  } else {
+    var tbl = el('table');
+    var thead = el('thead');
+    var htr = el('tr');
+    htr.appendChild(el('th', null, 'Detail'));
+    htr.appendChild(el('th', 'r', 'Date'));
+    htr.appendChild(el('th', 'r', 'Next due'));
+    thead.appendChild(htr);
+    tbl.appendChild(thead);
+    var tb = el('tbody');
+    d.maintenance.forEach(function (m) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, m.detail));
+      tr.appendChild(el('td', 'r', m.date));
+      tr.appendChild(el('td', 'r', m.next));
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    mc.appendChild(tbl);
+  }
+  app.appendChild(mc);
+
+  app.appendChild(el('div', 'foot', 'Opstation · Asset register'));
+}
+
+function load() {
+  if (!t) { showError('Invalid asset link.'); return; }
+  fetch(EF + '?t=' + encodeURIComponent(t))
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+    .then(function (d) {
+      if (!d || d.error) { showError('Asset not found. This tag may have been removed or replaced.'); return; }
+      render(d);
+    })
+    .catch(function () { showError('Asset not found. This tag may have been removed or replaced.'); });
+}
+load();
+</script>
+</body>
+</html>
