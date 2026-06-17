@@ -82,20 +82,39 @@ serve(async (req) => {
       .filter(Boolean);
     if (recipients.length === 0) return json({ skipped: "no recipients" });
 
-    const changeList = Array.isArray(changes)
-      ? changes.join(", ")
-      : String(changes ?? "");
+    const fmtChange = (c: unknown): string => {
+      if (c && typeof c === "object") {
+        const o = c as Record<string, unknown>;
+        const f = String(o.field ?? o.label ?? "");
+        const from = String(o.from ?? o.old ?? "");
+        const to = String(o.to ?? o.new ?? "");
+        if (f && (from !== "" || to !== "")) return `${f}: ${from} → ${to}`;
+        return f || JSON.stringify(c);
+      }
+      return String(c);
+    };
+    const changeArr = Array.isArray(changes)
+      ? changes
+      : changes != null
+      ? [changes]
+      : [];
+    const changeItems = changeArr.map(fmtChange);
     const safeCustomer = String(customerName ?? "(unknown customer)");
 
     const subject = `Customer edited: ${safeCustomer}`;
     const text =
       `${userName} edited customer "${safeCustomer}".\n` +
-      `Changed: ${changeList}\n\n` +
-      `Automated Opstation audit alert.`;
+      `Changed:\n` +
+      (changeItems.length
+        ? changeItems.map((s) => ` - ${s}`).join("\n")
+        : " - (no details)") +
+      `\n\nAutomated Opstation audit alert.`;
     const html =
       `<p><b>${escapeHtml(userName)}</b> edited customer ` +
       `<b>${escapeHtml(safeCustomer)}</b>.</p>` +
-      `<p>Changed: ${escapeHtml(changeList)}</p>` +
+      (changeItems.length
+        ? `<ul>${changeItems.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`
+        : `<p>Changed: (no details)</p>`) +
       `<p style="color:#888;font-size:12px">Automated Opstation audit alert.</p>`;
 
     const gmailUser = Deno.env.get("GMAIL_USER")!;

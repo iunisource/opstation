@@ -19,8 +19,10 @@ class ErpAuditLogScreen extends ConsumerStatefulWidget {
 
 class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
   bool _loading = true;
+  String? _error;
   List<Map<String, dynamic>> _entries = [];
   List<Map<String, dynamic>> _orgUsers = [];
+  final Map<String, String> _userNames = {};
 
   late DateTime _from;
   late DateTime _to;
@@ -37,7 +39,10 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) {
       setState(() => _loading = false);
@@ -46,28 +51,30 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     try {
       final client = Supabase.instance.client;
 
-      // Org users — populate the dropdown and resolve names for legacy rows.
+      // Org users — populate the dropdown and resolve names for rows that
+      // recorded the actor as a user_id rather than a name.
       final users = await client
           .from('users')
           .select('id, name')
           .eq('org_id', orgId)
           .order('name');
       final userList = List<Map<String, dynamic>>.from(users);
-      final ids = [for (final u in userList) u['id'] as String];
-      final idsCsv = ids.join(',');
 
       final fromIso = DateFormat('yyyy-MM-dd').format(_from);
       final toIso =
           DateFormat('yyyy-MM-dd').format(_to.add(const Duration(days: 1)));
 
+      // Every audit row carries org_id, so scope by it directly. No embedded
+      // users() join (the actor name is resolved client-side below).
       var q = client
           .from('voucher_audit_log')
-          .select('*, users(name)')
+          .select('*')
+          .eq('org_id', orgId)
           .gte('performed_at', fromIso)
           .lt('performed_at', toIso);
       if (_user != 'all') {
         // A selected user may be attributed either way: modern rows carry the
-        // actor in performed_by (name/email), legacy rows in user_id.
+        // actor name in performed_by, older rows the id in user_id.
         final selName = userList.firstWhere(
           (u) => u['id'] == _user,
           orElse: () => const <String, dynamic>{},
@@ -77,12 +84,6 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
           parts.add('performed_by.eq."$selName"');
         }
         q = q.or(parts.join(','));
-      } else {
-        // Org scope across both eras: modern rows carry org_id; legacy rows
-        // carry only user_id (one of our org users).
-        q = idsCsv.isEmpty
-            ? q.eq('org_id', orgId)
-            : q.or('org_id.eq.$orgId,user_id.in.($idsCsv)');
       }
       final rows =
           await q.order('performed_at', ascending: false).limit(1000);
@@ -90,6 +91,10 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
       if (!mounted) return;
       setState(() {
         _orgUsers = userList;
+        _userNames
+          ..clear()
+          ..addEntries(userList.map(
+              (u) => MapEntry(u['id'] as String, (u['name'] as String?) ?? '')));
         _entries = List<Map<String, dynamic>>.from(rows);
         _loading = false;
       });
@@ -97,6 +102,7 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
       if (!mounted) return;
       setState(() {
         _entries = [];
+        _error = e.toString();
         _loading = false;
       });
     }
@@ -271,9 +277,13 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
 
   Widget _table(List<Map<String, dynamic>> rows) {
     if (rows.isEmpty) {
-      return const Center(
-          child: Text('No activity in this range',
-              style: TextStyle(color: AppTheme.textSecondary)));
+      return Center(
+          child: Text(
+              _error == null
+                  ? 'No activity in this range'
+                  : "Couldn't load audit trail: $_error",
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppTheme.textSecondary)));
     }
     return Container(
       decoration: BoxDecoration(
@@ -341,10 +351,13 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
     final action = e['action'] as String? ?? '-';
     final type = e['voucher_type'] as String? ?? '-';
     final details = e['details'] as String? ?? '';
-    final userName = (e['users']?['name'] as String?) ??
-        (e['performed_by'] as String?) ??
-        (e['user_id'] as String?) ??
-        '—';
+    final pb = (e['performed_by'] as String?)?.trim();
+    final mapped = _userNames[e['user_id']];
+    final userName = (pb != null && pb.isNotEmpty)
+        ? pb
+        : (mapped != null && mapped.isNotEmpty)
+            ? mapped
+            : (e['user_id'] as String?) ?? '—';
     final ts = e['performed_at'] != null
         ? DateFormat('d MMM y · HH:mm')
             .format(DateTime.parse(e['performed_at'] as String).toLocal())
