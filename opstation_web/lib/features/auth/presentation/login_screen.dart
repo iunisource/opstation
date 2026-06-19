@@ -124,290 +124,308 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     final isLoading = ref.watch(authControllerProvider).isLoading;
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              AppTheme.primary.withOpacity(0.06),
-              const Color(0xFFF8FAFC),
-              AppTheme.primary.withOpacity(0.04),
+      backgroundColor: Colors.white,
+      body: LayoutBuilder(
+        builder: (context, c) {
+          if (c.maxWidth < 900) return _formPanel(isLoading, showLogo: true);
+          return Row(
+            children: [
+              Expanded(flex: 6, child: _brandPanel()),
+              SizedBox(width: 520, child: _formPanel(isLoading, showLogo: false)),
             ],
-            stops: const [0.0, 0.5, 1.0],
-          ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ───────────────────────────── brand panel (left) ─────────────────────────
+  Widget _brandPanel() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppTheme.primary,
+            Color.lerp(AppTheme.primary, const Color(0xFF0B1220), 0.55)!,
+          ],
         ),
-        child: Stack(
-          children: [
-            // Decorative blurred orbs
-            Positioned(
-              top: -120,
-              right: -120,
-              child: Container(
-                width: 420,
-                height: 420,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [AppTheme.primary.withOpacity(0.10), Colors.transparent],
+      ),
+      child: Stack(
+        children: [
+          Positioned(top: -100, left: -80, child: _orb(360, 0.16)),
+          Positioned(bottom: -150, right: -110, child: _orb(470, 0.10)),
+          Padding(
+            padding: const EdgeInsets.all(56),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.16),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.25)),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Text('O',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
                   ),
+                  const SizedBox(width: 12),
+                  const Text('Opstation',
+                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                ]),
+                const Spacer(),
+                const Text(
+                  'Run your whole operation\nfrom a single panel.',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800,
+                      height: 1.15,
+                      letterSpacing: -0.5),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Inventory, sales, POS, manufacturing, financials and facilities — unified across every branch, in real time.',
+                  style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 15, height: 1.5),
+                ),
+                const SizedBox(height: 36),
+                _brandFeature(Icons.inventory_2_outlined, 'Multi-branch inventory, POS & delivery'),
+                _brandFeature(Icons.account_balance_outlined, 'Real-time financials, ledgers & reports'),
+                _brandFeature(Icons.precision_manufacturing_outlined, 'Production, assets & facility upkeep'),
+                _brandFeature(Icons.verified_user_outlined, 'Role-based access & full audit trail'),
+                const Spacer(),
+                Text('© 2026 Opstation · All rights reserved',
+                    style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _orb(double size, double opacity) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(colors: [Colors.white.withOpacity(opacity), Colors.transparent]),
+        ),
+      );
+
+  Widget _brandFeature(IconData icon, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Row(children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.95), fontSize: 14.5, fontWeight: FontWeight.w500)),
+          ),
+        ]),
+      );
+
+  // ───────────────────────────── form panel (right) ─────────────────────────
+  Widget _formPanel(bool isLoading, {required bool showLogo}) {
+    return Container(
+      color: Colors.white,
+      alignment: Alignment.center,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(40),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (showLogo) ...[
+                Row(children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [AppTheme.primary, AppTheme.primary.withOpacity(0.78)],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Text('O',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Opstation',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _ink)),
+                ]),
+                const SizedBox(height: 36),
+              ],
+              const Text('Welcome back',
+                  style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                      letterSpacing: -0.5,
+                      color: _ink)),
+              const SizedBox(height: 8),
+              const Text('Sign in to manage your organization',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
+              const SizedBox(height: 36),
+              const Text('Email',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _emailCtrl,
+                focusNode: _emailFocus,
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [AutofillHints.email],
+                textInputAction: TextInputAction.next,
+                onSubmitted: (_) => _passFocus.requestFocus(),
+                style: const TextStyle(fontSize: 14, color: _ink),
+                decoration: InputDecoration(
+                  hintText: 'name@company.com',
+                  hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                  prefixIcon: const Icon(Icons.email_outlined, size: 18, color: AppTheme.textSecondary),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                  filled: true,
+                  fillColor: const Color(0xFFFAFBFC),
+                  border: _border(),
+                  enabledBorder: _border(),
+                  focusedBorder: _border(AppTheme.primary).copyWith(
+                      borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
                 ),
               ),
-            ),
-            Positioned(
-              bottom: -160,
-              left: -120,
-              child: Container(
-                width: 500,
-                height: 500,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [AppTheme.primary.withOpacity(0.06), Colors.transparent],
+              const SizedBox(height: 18),
+              const Text('Password',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _passCtrl,
+                focusNode: _passFocus,
+                obscureText: _obscure,
+                autofillHints: const [AutofillHints.password],
+                onSubmitted: (_) => _submit(),
+                style: const TextStyle(fontSize: 14, color: _ink),
+                decoration: InputDecoration(
+                  hintText: '••••••••',
+                  hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                  prefixIcon: const Icon(Icons.lock_outline, size: 18, color: AppTheme.textSecondary),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                        _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                        size: 18,
+                        color: AppTheme.textSecondary),
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                    tooltip: _obscure ? 'Show password' : 'Hide password',
                   ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                  filled: true,
+                  fillColor: const Color(0xFFFAFBFC),
+                  border: _border(),
+                  enabledBorder: _border(),
+                  focusedBorder: _border(AppTheme.primary).copyWith(
+                      borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
                 ),
               ),
-            ),
-            // Card
-            Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 440),
-                  padding: const EdgeInsets.all(48),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: AppTheme.border, width: 0.5),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppTheme.primary.withOpacity(0.06),
-                        blurRadius: 40,
-                        offset: const Offset(0, 12),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.04),
-                        blurRadius: 24,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(children: [
-                        Container(
-                          width: 46,
-                          height: 46,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [AppTheme.primary, AppTheme.primary.withOpacity(0.78)],
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppTheme.primary.withOpacity(0.3),
-                                blurRadius: 14,
-                                offset: const Offset(0, 6),
-                              ),
-                            ],
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  InkWell(
+                    onTap: () => _setRemember(!_rememberMe),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: Checkbox(
+                            value: _rememberMe,
+                            onChanged: (v) => _setRemember(v ?? true),
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
                           ),
-                          alignment: Alignment.center,
-                          child: const Text('O',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 22)),
                         ),
-                        const SizedBox(width: 12),
-                        const Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(width: 10),
+                        const Text('Keep me signed in',
+                            style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                      ]),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: isLoading ? null : _forgotPassword,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Forgot password?',
+                        style: TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: isLoading ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    disabledBackgroundColor: AppTheme.primary.withOpacity(0.5),
+                  ),
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text('Opstation',
+                            Text('Sign in',
                                 style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
-                                    height: 1,
-                                    color: _ink)),
-                            SizedBox(height: 4),
-                            Text('Admin Panel',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    color: AppTheme.textSecondary,
-                                    fontWeight: FontWeight.w500,
-                                    letterSpacing: 0.4)),
+                                    fontSize: 15, fontWeight: FontWeight.w600, letterSpacing: 0.2)),
+                            SizedBox(width: 8),
+                            Icon(Icons.arrow_forward, size: 18),
                           ],
                         ),
-                      ]),
-                      const SizedBox(height: 40),
-                      const Text('Welcome back',
-                          style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              height: 1.1,
-                              letterSpacing: -0.5,
-                              color: _ink)),
-                      const SizedBox(height: 8),
-                      const Text('Sign in to manage your organization',
-                          style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
-                      const SizedBox(height: 36),
-                      const Text('Email',
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _emailCtrl,
-                        focusNode: _emailFocus,
-                        keyboardType: TextInputType.emailAddress,
-                        autofillHints: const [AutofillHints.email],
-                        textInputAction: TextInputAction.next,
-                        onSubmitted: (_) => _passFocus.requestFocus(),
-                        style: const TextStyle(fontSize: 14, color: _ink),
-                        decoration: InputDecoration(
-                          hintText: 'name@company.com',
-                          hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
-                          prefixIcon: const Icon(Icons.email_outlined,
-                              size: 18, color: AppTheme.textSecondary),
-                          contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-                          filled: true,
-                          fillColor: const Color(0xFFFAFBFC),
-                          border: _border(),
-                          enabledBorder: _border(),
-                          focusedBorder: _border(AppTheme.primary).copyWith(
-                              borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      const Text('Password',
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _passCtrl,
-                        focusNode: _passFocus,
-                        obscureText: _obscure,
-                        autofillHints: const [AutofillHints.password],
-                        onSubmitted: (_) => _submit(),
-                        style: const TextStyle(fontSize: 14, color: _ink),
-                        decoration: InputDecoration(
-                          hintText: '••••••••',
-                          hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
-                          prefixIcon: const Icon(Icons.lock_outline,
-                              size: 18, color: AppTheme.textSecondary),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                                _obscure
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
-                                size: 18,
-                                color: AppTheme.textSecondary),
-                            onPressed: () => setState(() => _obscure = !_obscure),
-                            tooltip: _obscure ? 'Show password' : 'Hide password',
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-                          filled: true,
-                          fillColor: const Color(0xFFFAFBFC),
-                          border: _border(),
-                          enabledBorder: _border(),
-                          focusedBorder: _border(AppTheme.primary).copyWith(
-                              borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      InkWell(
-                        onTap: () => _setRemember(!_rememberMe),
-                        borderRadius: BorderRadius.circular(6),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                          child: Row(children: [
-                            SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: Checkbox(
-                                value: _rememberMe,
-                                onChanged: (v) => _setRemember(v ?? true),
-                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                visualDensity: VisualDensity.compact,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(4)),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            const Text('Keep me signed in',
-                                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-                          ]),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: isLoading ? null : _forgotPassword,
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          child: const Text('Forgot password?',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppTheme.primary,
-                                  fontWeight: FontWeight.w600)),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton(
-                          onPressed: isLoading ? null : _submit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primary,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            disabledBackgroundColor: AppTheme.primary.withOpacity(0.5),
-                          ),
-                          child: isLoading
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: Colors.white))
-                              : const Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text('Sign in',
-                                        style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w600,
-                                            letterSpacing: 0.2)),
-                                    SizedBox(width: 8),
-                                    Icon(Icons.arrow_forward, size: 18),
-                                  ],
-                                ),
-                        ),
-                      ),
-                    ],
+                ),
+              ),
+              const SizedBox(height: 28),
+              Center(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.lock_outline, size: 13, color: AppTheme.textSecondary),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text('Secured connection · Need access? Contact your administrator.',
+                        style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary.withOpacity(0.9)),
+                        textAlign: TextAlign.center),
                   ),
-                ),
+                ]),
               ),
-            ),
-            Positioned(
-              bottom: 24,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Text(
-                  '© 2026 Opstation · All rights reserved',
-                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary.withOpacity(0.7)),
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
