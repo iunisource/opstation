@@ -1,3 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
+import 'dart:html' as html;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -220,6 +223,330 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     );
   }
 
+  // ─────────────────────────── Bulk import ───────────────────────────
+  static String _norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  static const Map<String, List<String>> _importFields = {
+    'name': ['name', 'suppliername', 'supplier'],
+    'phone': ['phone', 'phoneno', 'phonenumber'],
+    'email': ['email', 'emailaddress'],
+    'contact_person': ['contactperson', 'contact'],
+    'contact_number': ['contactnumber', 'contactno', 'contactnum'],
+    'ntn': ['ntn', 'ntngst', 'gst'],
+    'address': ['address'],
+    'payment_terms_days': ['paymentterms', 'paymenttermsdays', 'terms'],
+    'credit_limit': ['creditlimit', 'credit'],
+  };
+
+  List<List<String>> _parseCsv(String input) {
+    final rows = <List<String>>[];
+    var field = StringBuffer();
+    var row = <String>[];
+    var inQuotes = false;
+    final s = input.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    for (var i = 0; i < s.length; i++) {
+      final ch = s[i];
+      if (inQuotes) {
+        if (ch == '"') {
+          if (i + 1 < s.length && s[i + 1] == '"') {
+            field.write('"');
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field.write(ch);
+        }
+      } else {
+        if (ch == '"') {
+          inQuotes = true;
+        } else if (ch == ',') {
+          row.add(field.toString());
+          field = StringBuffer();
+        } else if (ch == '\n') {
+          row.add(field.toString());
+          field = StringBuffer();
+          rows.add(row);
+          row = <String>[];
+        } else {
+          field.write(ch);
+        }
+      }
+    }
+    if (field.isNotEmpty || row.isNotEmpty) {
+      row.add(field.toString());
+      rows.add(row);
+    }
+    return rows.where((r) => r.any((c) => c.trim().isNotEmpty)).toList();
+  }
+
+  void _downloadTemplate() {
+    const headers =
+        'Name,Phone,Email,Contact Person,Contact Number,NTN,Address,Payment Terms (days),Credit Limit';
+    const sample =
+        'Acme Traders,03001234567,acme@example.com,Ali Khan,04211112222,1234567-8,"12 Mall Road, Lahore",30,500000';
+    final blob = html.Blob(['$headers\n$sample\n'], 'text/csv');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..download = 'suppliers_template.csv'
+      ..click();
+    html.Url.revokeObjectUrl(url);
+  }
+
+  Future<List<List<String>>?> _pickCsv() async {
+    final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
+    input.click();
+    await input.onChange.first;
+    final files = input.files;
+    if (files == null || files.isEmpty) return null;
+    final reader = html.FileReader()..readAsText(files.first);
+    await reader.onLoad.first;
+    return _parseCsv((reader.result as String?) ?? '');
+  }
+
+  Widget _chip(String text, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+        child: Text(text,
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+      );
+
+  Future<void> _bulkImportDialog() async {
+    final rawRows = await _pickCsv();
+    if (rawRows == null) return;
+    if (rawRows.length < 2) {
+      _showSnack('CSV has a header but no data rows.');
+      return;
+    }
+
+    final header = rawRows.first.map((h) => _norm(h)).toList();
+    final colIndex = <String, int>{};
+    _importFields.forEach((field, aliases) {
+      for (var i = 0; i < header.length; i++) {
+        if (aliases.contains(header[i])) {
+          colIndex[field] = i;
+          break;
+        }
+      }
+    });
+    if (!colIndex.containsKey('name')) {
+      _showSnack('No "Name" column found in the CSV header.');
+      return;
+    }
+
+    final existingByName = <String, Map<String, dynamic>>{
+      for (final s in _suppliers) (s['name'] as String? ?? '').trim().toLowerCase(): s,
+    };
+
+    String cell(List<String> r, String f) {
+      final idx = colIndex[f];
+      if (idx == null || idx >= r.length) return '';
+      return r[idx].trim();
+    }
+
+    final parsed = <Map<String, dynamic>>[];
+    for (final r in rawRows.skip(1)) {
+      final name = cell(r, 'name');
+      if (name.isEmpty) {
+        parsed.add({'status': 'invalid', 'name': '(blank)', 'error': 'missing name'});
+        continue;
+      }
+      final dup = existingByName.containsKey(name.toLowerCase());
+      final data = <String, dynamic>{
+        'name': name,
+        'phone': cell(r, 'phone').isEmpty ? null : cell(r, 'phone'),
+        'email': cell(r, 'email').isEmpty ? null : cell(r, 'email'),
+        'address': cell(r, 'address').isEmpty ? null : cell(r, 'address'),
+        'contact_person':
+            cell(r, 'contact_person').isEmpty ? null : cell(r, 'contact_person'),
+        'contact_number':
+            cell(r, 'contact_number').isEmpty ? null : cell(r, 'contact_number'),
+        'ntn': cell(r, 'ntn').isEmpty ? null : cell(r, 'ntn'),
+        'payment_terms_days': int.tryParse(cell(r, 'payment_terms_days')) ?? 30,
+        'credit_limit':
+            cell(r, 'credit_limit').isEmpty ? null : double.tryParse(cell(r, 'credit_limit')),
+      };
+      parsed.add({'status': dup ? 'dup' : 'new', 'name': name, 'data': data});
+    }
+
+    final newCount = parsed.where((p) => p['status'] == 'new').length;
+    final dupCount = parsed.where((p) => p['status'] == 'dup').length;
+    final invalidCount = parsed.where((p) => p['status'] == 'invalid').length;
+    var dupMode = 'skip';
+    var importing = false;
+
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return AlertDialog(
+          title: const Text('Bulk Import Suppliers'),
+          content: SizedBox(
+            width: 560,
+            height: 460,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                _chip('${parsed.length} rows', AppTheme.textSecondary),
+                const SizedBox(width: 8),
+                _chip('$newCount new', AppTheme.success),
+                const SizedBox(width: 8),
+                _chip('$dupCount duplicate', Colors.orange),
+                if (invalidCount > 0) ...[
+                  const SizedBox(width: 8),
+                  _chip('$invalidCount invalid', AppTheme.danger),
+                ],
+              ]),
+              const SizedBox(height: 12),
+              if (dupCount > 0) ...[
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Rows whose name already exists:',
+                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ),
+                Row(children: [
+                  Expanded(
+                    child: RadioListTile<String>(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Skip', style: TextStyle(fontSize: 13)),
+                      value: 'skip',
+                      groupValue: dupMode,
+                      onChanged: (v) => setLocal(() => dupMode = v!),
+                    ),
+                  ),
+                  Expanded(
+                    child: RadioListTile<String>(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Update existing', style: TextStyle(fontSize: 13)),
+                      value: 'update',
+                      groupValue: dupMode,
+                      onChanged: (v) => setLocal(() => dupMode = v!),
+                    ),
+                  ),
+                ]),
+              ],
+              const Divider(height: 16),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: parsed.length,
+                  itemBuilder: (_, i) {
+                    final p = parsed[i];
+                    final st = p['status'] as String;
+                    final color = st == 'new'
+                        ? AppTheme.success
+                        : st == 'dup'
+                            ? Colors.orange
+                            : AppTheme.danger;
+                    final label = st == 'new'
+                        ? 'new'
+                        : st == 'dup'
+                            ? 'dup'
+                            : '${p['error']}';
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(children: [
+                        Expanded(
+                            child: Text('${p['name']}',
+                                style: const TextStyle(fontSize: 13),
+                                maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        _chip(label, color),
+                      ]),
+                    );
+                  },
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: _downloadTemplate, child: const Text('Download template')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed:
+                  (importing || newCount + (dupMode == 'update' ? dupCount : 0) == 0)
+                      ? null
+                      : () async {
+                          setLocal(() => importing = true);
+                          final res = await _runImport(parsed, dupMode, existingByName);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          _showSnack(res);
+                          _load();
+                        },
+              child: Text(importing ? 'Importing…' : 'Import'),
+            ),
+          ],
+        );
+      }),
+    );
+  }
+
+  Future<String> _runImport(List<Map<String, dynamic>> parsed, String dupMode,
+      Map<String, Map<String, dynamic>> existingByName) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    final client = Supabase.instance.client;
+    final toInsert = <Map<String, dynamic>>[];
+    final toUpdate = <Map<String, dynamic>>[];
+    var skipped = 0, invalid = 0;
+    var seq = DateTime.now().millisecondsSinceEpoch;
+    for (final p in parsed) {
+      final st = p['status'] as String;
+      if (st == 'invalid') {
+        invalid++;
+        continue;
+      }
+      final data = Map<String, dynamic>.from(p['data'] as Map);
+      if (st == 'dup') {
+        if (dupMode == 'skip') {
+          skipped++;
+          continue;
+        }
+        final existing = existingByName[(p['name'] as String).toLowerCase()];
+        if (existing != null) {
+          toUpdate.add({
+            'id': existing['id'],
+            'data': {...data, 'updated_at': DateTime.now().toUtc().toIso8601String()},
+          });
+        }
+        continue;
+      }
+      toInsert.add({
+        ...data,
+        'id': 'sup_${seq++}',
+        'org_id': orgId,
+        'is_active': true,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
+
+    var created = 0, updated = 0, failed = 0;
+    try {
+      for (var i = 0; i < toInsert.length; i += 200) {
+        final part = toInsert.sublist(
+            i, i + 200 > toInsert.length ? toInsert.length : i + 200);
+        await client.from('suppliers').insert(part);
+        created += part.length;
+      }
+      for (final u in toUpdate) {
+        try {
+          await client.from('suppliers').update(u['data']).eq('id', u['id']);
+          updated++;
+        } catch (_) {
+          failed++;
+        }
+      }
+    } catch (e) {
+      return 'Stopped after $created created — $e';
+    }
+
+    final bits = <String>['$created created'];
+    if (updated > 0) bits.add('$updated updated');
+    if (skipped > 0) bits.add('$skipped skipped');
+    if (invalid > 0) bits.add('$invalid invalid');
+    if (failed > 0) bits.add('$failed failed');
+    return 'Import done — ${bits.join(', ')}.';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -232,6 +559,12 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
             const Text('Suppliers',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const Spacer(),
+            OutlinedButton.icon(
+              onPressed: _bulkImportDialog,
+              icon: const Icon(Icons.upload_file, size: 18),
+              label: const Text('Bulk Import'),
+            ),
+            const SizedBox(width: 8),
             ElevatedButton.icon(
               onPressed: () => _showDialog(context, null),
               icon: const Icon(Icons.add, size: 18),
