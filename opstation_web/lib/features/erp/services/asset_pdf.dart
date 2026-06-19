@@ -285,6 +285,79 @@ class AssetPdf {
         color: _ink,
       );
 
+  /// A full A4 sheet of QR labels (2 per row, ~12 per page) for printing many
+  /// assets at once, then cutting them apart. Each entry: {code, name, url}.
+  static Future<void> printLabelSheet({
+    required List<Map<String, String>> labels,
+    String? orgName,
+  }) async {
+    final doc = pw.Document();
+    final rows = <pw.Widget>[];
+    for (var i = 0; i < labels.length; i += 2) {
+      final a = labels[i];
+      final b = (i + 1) < labels.length ? labels[i + 1] : null;
+      rows.add(pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Expanded(child: _labelCard(a, orgName)),
+          pw.SizedBox(width: 12),
+          pw.Expanded(
+              child: b == null ? pw.SizedBox() : _labelCard(b, orgName)),
+        ],
+      ));
+      rows.add(pw.SizedBox(height: 12));
+    }
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.all(24),
+      build: (ctx) => rows,
+    ));
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => doc.save(),
+      name: 'asset-qr-labels.pdf',
+    );
+  }
+
+  static pw.Widget _labelCard(Map<String, String> l, String? orgName) {
+    return pw.Container(
+      height: 116,
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: _border, width: 0.8),
+        borderRadius: pw.BorderRadius.circular(6),
+      ),
+      padding: const pw.EdgeInsets.all(8),
+      child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.center,
+          children: [
+            _qr(l['url'] ?? '', 92),
+            pw.SizedBox(width: 10),
+            pw.Expanded(
+              child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  mainAxisAlignment: pw.MainAxisAlignment.center,
+                  children: [
+                    if (orgName != null && orgName.isNotEmpty)
+                      pw.Text(_s(orgName),
+                          style: pw.TextStyle(fontSize: 7.5, color: _muted)),
+                    pw.SizedBox(height: 1),
+                    pw.Text(_s(l['code'] ?? ''),
+                        style: pw.TextStyle(
+                            fontSize: 14,
+                            fontWeight: pw.FontWeight.bold,
+                            color: _accent)),
+                    pw.SizedBox(height: 2),
+                    pw.Text(_s(l['name'] ?? ''),
+                        maxLines: 2,
+                        style: pw.TextStyle(fontSize: 9, color: _ink)),
+                    pw.SizedBox(height: 4),
+                    pw.Text('Scan for asset details',
+                        style: pw.TextStyle(fontSize: 6.5, color: _muted)),
+                  ]),
+            ),
+          ]),
+    );
+  }
+
   // ── Status pill ────────────────────────────────────────────────────
   static pw.Widget _statusPill(String status) {
     final key = status.toLowerCase().replaceAll('_', ' ').trim();

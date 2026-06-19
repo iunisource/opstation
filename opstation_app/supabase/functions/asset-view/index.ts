@@ -163,7 +163,6 @@ Deno.serve(async (req) => {
   const maintenance = maintRows.map((m) => {
     const detail = [
       title(m.type),
-      m.cost != null ? money(m.cost) : "",
       m.vendor ?? "",
     ].filter(Boolean).join(" · ") + (m.note ? ` — ${m.note}` : "");
     return {

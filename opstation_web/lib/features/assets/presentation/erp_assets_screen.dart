@@ -435,6 +435,103 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     );
   }
 
+  Future<void> _printLabelsDialog() async {
+    final source = _filtered.isNotEmpty ? _filtered : _assets;
+    if (source.isEmpty) {
+      _snack('No assets to print.');
+      return;
+    }
+    final selected = <String>{...source.map((a) => a['id'] as String)};
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        final allOn = selected.length == source.length;
+        return AlertDialog(
+          title: const Text('Print QR labels'),
+          content: SizedBox(
+            width: 440,
+            height: 480,
+            child: Column(children: [
+              Row(children: [
+                Text('${selected.length} of ${source.length} selected',
+                    style: const TextStyle(color: AppTheme.textSecondary)),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => setLocal(() {
+                    if (allOn) {
+                      selected.clear();
+                    } else {
+                      selected
+                        ..clear()
+                        ..addAll(source.map((a) => a['id'] as String));
+                    }
+                  }),
+                  child: Text(allOn ? 'Clear all' : 'Select all'),
+                ),
+              ]),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView(
+                  children: [
+                    for (final a in source)
+                      CheckboxListTile(
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: selected.contains(a['id']),
+                        onChanged: (v) => setLocal(() {
+                          if (v == true) {
+                            selected.add(a['id'] as String);
+                          } else {
+                            selected.remove(a['id']);
+                          }
+                        }),
+                        title: Text(
+                            '${a['asset_code'] ?? ''}   ${a['name'] ?? ''}',
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.print, size: 18),
+              label: Text('Print ${selected.length}'),
+              onPressed: selected.isEmpty
+                  ? null
+                  : () {
+                      final labels = <Map<String, String>>[];
+                      for (final a in source) {
+                        if (!selected.contains(a['id'])) continue;
+                        final url = _assetUrl(a);
+                        if (url == null) continue;
+                        labels.add({
+                          'code': a['asset_code'] as String? ?? '-',
+                          'name': a['name'] as String? ?? '-',
+                          'url': url,
+                        });
+                      }
+                      Navigator.pop(ctx);
+                      if (labels.isEmpty) {
+                        _snack('Selected assets have no QR token yet.');
+                        return;
+                      }
+                      AssetPdf.printLabelSheet(
+                        labels: labels,
+                        orgName: ref.read(currentUserProvider)?.orgName,
+                      );
+                    },
+            ),
+          ],
+        );
+      }),
+    );
+  }
+
   // ───────────────────────────────────────────────────── build
   @override
   Widget build(BuildContext context) {
@@ -461,6 +558,12 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               icon: const Icon(Icons.category_outlined, size: 18),
               label: const Text('Categories'),
               onPressed: _categoriesDialog,
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.qr_code_2, size: 18),
+              label: const Text('QR labels'),
+              onPressed: _printLabelsDialog,
             ),
             const SizedBox(width: 8),
             OutlinedButton.icon(
