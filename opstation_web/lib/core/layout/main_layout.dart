@@ -382,6 +382,19 @@ class _TopNav extends ConsumerWidget {
             ),
           ),
         ),
+        if ((user?.orgName ?? '').isNotEmpty) ...[
+          Container(width: 1, height: 28, color: Colors.white12),
+          const SizedBox(width: 10),
+          const Icon(Icons.apartment_rounded, size: 15, color: Colors.white54),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(user?.orgName ?? '',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+          ),
+          const SizedBox(width: 6),
+        ],
         Container(width: 1, height: 28, color: Colors.white12),
         const SizedBox(width: 4),
 
