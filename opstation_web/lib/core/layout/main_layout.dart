@@ -220,6 +220,7 @@ class _TopNav extends ConsumerWidget {
     // ── Per-section item lists ───────────────────────────────────────────
     final purchaseItems = <Widget>[
       if (modules.contains('purchase')) ...[
+        if (show('/erp/purchase-dashboard')) _menuItem(context, 'Purchase Dashboard',      Icons.dashboard_outlined,         '/erp/purchase-dashboard',       location),
         if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
         if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location),
         if (show('/erp/grn')) _menuItem(context, 'GRN',                      Icons.move_to_inbox_outlined,     '/erp/grn',                      location),
@@ -233,6 +234,7 @@ class _TopNav extends ConsumerWidget {
 
     final salesItems = <Widget>[
       if (modules.contains('sales')) ...[
+        if (show('/erp/sales-dashboard')) _menuItem(context, 'Sales Dashboard',         Icons.dashboard_outlined,         '/erp/sales-dashboard',          location),
         if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
         if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
         if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location),

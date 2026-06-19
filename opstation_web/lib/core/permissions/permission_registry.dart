@@ -53,6 +53,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('stock_adjustment', 'Stock Adjustment', PermKind.doc, '/erp/stock-adjustment'),
   ]),
   PermModule('purchase', 'Purchase', Icons.shopping_cart_outlined, [
+    PermItem('purchase_dashboard', 'Purchase Dashboard', PermKind.report, '/erp/purchase-dashboard'),
     PermItem('suppliers', 'Suppliers', PermKind.doc, '/erp/suppliers'),
     PermItem('po', 'Purchase Orders', PermKind.doc, '/erp/purchase'),
     PermItem('grn', 'GRN', PermKind.doc, '/erp/grn'),
@@ -61,6 +62,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('purchase_return_invoice', 'Purchase Return Invoices', PermKind.doc, '/erp/purchase-return-vouchers'),
   ]),
   PermModule('sales', 'Sales', Icons.receipt_long_outlined, [
+    PermItem('sales_dashboard', 'Sales Dashboard', PermKind.report, '/erp/sales-dashboard'),
     PermItem('so', 'Sales Orders', PermKind.doc, '/erp/sales'),
     PermItem('do', 'Delivery Orders', PermKind.doc, '/erp/delivery-orders'),
     PermItem('si', 'Sales Invoices', PermKind.doc, '/erp/sales-invoices'),
