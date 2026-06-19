@@ -115,6 +115,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  Future<void> _openSignup() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => const _SignupDialog(),
+    );
+    if (ok == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Thanks! Your request has been sent. We will be in touch shortly.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   OutlineInputBorder _border([Color? c]) => OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
         borderSide: BorderSide(color: c ?? AppTheme.border),
@@ -412,13 +427,30 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                 ),
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 18),
+              Center(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('New to Opstation?',
+                      style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  TextButton(
+                    onPressed: _openSignup,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Request access',
+                        style: TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 14),
               Center(
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   const Icon(Icons.lock_outline, size: 13, color: AppTheme.textSecondary),
                   const SizedBox(width: 6),
                   Flexible(
-                    child: Text('Secured connection · Need access? Contact your administrator.',
+                    child: Text('Secured & encrypted connection.',
                         style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary.withOpacity(0.9)),
                         textAlign: TextAlign.center),
                   ),
@@ -428,6 +460,148 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SignupDialog extends StatefulWidget {
+  const _SignupDialog();
+  @override
+  State<_SignupDialog> createState() => _SignupDialogState();
+}
+
+class _SignupDialogState extends State<_SignupDialog> {
+  final _name = TextEditingController();
+  final _org = TextEditingController();
+  final _contact = TextEditingController();
+  final _email = TextEditingController();
+  String? _industry;
+  bool _submitting = false;
+  String? _error;
+
+  static const _industries = [
+    'Manufacturing',
+    'Retail',
+    'Wholesale & Distribution',
+    'Automotive & Parts',
+    'Textiles & Apparel',
+    'Food & Beverage',
+    'Pharmaceuticals & Healthcare',
+    'Construction & Building Materials',
+    'Electronics & Hardware',
+    'Chemicals',
+    'Logistics & Transport',
+    'Agriculture',
+    'Energy & Utilities',
+    'Services',
+    'Other',
+  ];
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _org.dispose();
+    _contact.dispose();
+    _email.dispose();
+    super.dispose();
+  }
+
+  bool _looksLikeEmail(String s) => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(s);
+
+  Future<void> _submit() async {
+    final name = _name.text.trim();
+    final org = _org.text.trim();
+    final email = _email.text.trim();
+    if (name.isEmpty || org.isEmpty || email.isEmpty) {
+      setState(() => _error = 'Name, organization and email are required.');
+      return;
+    }
+    if (!_looksLikeEmail(email)) {
+      setState(() => _error = 'Please enter a valid email address.');
+      return;
+    }
+    setState(() { _submitting = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client.functions.invoke('signup-request', body: {
+        'name': name,
+        'orgName': org,
+        'contact': _contact.text.trim(),
+        'email': email,
+        'industry': _industry ?? '',
+      });
+      if (res.status != 200) {
+        setState(() { _submitting = false; _error = 'Could not submit (status ${res.status}). Please try again.'; });
+        return;
+      }
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      setState(() {
+        _submitting = false;
+        _error = 'Could not submit: ${e.toString().split("\n").first}';
+      });
+    }
+  }
+
+  InputDecoration _dec(String label) =>
+      InputDecoration(labelText: label, isDense: true, border: const OutlineInputBorder());
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Request access'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Tell us a bit about your business and we will get you set up.',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            ),
+            const SizedBox(height: 16),
+            TextField(controller: _name, decoration: _dec('Name *'), textInputAction: TextInputAction.next),
+            const SizedBox(height: 12),
+            TextField(controller: _org, decoration: _dec('Organization name *'), textInputAction: TextInputAction.next),
+            const SizedBox(height: 12),
+            TextField(controller: _contact, decoration: _dec('Contact number'),
+                keyboardType: TextInputType.phone, textInputAction: TextInputAction.next),
+            const SizedBox(height: 12),
+            TextField(controller: _email, decoration: _dec('Email address *'),
+                keyboardType: TextInputType.emailAddress, textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _submit()),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _industry,
+              isExpanded: true,
+              decoration: _dec('Industry'),
+              items: [for (final i in _industries) DropdownMenuItem(value: i, child: Text(i))],
+              onChanged: (v) => setState(() => _industry = v),
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(_error!, style: const TextStyle(color: AppTheme.danger, fontSize: 13)),
+                ),
+              ),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _submitting ? null : _submit,
+          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+          child: _submitting
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Submit request'),
+        ),
+      ],
     );
   }
 }
