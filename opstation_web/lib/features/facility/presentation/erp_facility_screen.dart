@@ -46,7 +46,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
   final Map<String, String> _branchNames = {};
 
   String _branch = 'all';
-  String _taskFilter = 'open'; // open | overdue | today | done
+  String _taskFilter = 'today'; // today | open | overdue | done
 
   @override
   void initState() {
@@ -207,7 +207,9 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
         case 'overdue':
           return t['status'] == 'open' && '${t['due_date']}'.compareTo(today) < 0;
         case 'today':
-          return t['status'] == 'open' && '${t['due_date']}' == today;
+          // Everything scheduled for today — open and done — for a focused
+          // daily status check. Done ones render with a tick.
+          return '${t['due_date']}' == today;
         case 'done':
           return t['status'] == 'done';
       }
@@ -322,16 +324,18 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
   // ───────────────────────────────────────────────── TASKS tab
   Widget _tasksTab() {
     final rows = _filteredTasks;
+    final doneToday =
+        _taskFilter == 'today' ? rows.where((t) => t['status'] == 'done').length : 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        for (final f in const ['open', 'overdue', 'today', 'done'])
+        for (final f in const ['today', 'open', 'overdue', 'done'])
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: ChoiceChip(
               label: Text({
+                'today': 'Today',
                 'open': 'All open',
                 'overdue': 'Overdue',
-                'today': 'Due today',
                 'done': 'Done (30d)',
               }[f]!),
               selected: _taskFilter == f,
@@ -339,15 +343,22 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
             ),
           ),
         const Spacer(),
-        Text('${rows.length} task${rows.length == 1 ? '' : 's'}',
-            style: const TextStyle(color: AppTheme.textSecondary)),
+        Text(
+          _taskFilter == 'today'
+              ? '$doneToday / ${rows.length} done'
+              : '${rows.length} task${rows.length == 1 ? '' : 's'}',
+          style: const TextStyle(color: AppTheme.textSecondary),
+        ),
       ]),
       const SizedBox(height: 12),
       Expanded(
         child: rows.isEmpty
-            ? const Center(
-                child: Text('Nothing here.',
-                    style: TextStyle(color: AppTheme.textSecondary)))
+            ? Center(
+                child: Text(
+                    _taskFilter == 'today'
+                        ? 'Nothing scheduled for today.'
+                        : 'Nothing here.',
+                    style: const TextStyle(color: AppTheme.textSecondary)))
             : ListView.separated(
                 itemCount: rows.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
