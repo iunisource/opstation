@@ -109,6 +109,16 @@ const List<_AdminToggle> _toggles = [
         'org.asset_maintenance_reminder_emails', 'Reminder recipients',
         hint: 'Comma- or newline-separated email addresses'),
   ),
+
+  _AdminToggle(
+    'org.backup_enabled',
+    'Daily data backup by email',
+    'When ON, a zipped CSV export of all of this organization\'s data (one file '
+        'per table) is emailed to the recipients below every night. Leave '
+        'recipients blank to send to no one.',
+    text: _TextSetting('org.backup_emails', 'Backup recipients',
+        hint: 'Comma- or newline-separated email addresses'),
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
@@ -126,6 +136,7 @@ class _ErpAdminSettingsScreenState
   final Map<String, TextEditingController> _textCtrls = {};
   final Set<String> _saving = {};
   bool _loading = true;
+  bool _backupRunning = false;
 
   @override
   void initState() {
@@ -206,6 +217,47 @@ class _ErpAdminSettingsScreenState
       'value': value,
       'org_id': orgId,
     }, onConflict: 'key,org_id,branch_id');
+  }
+
+  Future<void> _backupNow() async {
+    setState(() => _backupRunning = true);
+    try {
+      final res = await Supabase.instance.client.functions.invoke('daily-backup');
+      final data = res.data;
+      final ok = res.status == 200 && data is Map && data['ok'] == true;
+      String msg;
+      if (ok) {
+        final results = (data['results'] as List?) ?? [];
+        if (results.isEmpty) {
+          msg = 'No recipients set — add a backup email above and try again.';
+        } else {
+          final r = results.first as Map;
+          switch (r['status']) {
+            case 'sent':
+              msg = 'Backup emailed — ${r['tables']} tables, ${r['mb']} MB, to ${r['recipients']} recipient(s).';
+              break;
+            case 'too_large':
+              msg = 'Backup built but too large to email (${r['mb']} MB).';
+              break;
+            default:
+              msg = 'Backup skipped — check the recipients above.';
+          }
+        }
+      } else {
+        final err = (data is Map ? data['error'] : null) ?? 'status ${res.status}';
+        msg = 'Backup failed: $err';
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Backup failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _backupRunning = false);
+    }
   }
 
   Future<void> _setToggle(String key, bool val) async {
@@ -429,6 +481,54 @@ class _ErpAdminSettingsScreenState
                       ],
                     ),
                   ),
+                  if (_values['org.backup_enabled'] ?? false) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Run a backup now',
+                                    style: TextStyle(
+                                        fontSize: 14, fontWeight: FontWeight.w600)),
+                                SizedBox(height: 4),
+                                Text(
+                                    'Email a zipped CSV export of all data to the recipients above, right now.',
+                                    style: TextStyle(
+                                        fontSize: 12.5,
+                                        color: AppTheme.textSecondary,
+                                        height: 1.35)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          ElevatedButton.icon(
+                            onPressed: _backupRunning ? null : _backupNow,
+                            icon: _backupRunning
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white))
+                                : const Icon(Icons.backup_outlined, size: 18),
+                            label: Text(_backupRunning ? 'Sending…' : 'Back up now'),
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                foregroundColor: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
