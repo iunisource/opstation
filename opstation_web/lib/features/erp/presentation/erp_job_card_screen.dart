@@ -847,7 +847,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   String _esc(String s) => s
       .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 
-  String _buildJobCardHtml() {
+  String _buildJobCardHtml({bool withPrices = true}) {
     final jobNo = _current?['job_number'] as String? ?? 'New Job';
     final st = _status;
     final stLabel = st == 'completed' ? 'Completed' : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : 'Queued';
@@ -866,7 +866,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     for (var i = 0; i < _materials.length; i++) {
       final m = _materials[i];
       final lineCost = m.qty * (_prodCost[m.productId] ?? 0);
-      mat.write('<tr><td class="n">${i + 1}</td><td>${_esc(m.productLabel)}</td><td class="r">${_trim(m.qty)}</td><td class="r">${_money(lineCost)}</td></tr>');
+      mat.write('<tr><td class="n">${i + 1}</td><td>${_esc(m.productLabel)}</td><td class="r">${_trim(m.qty)}</td>'
+          '${withPrices ? '<td class="r">${_money(lineCost)}</td>' : ''}</tr>');
     }
     final ohb = StringBuffer();
     for (final o in _overheads) {
@@ -879,19 +880,34 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           '<td class="r">${_trim((r['produced_qty'] as num? ?? 0).toDouble())}</td>'
           '<td class="r">${_trim((r['accepted_qty'] as num? ?? 0).toDouble())}</td>'
           '<td class="r">${_trim((r['rejected_qty'] as num? ?? 0).toDouble())}</td>'
-          '<td class="r">${_money((r['total_cost'] as num? ?? 0).toDouble())}</td>'
+          '${withPrices ? '<td class="r">${_money((r['total_cost'] as num? ?? 0).toDouble())}</td>' : ''}'
           '<td>${_esc((r['status'] ?? '').toString())}</td></tr>');
     }
 
-    final ohSection = _overheads.isEmpty ? '' :
+    final ohSection = (!withPrices || _overheads.isEmpty) ? '' :
       '<div class="sec">Labor &amp; overhead</div><table><thead><tr><th>Type</th><th>Description</th><th class="r">Amount</th></tr></thead>'
       '<tbody>${ohb.toString()}</tbody><tfoot><tr><td colspan="2">Total</td><td class="r">${_money(oh)}</td></tr></tfoot></table>';
     final runSection = _runs.isEmpty ? '' :
-      '<div class="sec">Production batches</div><table><thead><tr><th class="n">Batch</th><th>Date</th><th class="r">Produced</th><th class="r">Accepted</th><th class="r">Rejected</th><th class="r">Cost</th><th>Status</th></tr></thead>'
+      '<div class="sec">Production batches</div><table><thead><tr><th class="n">Batch</th><th>Date</th><th class="r">Produced</th><th class="r">Accepted</th><th class="r">Rejected</th>${withPrices ? '<th class="r">Cost</th>' : ''}<th>Status</th></tr></thead>'
       '<tbody>${runb.toString()}</tbody></table>';
-    final matBody = mat.toString().isEmpty ? '<tr><td colspan="4" style="color:#999">No components.</td></tr>' : mat.toString();
+    final matCols = withPrices ? 4 : 3;
+    final matBody = mat.toString().isEmpty ? '<tr><td colspan="$matCols" style="color:#999">No components.</td></tr>' : mat.toString();
 
-    return '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job Card $jobNo</title>
+    final notes = _notesCtrl.text.trim();
+    final remarksBlock = notes.isEmpty ? '' :
+      '<div class="sec">Remarks</div><div class="remarks">${_esc(notes)}</div>';
+    final cardsBlock = !withPrices ? '' : '''<div class="cards">
+  <div class="card"><div class="k">Components</div><div class="v">${_money(comp)}</div></div>
+  <div class="card"><div class="k">Labor &amp; Overhead</div><div class="v">${_money(oh)}</div></div>
+  <div class="card"><div class="k">Total absorbed</div><div class="v">${_money(total)}</div></div>
+  <div class="card"><div class="k">Unit cost</div><div class="v">${NumberFormat('#,##0.0000').format(unit)}</div></div>
+</div>''';
+    final recipeTable = '<div class="sec">Recipe (per planned qty)</div>'
+      '<table><thead><tr><th class="n">#</th><th>Component</th><th class="r">Qty</th>${withPrices ? '<th class="r">Cost</th>' : ''}</tr></thead>'
+      '<tbody>$matBody</tbody>'
+      '${withPrices ? '<tfoot><tr><td colspan="3">Components total</td><td class="r">${_money(comp)}</td></tr></tfoot>' : ''}</table>';
+
+    return '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job Card $jobNo${withPrices ? '' : ' (Internal)'}</title>
 <style>
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
@@ -908,6 +924,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   .card { flex: 1; border: 1px solid #e3e3e3; border-radius: 8px; padding: 8px 10px; }
   .card .k { color: #888; font-size: 10px; }
   .card .v { font-size: 16px; font-weight: 800; margin-top: 2px; }
+  .remarks { font-size: 12px; white-space: pre-wrap; border: 1px solid #e3e3e3; border-radius: 8px; padding: 8px 10px; margin-bottom: 14px; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
   th { text-align: left; font-size: 10px; text-transform: uppercase; color: #888; border-bottom: 1px solid #ccc; padding: 6px 8px; }
   td { padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 12px; }
@@ -921,7 +938,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 <div class="toolbar no-print"><button class="btn" onclick="window.print()">Print / Save as PDF</button></div>
 <div class="hdr">
   <div><h1>Job Card</h1><div class="sub">$branch</div></div>
-  <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div></div>
+  <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div>${withPrices ? '' : '<div class="sub" style="color:#b45309;font-weight:700">Internal copy - no costing</div>'}</div>
 </div>
 <div class="meta">
   <div><div class="k">Date</div><div class="v">$dateStr</div></div>
@@ -934,16 +951,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   <div><div class="k">Produced</div><div class="v">${_trim(_producedQty)}</div></div>
   <div><div class="k">Remaining</div><div class="v">${_trim(_remainingQty)}</div></div>
 </div>
-<div class="cards">
-  <div class="card"><div class="k">Components</div><div class="v">${_money(comp)}</div></div>
-  <div class="card"><div class="k">Labor &amp; Overhead</div><div class="v">${_money(oh)}</div></div>
-  <div class="card"><div class="k">Total absorbed</div><div class="v">${_money(total)}</div></div>
-  <div class="card"><div class="k">Unit cost</div><div class="v">${NumberFormat('#,##0.0000').format(unit)}</div></div>
-</div>
-<div class="sec">Recipe (per planned qty)</div>
-<table><thead><tr><th class="n">#</th><th>Component</th><th class="r">Qty</th><th class="r">Cost</th></tr></thead>
-<tbody>$matBody</tbody>
-<tfoot><tr><td colspan="3">Components total</td><td class="r">${_money(comp)}</td></tr></tfoot></table>
+$cardsBlock
+$remarksBlock
+$recipeTable
 $ohSection
 $runSection
 <div class="foot"><div>Printed by ${by.isEmpty ? '—' : _esc(by)}</div><div>$printedAt</div></div>
@@ -951,10 +961,10 @@ $runSection
 </body></html>''';
   }
 
-  void _printJobCard() {
+  void _printJobCard({bool withPrices = true}) {
     if (_current == null) { _snack('Open a saved job card to print'); return; }
     try {
-      final out = _buildJobCardHtml();
+      final out = _buildJobCardHtml(withPrices: withPrices);
       final blob = html.Blob([out], 'text/html');
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.window.open(url, '_blank');
@@ -1135,7 +1145,8 @@ $runSection
             if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_trim(_remainingQty)} left',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
             if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail'),
-            if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _printJobCard, tooltip: 'Print / PDF'),
+            if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)'),
+            if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)'),
             if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete'),
             if (_editable) OutlinedButton.icon(
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
