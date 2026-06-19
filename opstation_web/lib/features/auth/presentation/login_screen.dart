@@ -439,7 +439,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: const Text('Request access',
+                    child: const Text('Sign up',
                         style: TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w700)),
                   ),
                 ]),
@@ -549,7 +549,7 @@ class _SignupDialogState extends State<_SignupDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Request access'),
+      title: const Text('Sign up'),
       content: SizedBox(
         width: 420,
         child: SingleChildScrollView(
