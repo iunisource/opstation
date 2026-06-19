@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Area</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f1f5f9;color:#0f172a;-webkit-text-size-adjust:100%}
+.wrap{max-width:560px;margin:0 auto;padding:16px}
+.head{background:#fff;border-radius:14px;padding:18px;border:1px solid #e2e8f0;border-left:4px solid #2563eb}
+.org{font-size:12px;color:#64748b;margin:0 0 6px}
+.name{font-size:22px;font-weight:800;margin:0;line-height:1.15}
+.sub{font-size:13px;color:#64748b;margin:6px 0 0}
+.stats{display:flex;gap:12px;margin-top:14px}
+.stat{flex:1;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px}
+.stat .n{font-size:22px;font-weight:800;margin:0}
+.stat .l{font-size:11px;color:#64748b;margin:2px 0 0}
+.stat.bad .n{color:#dc2626}
+.stat.ok .n{color:#2563eb}
+.card{background:#fff;border-radius:14px;padding:16px 18px;border:1px solid #e2e8f0;margin-top:14px}
+.card h2{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:#64748b;margin:0 0 12px}
+.row{display:flex;justify-content:space-between;align-items:flex-start;padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:14px}
+.row:last-child{border-bottom:0}
+.row .meta{font-size:12px;color:#64748b;white-space:nowrap;margin-left:10px}
+.tag{display:inline-block;font-size:10px;font-weight:700;color:#b45309;background:#fef3c7;border-radius:4px;padding:1px 6px;margin-left:8px}
+.tag.bad{color:#b91c1c;background:#fee2e2}
+.empty{color:#64748b;font-size:13px}
+.foot{text-align:center;color:#94a3b8;font-size:11px;margin:18px 0 4px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="card empty">Loading…</div></div>
+<script>
+var EF = 'https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/facility-area';
+var app = document.getElementById('app');
+var t = new URLSearchParams(location.search).get('t');
+
+function el(tag, cls, txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e;}
+function showError(msg){app.innerHTML='';var c=el('div','card empty');c.appendChild(el('strong',null,msg));app.appendChild(c);}
+
+function render(d){
+  app.innerHTML='';
+  var head=el('div','head');
+  if(d.orgName)head.appendChild(el('p','org',d.orgName));
+  head.appendChild(el('h1','name',d.name||'Area'));
+  var sub=[d.areaType,d.branch].filter(Boolean).join(' · ');
+  if(sub)head.appendChild(el('p','sub',sub));
+  app.appendChild(head);
+
+  var stats=el('div','stats');
+  var s1=el('div','stat ok');s1.appendChild(el('p','n',String(d.counts.open)));s1.appendChild(el('p','l','Open tasks'));
+  var s2=el('div','stat bad');s2.appendChild(el('p','n',String(d.counts.overdue)));s2.appendChild(el('p','l','Overdue'));
+  stats.appendChild(s1);stats.appendChild(s2);
+  app.appendChild(stats);
+
+  var oc=el('div','card');oc.appendChild(el('h2',null,'Open tasks'));
+  if(!d.open||!d.open.length){oc.appendChild(el('p','empty','Nothing due — all clear.'));}
+  else{d.open.forEach(function(o){
+    var r=el('div','row');
+    var left=el('div',null,o.title);
+    if(o.category){var tg=el('span','tag'+(o.overdue?' bad':''),o.category);left.appendChild(tg);}
+    r.appendChild(left);
+    r.appendChild(el('div','meta',(o.overdue?'Overdue · ':'Due ')+o.due));
+    oc.appendChild(r);
+  });}
+  app.appendChild(oc);
+
+  var rc=el('div','card');rc.appendChild(el('h2',null,'Recently done'));
+  if(!d.recent||!d.recent.length){rc.appendChild(el('p','empty','No completions logged yet.'));}
+  else{d.recent.forEach(function(x){
+    var r=el('div','row');
+    r.appendChild(el('div',null,x.title));
+    r.appendChild(el('div','meta',x.date+(x.by?(' · '+x.by):'')));
+    rc.appendChild(r);
+  });}
+  app.appendChild(rc);
+
+  app.appendChild(el('div','foot','Opstation · Facility'));
+}
+
+function load(){
+  if(!t){showError('Invalid area link.');return;}
+  fetch(EF+'?t='+encodeURIComponent(t))
+    .then(function(r){return r.ok?r.json():Promise.reject();})
+    .then(function(d){if(!d||d.error){showError('Area not found.');return;}render(d);})
+    .catch(function(){showError('Area not found.');});
+}
+load();
+</script>
+</body>
+</html>

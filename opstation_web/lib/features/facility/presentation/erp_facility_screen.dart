@@ -9,6 +9,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../erp/services/asset_pdf.dart';
+
+const _kAreaViewBase = 'https://opstation-f06c7.web.app/area.html';
 
 const _bucket = 'facility-files';
 const _categories = ['cleaning', 'inspection', 'servicing', 'safety', 'pest', 'other'];
@@ -851,6 +854,12 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
         Text('${rows.length} area${rows.length == 1 ? '' : 's'}',
             style: const TextStyle(color: AppTheme.textSecondary)),
         const Spacer(),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.qr_code_2, size: 18),
+          label: const Text('QR labels'),
+          onPressed: _printAreaLabels,
+        ),
+        const SizedBox(width: 8),
         ElevatedButton.icon(
           icon: const Icon(Icons.add, size: 18),
           label: const Text('New area'),
@@ -897,10 +906,61 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
           ]),
         ),
         IconButton(
+            onPressed: () => _printAreaLabel(a),
+            icon: const Icon(Icons.qr_code_2, size: 18),
+            tooltip: 'QR label (print & stick in the area)'),
+        IconButton(
             onPressed: () => _areaDialog(existing: a),
             icon: const Icon(Icons.edit_outlined, size: 18),
             tooltip: 'Edit'),
       ]),
+    );
+  }
+
+  String? _areaUrl(Map<String, dynamic> a) {
+    final tkn = a['public_token'] as String?;
+    if (tkn == null || tkn.isEmpty) return null;
+    return '$_kAreaViewBase?t=$tkn';
+  }
+
+  String _areaSub(Map<String, dynamic> a) => [
+        a['area_type'],
+        _branchNames[a['branch_id']],
+      ].where((x) => x != null && '$x'.isNotEmpty).join(' · ');
+
+  Future<void> _printAreaLabel(Map<String, dynamic> a) async {
+    final url = _areaUrl(a);
+    if (url == null) {
+      _snack('No QR token yet — refresh and try again.');
+      return;
+    }
+    await AssetPdf.printLabel(
+      code: a['name'] as String? ?? 'Area',
+      name: _areaSub(a),
+      url: url,
+      orgName: ref.read(currentUserProvider)?.orgName,
+    );
+  }
+
+  Future<void> _printAreaLabels() async {
+    final src = _areas.where(_inBranch).toList();
+    final labels = <Map<String, String>>[];
+    for (final a in src) {
+      final url = _areaUrl(a);
+      if (url == null) continue;
+      labels.add({
+        'code': a['name'] as String? ?? 'Area',
+        'name': _areaSub(a),
+        'url': url,
+      });
+    }
+    if (labels.isEmpty) {
+      _snack('No areas to print.');
+      return;
+    }
+    await AssetPdf.printLabelSheet(
+      labels: labels,
+      orgName: ref.read(currentUserProvider)?.orgName,
     );
   }
 
