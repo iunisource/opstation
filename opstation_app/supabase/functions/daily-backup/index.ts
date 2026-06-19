@@ -80,11 +80,26 @@ serve(async (req) => {
     }
 
     // org names (for filenames); ignore if table differs
+    // org names (for subject/body/filenames). The org table name + key column
+    // vary, so scan likely candidates and map every key value -> name.
     const orgName: Record<string, string> = {};
-    try {
-      const { data: orgs } = await admin.from("organizations").select("id, name");
-      for (const o of orgs ?? []) orgName[o.id as string] = (o.name as string) ?? (o.id as string);
-    } catch (_) { /* fallback to id */ }
+    {
+      const keyCols = ["id", "org_id", "slug", "code", "uuid"];
+      const nameCols = ["name", "org_name", "title", "display_name", "label", "company_name"];
+      for (const table of ["organizations", "orgs", "organization", "companies"]) {
+        try {
+          const { data, error } = await admin.from(table).select("*");
+          if (error || !data) continue;
+          for (const row of data as Record<string, unknown>[]) {
+            let nm = "";
+            for (const nc of nameCols) { if (row[nc]) { nm = `${row[nc]}`; break; } }
+            if (!nm) continue;
+            for (const kc of keyCols) { if (row[kc] != null) orgName[`${row[kc]}`] = nm; }
+          }
+          if (Object.keys(orgName).length) break; // usable table found
+        } catch (_) { /* try next candidate */ }
+      }
+    }
 
     // org-scoped tables
     const { data: tableList, error: tlErr } = await admin.rpc("list_org_backup_tables");
@@ -117,6 +132,7 @@ serve(async (req) => {
       }
 
       const zip = new JSZip();
+      const label = orgName[orgId] ? `${orgName[orgId]} (${orgId})` : orgId;
       const folder = zip.folder(`opstation-backup-${today}`)!;
       let tableCount = 0;
 
@@ -137,7 +153,7 @@ serve(async (req) => {
 
       folder.file(
         "_manifest.txt",
-        `Opstation backup\nOrganization: ${orgName[orgId] ?? orgId} (${orgId})\n` +
+        `Opstation backup\nOrganization: ${label}\n` +
           `Date: ${today}\nTables exported: ${tableCount}\nGenerated (UTC): ${new Date().toISOString()}\n`,
       );
 
@@ -151,9 +167,9 @@ serve(async (req) => {
         await smtp.send({
           from: `Opstation Backups <${gmailUser}>`,
           to: recipients,
-          subject: `Opstation backup ${today} — too large to email`,
+          subject: `Opstation backup - ${label} - ${today} - too large to email`,
           content:
-            `Today's backup for ${orgName[orgId] ?? orgId} is ` +
+            `Today's backup for ${label} is ` +
             `${(bytes.length / 1048576).toFixed(1)} MB, above the email limit. ` +
             `Please contact your administrator to retrieve it another way.`,
         });
@@ -164,9 +180,9 @@ serve(async (req) => {
       await smtp.send({
         from: `Opstation Backups <${gmailUser}>`,
         to: recipients,
-        subject: `Opstation backup — ${orgName[orgId] ?? orgId} — ${today}`,
+        subject: `Opstation backup - ${label} - ${today}`,
         content:
-          `Attached is the daily data backup for ${orgName[orgId] ?? orgId} (${today}).\n\n` +
+          `Attached is the daily data backup for ${label}, dated ${today}.\n\n` +
           `${tableCount} tables exported as CSV inside the zip.\n` +
           `This is an automated message from Opstation.`,
         attachments: [{

@@ -1,9 +1,14 @@
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../auth_controller.dart';
 import '../../../core/theme/app_theme.dart';
+
+/// Destination for the "Partner Retailer Portal" button.
+/// Opened in the same tab; swap for any URL (in-app hash route or external).
+const String _kRetailerLoginUrl = 'https://opstation-f06c7.web.app/#/r/login';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -140,18 +145,43 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final isLoading = ref.watch(authControllerProvider).isLoading;
     return Scaffold(
       backgroundColor: Colors.white,
-      body: LayoutBuilder(
-        builder: (context, c) {
-          if (c.maxWidth < 900) return _formPanel(isLoading, showLogo: true);
-          return Row(
-            children: [
-              Expanded(flex: 6, child: _brandPanel()),
-              SizedBox(width: 520, child: _formPanel(isLoading, showLogo: false)),
-            ],
-          );
-        },
+      body: Stack(
+        children: [
+          LayoutBuilder(
+            builder: (context, c) {
+              if (c.maxWidth < 900) return _formPanel(isLoading, showLogo: true);
+              return Row(
+                children: [
+                  Expanded(flex: 6, child: _brandPanel()),
+                  SizedBox(width: 520, child: _formPanel(isLoading, showLogo: false)),
+                ],
+              );
+            },
+          ),
+          Positioned(
+            top: 18,
+            right: 24,
+            child: OutlinedButton.icon(
+              onPressed: _openRetailerLogin,
+              icon: const Icon(Icons.storefront_outlined, size: 18),
+              label: const Text('Partner Retailer Portal'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primary,
+                backgroundColor: Colors.white,
+                side: const BorderSide(color: AppTheme.primary, width: 1.4),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  void _openRetailerLogin() {
+    html.window.open(_kRetailerLoginUrl, '_self');
   }
 
   // ───────────────────────────── brand panel (left) ─────────────────────────
