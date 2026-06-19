@@ -239,6 +239,7 @@ class _TopNav extends ConsumerWidget {
         _menuDivider(),
         if (show('/erp/sales-returns')) _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
         if (show('/erp/sales-return-invoices')) _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location),
+        if (show('/erp/sales-report')) _menuItem(context, 'Sales Report',         Icons.assessment_outlined,        '/erp/sales-report',          location),
         _menuDivider(),
         
       ],
