@@ -227,6 +227,7 @@ class AssetPdf {
     required String name,
     required String url,
     String? orgName,
+    String caption = 'Scan for asset details',
   }) async {
     final doc = pw.Document();
     doc.addPage(pw.Page(
@@ -263,7 +264,7 @@ class AssetPdf {
                           maxLines: 2,
                           style: pw.TextStyle(fontSize: 9.5, color: _ink)),
                       pw.SizedBox(height: 5),
-                      pw.Text('Scan for asset details',
+                      pw.Text(_s(caption),
                           style: pw.TextStyle(fontSize: 7, color: _muted)),
                     ]),
               ),
@@ -290,6 +291,7 @@ class AssetPdf {
   static Future<void> printLabelSheet({
     required List<Map<String, String>> labels,
     String? orgName,
+    String caption = 'Scan for asset details',
   }) async {
     final doc = pw.Document();
     final rows = <pw.Widget>[];
@@ -299,10 +301,10 @@ class AssetPdf {
       rows.add(pw.Row(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          pw.Expanded(child: _labelCard(a, orgName)),
+          pw.Expanded(child: _labelCard(a, orgName, caption)),
           pw.SizedBox(width: 12),
           pw.Expanded(
-              child: b == null ? pw.SizedBox() : _labelCard(b, orgName)),
+              child: b == null ? pw.SizedBox() : _labelCard(b, orgName, caption)),
         ],
       ));
       rows.add(pw.SizedBox(height: 12));
@@ -318,7 +320,7 @@ class AssetPdf {
     );
   }
 
-  static pw.Widget _labelCard(Map<String, String> l, String? orgName) {
+  static pw.Widget _labelCard(Map<String, String> l, String? orgName, String caption) {
     return pw.Container(
       height: 116,
       decoration: pw.BoxDecoration(
@@ -350,7 +352,7 @@ class AssetPdf {
                         maxLines: 2,
                         style: pw.TextStyle(fontSize: 9, color: _ink)),
                     pw.SizedBox(height: 4),
-                    pw.Text('Scan for asset details',
+                    pw.Text(_s(caption),
                         style: pw.TextStyle(fontSize: 6.5, color: _muted)),
                   ]),
             ),

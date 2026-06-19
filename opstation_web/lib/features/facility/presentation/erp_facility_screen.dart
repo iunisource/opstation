@@ -939,6 +939,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
       name: _areaSub(a),
       url: url,
       orgName: ref.read(currentUserProvider)?.orgName,
+      caption: 'Scan for area status',
     );
   }
 
@@ -961,6 +962,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     await AssetPdf.printLabelSheet(
       labels: labels,
       orgName: ref.read(currentUserProvider)?.orgName,
+      caption: 'Scan for area status',
     );
   }
 
