@@ -45,6 +45,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
 
   // result
   List<Map<String, dynamic>> _rows = [];
+  Map<String, List<Map<String, dynamic>>> _children = {};
+  final Set<String> _expanded = {};
   double _grandAmount = 0;
   double _grandQty = 0;
   int _docCount = 0;
@@ -170,22 +172,28 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
     final toStr = _ymd(_to);
     final toExclusive = _ymd(_to.add(const Duration(days: 1)));
     final productMode = _breakdown == 'product';
-    // key -> aggregate
-    final agg = <String, Map<String, dynamic>>{};
 
-    void add(String key, String name, String sub, double qty, double amount) {
-      final a = agg.putIfAbsent(
-          key, () => {'name': name, 'sub': sub, 'qty': 0.0, 'amount': 0.0, 'count': 0});
-      a['qty'] = (a['qty'] as double) + qty;
-      a['amount'] = (a['amount'] as double) + amount;
+    // line-level cells at customer × product grain
+    final cells = <Map<String, dynamic>>[];
+    final orderSets = <String, Set<String>>{}; // customer key -> distinct doc ids
+    var docs = 0;
+
+    Map<String, String> custInfo(String? cid, {String? posCustId, bool pos = false}) {
+      if (cid != null) {
+        final cust = _customers[cid];
+        return {
+          'k': cid,
+          'n': cust == null ? '(customer)' : '${cust['shop_name']}',
+          's': cust == null ? '' : '${cust['code'] ?? ''}',
+        };
+      }
+      if (pos && posCustId != null) {
+        return {'k': 'pos:$posCustId', 'n': _posCustomerNames[posCustId] ?? 'POS customer', 's': 'POS'};
+      }
+      if (pos) return {'k': 'pos:walkin', 'n': 'Walk-in', 's': 'POS'};
+      return {'k': 'walkin', 'n': '(no customer)', 's': ''};
     }
 
-    void bumpCount(String key) {
-      final a = agg[key];
-      if (a != null) a['count'] = (a['count'] as int) + 1;
-    }
-
-    int docs = 0;
     try {
       // ───────── Sales Invoices ─────────
       if (_source == 'both' || _source == 'invoice') {
@@ -198,41 +206,33 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             .lte('voucher_date', toStr);
         if (_branch != 'all') q = q.eq('branch_id', _branch);
         final invs = await q;
-        final kept = <Map<String, dynamic>>[];
+        final docCust = <String, Map<String, String>>{};
+        final keptIds = <String>[];
         for (final inv in invs) {
           if (!_custPassesFilter(inv['customer_id'] as String?)) continue;
-          kept.add(Map<String, dynamic>.from(inv));
+          final ci = custInfo(inv['customer_id'] as String?);
+          docCust[inv['id'] as String] = ci;
+          keptIds.add(inv['id'] as String);
+          orderSets.putIfAbsent(ci['k']!, () => {}).add(inv['id'] as String);
         }
-        docs += kept.length;
-
-        if (productMode) {
-          final ids = kept.map((e) => e['id'] as String).toList();
-          for (final part in _chunk(ids, 300)) {
-            if (part.isEmpty) continue;
-            final items = await c
-                .from('sales_invoice_items')
-                .select('invoice_id, product_id, qty_delivered, line_total')
-                .inFilter('invoice_id', part);
-            for (final it in items) {
-              final pid = it['product_id'] as String?;
-              final key = pid ?? 'unknown';
-              add(key, pid == null ? '(unknown product)' : (_productNames[pid] ?? pid),
-                  'Invoice', _d(it['qty_delivered']), _d(it['line_total']));
-            }
-          }
-        } else {
-          for (final inv in kept) {
-            final cid = inv['customer_id'] as String?;
-            final key = cid ?? 'walkin';
-            final cust = cid == null ? null : _customers[cid];
-            add(
-              key,
-              cust == null ? '(no customer)' : '${cust['shop_name']}',
-              cust == null ? '' : '${cust['code'] ?? ''}',
-              0,
-              _d(inv['grand_total']),
-            );
-            bumpCount(key);
+        docs += keptIds.length;
+        for (final part in _chunk(keptIds, 300)) {
+          if (part.isEmpty) continue;
+          final items = await c
+              .from('sales_invoice_items')
+              .select('invoice_id, product_id, qty_delivered, line_total')
+              .inFilter('invoice_id', part);
+          for (final it in items) {
+            final ci = docCust[it['invoice_id']];
+            if (ci == null) continue;
+            final pid = it['product_id'] as String?;
+            cells.add({
+              'ck': ci['k'], 'cn': ci['n'], 'cs': ci['s'],
+              'pk': pid ?? 'unknown',
+              'pn': pid == null ? '(unknown product)' : (_productNames[pid] ?? pid),
+              'qty': _d(it['qty_delivered']),
+              'amount': _d(it['line_total']),
+            });
           }
         }
       }
@@ -241,83 +241,98 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       if (_source == 'both' || _source == 'pos') {
         final txAll = await c
             .from('pos_transactions')
-            .select(
-                'id, customer_id, pos_customer_id, total, transacted_at, transaction_type, reference_transaction_id, session_id')
+            .select('id, customer_id, pos_customer_id, total, transacted_at, transaction_type, session_id')
             .eq('org_id', _orgId!)
             .gte('transacted_at', fromStr)
             .lt('transacted_at', toExclusive);
-        final kept = <Map<String, dynamic>>[];
+        final docCust = <String, Map<String, String>>{};
+        final keptIds = <String>[];
         for (final tx in txAll) {
-          // sales only — skip returns
           if ('${tx['transaction_type']}'.toLowerCase() == 'return') continue;
-          // branch scoping via session (if a specific branch is chosen)
           if (_branch != 'all') {
             final b = _sessionBranch[tx['session_id']];
             if (b != _branch) continue;
           }
           if (!_custPassesFilter(tx['customer_id'] as String?)) continue;
-          kept.add(Map<String, dynamic>.from(tx));
+          final ci = custInfo(tx['customer_id'] as String?,
+              posCustId: tx['pos_customer_id'] as String?, pos: true);
+          docCust[tx['id'] as String] = ci;
+          keptIds.add(tx['id'] as String);
+          orderSets.putIfAbsent(ci['k']!, () => {}).add(tx['id'] as String);
         }
-        docs += kept.length;
-
-        if (productMode) {
-          final ids = kept.map((e) => e['id'] as String).toList();
-          for (final part in _chunk(ids, 300)) {
-            if (part.isEmpty) continue;
-            final items = await c
-                .from('pos_transaction_items')
-                .select(
-                    'transaction_id, product_id, item_name, quantity, unit_price, discount, discount_type')
-                .inFilter('transaction_id', part);
-            for (final it in items) {
-              final pid = it['product_id'] as String?;
-              final qty = _d(it['quantity']);
-              final gross = qty * _d(it['unit_price']);
-              final disc = '${it['discount_type']}'.toLowerCase() == 'percent'
-                  ? gross * _d(it['discount']) / 100.0
-                  : _d(it['discount']);
-              final name = pid != null
-                  ? (_productNames[pid] ?? it['item_name'] ?? pid)
-                  : (it['item_name'] ?? '(unknown product)');
-              final key = pid ?? 'name:${it['item_name']}';
-              add(key, '$name', 'POS', qty, gross - disc);
-            }
-          }
-        } else {
-          for (final tx in kept) {
-            final cid = tx['customer_id'] as String?;
-            final pcid = tx['pos_customer_id'] as String?;
-            String key;
-            String name;
-            String sub;
-            if (cid != null) {
-              key = cid;
-              final cust = _customers[cid];
-              name = cust == null ? '(customer)' : '${cust['shop_name']}';
-              sub = cust == null ? '' : '${cust['code'] ?? ''}';
-            } else if (pcid != null) {
-              key = 'pos:$pcid';
-              name = _posCustomerNames[pcid] ?? 'POS customer';
-              sub = 'POS';
-            } else {
-              key = 'pos:walkin';
-              name = 'Walk-in';
-              sub = 'POS';
-            }
-            add(key, name, sub, 0, _d(tx['total']));
-            bumpCount(key);
+        docs += keptIds.length;
+        for (final part in _chunk(keptIds, 300)) {
+          if (part.isEmpty) continue;
+          final items = await c
+              .from('pos_transaction_items')
+              .select('transaction_id, product_id, item_name, quantity, unit_price, discount, discount_type')
+              .inFilter('transaction_id', part);
+          for (final it in items) {
+            final ci = docCust[it['transaction_id']];
+            if (ci == null) continue;
+            final pid = it['product_id'] as String?;
+            final qty = _d(it['quantity']);
+            final gross = qty * _d(it['unit_price']);
+            final disc = '${it['discount_type']}'.toLowerCase() == 'percent'
+                ? gross * _d(it['discount']) / 100.0
+                : _d(it['discount']);
+            final name = pid != null
+                ? (_productNames[pid] ?? it['item_name'] ?? pid)
+                : (it['item_name'] ?? '(unknown product)');
+            cells.add({
+              'ck': ci['k'], 'cn': ci['n'], 'cs': ci['s'],
+              'pk': pid ?? 'name:${it['item_name']}',
+              'pn': '$name',
+              'qty': qty,
+              'amount': gross - disc,
+            });
           }
         }
       }
 
-      final rows = agg.entries.map((e) => {'key': e.key, ...e.value}).toList()
+      // ───────── roll up to top rows + children ─────────
+      final topAgg = <String, Map<String, dynamic>>{};
+      final childAgg = <String, Map<String, Map<String, dynamic>>>{};
+      for (final cell in cells) {
+        final topKey = (productMode ? cell['pk'] : cell['ck']) as String;
+        final topName = (productMode ? cell['pn'] : cell['cn']) as String;
+        final topSub = productMode ? '' : cell['cs'] as String;
+        final childKey = (productMode ? cell['ck'] : cell['pk']) as String;
+        final childName = (productMode ? cell['cn'] : cell['pn']) as String;
+        final childSub = productMode ? cell['cs'] as String : '';
+        final qty = cell['qty'] as double;
+        final amt = cell['amount'] as double;
+
+        final t = topAgg.putIfAbsent(topKey,
+            () => {'key': topKey, 'name': topName, 'sub': topSub, 'qty': 0.0, 'amount': 0.0, 'count': 0});
+        t['qty'] = (t['qty'] as double) + qty;
+        t['amount'] = (t['amount'] as double) + amt;
+
+        final ch = childAgg.putIfAbsent(topKey, () => {});
+        final ca = ch.putIfAbsent(childKey,
+            () => {'key': childKey, 'name': childName, 'sub': childSub, 'qty': 0.0, 'amount': 0.0});
+        ca['qty'] = (ca['qty'] as double) + qty;
+        ca['amount'] = (ca['amount'] as double) + amt;
+      }
+      if (!productMode) {
+        topAgg.forEach((k, v) => v['count'] = orderSets[k]?.length ?? 0);
+      }
+
+      final rows = topAgg.values.toList()
         ..sort((a, b) => (b['amount'] as double).compareTo(a['amount'] as double));
+      final children = <String, List<Map<String, dynamic>>>{};
+      childAgg.forEach((k, m) {
+        children[k] = m.values.toList()
+          ..sort((a, b) => (b['amount'] as double).compareTo(a['amount'] as double));
+      });
       final grandAmt = rows.fold<double>(0, (s, r) => s + (r['amount'] as double));
       final grandQty = rows.fold<double>(0, (s, r) => s + (r['qty'] as double));
 
       if (!mounted) return;
       setState(() {
         _rows = rows;
+        _children = children;
+        _expanded.clear();
         _grandAmount = grandAmt;
         _grandQty = grandQty;
         _docCount = docs;
@@ -472,23 +487,39 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         ),
       ]),
       const SizedBox(height: 12),
-      SizedBox(
-        width: 360,
-        child: TextField(
-          controller: _searchCtrl,
-          decoration: InputDecoration(
-            hintText: productMode ? 'Search product…' : 'Search customer…',
-            prefixIcon: const Icon(Icons.search, size: 20),
-            isDense: true,
-            border: const OutlineInputBorder(),
-            suffixIcon: _searchCtrl.text.isEmpty
-                ? null
-                : IconButton(
-                    icon: const Icon(Icons.clear, size: 18),
-                    onPressed: () => _searchCtrl.clear()),
+      Row(children: [
+        SizedBox(
+          width: 360,
+          child: TextField(
+            controller: _searchCtrl,
+            decoration: InputDecoration(
+              hintText: productMode ? 'Search product…' : 'Search customer…',
+              prefixIcon: const Icon(Icons.search, size: 20),
+              isDense: true,
+              border: const OutlineInputBorder(),
+              suffixIcon: _searchCtrl.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () => _searchCtrl.clear()),
+            ),
           ),
         ),
-      ),
+        const Spacer(),
+        TextButton.icon(
+          icon: Icon(_expanded.isEmpty ? Icons.unfold_more : Icons.unfold_less, size: 18),
+          label: Text(_expanded.isEmpty ? 'Expand all' : 'Collapse all'),
+          onPressed: rows.isEmpty
+              ? null
+              : () => setState(() {
+                    if (_expanded.isEmpty) {
+                      _expanded.addAll(rows.map((r) => r['key'] as String));
+                    } else {
+                      _expanded.clear();
+                    }
+                  }),
+        ),
+      ]),
       const SizedBox(height: 10),
       _tableHeader(productMode),
       const Divider(height: 1),
@@ -520,7 +551,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(children: [
-        const SizedBox(width: 36, child: Text('#', style: s)),
+        const SizedBox(width: 36),
         Expanded(flex: 4, child: Text(productMode ? 'Product' : 'Customer', style: s)),
         if (!productMode) const Expanded(flex: 2, child: Text('Cat / Group', style: s)),
         Expanded(
@@ -536,50 +567,118 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   Widget _tableRow(int n, Map<String, dynamic> r, bool productMode) {
     final amount = r['amount'] as double;
     final pct = _grandAmount == 0 ? 0.0 : amount / _grandAmount * 100;
-    final cust = productMode ? null : _customers[r['key']];
+    final key = r['key'] as String;
+    final kids = _children[key] ?? const [];
+    final expanded = _expanded.contains(key);
+    final cust = productMode ? null : _customers[key];
     final catGrp = cust == null
         ? '${r['sub']}'
         : [cust['category'], cust['group_name']].where((x) => x != null && '$x'.isNotEmpty).join(' · ');
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 9),
-      child: Row(children: [
-        SizedBox(width: 36, child: Text('$n', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-        Expanded(
-          flex: 4,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${r['name']}',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (!productMode && '${r['sub']}'.isNotEmpty)
-              Text('${r['sub']}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      InkWell(
+        onTap: kids.isEmpty
+            ? null
+            : () => setState(() =>
+                expanded ? _expanded.remove(key) : _expanded.add(key)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          child: Row(children: [
+            SizedBox(
+              width: 36,
+              child: Row(children: [
+                Text('$n',
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                const SizedBox(width: 2),
+                Icon(
+                    kids.isEmpty
+                        ? Icons.remove
+                        : (expanded ? Icons.expand_less : Icons.expand_more),
+                    size: 15,
+                    color: AppTheme.textSecondary),
+              ]),
+            ),
+            Expanded(
+              flex: 4,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${r['name']}',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                if (!productMode && '${r['sub']}'.isNotEmpty)
+                  Text('${r['sub']}',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              ]),
+            ),
+            if (!productMode)
+              Expanded(
+                flex: 2,
+                child: Text(catGrp,
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+            Expanded(
+              flex: 2,
+              child: Text(productMode ? _qtyFmt.format(r['qty']) : '${r['count']}',
+                  textAlign: TextAlign.right, style: const TextStyle(fontSize: 13)),
+            ),
+            Expanded(
+              flex: 2,
+              child: Text(_money.format(amount),
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
+            SizedBox(
+              width: 60,
+              child: Text('${pct.toStringAsFixed(1)}%',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ),
           ]),
         ),
-        if (!productMode)
-          Expanded(
-            flex: 2,
-            child: Text(catGrp,
-                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
+      if (expanded && kids.isNotEmpty)
+        Container(
+          margin: const EdgeInsets.only(left: 36, bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: AppTheme.background,
+            borderRadius: BorderRadius.circular(6),
           ),
+          child: Column(children: [for (final ch in kids) _childRow(ch, productMode)]),
+        ),
+    ]);
+  }
+
+  Widget _childRow(Map<String, dynamic> ch, bool productMode) {
+    // In product-mode the children are customers; in customer-mode they're products.
+    final childIsProduct = !productMode;
+    final amount = ch['amount'] as double;
+    final sub = '${ch['sub']}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(children: [
+        Icon(childIsProduct ? Icons.inventory_2_outlined : Icons.person_outline,
+            size: 13, color: AppTheme.textSecondary),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 4,
+          child: Text(
+              sub.isEmpty ? '${ch['name']}' : '${ch['name']}  ·  $sub',
+              style: const TextStyle(fontSize: 12.5),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        if (!productMode) const Expanded(flex: 2, child: SizedBox()),
         Expanded(
           flex: 2,
-          child: Text(
-              productMode ? _qtyFmt.format(r['qty']) : '${r['count']}',
+          child: Text(_qtyFmt.format(ch['qty']),
               textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 13)),
+              style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
         ),
         Expanded(
           flex: 2,
           child: Text(_money.format(amount),
-              textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              textAlign: TextAlign.right, style: const TextStyle(fontSize: 12.5)),
         ),
-        SizedBox(
-          width: 60,
-          child: Text('${pct.toStringAsFixed(1)}%',
-              textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-        ),
+        const SizedBox(width: 60),
       ]),
     );
   }
@@ -657,6 +756,15 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           _money.format(amount),
           '${pct.toStringAsFixed(1)}%',
         ]);
+      }
+      for (final ch in (_children[r['key']] ?? const <Map<String, dynamic>>[])) {
+        final sub = '${ch['sub']}';
+        final cname = sub.isEmpty ? '${ch['name']}' : '${ch['name']}  ($sub)';
+        if (productMode) {
+          data.add(['', '    • $cname', _qtyFmt.format(ch['qty']), _money.format(ch['amount']), '']);
+        } else {
+          data.add(['', '    • $cname', '', _qtyFmt.format(ch['qty']), _money.format(ch['amount']), '']);
+        }
       }
     }
     final totalAmt = rows.fold<double>(0, (s, r) => s + (r['amount'] as double));
