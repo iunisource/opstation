@@ -34,12 +34,14 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
 
   List<Map<String, dynamic>> _branches = [];
   List<Map<String, dynamic>> _users = [];
+  List<Map<String, dynamic>> _assignees = [];
   List<Map<String, dynamic>> _areas = [];
   List<Map<String, dynamic>> _schedules = [];
   List<Map<String, dynamic>> _tasks = [];
   Map<String, dynamic> _dash = {};
 
   final Map<String, String> _userNames = {};
+  final Map<String, String> _assigneeNames = {};
   final Map<String, String> _areaNames = {};
   final Map<String, String> _branchNames = {};
 
@@ -79,6 +81,12 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
           .order('name');
       final users =
           await c.from('users').select('id, name').eq('org_id', orgId).order('name');
+      final assignees = await c
+          .from('facility_assignees')
+          .select()
+          .eq('org_id', orgId)
+          .eq('is_active', true)
+          .order('name');
       final areas = await c
           .from('facility_areas')
           .select()
@@ -116,6 +124,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
       setState(() {
         _branches = List<Map<String, dynamic>>.from(branches);
         _users = List<Map<String, dynamic>>.from(users);
+        _assignees = List<Map<String, dynamic>>.from(assignees);
         _areas = List<Map<String, dynamic>>.from(areas);
         _schedules = List<Map<String, dynamic>>.from(schedules);
         _tasks = [
@@ -129,6 +138,9 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
         _userNames
           ..clear()
           ..addEntries(_users.map((u) => MapEntry(u['id'] as String, '${u['name']}')));
+        _assigneeNames
+          ..clear()
+          ..addEntries(_assignees.map((u) => MapEntry(u['id'] as String, '${u['name']}')));
         _areaNames
           ..clear()
           ..addEntries(_areas.map((a) => MapEntry(a['id'] as String, '${a['name']}')));
@@ -351,8 +363,9 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
         !done && '${t['due_date']}'.compareTo(_today()) < 0;
     final cat = t['category'] as String?;
     final area = _areaNames[t['area_id']];
+    final photoCount = _photoList(t).length;
     return InkWell(
-      onTap: done ? null : () => _completeDialog(t),
+      onTap: () => done ? _taskDetailDialog(t) : _completeDialog(t),
       borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -394,6 +407,13 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
             if ((t['checklist'] as List?)?.isNotEmpty == true)
               Text('${(t['checklist'] as List).length} checks',
                   style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            if (done && photoCount > 0)
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.photo_outlined, size: 12, color: AppTheme.textSecondary),
+                const SizedBox(width: 3),
+                Text('$photoCount',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              ]),
           ]),
         ]),
       ),
@@ -414,7 +434,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     final checks = {for (final item in checklist) item: false};
     final noteCtrl = TextEditingController();
     final requiresPhoto = t['requires_photo'] == true;
-    String? photoPath;
+    final photos = <String>[];
     bool saving = false;
 
     await showDialog(
@@ -452,19 +472,25 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
                 Row(children: [
                   OutlinedButton.icon(
                     icon: const Icon(Icons.photo_camera_outlined, size: 18),
-                    label: Text(photoPath == null ? 'Attach photo' : 'Photo attached'),
+                    label: Text(photos.isEmpty ? 'Attach photo' : 'Add another'),
                     onPressed: saving
                         ? null
                         : () async {
                             final p = await _pickAndUploadPhoto(t['id'] as String);
-                            if (p != null) setLocal(() => photoPath = p);
+                            if (p != null) setLocal(() => photos.add(p));
                           },
                   ),
-                  if (requiresPhoto) ...[
-                    const SizedBox(width: 8),
-                    const Text('required',
-                        style: TextStyle(fontSize: 12, color: AppTheme.danger)),
-                  ],
+                  const SizedBox(width: 10),
+                  Text(
+                    photos.isEmpty
+                        ? (requiresPhoto ? 'required' : 'none yet')
+                        : '${photos.length} photo${photos.length == 1 ? '' : 's'} attached',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: photos.isEmpty && requiresPhoto
+                            ? AppTheme.danger
+                            : AppTheme.textSecondary),
+                  ),
                 ]),
               ]),
             ),
@@ -475,12 +501,12 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
               onPressed: saving
                   ? null
                   : () async {
-                      if (requiresPhoto && photoPath == null) {
+                      if (requiresPhoto && photos.isEmpty) {
                         _snack('A photo is required for this task.');
                         return;
                       }
                       setLocal(() => saving = true);
-                      final ok = await _markDone(t, checks, noteCtrl.text.trim(), photoPath);
+                      final ok = await _markDone(t, checks, noteCtrl.text.trim(), photos);
                       if (ok && ctx.mounted) Navigator.pop(ctx);
                       if (!ok) setLocal(() => saving = false);
                     },
@@ -493,7 +519,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
   }
 
   Future<bool> _markDone(Map<String, dynamic> t, Map<String, bool> checks,
-      String note, String? photoPath) async {
+      String note, List<String> photos) async {
     try {
       await Supabase.instance.client.from('facility_tasks').update({
         'status': 'done',
@@ -501,7 +527,8 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
         'completed_by': ref.read(currentUserProvider)?.id,
         'checklist_result': checks,
         'note': note.isEmpty ? null : note,
-        'photo_path': photoPath,
+        'photos': photos,
+        'photo_path': photos.isEmpty ? null : photos.first,
       }).eq('id', t['id']);
       await _load();
       return true;
@@ -509,6 +536,260 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
       _snack('Could not save: $e');
       return false;
     }
+  }
+
+  List<String> _photoList(Map<String, dynamic> t) {
+    final raw = t['photos'];
+    if (raw is List && raw.isNotEmpty) return raw.map((e) => '$e').toList();
+    final p = t['photo_path'];
+    if (p is String && p.isNotEmpty) return [p];
+    return [];
+  }
+
+  Future<String?> _signedUrl(String path) async {
+    try {
+      return await Supabase.instance.client.storage
+          .from(_bucket)
+          .createSignedUrl(path, 3600);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Widget _photoThumb(String path) {
+    return FutureBuilder<String?>(
+      future: _signedUrl(path),
+      builder: (c, snap) {
+        final url = snap.data;
+        return InkWell(
+          onTap: url == null ? null : () => html.window.open(url, '_blank'),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: 76,
+            height: 76,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: AppTheme.background,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: snap.connectionState != ConnectionState.done
+                ? const Center(
+                    child: SizedBox(
+                        width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+                : url == null
+                    ? const Center(
+                        child: Icon(Icons.image_outlined, size: 20, color: AppTheme.textSecondary))
+                    : Image.network(url,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(Icons.broken_image_outlined, size: 20))),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _taskDetailDialog(Map<String, dynamic> t) async {
+    final result = (t['checklist_result'] as Map?) ?? {};
+    final checklist = List<String>.from((t['checklist'] as List?)?.cast<String>() ?? []);
+    final photos = _photoList(t);
+    final by = t['completed_by'] == null ? '' : (_userNames[t['completed_by']] ?? '');
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${t['title']}'),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(
+            child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Done ${_fmtDate(t['completed_at'])}${by.isEmpty ? '' : ' · $by'}',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                  if (checklist.isNotEmpty) ...[
+                    for (final item in checklist)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(children: [
+                          Icon(
+                              result[item] == true
+                                  ? Icons.check_circle
+                                  : Icons.radio_button_unchecked,
+                              size: 16,
+                              color: result[item] == true
+                                  ? AppTheme.success
+                                  : AppTheme.textSecondary),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text(item, style: const TextStyle(fontSize: 13))),
+                        ]),
+                      ),
+                    const SizedBox(height: 10),
+                  ],
+                  if ((t['note'] as String?)?.isNotEmpty == true) ...[
+                    const Text('Note',
+                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    const SizedBox(height: 2),
+                    Text('${t['note']}', style: const TextStyle(fontSize: 13)),
+                    const SizedBox(height: 12),
+                  ],
+                  Text(
+                    photos.isEmpty
+                        ? 'No photos attached'
+                        : '${photos.length} photo${photos.length == 1 ? '' : 's'}',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                  ),
+                  if (photos.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [for (final p in photos) _photoThumb(p)],
+                    ),
+                    const SizedBox(height: 4),
+                    const Text('Tap a photo to open full size',
+                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ],
+                ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  // ───────────────────────────────────────────────── assignee roster
+  Future<void> _assigneesDialog() async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return AlertDialog(
+          title: const Text('Assignees'),
+          content: SizedBox(
+            width: 420,
+            height: 440,
+            child: Column(children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: const Text(
+                    'People who carry out facility tasks (cleaners, maintenance). '
+                    'They need not be app users.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _assignees.isEmpty
+                    ? const Center(
+                        child: Text('No assignees yet.',
+                            style: TextStyle(color: AppTheme.textSecondary)))
+                    : ListView.separated(
+                        itemCount: _assignees.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, i) {
+                          final a = _assignees[i];
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('${a['name']}'),
+                            subtitle: (a['phone'] as String?)?.isNotEmpty == true
+                                ? Text('${a['phone']}')
+                                : null,
+                            trailing: IconButton(
+                              icon: const Icon(Icons.edit_outlined, size: 18),
+                              onPressed: () async {
+                                await _assigneeEditDialog(existing: a);
+                                setLocal(() {});
+                              },
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await _assigneeEditDialog();
+                setLocal(() {});
+              },
+              child: const Text('Add assignee'),
+            ),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done')),
+          ],
+        );
+      }),
+    );
+  }
+
+  Future<void> _assigneeEditDialog({Map<String, dynamic>? existing}) async {
+    final nameCtrl = TextEditingController(text: existing?['name'] as String? ?? '');
+    final phoneCtrl = TextEditingController(text: existing?['phone'] as String? ?? '');
+    bool saving = false;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return AlertDialog(
+          title: Text(existing == null ? 'New assignee' : 'Edit assignee'),
+          content: SizedBox(
+            width: 360,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name', isDense: true),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: phoneCtrl,
+                decoration: const InputDecoration(labelText: 'Phone (optional)', isDense: true),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      if (nameCtrl.text.trim().isEmpty) {
+                        _snack('Name is required.');
+                        return;
+                      }
+                      setLocal(() => saving = true);
+                      try {
+                        final c = Supabase.instance.client;
+                        final data = {
+                          'org_id': _orgId,
+                          'name': nameCtrl.text.trim(),
+                          'phone': phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+                        };
+                        if (existing == null) {
+                          await c.from('facility_assignees').insert(data);
+                        } else {
+                          await c
+                              .from('facility_assignees')
+                              .update(data)
+                              .eq('id', existing['id']);
+                        }
+                        await _load();
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } catch (e) {
+                        setLocal(() => saving = false);
+                        _snack('Save failed: $e');
+                      }
+                    },
+              child: Text(saving ? 'Saving…' : 'Save'),
+            ),
+          ],
+        );
+      }),
+    );
   }
 
   Future<String?> _pickAndUploadPhoto(String taskId) async {
@@ -544,6 +825,12 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
         Text('${rows.length} schedule${rows.length == 1 ? '' : 's'}',
             style: const TextStyle(color: AppTheme.textSecondary)),
         const Spacer(),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.groups_outlined, size: 18),
+          label: const Text('Assignees'),
+          onPressed: _assigneesDialog,
+        ),
+        const SizedBox(width: 8),
         ElevatedButton.icon(
           icon: const Icon(Icons.add, size: 18),
           label: const Text('New schedule'),
@@ -731,7 +1018,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
                       decoration: const InputDecoration(labelText: 'Assignee (optional)', isDense: true),
                       items: [
                         const DropdownMenuItem(value: null, child: Text('—')),
-                        for (final u in _users)
+                        for (final u in _assignees)
                           DropdownMenuItem(value: u['id'] as String, child: Text('${u['name']}')),
                       ],
                       onChanged: (v) => setLocal(() => assignee = v),
