@@ -313,8 +313,60 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
       );
 
   Future<void> _bulkImportDialog() async {
-    final rawRows = await _pickCsv();
-    if (rawRows == null) return;
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Bulk Import Suppliers'),
+        content: SizedBox(
+          width: 520,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Upload a CSV to add many suppliers at once.'),
+            const SizedBox(height: 14),
+            const Text('Columns', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+            const SizedBox(height: 4),
+            const Text('Required:  Name', style: TextStyle(fontSize: 13)),
+            const Text(
+                'Optional:  Phone, Email, Contact Person, Contact Number, NTN, '
+                'Address, Payment Terms (days), Credit Limit',
+                style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 14),
+            const Text('• Header names are flexible — case, spaces and underscores are ignored.',
+                style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 3),
+            const Text('• Wrap any value containing a comma in quotes (e.g. an address).',
+                style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 3),
+            const Text('• Duplicates are matched by name — skip or update them on the next step.',
+                style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 3),
+            const Text('• Payment Terms defaults to 30 if left blank.',
+                style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 18),
+            OutlinedButton.icon(
+              onPressed: _downloadTemplate,
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: const Text('Download sample CSV'),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.upload_file, size: 18),
+            label: const Text('Choose CSV file'),
+            onPressed: () async {
+              final rows = await _pickCsv();
+              if (rows == null) return; // picker cancelled — keep this dialog open
+              if (ctx.mounted) Navigator.pop(ctx);
+              await _previewImport(rows);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _previewImport(List<List<String>> rawRows) async {
     if (rawRows.length < 2) {
       _showSnack('CSV has a header but no data rows.');
       return;
