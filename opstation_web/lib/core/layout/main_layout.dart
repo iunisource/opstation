@@ -361,16 +361,26 @@ class _TopNav extends ConsumerWidget {
         // ── Logo ────────────────────────────────────────────────────────────
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(children: [
-            Container(
-              width: 28, height: 28,
-              decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
-              alignment: Alignment.center,
-              child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+          child: Tooltip(
+            message: 'Go to Dashboard',
+            child: InkWell(
+              onTap: () => GoRouter.of(context).go('/dashboard'),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Row(children: [
+                  Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
+                    alignment: Alignment.center,
+                    child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
+                ]),
+              ),
             ),
-            const SizedBox(width: 8),
-            const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
-          ]),
+          ),
         ),
         Container(width: 1, height: 28, color: Colors.white12),
         const SizedBox(width: 4),
