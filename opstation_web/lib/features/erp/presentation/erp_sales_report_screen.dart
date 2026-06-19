@@ -747,7 +747,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             ? '${r['sub']}'
             : [cust['category'], cust['group_name']]
                 .where((x) => x != null && '$x'.isNotEmpty)
-                .join(' · ');
+                .join(' / ');
         data.add([
           '${i + 1}',
           '${r['name']}${'${r['sub']}'.isNotEmpty ? '  (${r['sub']})' : ''}',
@@ -761,9 +761,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         final sub = '${ch['sub']}';
         final cname = sub.isEmpty ? '${ch['name']}' : '${ch['name']}  ($sub)';
         if (productMode) {
-          data.add(['', '    • $cname', _qtyFmt.format(ch['qty']), _money.format(ch['amount']), '']);
+          data.add(['', '    - $cname', _qtyFmt.format(ch['qty']), _money.format(ch['amount']), '']);
         } else {
-          data.add(['', '    • $cname', '', _qtyFmt.format(ch['qty']), _money.format(ch['amount']), '']);
+          data.add(['', '    - $cname', '', _qtyFmt.format(ch['qty']), _money.format(ch['amount']), '']);
         }
       }
     }
@@ -779,11 +779,11 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       build: (ctx) => [
         if (org.isNotEmpty)
           pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
-        pw.Text('Sales Report — ${productMode ? 'Product-wise' : 'Customer-wise'}',
+        pw.Text('Sales Report - ${productMode ? 'Product-wise' : 'Customer-wise'}',
             style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
         pw.Text(
-            '${DateFormat('d MMM y').format(_from)} – ${DateFormat('d MMM y').format(_to)}   •   ${filterBits.join('   •   ')}',
+            '${DateFormat('d MMM y').format(_from)} to ${DateFormat('d MMM y').format(_to)}     |     ${filterBits.join('     |     ')}',
             style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
