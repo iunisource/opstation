@@ -112,6 +112,27 @@ final assetsDueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of facility tasks open & overdue for the current org (nav badge).
+final facilityDueCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final now = DateTime.now();
+    final today =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final res = await client
+        .from('facility_tasks')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'open')
+        .lt('due_date', today);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 
 class MainLayout extends ConsumerWidget {
@@ -147,6 +168,7 @@ class _TopNav extends ConsumerWidget {
     final access = ref.watch(accessSyncProvider);
     final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
     final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
+    final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
     bool show(String route) {
       final mod = kRouteToModule[route];
       if (mod != null && !modules.contains(mod)) return false;
@@ -406,6 +428,8 @@ class _TopNav extends ConsumerWidget {
           ),
           if (show('/assets'))
             _navButton(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
+          if (show('/facility'))
+            _navButton(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
           ...splitErpMenus(),
         ],
 

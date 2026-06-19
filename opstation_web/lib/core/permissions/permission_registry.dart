@@ -112,6 +112,9 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('assets', 'Assets', Icons.chair_outlined, [
     PermItem('assets', 'Asset Register', PermKind.doc, '/assets'),
   ]),
+  PermModule('facility', 'Facility', Icons.cleaning_services_outlined, [
+    PermItem('facility', 'Facility Maintenance', PermKind.doc, '/facility'),
+  ]),
 ];
 
 /// route -> PermItem (for menu + router gating).

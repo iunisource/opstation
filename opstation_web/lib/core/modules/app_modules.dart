@@ -39,6 +39,7 @@ const List<AppModule> kAppModules = [
   AppModule('production', 'Production', Icons.precision_manufacturing_outlined),
   AppModule('financial_reporting', 'Financial Reporting', Icons.account_balance_outlined),
   AppModule('assets', 'Asset Management', Icons.chair_outlined),
+  AppModule('facility', 'Facility Management', Icons.cleaning_services_outlined),
 
   // ─── Pending modules — add more here as needed ───────────────────────────
   // The `key` MUST match the org_modules.module string the backend expects.
