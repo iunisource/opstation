@@ -224,6 +224,10 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
             const Icon(Icons.storefront_outlined, size: 12, color: AppTheme.primary), const SizedBox(width: 3),
             Flexible(child: Text(customer, style: const TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
           ])),
+          if (((j['notes'] as String?)?.trim() ?? '').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 4), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.sticky_note_2_outlined, size: 12, color: AppTheme.textSecondary), const SizedBox(width: 3),
+            Flexible(child: Text((j['notes'] as String).trim(), style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontStyle: FontStyle.italic), maxLines: 2, overflow: TextOverflow.ellipsis)),
+          ])),
         ]),
       ),
     );
@@ -255,6 +259,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
           DataColumn(label: Text('Work Center', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
           DataColumn(label: Text('Assignee', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
           DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+          DataColumn(label: Text('Remarks', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
         ],
         rows: items.map((j) {
           final st = (j['status'] as String? ?? 'queued');
@@ -285,6 +290,11 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
               DataCell(Text(j['work_center'] as String? ?? '—', style: const TextStyle(fontSize: 12))),
               DataCell(Text(j['assigned_to'] != null ? (_userLabel[j['assigned_to']] ?? '—') : '—', style: const TextStyle(fontSize: 12))),
               DataCell(Text(j['voucher_date'] as String? ?? '', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+              DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 240),
+                child: ((j['notes'] as String?)?.trim() ?? '').isEmpty
+                  ? const Text('—', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))
+                  : Tooltip(message: (j['notes'] as String).trim(),
+                      child: Text((j['notes'] as String).trim(), style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic), maxLines: 1, overflow: TextOverflow.ellipsis)))),
             ],
           );
         }).toList(),

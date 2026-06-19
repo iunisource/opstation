@@ -1214,6 +1214,14 @@ $runSection
                   ])
                 : _readonlyBox(_customerLabel.isEmpty ? '—' : _customerLabel))),
             ]),
+            const SizedBox(height: 14),
+            _labeled('Remarks (optional)', TextField(
+              controller: _notesCtrl, enabled: _editable,
+              minLines: 1, maxLines: 3,
+              decoration: const InputDecoration(isDense: true,
+                hintText: 'Note for the floor - special instructions, customer ask, etc.',
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 11)),
+            )),
             const SizedBox(height: 18),
             if (_materials.isNotEmpty || _overheads.isNotEmpty) ...[
               _costSummary(),
