@@ -5,6 +5,7 @@ import '../../features/erp/presentation/erp_opening_journal_screen.dart';
 import '../../features/erp/presentation/erp_account_activity_screen.dart';
 import '../../features/erp/presentation/erp_profit_loss_screen.dart';
 import '../../features/erp/presentation/erp_balance_sheet_screen.dart';
+import '../../features/erp/presentation/erp_onboarding_screen.dart';
 import '../../features/erp/presentation/erp_product_assembly_screen.dart';
 import '../../features/erp/presentation/erp_production_voucher_screen.dart';
 import '../../features/erp/presentation/erp_production_inverse_voucher_screen.dart';
@@ -240,6 +241,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
           GoRoute(path: '/erp/admin-settings', builder: (_, __) => const ErpAdminSettingsScreen()),
           GoRoute(path: '/erp/audit-log', builder: (_, __) => const ErpAuditLogScreen()),
+          GoRoute(path: '/erp/onboarding', builder: (_, __) => const ErpOnboardingScreen()),
           GoRoute(path: '/erp/home', builder: (_, __) => const ErpHomeScreen()),
           GoRoute(path: '/erp/no-access', builder: (_, __) => const _NoAccessScreen()),
           GoRoute(path: '/erp/opening-stock', builder: (_, __) => const ErpOpeningStockScreen()),

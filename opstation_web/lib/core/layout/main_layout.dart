@@ -194,6 +194,7 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
   final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
   final access = ref.watch(accessSyncProvider);
   return (String route) {
+    if (route == '/erp/onboarding') return true; // onboarding guide: visible to all
     final mod = kRouteToModule[route];
     if (mod != null && !modules.contains(mod)) return false;
     final r = user?.role;
@@ -378,9 +379,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
-      if (_hasItems(erpAdminItems))
-        _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-          ['/erp/users', '/erp/admin-settings', '/erp/audit-log'], _trimDividers(erpAdminItems)),
+      _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
+        ['/erp/onboarding', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
+        [
+          _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
+          if (_hasItems(erpAdminItems)) _menuDivider(),
+          ..._trimDividers(erpAdminItems),
+        ]),
     ];
 
   return <Widget>[
