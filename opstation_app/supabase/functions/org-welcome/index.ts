@@ -4,7 +4,9 @@
 // admin creation, or callable directly with functions.invoke('org-welcome', ...).
 //
 // Deploy: supabase functions deploy org-welcome --no-verify-jwt
-// Secrets used: GMAIL_USER, GMAIL_APP_PASSWORD, CRON_SECRET
+// Secrets used: GMAIL_USER, GMAIL_APP_PASSWORD, WELCOME_SECRET
+//   (WELCOME_SECRET is dedicated to this function and independent of the
+//    CRON_SECRET used by daily-backup, so the two never interfere.)
 // Optional env: ONBOARDING_PDF_URL (defaults to the live landing copy),
 //               APP_LOGIN_URL (defaults to the app URL).
 
@@ -21,8 +23,8 @@ const json = (o: unknown, status = 200) =>
 serve(async (req: Request) => {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  // Shared-secret auth (the DB trigger sends this header). Reuses CRON_SECRET.
-  const secret = Deno.env.get("CRON_SECRET");
+  // Shared-secret auth (the DB trigger sends this header). Dedicated secret.
+  const secret = Deno.env.get("WELCOME_SECRET");
   if (secret && req.headers.get("x-welcome-secret") !== secret) {
     return json({ error: "unauthorized" }, 401);
   }

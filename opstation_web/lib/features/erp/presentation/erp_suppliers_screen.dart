@@ -16,6 +16,7 @@ class ErpSuppliersScreen extends ConsumerStatefulWidget {
 class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
   List<Map<String, dynamic>> _suppliers = [];
   List<Map<String, dynamic>> _filtered = [];
+  Map<String, String> _catNames = {}; // category_id -> name, for list display
   bool _loading = true;
   final _searchCtrl = TextEditingController();
 
@@ -41,9 +42,23 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
           .select()
           .eq('org_id', orgId)
           .order('name');
+      // Category names for list display (best-effort: don't block the screen
+      // if the supplier_categories table isn't there yet).
+      Map<String, String> catNames = {};
+      try {
+        final cats = await Supabase.instance.client
+            .from('supplier_categories')
+            .select('id, name')
+            .eq('org_id', orgId);
+        catNames = {
+          for (final c in (cats as List))
+            c['id'] as String: c['name'] as String,
+        };
+      } catch (_) {}
       setState(() {
         _suppliers = List<Map<String, dynamic>>.from(res);
         _filtered = _suppliers;
+        _catNames = catNames;
         _loading = false;
       });
     } catch (_) {
@@ -54,11 +69,14 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
   void _filter() {
     final q = _searchCtrl.text.toLowerCase();
     setState(() {
-      _filtered = _suppliers.where((s) =>
-          q.isEmpty ||
-          (s['name'] as String? ?? '').toLowerCase().contains(q) ||
-          (s['phone'] as String? ?? '').toLowerCase().contains(q) ||
-          (s['email'] as String? ?? '').toLowerCase().contains(q)).toList();
+      _filtered = _suppliers.where((s) {
+        if (q.isEmpty) return true;
+        final cat = (_catNames[s['category_id']] ?? '').toLowerCase();
+        return (s['name'] as String? ?? '').toLowerCase().contains(q) ||
+            (s['phone'] as String? ?? '').toLowerCase().contains(q) ||
+            (s['email'] as String? ?? '').toLowerCase().contains(q) ||
+            cat.contains(q);
+      }).toList();
     });
   }
 
@@ -80,9 +98,178 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  // ─────────────────────── Manage supplier categories ───────────────────────
+  // Admin-only master editor: add / rename / activate-deactivate. Org-scoped.
+  Future<void> _manageCategoriesDialog(String orgId) async {
+    final client = Supabase.instance.client;
+    List<Map<String, dynamic>> cats;
+    try {
+      cats = List<Map<String, dynamic>>.from(await client
+          .from('supplier_categories')
+          .select()
+          .eq('org_id', orgId)
+          .order('name'));
+    } catch (e) {
+      _showSnack('Failed to load categories: $e');
+      return;
+    }
+    final addCtrl = TextEditingController();
+    if (!mounted) return;
+
+    String dupOrError(Object e) {
+      final s = e.toString().toLowerCase();
+      if (s.contains('ux_supplier_categories_org_name') ||
+          s.contains('duplicate') ||
+          s.contains('unique')) {
+        return 'That category already exists.';
+      }
+      return 'Failed: $e';
+    }
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSB) {
+        Future<void> reload() async {
+          final res = await client
+              .from('supplier_categories')
+              .select()
+              .eq('org_id', orgId)
+              .order('name');
+          setSB(() => cats = List<Map<String, dynamic>>.from(res));
+        }
+
+        Future<void> addCat() async {
+          final name = addCtrl.text.trim();
+          if (name.isEmpty) return;
+          try {
+            await client.from('supplier_categories').insert({
+              'id': 'scat_${DateTime.now().millisecondsSinceEpoch}',
+              'org_id': orgId,
+              'name': name,
+              'is_active': true,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            });
+            addCtrl.clear();
+            await reload();
+          } catch (e) {
+            _showSnack(dupOrError(e));
+          }
+        }
+
+        Future<void> renameCat(Map<String, dynamic> c) async {
+          final ctrl = TextEditingController(text: c['name'] as String? ?? '');
+          final newName = await showDialog<String>(
+            context: ctx,
+            builder: (d) => AlertDialog(
+              title: const Text('Rename category'),
+              content: TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                  onSubmitted: (_) => Navigator.pop(d, ctrl.text.trim())),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+                ElevatedButton(
+                    onPressed: () => Navigator.pop(d, ctrl.text.trim()),
+                    child: const Text('Save')),
+              ],
+            ),
+          );
+          if (newName == null || newName.isEmpty || newName == c['name']) return;
+          try {
+            await client.from('supplier_categories').update({
+              'name': newName,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            }).eq('id', c['id']);
+            await reload();
+          } catch (e) {
+            _showSnack(dupOrError(e));
+          }
+        }
+
+        Future<void> toggleCat(Map<String, dynamic> c) async {
+          final newVal = !(c['is_active'] as bool? ?? true);
+          try {
+            await client.from('supplier_categories').update({
+              'is_active': newVal,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            }).eq('id', c['id']);
+            await reload();
+          } catch (e) {
+            _showSnack('Failed: $e');
+          }
+        }
+
+        return AlertDialog(
+          title: const Text('Manage Categories'),
+          content: SizedBox(
+            width: 420,
+            height: 420,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: addCtrl,
+                    decoration: const InputDecoration(
+                        labelText: 'New category', hintText: 'e.g. Electrical'),
+                    onSubmitted: (_) => addCat(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(onPressed: addCat, child: const Text('Add')),
+              ]),
+              const Divider(height: 20),
+              Expanded(
+                child: cats.isEmpty
+                    ? const Center(
+                        child: Text('No categories yet.',
+                            style: TextStyle(color: AppTheme.textSecondary)))
+                    : ListView.separated(
+                        itemCount: cats.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, i) {
+                          final c = cats[i];
+                          final active = c['is_active'] as bool? ?? true;
+                          return Opacity(
+                            opacity: active ? 1.0 : 0.5,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(children: [
+                                Expanded(
+                                    child: Text(c['name'] as String? ?? '',
+                                        style: const TextStyle(fontSize: 14))),
+                                IconButton(
+                                    tooltip: 'Rename',
+                                    icon: const Icon(Icons.edit_outlined, size: 18),
+                                    onPressed: () => renameCat(c)),
+                                IconButton(
+                                    tooltip: active ? 'Deactivate' : 'Activate',
+                                    icon: Icon(
+                                        active ? Icons.block : Icons.check_circle_outline,
+                                        size: 18,
+                                        color: active ? AppTheme.danger : AppTheme.success),
+                                    onPressed: () => toggleCat(c)),
+                              ]),
+                            ),
+                          );
+                        }),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done')),
+          ],
+        );
+      }),
+    );
+  }
+
   void _showDialog(BuildContext context, Map<String, dynamic>? supplier) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
+    final roleName = ref.read(currentUserProvider)?.role.name;
+    final canManage =
+        roleName == 'superAdmin' || roleName == 'admin' || roleName == 'masterAdmin';
     final allBranches = await Supabase.instance.client
         .from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name');
     Set<String> selectedBranches = {};
@@ -91,6 +278,17 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
           .from('supplier_branches').select('branch_id').eq('supplier_id', supplier['id']);
       selectedBranches = (existing as List).map((b) => b['branch_id'] as String).toSet();
     }
+    // Active categories for the dropdown (best-effort).
+    List<Map<String, dynamic>> cats = [];
+    try {
+      cats = List<Map<String, dynamic>>.from(await Supabase.instance.client
+          .from('supplier_categories')
+          .select()
+          .eq('org_id', orgId)
+          .eq('is_active', true)
+          .order('name'));
+    } catch (_) {}
+    String? selectedCategoryId = supplier?['category_id'] as String?;
     if (!mounted) return;
     final nameCtrl = TextEditingController(text: supplier?['name'] ?? '');
     final phoneCtrl = TextEditingController(text: supplier?['phone'] ?? '');
@@ -112,6 +310,59 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               TextField(controller: nameCtrl,
                   decoration: const InputDecoration(labelText: 'Supplier Name *')),
+              const SizedBox(height: 12),
+              // ── Category (dropdown + admin-only Manage) ──
+              StatefulBuilder(builder: (ctxCat, setCat) {
+                Future<void> reloadCats() async {
+                  final fresh = await Supabase.instance.client
+                      .from('supplier_categories')
+                      .select()
+                      .eq('org_id', orgId)
+                      .eq('is_active', true)
+                      .order('name');
+                  setCat(() => cats = List<Map<String, dynamic>>.from(fresh));
+                }
+
+                final ids = cats.map((c) => c['id'] as String).toSet();
+                final items = <DropdownMenuItem<String?>>[
+                  const DropdownMenuItem<String?>(
+                      value: null, child: Text('— No category —')),
+                  ...cats.map((c) => DropdownMenuItem<String?>(
+                      value: c['id'] as String,
+                      child: Text(c['name'] as String? ?? ''))),
+                ];
+                // Keep an already-assigned but now-inactive category selectable
+                // so the dropdown value stays valid on edit.
+                if (selectedCategoryId != null && !ids.contains(selectedCategoryId)) {
+                  items.add(DropdownMenuItem<String?>(
+                    value: selectedCategoryId,
+                    child: Text('${_catNames[selectedCategoryId] ?? 'Current'} (inactive)'),
+                  ));
+                }
+                return Row(children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String?>(
+                      value: selectedCategoryId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Category'),
+                      items: items,
+                      onChanged: (v) => setCat(() => selectedCategoryId = v),
+                    ),
+                  ),
+                  if (canManage) ...[
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: () async {
+                        await _manageCategoriesDialog(orgId);
+                        await reloadCats();
+                        _load(); // refresh list subtitles
+                      },
+                      icon: const Icon(Icons.tune, size: 18),
+                      label: const Text('Manage'),
+                    ),
+                  ],
+                ]);
+              }),
               const SizedBox(height: 12),
               Row(children: [
                 Expanded(child: TextField(controller: phoneCtrl,
@@ -197,6 +448,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                 'contact_person': contactPersonCtrl.text.trim().isEmpty ? null : contactPersonCtrl.text.trim(),
                 'contact_number': contactNumberCtrl.text.trim().isEmpty ? null : contactNumberCtrl.text.trim(),
                 'ntn': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
+                'category_id': selectedCategoryId,
                 'payment_terms_days': int.tryParse(termsCtrl.text.trim()) ?? 30,
                 'credit_limit': creditCtrl.text.trim().isEmpty ? null : double.tryParse(creditCtrl.text.trim()),
                 'is_active': true,
@@ -630,7 +882,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
           TextField(
             controller: _searchCtrl,
             decoration: const InputDecoration(
-              hintText: 'Search by name, phone or email...',
+              hintText: 'Search by name, phone, email or category...',
               prefixIcon: Icon(Icons.search),
             ),
           ),
@@ -671,13 +923,23 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                             itemBuilder: (_, i) {
                               final s = _filtered[i];
                               final isActive = s['is_active'] as bool? ?? true;
+                              final catName = _catNames[s['category_id']];
                               return Opacity(
                                 opacity: isActive ? 1.0 : 0.5,
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                                   child: Row(children: [
-                                    Expanded(flex: 3, child: Text(s['name'] as String? ?? '',
-                                        style: const TextStyle(fontWeight: FontWeight.w600))),
+                                    Expanded(flex: 3, child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(s['name'] as String? ?? '',
+                                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                                        if (catName != null && catName.isNotEmpty)
+                                          Text(catName,
+                                              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                                      ],
+                                    )),
                                     Expanded(flex: 2, child: Text(s['phone'] as String? ?? '-',
                                         style: const TextStyle(fontSize: 13))),
                                     Expanded(flex: 2, child: Text(s['email'] as String? ?? '-',
