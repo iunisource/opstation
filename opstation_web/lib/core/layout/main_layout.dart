@@ -135,6 +135,30 @@ final facilityDueCountProvider = FutureProvider<int>((ref) async {
 
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 
+// ─── Nav layout mode (top bar ↔ sidebar) ───────────────────────
+
+enum NavLayout { top, side }
+
+final navLayoutProvider = StateProvider<NavLayout>((ref) {
+  final saved = html.window.localStorage['op_nav_layout'];
+  return saved == 'side' ? NavLayout.side : NavLayout.top;
+});
+
+void _setNavLayout(WidgetRef ref, NavLayout layout) {
+  ref.read(navLayoutProvider.notifier).state = layout;
+  html.window.localStorage['op_nav_layout'] = layout == NavLayout.side ? 'side' : 'top';
+}
+
+Widget _navLayoutToggle(WidgetRef ref, NavLayout current) {
+  final goingSide = current == NavLayout.top;
+  return IconButton(
+    tooltip: goingSide ? 'Switch to sidebar menu' : 'Switch to top bar menu',
+    icon: Icon(goingSide ? Icons.view_sidebar_outlined : Icons.view_day_outlined,
+        color: Colors.white70, size: 20),
+    onPressed: () => _setNavLayout(ref, goingSide ? NavLayout.side : NavLayout.top),
+  );
+}
+
 class MainLayout extends ConsumerWidget {
   final Widget child;
   const MainLayout({super.key, required this.child});
@@ -146,6 +170,15 @@ class MainLayout extends ConsumerWidget {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final user = auth.valueOrNull;
+    final layout = ref.watch(navLayoutProvider);
+    if (layout == NavLayout.side) {
+      return Scaffold(
+        body: Row(children: [
+          _SideNav(user: user),
+          Expanded(child: child),
+        ]),
+      );
+    }
     return Scaffold(
       body: Column(children: [
         _TopNav(user: user),
@@ -155,35 +188,34 @@ class MainLayout extends ConsumerWidget {
   }
 }
 
-// ─── Top Navigation Bar ───────────────────────────────────────────────────────
+// ─── Shared role-based nav builders (single source for both layouts) ───────
 
-class _TopNav extends ConsumerWidget {
-  final WebUser? user;
-  const _TopNav({this.user});
+bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
+  final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
+  final access = ref.watch(accessSyncProvider);
+  return (String route) {
+    final mod = kRouteToModule[route];
+    if (mod != null && !modules.contains(mod)) return false;
+    final r = user?.role;
+    final isAdminTier2 = r == WebUserRole.admin ||
+        r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+    if (isAdminTier2) return true;
+    if (access == null) return false;
+    return access.canAccessRoute(route);
+  };
+}
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final location = GoRouterState.of(context).matchedLocation;
-    final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
-    final access = ref.watch(accessSyncProvider);
-    final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
-    final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
-    final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
-    bool show(String route) {
-      final mod = kRouteToModule[route];
-      if (mod != null && !modules.contains(mod)) return false;
-      final r = user?.role;
-      final isAdminTier2 = r == WebUserRole.admin ||
-          r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
-      if (isAdminTier2) return true;
-      if (access == null) return false;
-      return access.canAccessRoute(route);
-    }
+List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, String location) {
+  final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
+  final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
+  final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
+  final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
+  final show = _showFn(ref, user);
 
-    final isAdminTier = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin;
-    final isDispatch = user?.role == WebUserRole.dispatchManager;
-    final isAccountant = user?.role == WebUserRole.accountant;
-    final isErpUser = user?.role == WebUserRole.erpUser;
+  final isAdminTier = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin;
+  final isDispatch = user?.role == WebUserRole.dispatchManager;
+  final isAccountant = user?.role == WebUserRole.accountant;
+  final isErpUser = user?.role == WebUserRole.erpUser;
 
     // ── ERP Inventory submenu ─────────────────────────────────────────────
     final inventoryItems = <Widget>[
@@ -351,58 +383,7 @@ class _TopNav extends ConsumerWidget {
           ['/erp/users', '/erp/admin-settings', '/erp/audit-log'], _trimDividers(erpAdminItems)),
     ];
 
-    return Container(
-      height: 52,
-      decoration: const BoxDecoration(
-        color: AppTheme.sidebar,
-        border: Border(bottom: BorderSide(color: Colors.white12)),
-      ),
-      child: Row(children: [
-        // ── Logo ────────────────────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Tooltip(
-            message: 'Go to Dashboard',
-            child: InkWell(
-              onTap: () => GoRouter.of(context).go('/dashboard'),
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                child: Row(children: [
-                  Container(
-                    width: 28, height: 28,
-                    decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
-                    alignment: Alignment.center,
-                    child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
-                ]),
-              ),
-            ),
-          ),
-        ),
-        if ((user?.orgName ?? '').isNotEmpty) ...[
-          Container(width: 1, height: 28, color: Colors.white12),
-          const SizedBox(width: 10),
-          const Icon(Icons.apartment_rounded, size: 15, color: Colors.white54),
-          const SizedBox(width: 6),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 220),
-            child: Text(user?.orgName ?? '',
-                maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
-          ),
-          const SizedBox(width: 6),
-        ],
-        Container(width: 1, height: 28, color: Colors.white12),
-        const SizedBox(width: 4),
-
-        // ── Navigation items (role-based, horizontally scrollable) ───────────
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(children: [
+  return <Widget>[
         if (user?.role == WebUserRole.superAdmin)
           _navButton(context, 'Organizations', Icons.business, '/orgs', location),
 
@@ -461,23 +442,24 @@ class _TopNav extends ConsumerWidget {
 
         if (isErpUser && erpMenuItems.isNotEmpty)
           ...splitErpMenus(),
-            ]),
-          ),
-        ),
+  ];
+}
 
-        // ── Global search ────────────────────────────────────────────────────
-        IconButton(
+// ─── Shared chrome (logo/search/branch/user reused by both layouts) ───────
+
+Widget _searchButton(BuildContext context, WebUser? user, bool Function(String) show) {
+  return         IconButton(
           tooltip: 'Search products, customers, suppliers, vouchers, entries',
           icon: const Icon(Icons.search, color: Colors.white70, size: 20),
           onPressed: () {
             final oid = user?.orgId;
             if (oid != null) showGlobalSearch(context, orgId: oid, can: show);
           },
-        ),
-        const SizedBox(width: 4),
+        );
+}
 
-        // ── Branch selector ──────────────────────────────────────────────────
-        Builder(builder: (ctx) {
+Widget _branchSelector(WidgetRef ref, Set<String> modules) {
+  return         Builder(builder: (ctx) {
           final hasErp = modules.any((m) => ['inventory', 'purchase', 'sales', 'pos'].contains(m));
           if (!hasErp) return const SizedBox.shrink();
           final branches = ref.watch(userBranchesProvider).valueOrNull ?? [];
@@ -540,12 +522,12 @@ class _TopNav extends ConsumerWidget {
               ),
             ),
           );
-        }),
+        });
+}
 
-        // ── User / logout menu ───────────────────────────────────────────────
-        Container(width: 1, height: 28, color: Colors.white12),
-        PopupMenuButton<String>(
-          offset: const Offset(0, 52),
+Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
+  return         PopupMenuButton<String>(
+          offset: offset,
           color: const Color(0xFF1E293B),
           elevation: 8,
           shape: RoundedRectangleBorder(
@@ -593,11 +575,168 @@ class _TopNav extends ConsumerWidget {
               const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
             ]),
           ),
+        );
+}
+
+// ─── Top Navigation Bar ────────────────────────────────────────
+
+class _TopNav extends ConsumerWidget {
+  final WebUser? user;
+  const _TopNav({this.user});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final location = GoRouterState.of(context).matchedLocation;
+    final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
+    final navItems = _buildNavItems(context, ref, user, location);
+    final show = _showFn(ref, user);
+
+    return Container(
+      height: 52,
+      decoration: const BoxDecoration(
+        color: AppTheme.sidebar,
+        border: Border(bottom: BorderSide(color: Colors.white12)),
+      ),
+      child: Row(children: [
+        // ── Logo ────────────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Tooltip(
+            message: 'Go to Dashboard',
+            child: InkWell(
+              onTap: () => GoRouter.of(context).go('/dashboard'),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Row(children: [
+                  Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
+                    alignment: Alignment.center,
+                    child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+        if ((user?.orgName ?? '').isNotEmpty) ...[
+          Container(width: 1, height: 28, color: Colors.white12),
+          const SizedBox(width: 10),
+          const Icon(Icons.apartment_rounded, size: 15, color: Colors.white54),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(user?.orgName ?? '',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+          ),
+          const SizedBox(width: 6),
+        ],
+        Container(width: 1, height: 28, color: Colors.white12),
+        const SizedBox(width: 4),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: navItems),
+          ),
+        ),
+        _searchButton(context, user, show),
+        _navLayoutToggle(ref, NavLayout.top),
+        const SizedBox(width: 4),
+        _branchSelector(ref, modules),
+        Container(width: 1, height: 28, color: Colors.white12),
+        _userMenu(ref, user, const Offset(0, 52)),
+      ]),
+    );
+  }
+}
+
+// ─── Side Navigation Bar ──────────────────────────────────────
+
+class _SideNav extends ConsumerWidget {
+  final WebUser? user;
+  const _SideNav({this.user});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final location = GoRouterState.of(context).matchedLocation;
+    final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
+    final navItems = _buildNavItems(context, ref, user, location);
+    final show = _showFn(ref, user);
+
+    return Container(
+      width: 232,
+      decoration: const BoxDecoration(
+        color: AppTheme.sidebar,
+        border: Border(right: BorderSide(color: Colors.white12)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 8, 10),
+          child: Row(children: [
+            Expanded(
+              child: Tooltip(
+                message: 'Go to Dashboard',
+                child: InkWell(
+                  onTap: () => GoRouter.of(context).go('/dashboard'),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Row(children: [
+                    Container(
+                      width: 28, height: 28,
+                      decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
+                      alignment: Alignment.center,
+                      child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+                    ),
+                    const SizedBox(width: 8),
+                    const Flexible(child: Text('Opstation', maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14))),
+                  ]),
+                ),
+              ),
+            ),
+            _navLayoutToggle(ref, NavLayout.side),
+          ]),
+        ),
+        if ((user?.orgName ?? '').isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
+            child: Row(children: [
+              const Icon(Icons.apartment_rounded, size: 14, color: Colors.white54),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(user?.orgName ?? '', maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12)),
+              ),
+            ]),
+          ),
+        const Divider(height: 1, color: Colors.white12),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: navItems),
+          ),
+        ),
+        const Divider(height: 1, color: Colors.white12),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+          child: Row(children: [
+            _searchButton(context, user, show),
+            const Spacer(),
+            _userMenu(ref, user, const Offset(0, 8)),
+          ]),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: Align(alignment: Alignment.centerLeft, child: _branchSelector(ref, modules)),
         ),
       ]),
     );
   }
 }
+
 
 // ─── Nav helpers ──────────────────────────────────────────────────────────────
 
@@ -825,3 +964,4 @@ Widget _menuLabel(String text) => Padding(
     letterSpacing: 0.8,
   )),
 );
+
