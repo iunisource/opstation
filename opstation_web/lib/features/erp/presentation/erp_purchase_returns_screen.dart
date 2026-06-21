@@ -34,6 +34,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
+  String _filter = 'all';
+  int _addRowKey = 0;
 
   // inline add row state
   String? _addProductId;
@@ -153,7 +155,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         'org_id': _orgId,
         'voucher_id': id, 'voucher_type': 'PRN',
         'action': action, 'details': details,
-        'user_id': ref.read(currentUserProvider)?.id,
+        'performed_by': ref.read(currentUserProvider)?.id,
       });
     } catch (_) {}
   }
@@ -219,6 +221,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
     final uom  = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
     final itemId = 'pri_${DateTime.now().microsecondsSinceEpoch}';
+    final cost = (prod['cost_price'] as num?)?.toDouble() ?? 0;
+    final lineTotal = qty * cost;
 
     try {
       await Supabase.instance.client.from('purchase_return_items').insert({
@@ -227,9 +231,9 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         'product_id': _addProductId,
         'uom_id': _addUomId,
         'quantity': qty,
-        'unit_price': 0,
+        'unit_price': cost,
         'discount': 0,
-        'line_total': 0,
+        'line_total': lineTotal,
       });
       setState(() {
         _items.add({
@@ -238,15 +242,17 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
           'product_id': _addProductId,
           'uom_id': _addUomId,
           'quantity': qty,
-          'unit_price': 0,
+          'unit_price': cost,
           'discount': 0,
-          'line_total': 0,
+          'line_total': lineTotal,
           'products': {'name': prod['name'], 'sku': prod['sku']},
           'uoms': {'abbreviation': uom['abbreviation']},
         });
         _addProductId = null; _addUomId = null;
         _addQtyCtrl.text = '1';
+        _addRowKey++; // reset the searchable picker field
       });
+      await _recalcTotals();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -471,9 +477,12 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _returns.where((r) {
-      if (q.isEmpty) return true;
-      return (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = q.isEmpty ||
+          (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
+          ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q);
+      final st = r['status'] as String? ?? 'draft';
+      final matchStatus = _filter == 'all' || st == _filter;
+      return matchSearch && matchStatus;
     }).toList();
     return Container(
       decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))),
@@ -499,6 +508,16 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
             ),
             onChanged: (v) => setState(() => _search = v),
           ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Wrap(spacing: 6, runSpacing: 6, children: [
+            _PrnFilterTab(label: 'All', value: 'all', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PrnFilterTab(label: 'Draft', value: 'draft', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PrnFilterTab(label: 'Saved', value: 'saved', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PrnFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          ]),
         ),
         const SizedBox(height: 12),
         Expanded(
@@ -646,21 +665,29 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                     color: AppTheme.background,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(children: [
-                      Expanded(flex: 5, child: DropdownButtonFormField<String>(
-                        value: _addProductId,
-                        isDense: true,
-                        isExpanded: true,
-                        decoration: const InputDecoration(hintText: 'Pick product', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
-                        items: _products.map((p) => DropdownMenuItem<String>(
-                          value: p['id'] as String,
-                          child: Text('${p['name']}${p['sku'] != null ? " · ${p['sku']}" : ""}',
-                              overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                        )).toList(),
-                        onChanged: (v) => setState(() {
-                          _addProductId = v;
-                          final p = _products.firstWhere((x) => x['id'] == v, orElse: () => {});
+                      Expanded(flex: 5, child: Autocomplete<Map<String, dynamic>>(
+                        key: ValueKey('prn_prodpick_$_addRowKey'),
+                        displayStringForOption: (p) => '${p['name']}${p['sku'] != null ? " · ${p['sku']}" : ""}',
+                        optionsBuilder: (TextEditingValue tev) {
+                          final query = tev.text.toLowerCase().trim();
+                          if (query.isEmpty) return _products.take(50);
+                          return _products.where((p) =>
+                            (p['name'] as String? ?? '').toLowerCase().contains(query) ||
+                            (p['sku'] as String? ?? '').toLowerCase().contains(query)).take(50);
+                        },
+                        onSelected: (p) => setState(() {
+                          _addProductId = p['id'] as String?;
                           _addUomId = p['base_uom_id'] as String?;
                         }),
+                        fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                          return TextField(
+                            controller: controller,
+                            focusNode: focusNode,
+                            style: const TextStyle(fontSize: 12),
+                            decoration: const InputDecoration(hintText: 'Search product…', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
+                            onSubmitted: (_) => onFieldSubmitted(),
+                          );
+                        },
                       )),
                       Expanded(flex: 2, child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -744,18 +771,6 @@ class _SupplierSelectDialogState extends State<_SupplierSelectDialog> {
           autofocus: true,
         ),
         const SizedBox(height: 12),
-        // Cash Supplier option pinned at top
-        Container(
-          decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.primary.withOpacity(0.3))),
-          child: ListTile(
-            dense: true,
-            leading: const Icon(Icons.person_outline, color: AppTheme.primary),
-            title: const Text('Cash Supplier', style: TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: const Text('No supplier linked', style: TextStyle(fontSize: 11)),
-            onTap: () => Navigator.pop(context, {'id': null, 'shop_name': 'Cash Supplier'}),
-          ),
-        ),
-        const SizedBox(height: 6),
         Expanded(
           child: filtered.isEmpty
               ? const Center(child: Text('No customers match.', style: TextStyle(color: AppTheme.textSecondary)))
@@ -843,6 +858,24 @@ class _Chip extends StatelessWidget {
   }
 }
 
+class _PrnFilterTab extends StatelessWidget {
+  final String label, value, current;
+  final ValueChanged<String> onTap;
+  const _PrnFilterTab({required this.label, required this.value, required this.current, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final active = value == current;
+    return GestureDetector(
+      onTap: () => onTap(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)),
+        child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
+      ),
+    );
+  }
+}
+
 // ─── Audit Trail Widget (inline — mirrors PRI) ────────────────────────────────
 class _AuditTrailWidget extends StatelessWidget {
   final String voucherId, voucherType;
@@ -852,7 +885,7 @@ class _AuditTrailWidget extends StatelessWidget {
     if (voucherId.isEmpty) return const SizedBox.shrink();
     return FutureBuilder<List<dynamic>>(
       future: Supabase.instance.client.from('voucher_audit_log')
-          .select('action, details, user_id, created_at')
+          .select('*, users(name)')
           .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
           .order('created_at', ascending: false).limit(20),
       builder: (ctx, snap) {
