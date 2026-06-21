@@ -36,6 +36,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
+  bool get _isVoided => _detail['is_voided'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
@@ -58,7 +59,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('sales_return_invoices')
-          .select('id,voucher_number,voucher_date,grand_total,is_locked,status,customer_id,srn_id,customers(shop_name),sales_returns(voucher_number)')
+          .select('id,voucher_number,voucher_date,grand_total,is_locked,is_voided,status,customer_id,srn_id,customers(shop_name),sales_returns(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -114,6 +115,10 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       if ((existing as List).isNotEmpty) { setState(() => _detailLoading = false); _showSnack('SRI ${existing.first['voucher_number']} already exists for this SRN'); return; }
       final srnItems = await Supabase.instance.client.from('sales_return_items').select('*').eq('return_id', srn['id'] as String);
       if ((srnItems as List).isEmpty) { setState(() => _detailLoading = false); _showSnack('SRN has no items'); return; }
+      final pids = [for (final si in srnItems) si['product_id'] as String];
+      final prods = pids.isEmpty ? <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(
+          await Supabase.instance.client.from('products').select('id,selling_price').inFilter('id', pids));
+      final priceMap = {for (final p in prods) p['id'] as String: (p['selling_price'] as num?)?.toDouble() ?? 0};
       final year = DateTime.now().year;
       final nextNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SRI', 'p_year': year});
       final vNum = 'SRI-$year-${nextNum.toString().padLeft(4, '0')}';
@@ -127,11 +132,13 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       });
       for (final si in srnItems) {
         final pid = si['product_id'] as String;
+        final price = priceMap[pid] ?? 0;
+        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
         await Supabase.instance.client.from('sales_return_invoice_items').insert({
           'id': 'srii_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'invoice_id': invId, 'srn_item_id': si['id'],
           'product_id': pid, 'uom_id': si['uom_id'],
-          'quantity': si['quantity'], 'unit_price': 0, 'discount': 0, 'line_total': 0,
+          'quantity': si['quantity'], 'unit_price': price, 'discount': 0, 'line_total': qty * price,
         });
       }
       await _logAudit(invId, 'created', 'SRI $vNum from SRN ${srn['voucher_number']}');
@@ -176,43 +183,24 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Issue Sales Return Invoice?'),
-      content: const Text('Stock will be added back to inventory and the SRN will be locked. This cannot be undone.'),
+      content: const Text('The return will be posted to the ledger and the invoice locked. Stock was already returned to inventory when the SRN was confirmed. This cannot be undone.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Issue'))],
     ));
     if (ok != true) return;
-    final orgId = _orgId; final branchId = _detail['branch_id'] as String?;
     final userId = ref.read(currentUserProvider)?.id;
     final invId = _detail['id'] as String;
     final srnId = _detail['srn_id'] as String?;
     try {
-      // Add stock back to inventory
-      for (final it in _items) {
-        final pid = it['product_id'] as String;
-        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-        if (qty <= 0 || branchId == null || orgId == null) continue;
-        final stock = await Supabase.instance.client.from('inventory_stock').select().eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock == null) {
-          await Supabase.instance.client.from('inventory_stock').insert({'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}', 'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': qty});
-        } else {
-          await Supabase.instance.client.from('inventory_stock').update({'quantity': ((stock['quantity'] as num).toDouble()) + qty, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', stock['id']);
-        }
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'uom_id': it['uom_id'], 'quantity': qty, 'movement_type': 'adjustment',
-          'reference_id': invId, 'reference_type': 'sales_return_invoice',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-      }
-      // Lock SRI
+      // Lock SRI — the sri_autopost trigger posts the GL on this update.
+      // Stock is NOT moved here; it moved when the SRN was confirmed.
       await Supabase.instance.client.from('sales_return_invoices').update({'status': 'issued', 'is_locked': true, 'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(), 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', invId);
       // Flip SRN to invoiced + lock
       if (srnId != null) {
         await Supabase.instance.client.from('sales_returns').update({'status': 'invoiced', 'is_locked': true, 'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(), 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', srnId);
       }
-      await _logAudit(invId, 'issued', 'Stock returned to inventory');
-      _showSnack('Invoice issued — stock returned to inventory');
+      await _logAudit(invId, 'issued', 'Return posted to ledger');
+      _showSnack('Invoice issued — return posted to the ledger');
       _loadDetail(invId); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -229,35 +217,29 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  Future<void> _delete() async {
+  Future<void> _void() async {
     if (!_canDelete) return;
+    if (_isVoided) { _showSnack('Already voided'); return; }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Sales Return Invoice?'),
-      content: Text('Delete ${_detail['voucher_number']}?${_isLocked ? "\n\nStock will be reversed and the SRN restored." : ""}'),
+      title: const Text('Void Sales Return Invoice?'),
+      content: Text('Void ${_detail['voucher_number']}?\n\nThe ledger entries will be reversed and the SRN restored so it can be re-invoiced or voided. The record is kept for the audit trail; this cannot be undone.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete'))],
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void'))],
     ));
     if (ok != true) return;
-    final orgId = _orgId; final branchId = _detail['branch_id'] as String?;
     final userId = ref.read(currentUserProvider)?.id;
     try {
-      if (_detail['status'] == 'issued') {
-        for (final it in _items) {
-          final pid = it['product_id'] as String;
-          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-          if (qty <= 0 || branchId == null || orgId == null) continue;
-          final stock = await Supabase.instance.client.from('inventory_stock').select().eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-          if (stock != null) { await Supabase.instance.client.from('inventory_stock').update({'quantity': ((stock['quantity'] as num).toDouble()) - qty, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', stock['id']); }
-          await Supabase.instance.client.from('inventory_movements').insert({'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}', 'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': it['uom_id'], 'quantity': -qty, 'movement_type': 'adjustment', 'reference_id': _detail['id'], 'reference_type': 'sales_return_invoice_deleted', 'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId});
-        }
-      }
+      // Flip is_voided — the void_sri trigger reverses the GL on this update.
+      // Stock is not touched here; it belongs to the SRN.
+      await Supabase.instance.client.from('sales_return_invoices').update({
+        'is_voided': true, 'voided_at': DateTime.now().toUtc().toIso8601String(), 'voided_by': userId,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
       final srnId = _detail['srn_id'] as String?;
       if (srnId != null) { await Supabase.instance.client.from('sales_returns').update({'status': 'saved', 'is_locked': true, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', srnId); }
-      await _logAudit(_detail['id'] as String, 'deleted', 'SRI deleted');
-      await Supabase.instance.client.from('sales_return_invoice_items').delete().eq('invoice_id', _detail['id']);
-      await Supabase.instance.client.from('sales_return_invoices').delete().eq('id', _detail['id']);
-      _showSnack('Deleted — SRN restored');
-      setState(() { _selectedId = null; _detail = {}; _items = []; }); _loadList();
+      await _logAudit(_detail['id'] as String, 'voided', 'SRI voided; GL reversed; SRN restored');
+      _showSnack('Voided — ledger reversed, SRN restored');
+      _loadDetail(_detail['id'] as String); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -328,10 +310,13 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
               itemBuilder: (_, i) {
                 final r = filtered[i]; final sel = r['id'] == _selectedId;
                 final locked = r['is_locked'] as bool? ?? false;
+                final voided = r['is_voided'] as bool? ?? false;
+                final badgeText = voided ? 'voided' : (locked ? 'issued' : 'draft');
+                final badgeColor = voided ? AppTheme.danger : (locked ? AppTheme.success : Colors.orange);
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                   title: Row(children: [
-                    Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null))),
-                    Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: locked ? AppTheme.success.withOpacity(0.12) : Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)), child: Text(locked ? 'issued' : 'draft', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: locked ? AppTheme.success : Colors.orange))),
+                    Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
+                    Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: badgeColor.withOpacity(0.12), borderRadius: BorderRadius.circular(4)), child: Text(badgeText, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: badgeColor))),
                   ]),
                   subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                     Text(r['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 11)),
@@ -354,16 +339,16 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
             Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             const Text('Sales Return Invoice', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
-          if (_isDraft) ...[
+          if (!_isVoided && _isDraft) ...[
             ElevatedButton.icon(icon: const Icon(Icons.check_circle_outline, size: 16), label: const Text('Issue Invoice'),
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _issueInvoice),
             const SizedBox(width: 8),
           ],
-          if (!_isDraft || _canUnlock)
+          if (!_isVoided && (!_isDraft || _canUnlock))
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
-          if (_canDelete) IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), onPressed: _delete),
+          if (_canDelete && !_isVoided) IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _void),
         ])),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
@@ -371,7 +356,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
           _SriChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
           _SriChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           if (srnVoucher != null) _SriChip(label: 'SRN #', value: srnVoucher),
-          _SriChip(label: 'Status', value: _isLocked ? 'issued' : 'draft'),
+          _SriChip(label: 'Status', value: _isVoided ? 'voided' : (_isLocked ? 'issued' : 'draft')),
           if (_isLocked) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
         ]),
         _SriInfoStrip(address: cust?['address'] as String?, contact: cust?['contact_person'] as String?, phone: cust?['phone'] as String?, salesperson: _meta.salespersonName, preparedBy: _meta.preparedBy),

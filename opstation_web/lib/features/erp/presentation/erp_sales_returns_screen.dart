@@ -31,6 +31,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   String _search = '';
   String? _addProductId;
   String? _addUomId;
+  int _addRowKey = 0;
   final _addQtyCtrl = TextEditingController(text: '1');
 
   @override void initState() { super.initState(); _loadList(); _loadLookups(); }
@@ -39,6 +40,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
+  bool get _isVoided => _detail['is_voided'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
@@ -68,7 +70,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('sales_returns')
-          .select('id,voucher_number,voucher_date,status,is_locked,customer_id,customers(shop_name)')
+          .select('id,voucher_number,voucher_date,status,is_locked,is_voided,customer_id,customers(shop_name)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -141,7 +143,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           'product_id': _addProductId, 'uom_id': _addUomId, 'quantity': qty,
           'unit_price': 0, 'discount': 0, 'line_total': 0,
           'products': {'name': prod['name'], 'sku': prod['sku']}, 'uoms': {'abbreviation': uom['abbreviation']}});
-        _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
+        _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; _addRowKey++;
       });
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -153,6 +155,43 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  /// Moves stock for every line by sign*qty. A sales return brings goods back
+  /// IN to inventory, so confirming uses sign +1; reversing uses -1.
+  Future<void> _applyStock(double sign, String refType) async {
+    final orgId = _orgId;
+    final branchId = _detail['branch_id'] as String?;
+    final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null || branchId == null) return;
+    for (final it in _items) {
+      final pid = it['product_id'] as String;
+      final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+      if (qty <= 0) continue;
+      final delta = sign * qty;
+      final stock = await Supabase.instance.client.from('inventory_stock').select()
+          .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+      if (stock == null) {
+        await Supabase.instance.client.from('inventory_stock').insert({
+          'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+          'quantity': delta, 'uom_id': it['uom_id'],
+        });
+      } else {
+        await Supabase.instance.client.from('inventory_stock').update({
+          'quantity': ((stock['quantity'] as num).toDouble()) + delta,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', stock['id']);
+      }
+      await Supabase.instance.client.from('inventory_movements').insert({
+        'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+        'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+        'uom_id': it['uom_id'], 'quantity': delta,
+        'movement_type': 'adjustment',
+        'reference_id': _detail['id'], 'reference_type': refType,
+        'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
+      });
+    }
+  }
+
   Future<void> _confirmReturn() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before confirming'); return; }
     // Check if SRI already exists
@@ -162,13 +201,16 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     } catch (_) {}
     final userId = ref.read(currentUserProvider)?.id;
     try {
+      // Confirming records the physical return: stock comes back IN to inventory
+      // and the note locks. The financial side is posted later by the Return Invoice.
+      await _applyStock(1.0, 'sales_return');
       await Supabase.instance.client.from('sales_returns').update({
         'status': 'saved', 'is_locked': true,
         'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'confirmed', 'SRN confirmed and locked');
-      _showSnack('Confirmed — ready to generate Sales Return Invoice');
+      await _logAudit(_detail['id'] as String, 'confirmed', 'Stock returned to inventory');
+      _showSnack('Confirmed — stock returned to inventory; ready to generate the Sales Return Invoice');
       _loadDetail(_detail['id'] as String); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -183,7 +225,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     } catch (_) {}
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Generate Sales Return Invoice?'),
-      content: const Text('A draft SRI will be created. Set prices and issue it to move stock back.'),
+      content: const Text('A draft SRI will be created with the product sale prices. Review prices, then issue it to post the return to the ledger.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Generate'))],
     ));
@@ -204,20 +246,23 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       });
       for (final si in _items) {
         final pid = si['product_id'] as String;
+        final prod = _products.firstWhere((p) => p['id'] == pid, orElse: () => const {});
+        final price = (prod['selling_price'] as num?)?.toDouble() ?? 0;
+        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
         await Supabase.instance.client.from('sales_return_invoice_items').insert({
           'id': 'srii_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'invoice_id': invId, 'srn_item_id': si['id'],
           'product_id': pid, 'uom_id': si['uom_id'],
-          'quantity': si['quantity'], 'unit_price': 0, 'discount': 0, 'line_total': 0,
+          'quantity': si['quantity'], 'unit_price': price, 'discount': 0, 'line_total': qty * price,
         });
       }
       await _logAudit(srnId, 'invoiced', 'Draft SRI $vNum created — set prices in Sales Return Invoices tab');
       await Supabase.instance.client.from('voucher_audit_log').insert({
         'org_id': orgId, 'voucher_id': invId, 'voucher_type': 'SRI',
         'action': 'created', 'details': 'Generated from SRN ${_detail['voucher_number']}',
-        'user_id': userId,
+        'performed_by': userId,
       });
-      _showSnack('$vNum created — open Sales Return Invoices to set prices and issue');
+      _showSnack('$vNum created — open Sales Return Invoices to review prices and issue');
       _loadDetail(srnId); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -225,38 +270,66 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   Future<void> _toggleLock() async {
     if (_isLocked && !_canUnlock) { _showSnack('Only admins can unlock'); return; }
     final newLocked = !_isLocked;
+    final isSaved = (_detail['status'] as String? ?? '') == 'saved';
     final userId = ref.read(currentUserProvider)?.id;
     try {
-      await Supabase.instance.client.from('sales_returns').update({
-        'is_locked': newLocked, 'locked_by': newLocked ? userId : null,
-        'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
-      _showSnack(newLocked ? 'Locked' : 'Unlocked');
-      _loadDetail(_detail['id'] as String);
+      if (!newLocked) {
+        // Cannot unlock once an invoice exists — void the SRI first.
+        final existing = await Supabase.instance.client.from('sales_return_invoices')
+            .select('id,voucher_number,is_voided').eq('srn_id', _detail['id'] as String);
+        final active = (existing as List).where((e) => e['is_voided'] != true).toList();
+        if (active.isNotEmpty) { _showSnack('Cannot unlock: SRI ${active.first['voucher_number']} exists. Void the invoice first.'); return; }
+      }
+      if (!newLocked && isSaved) {
+        // Unlocking a saved note reverses its stock and returns it to draft for editing.
+        await _applyStock(-1.0, 'sales_return_reversed');
+        await Supabase.instance.client.from('sales_returns').update({
+          'status': 'draft', 'is_locked': false, 'locked_by': null, 'locked_at': null,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _detail['id']);
+        await _logAudit(_detail['id'] as String, 'unlocked', 'Reverted to draft, stock reversed');
+        _showSnack('Unlocked — reverted to draft, stock reversed');
+      } else {
+        await Supabase.instance.client.from('sales_returns').update({
+          'is_locked': newLocked, 'locked_by': newLocked ? userId : null,
+          'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _detail['id']);
+        await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
+        _showSnack(newLocked ? 'Locked' : 'Unlocked');
+      }
+      _loadDetail(_detail['id'] as String); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  Future<void> _delete() async {
+  Future<void> _void() async {
     if (!_canDelete) return;
+    if (_isVoided) { _showSnack('Already voided'); return; }
     try {
-      final invs = await Supabase.instance.client.from('sales_return_invoices').select('id,voucher_number').eq('srn_id', _detail['id'] as String);
-      if ((invs as List).isNotEmpty) { _showSnack('Cannot delete: SRI ${invs.first['voucher_number']} exists. Delete the invoice first.'); return; }
+      final invs = await Supabase.instance.client.from('sales_return_invoices')
+          .select('id,voucher_number,is_voided').eq('srn_id', _detail['id'] as String);
+      final active = (invs as List).where((e) => e['is_voided'] != true).toList();
+      if (active.isNotEmpty) { _showSnack('Cannot void: SRI ${active.first['voucher_number']} exists. Void the invoice first.'); return; }
     } catch (e) { _showSnack('Check error: $e'); return; }
+    final wasSaved = (_detail['status'] as String? ?? 'draft') != 'draft';
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Sales Return Note?'),
-      content: Text('Delete ${_detail['voucher_number']}? Cannot be undone.'),
+      title: const Text('Void Sales Return Note?'),
+      content: Text('Void ${_detail['voucher_number']}?${wasSaved ? "\n\nStock will be reversed out of inventory." : ""}\n\nThe record is kept for the audit trail; this cannot be undone.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete'))],
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void'))],
     ));
     if (ok != true) return;
+    final userId = ref.read(currentUserProvider)?.id;
     try {
-      await _logAudit(_detail['id'] as String, 'deleted', 'SRN ${_detail['voucher_number']} deleted');
-      await Supabase.instance.client.from('sales_return_items').delete().eq('return_id', _detail['id']);
-      await Supabase.instance.client.from('sales_returns').delete().eq('id', _detail['id']);
-      _showSnack('Deleted');
-      setState(() { _selectedId = null; _detail = {}; _items = []; }); _loadList();
+      // If the note was confirmed, stock came in — reverse it before voiding.
+      if (wasSaved) await _applyStock(-1.0, 'sales_return_void');
+      await Supabase.instance.client.from('sales_returns').update({
+        'is_voided': true, 'voided_at': DateTime.now().toUtc().toIso8601String(), 'voided_by': userId,
+        'is_locked': true, 'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'voided', 'SRN ${_detail['voucher_number']} voided${wasSaved ? "; stock reversed" : ""}');
+      _showSnack('Voided');
+      _loadDetail(_detail['id'] as String); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -314,10 +387,11 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                 final r = filtered[i]; final sel = r['id'] == _selectedId;
                 final locked = r['is_locked'] as bool? ?? false;
                 final status = r['status'] as String? ?? 'draft';
+                final voided = r['is_voided'] as bool? ?? false;
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                   title: Row(children: [
-                    Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null))),
-                    _SrnBadge(status: locked ? 'confirmed' : status),
+                    Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
+                    _SrnBadge(status: voided ? 'voided' : (locked ? 'confirmed' : status)),
                   ]),
                   subtitle: Text(r['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 11)),
                   onTap: () => _loadDetail(r['id'] as String));
@@ -337,27 +411,27 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
             Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             const Text('Sales Return Note', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
-          if (_isDraft) ...[
+          if (!_isVoided && _isDraft) ...[
             ElevatedButton.icon(icon: const Icon(Icons.check, size: 16), label: const Text('Confirm Return'), onPressed: _confirmReturn),
             const SizedBox(width: 8),
           ],
-          if (!isInvoiced && (_isDraft || _canUnlock))
+          if (!_isVoided && !isInvoiced && (_isDraft || _canUnlock))
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
-          if (_isLocked && !isInvoiced) ...[
+          if (!_isVoided && _isLocked && !isInvoiced) ...[
             ElevatedButton.icon(icon: const Icon(Icons.receipt_long, size: 16), label: const Text('Generate Invoice'),
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _generateInvoice),
             const SizedBox(width: 8),
           ],
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
-          if (_canDelete) IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), onPressed: _delete),
+          if (_canDelete && !_isVoided) IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _void),
         ])),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
           _SrnChip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
           _SrnChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
           _SrnChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
-          _SrnChip(label: 'Status', value: _isLocked ? (_detail['status'] == 'invoiced' ? 'invoiced' : 'confirmed') : 'draft'),
+          _SrnChip(label: 'Status', value: _isVoided ? 'voided' : (_isLocked ? (_detail['status'] == 'invoiced' ? 'invoiced' : 'confirmed') : 'draft')),
           if (_isLocked) const _SrnLockedChip(),
         ]),
         _SrnInfoStrip(
@@ -400,10 +474,30 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
               const Divider(height: 1),
               Container(color: AppTheme.background, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(children: [
-                  Expanded(flex: 5, child: DropdownButtonFormField<String>(value: _addProductId, isDense: true, isExpanded: true,
-                    decoration: const InputDecoration(hintText: 'Pick product', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
-                    items: _products.map((p) => DropdownMenuItem<String>(value: p['id'] as String, child: Text('${p['name']}${p['sku'] != null ? " · ${p['sku']}" : ""}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)))).toList(),
-                    onChanged: (v) => setState(() { _addProductId = v; final p = _products.firstWhere((x) => x['id'] == v, orElse: () => {}); _addUomId = p['base_uom_id'] as String?; }))),
+                  Expanded(flex: 5, child: Autocomplete<Map<String, dynamic>>(
+                    key: ValueKey('srn_prodpick_$_addRowKey'),
+                    displayStringForOption: (p) => '${p['name']}${p['sku'] != null ? " · ${p['sku']}" : ""}',
+                    optionsBuilder: (TextEditingValue tev) {
+                      final query = tev.text.toLowerCase().trim();
+                      if (query.isEmpty) return _products.take(50);
+                      return _products.where((p) =>
+                        (p['name'] as String? ?? '').toLowerCase().contains(query) ||
+                        (p['sku'] as String? ?? '').toLowerCase().contains(query)).take(50);
+                    },
+                    onSelected: (p) => setState(() {
+                      _addProductId = p['id'] as String?;
+                      _addUomId = p['base_uom_id'] as String?;
+                    }),
+                    fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                      return TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        style: const TextStyle(fontSize: 12),
+                        decoration: const InputDecoration(hintText: 'Search product…', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
+                        onSubmitted: (_) => onFieldSubmitted(),
+                      );
+                    },
+                  )),
                   Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: DropdownButtonFormField<String>(value: _addUomId, isDense: true, isExpanded: true,
                       decoration: const InputDecoration(hintText: 'UOM', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 6)),
@@ -440,11 +534,6 @@ class _CustomerPickDialogState extends State<_CustomerPickDialog> {
       content: SizedBox(width: 480, height: 440, child: Column(children: [
         TextField(decoration: const InputDecoration(hintText: 'Search name / code…', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (v) => setState(() => _q = v), autofocus: true),
         const SizedBox(height: 12),
-        Container(decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.primary.withOpacity(0.3))),
-          child: ListTile(dense: true, leading: const Icon(Icons.person_outline, color: AppTheme.primary),
-            title: const Text('Walk-in', style: TextStyle(fontWeight: FontWeight.w700)),
-            onTap: () => Navigator.pop(context, {'id': null, 'shop_name': 'Walk-in'}))),
-        const SizedBox(height: 6),
         Expanded(child: filtered.isEmpty ? const Center(child: Text('No customers.', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) { final c = filtered[i]; return ListTile(dense: true,
@@ -495,7 +584,7 @@ class _SrnBadge extends StatelessWidget {
   final String status; const _SrnBadge({required this.status});
   @override Widget build(BuildContext context) {
     Color bg; Color fg;
-    switch (status) { case 'confirmed': bg = AppTheme.primary.withOpacity(0.12); fg = AppTheme.primary; break; case 'invoiced': bg = Colors.purple.withOpacity(0.12); fg = Colors.purple; break; default: bg = Colors.orange.withOpacity(0.12); fg = Colors.orange; }
+    switch (status) { case 'confirmed': bg = AppTheme.primary.withOpacity(0.12); fg = AppTheme.primary; break; case 'invoiced': bg = Colors.purple.withOpacity(0.12); fg = Colors.purple; break; case 'voided': bg = AppTheme.danger.withOpacity(0.12); fg = AppTheme.danger; break; default: bg = Colors.orange.withOpacity(0.12); fg = Colors.orange; }
     return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)), child: Text(status, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)));
   }
 }
