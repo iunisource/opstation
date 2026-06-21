@@ -72,7 +72,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       final params = {'p_org_id': orgId, 'p_as_of': asOfStr};
 
       // Aggregate buckets + GL-true net per customer (ties to 1210).
-      final agg = await client.rpc('rpc_customer_aging', params: params) as List;
+      final agg = await client.rpc('rpc_customer_aging', params: params).limit(10000) as List;
 
       // Resolve names/codes for exactly the customer ids in the result.
       // Org-agnostic on purpose: some (imported) customers carry a different
@@ -87,7 +87,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       if (cidList.isNotEmpty) {
         try {
           final cs = await client.from('customers')
-              .select('id, shop_name, code').inFilter('id', cidList);
+              .select('id, shop_name, code').inFilter('id', cidList).limit(10000);
           for (final c in cs as List) {
             final m = c as Map;
             final sn = m['shop_name'] as String?;
@@ -99,7 +99,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         if (missing.isNotEmpty) {
           try {
             final pcs = await client.from('pos_customers')
-                .select('id, name').inFilter('id', missing);
+                .select('id, name').inFilter('id', missing).limit(10000);
             for (final c in pcs as List) {
               final m = c as Map;
               final nm = m['name'] as String?;
@@ -112,7 +112,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       // Open GL lines per customer for the drill-down (best-effort).
       final detailByCust = <String, List<Map<String, dynamic>>>{};
       try {
-        final det = await client.rpc('rpc_customer_aging_detail', params: params) as List;
+        final det = await client.rpc('rpc_customer_aging_detail', params: params).limit(10000) as List;
         for (final d in det) {
           final m = d as Map;
           final key = (m['customer_id'] as String?) ?? '__unallocated__';
