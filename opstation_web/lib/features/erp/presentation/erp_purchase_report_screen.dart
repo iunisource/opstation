@@ -2,6 +2,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:excel/excel.dart' as xls;
+
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -107,6 +113,22 @@ class _ErpPurchaseReportScreenState extends ConsumerState<ErpPurchaseReportScree
     return '';
   }
 
+  double _num(dynamic v) => v == null ? 0.0 : (v as num).toDouble();
+
+  // Keep PDF text inside the base font's character set so nothing renders as a
+  // blank box. The on-screen UI keeps the nicer typographic glyphs.
+  String _ascii(String s) => s
+      .replaceAll('\u2014', '-')
+      .replaceAll('\u2013', '-')
+      .replaceAll('\u2026', '...')
+      .replaceAll('\u00b7', '-')
+      .replaceAll('\u20a8', 'Rs ')
+      .replaceAll('\u201c', '"')
+      .replaceAll('\u201d', '"')
+      .replaceAll('\u2018', "'")
+      .replaceAll('\u2019', "'")
+      .replaceAll(RegExp(r'[^\x20-\x7E]'), '');
+
   Future<void> _pickDate(bool isFrom) async {
     final init = isFrom ? _from : _to;
     final d = await showDatePicker(
@@ -155,6 +177,151 @@ class _ErpPurchaseReportScreenState extends ConsumerState<ErpPurchaseReportScree
     }
   }
 
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  }
+
+  Map<String, List<Map<String, dynamic>>> _grouped() {
+    final groups = <String, List<Map<String, dynamic>>>{};
+    for (final r in _rows) {
+      final sid = (r['supplier_id'] as String?) ?? '';
+      (groups[sid] ??= []).add(r);
+    }
+    return groups;
+  }
+
+  // ─────────────────────────────── PDF / print ───────────────────────────────
+  Future<void> _printPdf() async {
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
+    final supLabel = _nameOf(_suppliers, _supplierId, 'All suppliers');
+    final catLabel = _nameOf(_categories, _categoryId, 'All categories');
+    final singleSupplier = _supplierId != null;
+    final groups = _grouped();
+    final grand = _rows.fold<double>(0, (a, r) => a + _num(r['total']));
+
+    final headers = ['Product', 'Qty', 'Rate', 'Total'];
+    final data = <List<String>>[];
+    for (final entry in groups.entries) {
+      final list = entry.value;
+      if (!singleSupplier) {
+        final sub = list.fold<double>(0, (a, r) => a + _num(r['total']));
+        data.add([_ascii('${list.first['supplier_name'] ?? ''}'), '', '', _num2(sub)]);
+      }
+      for (final r in list) {
+        data.add([
+          (singleSupplier ? '' : '   ') + _ascii('${r['product_name'] ?? ''}'),
+          _num0(r['qty'] as num?),
+          _num2(r['rate'] as num?),
+          _num2(r['total'] as num?),
+        ]);
+      }
+    }
+    data.add([singleSupplier ? 'Total' : 'Grand Total', '', '', _num2(grand)]);
+
+    final doc = pw.Document();
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.all(28),
+      build: (ctx) => [
+        if (org.isNotEmpty)
+          pw.Text(_ascii(org),
+              style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
+        pw.Text('Purchase Report',
+            style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 2),
+        pw.Text(
+            '${_pretty(_from)} to ${_pretty(_to)}     |     Supplier: ${_ascii(supLabel)}     |     Category: ${_ascii(catLabel)}',
+            style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+        pw.SizedBox(height: 12),
+        pw.TableHelper.fromTextArray(
+          headers: headers,
+          data: data,
+          headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
+          cellStyle: const pw.TextStyle(fontSize: 9),
+          headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+          cellAlignments: {
+            0: pw.Alignment.centerLeft,
+            1: pw.Alignment.centerRight,
+            2: pw.Alignment.centerRight,
+            3: pw.Alignment.centerRight,
+          },
+          rowDecoration: const pw.BoxDecoration(
+              border: pw.Border(
+                  bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
+        ),
+        pw.SizedBox(height: 8),
+        pw.Text('${singleSupplier ? 'Total' : 'Grand total'}: ${_num2(grand)}',
+            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+      ],
+    ));
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat f) async => doc.save(),
+      name: 'purchase-report-${_ymd(_from)}_${_ymd(_to)}.pdf',
+    );
+  }
+
+  // ─────────────────────────────── Excel export ──────────────────────────────
+  Future<void> _exportExcel() async {
+    try {
+      final excel = xls.Excel.createExcel();
+      const sheetName = 'Purchase Report';
+      final sheet = excel[sheetName];
+      final def = excel.getDefaultSheet();
+      if (def != null && def != sheetName) {
+        excel.delete(def);
+      }
+
+      final supLabel = _nameOf(_suppliers, _supplierId, 'All suppliers');
+      final catLabel = _nameOf(_categories, _categoryId, 'All categories');
+
+      sheet.appendRow([xls.TextCellValue('Purchase Report')]);
+      sheet.appendRow([
+        xls.TextCellValue('Period'),
+        xls.TextCellValue('${_pretty(_from)} to ${_pretty(_to)}'),
+      ]);
+      sheet.appendRow([
+        xls.TextCellValue('Supplier'),
+        xls.TextCellValue(supLabel),
+        xls.TextCellValue('Category'),
+        xls.TextCellValue(catLabel),
+      ]);
+      sheet.appendRow([xls.TextCellValue('')]);
+      sheet.appendRow([
+        xls.TextCellValue('Supplier'),
+        xls.TextCellValue('Product'),
+        xls.TextCellValue('Qty'),
+        xls.TextCellValue('Rate'),
+        xls.TextCellValue('Total'),
+      ]);
+
+      for (final r in _rows) {
+        sheet.appendRow([
+          xls.TextCellValue('${r['supplier_name'] ?? ''}'),
+          xls.TextCellValue('${r['product_name'] ?? ''}'),
+          xls.DoubleCellValue(_num(r['qty'])),
+          xls.DoubleCellValue(_num(r['rate'])),
+          xls.DoubleCellValue(_num(r['total'])),
+        ]);
+      }
+
+      final grand = _rows.fold<double>(0, (a, r) => a + _num(r['total']));
+      sheet.appendRow([
+        xls.TextCellValue(''),
+        xls.TextCellValue('Grand Total'),
+        xls.TextCellValue(''),
+        xls.TextCellValue(''),
+        xls.DoubleCellValue(grand),
+      ]);
+
+      excel.save(fileName: 'purchase-report-${_ymd(_from)}_${_ymd(_to)}.xlsx');
+    } catch (e) {
+      _showSnack('Excel export failed: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -173,6 +340,24 @@ class _ErpPurchaseReportScreenState extends ConsumerState<ErpPurchaseReportScree
           else
             _filterBar(),
           const SizedBox(height: 16),
+          if (_hasRun && _runError == null && _rows.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(children: [
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: _printPdf,
+                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                  label: const Text('Print / PDF'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _exportExcel,
+                  icon: const Icon(Icons.grid_on_outlined, size: 18),
+                  label: const Text('Export Excel'),
+                ),
+              ]),
+            ),
           Expanded(child: _results()),
         ],
       ),
@@ -275,17 +460,12 @@ class _ErpPurchaseReportScreenState extends ConsumerState<ErpPurchaseReportScree
               style: TextStyle(color: AppTheme.textSecondary)));
     }
 
-    // Group by supplier, preserving the RPC's ordering.
-    final groups = <String, List<Map<String, dynamic>>>{};
-    final supplierNames = <String, String>{};
-    for (final r in _rows) {
-      final sid = (r['supplier_id'] as String?) ?? '';
-      supplierNames[sid] = (r['supplier_name'] as String?) ?? '';
-      (groups[sid] ??= []).add(r);
-    }
-
-    final grandTotal = _rows.fold<double>(
-        0, (a, r) => a + ((r['total'] as num?)?.toDouble() ?? 0));
+    final groups = _grouped();
+    final supplierNames = <String, String>{
+      for (final r in _rows)
+        ((r['supplier_id'] as String?) ?? ''): ((r['supplier_name'] as String?) ?? ''),
+    };
+    final grandTotal = _rows.fold<double>(0, (a, r) => a + _num(r['total']));
     final singleSupplier = _supplierId != null;
     final catLabel = _nameOf(_categories, _categoryId, 'All categories');
     final supLabel = _nameOf(_suppliers, _supplierId, 'All suppliers');
@@ -316,8 +496,8 @@ class _ErpPurchaseReportScreenState extends ConsumerState<ErpPurchaseReportScree
                           style: const TextStyle(
                               fontSize: 15, fontWeight: FontWeight.w800))),
                   Text(
-                      _num2(entry.value.fold<double>(
-                          0, (a, r) => a + ((r['total'] as num?)?.toDouble() ?? 0))),
+                      _num2(entry.value
+                          .fold<double>(0, (a, r) => a + _num(r['total']))),
                       style: const TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w800)),
                 ]),
