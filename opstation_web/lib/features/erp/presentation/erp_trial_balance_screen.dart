@@ -19,6 +19,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
   DateTime _from = DateTime(DateTime.now().year, 1, 1);
   DateTime _to   = DateTime.now();
   bool _loading  = false;
+  bool _allBranches = false;
   List<Map<String, dynamic>> _rows = [];
   // level-4 detail rows grouped by their level-3 parent code
   Map<String, List<Map<String, dynamic>>> _children = {};
@@ -39,7 +40,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
         'p_org_id': orgId,
         'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
         'p_date_to':   DateFormat('yyyy-MM-dd').format(_to),
-        'p_branch_id': branch?['id'],
+        'p_branch_id': _allBranches ? null : branch?['id'],
       };
       final client = Supabase.instance.client;
       final res = await client.rpc('rpc_trial_balance', params: params);
@@ -142,12 +143,21 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
         ]),
         const SizedBox(height: 4),
-        Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary)),
+        Text(_allBranches || branch == null ? 'All Branches (organization-wide)' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Row(children: [
           _datePicker('From', _from, (d) { setState(() => _from = d); _load(); }, maxDate: _to),
           const SizedBox(width: 12),
           _datePicker('To', _to, (d) { setState(() => _to = d); _load(); }, minDate: _from),
+          const SizedBox(width: 12),
+          // A trial balance is an org-level statement; a single-branch view won't
+          // balance when stock has moved between branches (in-transit accounts).
+          // This toggle flips to the exact organization-wide view.
+          if (branch != null) OutlinedButton.icon(
+            icon: Icon(_allBranches ? Icons.account_tree : Icons.store, size: 16),
+            label: Text(_allBranches ? 'All Branches' : 'This Branch'),
+            onPressed: () { setState(() => _allBranches = !_allBranches); _load(); },
+          ),
         ]),
         if (!_loading && _rows.isNotEmpty) ...[
           const SizedBox(height: 12),
@@ -160,6 +170,16 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
             const SizedBox(width: 12),
             _card('Status', balanced ? 'Balanced ✓' : 'Unbalanced ✗', balanced ? AppTheme.success : AppTheme.danger),
           ]),
+          if (!balanced && !_allBranches && branch != null) Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(children: [
+              const Icon(Icons.info_outline, size: 14, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(child: Text(
+                'A single-branch view may not balance when stock has moved between branches (in-transit accounts). Switch to "All Branches" for the organization-wide check.',
+                style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+            ]),
+          ),
         ],
         const SizedBox(height: 16),
         Expanded(child: Container(

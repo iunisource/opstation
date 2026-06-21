@@ -54,15 +54,35 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       client.from('products').select('id,name,sku,base_uom_id,selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
       client.from('uoms').select().eq('org_id', orgId).order('name'),
     ]);
-    final List<Map<String, dynamic>> c = [];
-    var off = 0;
-    while (true) {
-      final p = await client.from('customers').select('id,shop_name,code').eq('org_id', orgId).eq('is_active', true).order('shop_name').range(off, off + 999);
-      c.addAll(List<Map<String, dynamic>>.from(p));
-      if (p.length < 1000) break;
-      off += 1000;
-    }
-    if (mounted) setState(() { _products = List<Map<String, dynamic>>.from(results[0]); _uoms = List<Map<String, dynamic>>.from(results[1]); _customers = c; });
+    if (mounted) setState(() { _products = List<Map<String, dynamic>>.from(results[0]); _uoms = List<Map<String, dynamic>>.from(results[1]); });
+    _ensureCustomers();
+  }
+
+  Future<void>? _customersFuture;
+  bool _customersLoading = false;
+  // Returns immediately if already loaded; otherwise awaits the single in-flight
+  // load (so opening the picker early waits instead of showing an empty list).
+  Future<void> _ensureCustomers() {
+    if (_customers.isNotEmpty) return Future.value();
+    return _customersFuture ??= _loadCustomersNow();
+  }
+  Future<void> _loadCustomersNow() async {
+    final orgId = _orgId; if (orgId == null) return;
+    if (mounted) setState(() => _customersLoading = true);
+    try {
+      final client = Supabase.instance.client;
+      final List<Map<String, dynamic>> c = [];
+      var off = 0;
+      while (true) {
+        final p = await client.from('customers').select('id,shop_name,code').eq('org_id', orgId).eq('is_active', true).order('shop_name').range(off, off + 999);
+        c.addAll(List<Map<String, dynamic>>.from(p));
+        if (p.length < 1000) break;
+        off += 1000;
+      }
+      if (mounted) setState(() { _customers = c; });
+    } catch (_) {}
+    _customersFuture = null;
+    if (mounted) setState(() => _customersLoading = false);
   }
 
   Future<void> _loadList() async {
@@ -104,6 +124,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
+    if (_customers.isEmpty) { _showSnack('Loading customers…'); await _ensureCustomers(); }
     final picked = await showDialog<Map<String, dynamic>?>(context: context, builder: (_) => _CustomerPickDialog(customers: _customers));
     if (picked == null) return;
     setState(() => _detailLoading = true);

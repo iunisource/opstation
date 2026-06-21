@@ -165,16 +165,41 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
 
   String _normalizeRefTable(String refType) {
     final r = refType.toLowerCase();
-    if (r == 'pos_return' || r == 'pos_transaction' || r == 'pos_returns' || r == 'pos_transactions') return 'pos_transactions';
-    if (r == 'sales_invoice' || r == 'sales_invoices') return 'sales_invoices';
-    if (r == 'sales_return_invoice' || r == 'sales_return_invoices' || r == 'sale_return_invoice') return 'sales_return_invoices';
-    if (r == 'purchase_invoice' || r == 'purchase_invoices') return 'purchase_invoices';
-    if (r == 'purchase_return_invoice' || r == 'purchase_return_invoices') return 'purchase_return_invoices';
-    if (r == 'purchase_return' || r == 'purchase_return_reversed' || r == 'purchase_return_note' || r == 'purchase_return_note_reversed') return 'purchase_returns';
-    if (r == 'delivery_order' || r == 'delivery_orders') return 'delivery_orders';
-    if (r == 'grn' || r == 'grn_deleted' || r == 'goods_received_note' || r == 'goods_received_notes') return 'purchase_grns';
-    if (r == 'stock_adjustment' || r == 'stock_adjustments') return 'stock_adjustments';
+    // Order matters: more specific prefixes first.
+    if (r.startsWith('pos')) return 'pos_transactions';
+    if (r.startsWith('sales_return_invoice') || r == 'sale_return_invoice') return 'sales_return_invoices';
+    if (r.startsWith('purchase_return_invoice') || r.startsWith('purchase_return_voucher')) return 'purchase_return_invoices';
+    if (r.startsWith('purchase_return')) return 'purchase_returns';
+    if (r.startsWith('sales_return') || r.startsWith('sale_return')) return 'sales_returns';
+    if (r.startsWith('sales_invoice') || r == 'si') return 'sales_invoices';
+    if (r.startsWith('purchase_invoice')) return 'purchase_invoices';
+    if (r.startsWith('delivery_order')) return 'delivery_orders';
+    if (r.startsWith('grn') || r.startsWith('purchase_grn') || r.startsWith('goods_received')) return 'purchase_grns';
+    if (r.startsWith('stock_adjustment')) return 'stock_adjustments';
     return refType;
+  }
+
+  // Clean human label for movements that don't resolve to a voucher number
+  // (deleted/voided source rows, or types with no document like opening stock).
+  String _friendlyRefLabel(String? refType) {
+    final r = (refType ?? '').toLowerCase();
+    if (r.isEmpty) return '-';
+    final undone = r.contains('delet') || r.contains('void') || r.contains('revers');
+    String tag(String base) => undone ? '$base (reversed)' : base;
+    if (r == 'opening_stock') return 'Opening stock';
+    if (r.startsWith('stock_transfer')) return 'Stock transfer';
+    if (r == 'damage') return 'Damage';
+    if (r == 'adjustment' || r.startsWith('stock_adjustment')) return 'Stock adjustment';
+    if (r.startsWith('delivery_order')) return tag('Delivery Order');
+    if (r.startsWith('grn') || r.startsWith('purchase_grn') || r.startsWith('goods_received')) return tag('GRN');
+    if (r.startsWith('purchase_return_voucher') || r.startsWith('purchase_return_invoice')) return tag('Purchase Return Invoice');
+    if (r.startsWith('purchase_return')) return tag('Purchase Return');
+    if (r.startsWith('sales_return_invoice')) return tag('Sales Return Invoice');
+    if (r.startsWith('sales_return') || r.startsWith('sale_return')) return tag('Sales Return');
+    if (r.startsWith('purchase_invoice')) return 'Purchase Invoice';
+    if (r.startsWith('sales_invoice')) return 'Sales Invoice';
+    if (r.startsWith('pos')) return 'POS';
+    return r.split('_').map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
   }
 
   Future<void> _fetchVoucherNumbers(List<Map<String, dynamic>> entries) async {
@@ -396,6 +421,11 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           voucher = await client.from('purchase_returns').select('*, suppliers(name)').eq('id', refId).maybeSingle();
           if (voucher != null) lines = await client.from('purchase_return_items').select('*, products(name, sku)').eq('return_id', refId);
           break;
+        case 'sales_returns':
+          title = 'Sales Return Note';
+          voucher = await client.from('sales_returns').select('*, customers(shop_name, code)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('sales_return_items').select('*, products(name, sku)').eq('return_id', refId);
+          break;
         case 'stock_adjustments':
           title = 'Stock Adjustment';
           voucher = await client.from('stock_adjustments').select('*').eq('id', refId).maybeSingle();
@@ -526,7 +556,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         final date = m['moved_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
         final type = _displayType(m);
         final refId = m['reference_id'] as String?;
-        final vno = refId != null ? (_voucherNumbers[refId] ?? (m['reference_type'] as String? ?? '-')) : (m['notes'] as String? ?? '-');
+        final vno = refId != null ? (_voucherNumbers[refId] ?? _friendlyRefLabel(m['reference_type'] as String?)) : (m['notes'] as String? ?? '-');
         final inStr = qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
         final outStr = qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
         final balStr = runQty.toStringAsFixed(runQty % 1 == 0 ? 0 : 2) + ' ' + entryUom;
@@ -850,7 +880,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                             final refType = m['reference_type'] as String?;
                             final vno = refId != null ? (_voucherNumbers[refId] ?? '') : '';
                             final hasVoucher = vno.isNotEmpty && refType != null && refId != null;
-                            final displayRef = vno.isNotEmpty ? vno : ((m['notes'] as String? ?? '').isNotEmpty ? m['notes'] as String : (refType ?? '-'));
+                            final displayRef = vno.isNotEmpty ? vno : ((m['notes'] as String? ?? '').isNotEmpty ? m['notes'] as String : _friendlyRefLabel(refType));
                             return Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                               child: Row(children: [

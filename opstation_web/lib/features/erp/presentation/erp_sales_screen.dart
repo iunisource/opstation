@@ -107,7 +107,22 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final client = Supabase.instance.client;
       final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
-      // Paginate customers past PostgREST's 1000-row default and any later cap.
+      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); });
+      _ensureCustomers();
+    } catch (_) {}
+  }
+
+  Future<void>? _customersFuture;
+  // Returns immediately if loaded; otherwise awaits the single in-flight load so
+  // opening the picker early waits for customers instead of showing an empty list.
+  Future<void> _ensureCustomers() {
+    if (_customers.isNotEmpty) return Future.value();
+    return _customersFuture ??= _loadCustomersNow();
+  }
+  Future<void> _loadCustomersNow() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final client = Supabase.instance.client;
       final List<Map<String, dynamic>> c = [];
       const pageSize = 1000;
       var offset = 0;
@@ -119,10 +134,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         if (page.length < pageSize) break;
         offset += pageSize;
       }
-      // ignore: avoid_print
-      print('[ErpSales] customers loaded: ${c.length}');
-      setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _customers = c; });
+      if (mounted) setState(() { _customers = c; });
     } catch (_) {}
+    _customersFuture = null;
   }
 
   Future<void> _loadList() async {
@@ -607,6 +621,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                       ? _CustomerSelect(
                           customers: _customers,
                           selectedId: custId,
+                          ensureLoaded: _ensureCustomers,
+                          liveCustomers: () => _customers,
                           onChanged: (v) async {
                             setState(() => _detail['customer_id'] = v);
                             try {
@@ -2402,7 +2418,9 @@ class _CustomerSelect extends StatelessWidget {
   final List<Map<String, dynamic>> customers;
   final String? selectedId;
   final ValueChanged<String?> onChanged;
-  const _CustomerSelect({required this.customers, required this.selectedId, required this.onChanged});
+  final Future<void> Function()? ensureLoaded;
+  final List<Map<String, dynamic>> Function()? liveCustomers;
+  const _CustomerSelect({required this.customers, required this.selectedId, required this.onChanged, this.ensureLoaded, this.liveCustomers});
 
   String _displayName() {
     if (selectedId == null) return 'Walk-in';
@@ -2412,18 +2430,23 @@ class _CustomerSelect extends StatelessWidget {
   }
 
   Future<void> _showPicker(BuildContext context) async {
+    // Wait for customers if they're still loading, then read the fresh list.
+    if ((liveCustomers?.call() ?? customers).isEmpty && ensureLoaded != null) {
+      await ensureLoaded!();
+    }
+    final list = liveCustomers?.call() ?? customers;
     String search = '';
     final result = await showDialog<String?>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) {
-          final filtered = customers.where((c) =>
+          final filtered = list.where((c) =>
             search.isEmpty ||
             (c['shop_name'] as String? ?? '').toLowerCase().contains(search.toLowerCase()) ||
             (c['code'] as String? ?? '').toLowerCase().contains(search.toLowerCase())
           ).toList();
           return AlertDialog(
-            title: Text('Select Customer  ·  ${customers.length} total'),
+            title: Text('Select Customer  ·  ${list.length} total'),
             contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             content: SizedBox(
               width: 480,
