@@ -11,9 +11,10 @@ import '../services/voucher_meta.dart';
 
 /// Purchase Return Invoices (PRI) — stage 2 of the purchase return flow.
 ///
-/// Flow: PRN (qty-only note) → PRI (user sets prices → Issue → stock OUT).
+/// Flow: PRN (moves stock OUT on save) → PRI (user sets prices → Issue → posts GL).
 /// Status: draft → issued.
-/// Stock moves ONLY when "Issue Invoice" is clicked.
+/// Stock is NOT moved here — that happens at the PRN stage. Issuing posts the
+/// invoice to the ledger (via the pri_autopost trigger).
 class ErpPurchaseReturnVouchersScreen extends ConsumerStatefulWidget {
   const ErpPurchaseReturnVouchersScreen({super.key});
   @override
@@ -77,7 +78,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     if (orgId == null) return;
     setState(() => _listLoading = true);
     try {
-      var q = Supabase.instance.client.from('purchase_return_vouchers')
+      var q = Supabase.instance.client.from('purchase_return_invoices')
           .select('id, voucher_number, voucher_date, grand_total, status, supplier_id, prn_id, suppliers(name), purchase_returns(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
@@ -97,10 +98,10 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
       final client = Supabase.instance.client;
-      final inv = await client.from('purchase_return_vouchers')
+      final inv = await client.from('purchase_return_invoices')
           .select('*, suppliers(*), branches(name), purchase_returns(voucher_number)')
           .eq('id', id).single();
-      final items = await client.from('purchase_return_voucher_items')
+      final items = await client.from('purchase_return_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)')
           .eq('voucher_id', id);
       final meta = await VoucherMeta.fetch(
@@ -128,7 +129,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         'org_id': _orgId,
         'voucher_id': id, 'voucher_type': 'PRI',
         'action': action, 'details': details,
-        'user_id': ref.read(currentUserProvider)?.id,
+        'performed_by': ref.read(currentUserProvider)?.id,
       });
     } catch (_) {}
   }
@@ -158,7 +159,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     if (orgId == null || branchId == null) return;
     final prnId = prn['id'] as String;
     // Check not already invoiced
-    final exists = await Supabase.instance.client.from('purchase_return_vouchers')
+    final exists = await Supabase.instance.client.from('purchase_return_invoices')
         .select('id, voucher_number').eq('prn_id', prnId);
     if ((exists as List).isNotEmpty) {
       _showSnack('Invoice ${exists.first['voucher_number']} already exists for this PRN');
@@ -179,7 +180,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       final voucherNum = 'PRI-$year-${nextNum.toString().padLeft(4, '0')}';
       final invId = 'prv_${DateTime.now().millisecondsSinceEpoch}';
 
-      await Supabase.instance.client.from('purchase_return_vouchers').insert({
+      await Supabase.instance.client.from('purchase_return_invoices').insert({
         'id': invId,
         'org_id': orgId,
         'branch_id': branchId,
@@ -195,7 +196,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
 
       for (final si in srnItems) {
         final pid = si['product_id'] as String;
-        await Supabase.instance.client.from('purchase_return_voucher_items').insert({
+        await Supabase.instance.client.from('purchase_return_invoice_items').insert({
           'id': 'prvi_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'voucher_id': invId,
           'prn_item_id': si['id'],
@@ -225,7 +226,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     final qty   = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => {})['quantity'] as num?)?.toDouble() ?? 0;
     final lt    = qty * price * (1 - disc / 100);
     try {
-      await Supabase.instance.client.from('purchase_return_voucher_items').update({
+      await Supabase.instance.client.from('purchase_return_invoice_items').update({
         'unit_price': price, 'discount': disc, 'line_total': lt,
       }).eq('id', itemId);
       setState(() {
@@ -251,7 +252,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     }
     final grand = subtotal - discount;
     try {
-      await Supabase.instance.client.from('purchase_return_vouchers').update({
+      await Supabase.instance.client.from('purchase_return_invoices').update({
         'subtotal': subtotal, 'discount_total': discount, 'grand_total': grand,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
@@ -274,7 +275,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     }
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Issue Purchase Return Invoice?'),
-      content: const Text('Stock will be removed from inventory (returned to supplier). This action cannot be undone.'),
+      content: const Text('This posts the return invoice to the ledger. Stock was already returned at the PRN stage. This action cannot be undone.'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
@@ -283,42 +284,14 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     ));
     if (confirm != true) return;
 
-    final orgId = _orgId;
-    final branchId = _detail['branch_id'] as String?;
     final userId = ref.read(currentUserProvider)?.id;
     final invId = _detail['id'] as String;
     final prnId = _detail['prn_id'] as String?;
 
     try {
-      for (final it in _items) {
-        final pid = it['product_id'] as String;
-        final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-        if (qty <= 0 || branchId == null || orgId == null) continue;
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock == null) {
-          await Supabase.instance.client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-            'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': -qty,
-          });
-        } else {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((stock['quantity'] as num).toDouble()) - qty,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
-        }
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'uom_id': it['uom_id'], 'quantity': -qty,
-          'movement_type': 'adjustment',
-          'reference_id': invId, 'reference_type': 'purchase_return_invoice',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-      }
-
-      // Issue the PRI
-      await Supabase.instance.client.from('purchase_return_vouchers').update({
+      // Post the invoice. The pri_autopost trigger posts the GL entries on this
+      // update. Stock is intentionally NOT moved here — that happened at the PRN.
+      await Supabase.instance.client.from('purchase_return_invoices').update({
         'status': 'issued',
         'is_locked': true,
         'locked_by': userId,
@@ -335,8 +308,8 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         }).eq('id', prnId);
       }
 
-      await _logAudit(invId, 'issued', 'Stock removed from inventory');
-      _showSnack('Issued — stock removed from inventory');
+      await _logAudit(invId, 'issued', 'Invoice posted to ledger');
+      _showSnack('Issued — posted to ledger');
       _loadDetail(invId);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -345,7 +318,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   Future<void> _toggleLock() async {
     final newLocked = !_isLocked;
     try {
-      await Supabase.instance.client.from('purchase_return_vouchers').update({
+      await Supabase.instance.client.from('purchase_return_invoices').update({
         'is_locked': newLocked,
         'locked_by': newLocked ? ref.read(currentUserProvider)?.id : null,
         'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
@@ -361,7 +334,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     if (!_canDelete) return;
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete Purchase Return Invoice?'),
-      content: Text('Delete ${_detail['voucher_number']}?${_detail['status'] == 'issued' ? '\n\nStock will be reversed and the source PRN restored to saved.' : ''}'),
+      content: Text('Delete ${_detail['voucher_number']}? The source PRN will be restored to saved (its stock stays returned).'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
@@ -370,44 +343,19 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     ));
     if (confirm != true) return;
 
-    final orgId = _orgId; final branchId = _detail['branch_id'] as String?;
-    final userId = ref.read(currentUserProvider)?.id;
     try {
-      // If issued, reverse stock
-      if (_detail['status'] == 'issued') {
-        for (final it in _items) {
-          final pid = it['product_id'] as String;
-          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-          if (qty <= 0 || branchId == null || orgId == null) continue;
-          final stock = await Supabase.instance.client.from('inventory_stock').select()
-              .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-          if (stock != null) {
-            await Supabase.instance.client.from('inventory_stock').update({
-              'quantity': ((stock['quantity'] as num).toDouble()) + qty,
-              'updated_at': DateTime.now().toUtc().toIso8601String(),
-            }).eq('id', stock['id']);
-          }
-          await Supabase.instance.client.from('inventory_movements').insert({
-            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-            'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-            'uom_id': it['uom_id'], 'quantity': qty,
-            'movement_type': 'adjustment',
-            'reference_id': _detail['id'], 'reference_type': 'purchase_return_invoice_deleted',
-            'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-          });
-        }
-      }
-      // Restore PRN to saved
+      // PRI no longer moves stock, so nothing to reverse here. Restore the source
+      // PRN to 'saved' (still locked — its stock remains returned) so it can be re-invoiced.
       final prnId = _detail['prn_id'] as String?;
       if (prnId != null) {
         await Supabase.instance.client.from('purchase_returns').update({
-          'status': 'saved', 'is_locked': false, 'locked_by': null, 'locked_at': null,
+          'status': 'saved', 'is_locked': true,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', prnId);
       }
       await _logAudit(_detail['id'] as String, 'deleted', 'Invoice deleted');
-      await Supabase.instance.client.from('purchase_return_voucher_items').delete().eq('voucher_id', _detail['id']);
-      await Supabase.instance.client.from('purchase_return_vouchers').delete().eq('id', _detail['id']);
+      await Supabase.instance.client.from('purchase_return_invoice_items').delete().eq('voucher_id', _detail['id']);
+      await Supabase.instance.client.from('purchase_return_invoices').delete().eq('id', _detail['id']);
       _showSnack('Deleted — PRN restored');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       await _loadList();
@@ -622,7 +570,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                 child: const Row(children: [
                   Icon(Icons.edit_note, size: 16, color: Colors.orange),
                   SizedBox(width: 8),
-                  Expanded(child: Text('Draft — set prices below, then click "Issue Invoice" to move stock.',
+                  Expanded(child: Text('Draft — set prices below, then click "Issue Invoice" to post it to the ledger.',
                       style: TextStyle(fontSize: 12, color: Colors.orange))),
                 ]),
               ),
@@ -819,7 +767,7 @@ class _AuditTrailWidget extends StatelessWidget {
     if (voucherId.isEmpty) return const SizedBox.shrink();
     return FutureBuilder<List<dynamic>>(
       future: Supabase.instance.client.from('voucher_audit_log')
-          .select('action, details, user_id, created_at')
+          .select('*, users(name)')
           .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
           .order('created_at', ascending: false).limit(30),
       builder: (ctx, snap) {

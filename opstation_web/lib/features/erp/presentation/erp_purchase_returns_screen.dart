@@ -290,30 +290,87 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (_) {}
   }
 
+  // Move stock for every line. sign = -1 moves stock OUT (returned to supplier),
+  // sign = +1 reverses it. Mirrors the GRN confirm/reverse pattern.
+  Future<void> _applyStock(double sign, String refType) async {
+    final orgId = _orgId;
+    final branchId = _detail['branch_id'] as String?;
+    final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null || branchId == null) return;
+    for (final it in _items) {
+      final pid = it['product_id'] as String;
+      final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+      if (qty <= 0) continue;
+      final delta = sign * qty;
+      final stock = await Supabase.instance.client.from('inventory_stock').select()
+          .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+      if (stock == null) {
+        await Supabase.instance.client.from('inventory_stock').insert({
+          'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+          'quantity': delta, 'uom_id': it['uom_id'],
+        });
+      } else {
+        await Supabase.instance.client.from('inventory_stock').update({
+          'quantity': ((stock['quantity'] as num).toDouble()) + delta,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', stock['id']);
+      }
+      await Supabase.instance.client.from('inventory_movements').insert({
+        'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+        'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+        'uom_id': it['uom_id'], 'quantity': delta,
+        'movement_type': 'adjustment',
+        'reference_id': _detail['id'], 'reference_type': refType,
+        'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
+      });
+    }
+  }
+
   Future<void> _toggleLock() async {
     final newLocked = !_isLocked;
+    final isSaved = (_detail['status'] as String? ?? '') == 'saved';
     try {
-      await Supabase.instance.client.from('purchase_returns').update({
-        'is_locked': newLocked,
-        'locked_by': newLocked ? ref.read(currentUserProvider)?.id : null,
-        'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
-      _showSnack(newLocked ? 'Locked' : 'Unlocked');
+      if (!newLocked && isSaved) {
+        // Unlocking a saved note reverses its stock and returns it to draft for editing.
+        await _applyStock(1.0, 'purchase_return_reversed');
+        await Supabase.instance.client.from('purchase_returns').update({
+          'status': 'draft', 'is_locked': false, 'locked_by': null, 'locked_at': null,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _detail['id']);
+        await _logAudit(_detail['id'] as String, 'unlocked', 'Reverted to draft, stock restored');
+        _showSnack('Unlocked — reverted to draft, stock restored');
+      } else {
+        await Supabase.instance.client.from('purchase_returns').update({
+          'is_locked': newLocked,
+          'locked_by': newLocked ? ref.read(currentUserProvider)?.id : null,
+          'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _detail['id']);
+        await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
+        _showSnack(newLocked ? 'Locked' : 'Unlocked');
+      }
       _loadDetail(_detail['id'] as String);
+      _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void> _saveNote() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before saving'); return; }
+    final userId = ref.read(currentUserProvider)?.id;
     try {
+      // Saving confirms the physical return: stock moves OUT (back to supplier) and
+      // the note locks. The financial side is posted later by the Return Invoice.
+      await _applyStock(-1.0, 'purchase_return');
       await Supabase.instance.client.from('purchase_returns').update({
         'status': 'saved',
+        'is_locked': true,
+        'locked_by': userId,
+        'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'saved', null);
-      _showSnack('Saved');
+      await _logAudit(_detail['id'] as String, 'saved', 'Stock returned to supplier');
+      _showSnack('Saved — stock returned to supplier');
       _loadDetail(_detail['id'] as String);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -326,7 +383,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
 
     // Check if a PRI already exists for this PRN
     try {
-      final existing = await Supabase.instance.client.from('purchase_return_vouchers')
+      final existing = await Supabase.instance.client.from('purchase_return_invoices')
           .select('id, voucher_number').eq('prn_id', _detail['id'] as String);
       if ((existing as List).isNotEmpty) {
         _showSnack('Invoice ${existing.first['voucher_number']} already exists — open it in Purchase Return Invoices');
@@ -353,7 +410,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       final voucherNum = 'PRI-$year-${nextNum.toString().padLeft(4, '0')}';
       final invId = 'prv_${DateTime.now().millisecondsSinceEpoch}';
 
-      await Supabase.instance.client.from('purchase_return_vouchers').insert({
+      await Supabase.instance.client.from('purchase_return_invoices').insert({
         'id': invId,
         'org_id': orgId,
         'branch_id': branchId,
@@ -369,7 +426,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
 
       for (final si in _items) {
         final pid = si['product_id'] as String;
-        await Supabase.instance.client.from('purchase_return_voucher_items').insert({
+        await Supabase.instance.client.from('purchase_return_invoice_items').insert({
           'id': 'prvi_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'voucher_id': invId,
           'prn_item_id': si['id'],
@@ -393,7 +450,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     if (!_canDelete) return;
     // Cascade check: no PRV should reference this PRN
     try {
-      final vchs = await Supabase.instance.client.from('purchase_return_vouchers')
+      final vchs = await Supabase.instance.client.from('purchase_return_invoices')
           .select('id, voucher_number').eq('prn_id', _detail['id']);
       if ((vchs as List).isNotEmpty) {
         _showSnack('Cannot delete: voucher ${vchs.first['voucher_number']} exists. Delete the voucher first.');
@@ -413,6 +470,10 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     if (confirm != true) return;
     try {
       final vNum = _detail['voucher_number'] as String? ?? '';
+      // If the note was saved, stock was moved out — put it back before deleting.
+      if ((_detail['status'] as String? ?? 'draft') != 'draft') {
+        await _applyStock(1.0, 'purchase_return_reversed');
+      }
       await _logAudit(_detail['id'] as String, 'deleted', 'Voucher $vNum deleted by admin');
       await Supabase.instance.client.from('purchase_return_items').delete().eq('return_id', _detail['id']);
       await Supabase.instance.client.from('purchase_returns').delete().eq('id', _detail['id']);
