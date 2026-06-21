@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -500,7 +501,7 @@ Widget _branchSelector(WidgetRef ref, Set<String> modules) {
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: selected?['id'] as String?,
-                dropdownColor: const Color(0xFF1E293B),
+                dropdownColor: AppTheme.sidebarPanel,
                 icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
                 isDense: true,
                 items: branches.map((b) => DropdownMenuItem<String>(
@@ -539,7 +540,7 @@ Widget _branchSelector(WidgetRef ref, Set<String> modules) {
 Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
   return         PopupMenuButton<String>(
           offset: offset,
-          color: const Color(0xFF1E293B),
+          color: AppTheme.sidebarPanel,
           elevation: 8,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
@@ -769,7 +770,7 @@ Widget _navButton(BuildContext context, String label, IconData icon, String path
         Text(label, style: TextStyle(
           color: isActive ? Colors.white : AppTheme.sidebarText,
           fontSize: 13,
-          fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+          fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
         )),
         if (badge > 0) ...[
           const SizedBox(width: 6),
@@ -798,67 +799,137 @@ Widget _navMenu(
   List<Widget> items, {
   int badge = 0,
 }) {
-  final isActive = activePaths.any((p) => location.startsWith(p));
-  return MenuAnchor(
-    style: MenuStyle(
-      backgroundColor: const WidgetStatePropertyAll(Color(0xFF1E293B)),
-      elevation: const WidgetStatePropertyAll(12),
-      shadowColor: WidgetStatePropertyAll(Colors.black54),
-      shape: WidgetStatePropertyAll(RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Colors.white12),
-      )),
-      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
-    ),
-    menuChildren: items,
-    builder: (ctx, controller, _) {
-      return MouseRegion(
-        onEnter: (_) { if (!controller.isOpen) controller.open(); },
-        child: InkWell(
-          onTap: () => controller.isOpen ? controller.close() : controller.open(),
-          borderRadius: BorderRadius.circular(6),
-          hoverColor: Colors.white10,
-          child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: isActive
-                ? BoxDecoration(color: AppTheme.primary.withOpacity(0.3), borderRadius: BorderRadius.circular(6))
-                : null,
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(icon, size: 14, color: isActive ? Colors.white : AppTheme.sidebarText),
-              const SizedBox(width: 5),
-              Text(label, style: TextStyle(
-                color: isActive ? Colors.white : AppTheme.sidebarText,
-                fontSize: 13,
-                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-              )),
-              if (badge > 0) ...[
-                const SizedBox(width: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: AppTheme.danger,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(badge > 99 ? '99+' : '$badge',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700)),
-                ),
-              ],
-              const SizedBox(width: 3),
-              Icon(
-                controller.isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                size: 13,
-                color: isActive ? Colors.white70 : AppTheme.sidebarText,
-              ),
-            ]),
+  return _HoverNavMenu(
+    label: label,
+    icon: icon,
+    location: location,
+    activePaths: activePaths,
+    items: items,
+    badge: badge,
+  );
+}
+
+/// Top-nav dropdown that opens on hover and closes shortly after the pointer
+/// leaves both the trigger and the panel. Click still toggles it.
+class _HoverNavMenu extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final String location;
+  final List<String> activePaths;
+  final List<Widget> items;
+  final int badge;
+  const _HoverNavMenu({
+    required this.label,
+    required this.icon,
+    required this.location,
+    required this.activePaths,
+    required this.items,
+    this.badge = 0,
+  });
+  @override
+  State<_HoverNavMenu> createState() => _HoverNavMenuState();
+}
+
+class _HoverNavMenuState extends State<_HoverNavMenu> {
+  final MenuController _controller = MenuController();
+  Timer? _closeTimer;
+
+  void _openNow() {
+    _closeTimer?.cancel();
+    if (!_controller.isOpen) _controller.open();
+  }
+
+  void _scheduleClose() {
+    _closeTimer?.cancel();
+    _closeTimer = Timer(const Duration(milliseconds: 180), () {
+      if (mounted && _controller.isOpen) _controller.close();
+    });
+  }
+
+  @override
+  void dispose() {
+    _closeTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final location = widget.location;
+    final isActive = widget.activePaths.any((p) => location.startsWith(p));
+    return MenuAnchor(
+      controller: _controller,
+      style: MenuStyle(
+        backgroundColor: const WidgetStatePropertyAll(AppTheme.sidebarPanel),
+        elevation: const WidgetStatePropertyAll(12),
+        shadowColor: WidgetStatePropertyAll(Colors.black54),
+        shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: Colors.white12),
+        )),
+        padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
+      ),
+      menuChildren: [
+        // Keep the menu open while the pointer is over the panel.
+        MouseRegion(
+          onEnter: (_) => _closeTimer?.cancel(),
+          onExit: (_) => _scheduleClose(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: widget.items,
           ),
         ),
-      );
-    },
-  );
+      ],
+      builder: (ctx, controller, _) {
+        return MouseRegion(
+          onEnter: (_) => _openNow(),
+          onExit: (_) => _scheduleClose(),
+          child: InkWell(
+            onTap: () => controller.isOpen ? controller.close() : controller.open(),
+            borderRadius: BorderRadius.circular(6),
+            hoverColor: Colors.white10,
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: isActive
+                  ? BoxDecoration(color: AppTheme.primary.withOpacity(0.3), borderRadius: BorderRadius.circular(6))
+                  : null,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(widget.icon, size: 14, color: isActive ? Colors.white : AppTheme.sidebarText),
+                const SizedBox(width: 5),
+                Text(widget.label, style: TextStyle(
+                  color: isActive ? Colors.white : AppTheme.sidebarText,
+                  fontSize: 13,
+                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                )),
+                if (widget.badge > 0) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: AppTheme.danger,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(widget.badge > 99 ? '99+' : '${widget.badge}',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                ],
+                const SizedBox(width: 3),
+                Icon(
+                  controller.isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                  size: 13,
+                  color: isActive ? Colors.white70 : AppTheme.sidebarText,
+                ),
+              ]),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 void _openInNewTab(BuildContext context, String path, Offset pos) {
@@ -940,7 +1011,7 @@ Widget _subMenu(
       minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
     ),
     menuStyle: MenuStyle(
-      backgroundColor: const WidgetStatePropertyAll(Color(0xFF1E293B)),
+      backgroundColor: const WidgetStatePropertyAll(AppTheme.sidebarPanel),
       elevation: const WidgetStatePropertyAll(12),
       shape: WidgetStatePropertyAll(RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),

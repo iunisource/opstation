@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  static const primary = Color(0xFF2563EB);
-  static const primaryDark = Color(0xFF1D4ED8);
-  static const sidebar = Color(0xFF1E293B);
+  static const primary = Color(0xFF2F6FED);
+  static const primaryDark = Color(0xFF1B45A0);
+  static const sidebar = Color(0xFF111B33);
+  static const sidebarPanel = Color(0xFF0B1220);
   static const sidebarText = Color(0xFF94A3B8);
-  static const sidebarActive = Color(0xFF2563EB);
+  static const sidebarActive = Color(0xFF2F6FED);
   static const background = Color(0xFFF8FAFC);
   static const card = Colors.white;
   static const border = Color(0xFFE2E8F0);
