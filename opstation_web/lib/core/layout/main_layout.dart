@@ -222,8 +222,6 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final inventoryItems = <Widget>[
       if (modules.contains('inventory')) ...[
         if (show('/erp/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/erp/products', location),
-        if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
-        if (show('/erp/uoms')) _menuItem(context, 'Units of Measure', Icons.straighten_outlined, '/erp/uoms', location),
         if (show('/erp/stock')) _menuItem(context, 'Stock Levels', Icons.stacked_bar_chart_outlined, '/erp/stock', location),
         if (show('/erp/low-stock-report')) _menuItem(context, 'Low Stock Report', Icons.warning_amber_outlined, '/erp/low-stock-report', location),
         if (show('/erp/stock-value-report')) _menuItem(context, 'Stock Value Report', Icons.payments_outlined, '/erp/stock-value-report', location),
@@ -239,9 +237,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final purchaseItems = <Widget>[
       if (modules.contains('purchase')) ...[
         if (show('/erp/purchase-dashboard')) _menuItem(context, 'Purchase Dashboard',      Icons.dashboard_outlined,         '/erp/purchase-dashboard',       location),
+        if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
         if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
         if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location),
-        if (show('/erp/grn')) _menuItem(context, 'GRN',                      Icons.move_to_inbox_outlined,     '/erp/grn',                      location),
+        if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location),
         if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location),
         _menuDivider(),
         if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
@@ -265,6 +264,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _menuDivider(),
         if (show('/erp/customer-ledger')) _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
         if (show('/erp/customer-aging')) _menuItem(context, 'Customer Aging', Icons.hourglass_bottom_outlined, '/erp/customer-aging', location),
+        
       ],
     ];
 
@@ -281,16 +281,28 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       ],
     ];
 
+    // Top-level production items (non-voucher)
+    final mfgTopItems = <Widget>[
+      if (show('/manufacturing/production-floor')) _menuItem(context, 'Production Floor', Icons.dashboard_outlined, '/manufacturing/production-floor', location),
+      if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card', Icons.assignment_outlined, '/manufacturing/job-card', location),
+      if (show('/manufacturing/qc-checkpoints')) _menuItem(context, 'QC Checkpoints', Icons.fact_check_outlined, '/manufacturing/qc-checkpoints', location),
+    ];
+    final mfgVoucherItems = <Widget>[
+      if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)', Icons.account_tree_outlined, '/manufacturing/product-assembly', location),
+      if (show('/manufacturing/production-voucher')) _menuItem(context, 'Production Voucher', Icons.precision_manufacturing_outlined, '/manufacturing/production-voucher', location),
+      if (show('/manufacturing/damage-stock-voucher')) _menuItem(context, 'Damage Stock Voucher', Icons.report_gmailerrorred_outlined, '/manufacturing/damage-stock-voucher', location),
+      if (show('/manufacturing/production-inverse-voucher')) _menuItem(context, 'Production Inverse Voucher', Icons.undo_outlined, '/manufacturing/production-inverse-voucher', location),
+      if (show('/manufacturing/claim-processing-voucher')) _menuItem(context, 'Claim Processing Voucher', Icons.assignment_return_outlined, '/manufacturing/claim-processing-voucher', location),
+    ];
+    final mfgReportItems = <Widget>[
+      if (show('/manufacturing/production-waste-report')) _menuItem(context, 'Production Waste Report', Icons.recycling_outlined, '/manufacturing/production-waste-report', location),
+    ];
     final manufacturingItems = <Widget>[
-      if (show('/manufacturing/production-floor')) _menuItem(context, 'Production Floor',           Icons.dashboard_outlined,               '/manufacturing/production-floor',           location),
-      if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)',    Icons.account_tree_outlined,            '/manufacturing/product-assembly',           location),
-      if (show('/manufacturing/production-voucher')) _menuItem(context, 'Production Voucher',         Icons.precision_manufacturing_outlined, '/manufacturing/production-voucher',         location),
-      if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card',                   Icons.assignment_outlined,              '/manufacturing/job-card',                   location),
-      if (show('/manufacturing/qc-checkpoints')) _menuItem(context, 'QC Checkpoints',             Icons.fact_check_outlined,              '/manufacturing/qc-checkpoints',             location),
-      if (show('/manufacturing/production-inverse-voucher')) _menuItem(context, 'Production Inverse Voucher', Icons.undo_outlined,                    '/manufacturing/production-inverse-voucher', location),
-      if (show('/manufacturing/damage-stock-voucher')) _menuItem(context, 'Damage Stock Voucher',       Icons.report_gmailerrorred_outlined,    '/manufacturing/damage-stock-voucher',       location),
-      if (show('/manufacturing/claim-processing-voucher')) _menuItem(context, 'Claim Processing Voucher',   Icons.assignment_return_outlined,       '/manufacturing/claim-processing-voucher',   location),
-      if (show('/manufacturing/production-waste-report')) _menuItem(context, 'Production Waste Report',    Icons.recycling_outlined,               '/manufacturing/production-waste-report',    location),
+      ...mfgTopItems,
+      if (mfgVoucherItems.isNotEmpty) _menuLabel('Voucher'),
+      ...mfgVoucherItems,
+      if (mfgReportItems.isNotEmpty) _menuLabel('Reports'),
+      ...mfgReportItems,
     ];
 
     final hrItems = <Widget>[
@@ -330,28 +342,29 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     List<Widget> splitErpMenus() => [
       if (_hasItems(inventoryItems))
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
-          ['/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
+          ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger'],
           _trimDividers(inventoryItems)),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
-           '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers',
+           '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
            '/erp/supplier-ledger', '/erp/supplier-aging'],
           _trimDividers(purchaseItems)),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/erp/sales', '/erp/delivery-orders', '/erp/sales-invoices',
-           '/erp/sales-returns', '/erp/sales-return-invoices',
+           '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
           _trimDividers(salesItems)),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
       _navMenu(context, 'Reports', Icons.summarize_outlined, location,
-        ['/reports/margin', '/reports/customer-balance'],
+        ['/reports/margin', '/reports/customer-balance', '/intelligence/report-builder'],
         [_menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
-         _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location)]),
+         _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location),
+         _menuItem(context, 'Report Builder', Icons.table_chart_outlined, '/intelligence/report-builder', location)]),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
           ['/manufacturing/production-floor', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints',
@@ -366,9 +379,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-        ['/erp/onboarding', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
+        ['/erp/onboarding', '/erp/branches', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
           _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
+          if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
           if (_hasItems(erpAdminItems)) _menuDivider(),
           ..._trimDividers(erpAdminItems),
         ]),
@@ -402,7 +416,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
               _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
               if (user?.role == WebUserRole.masterAdmin)
-                _menuItem(context, 'Settings', Icons.settings_outlined, '/settings', location),
+                _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
             ],
           ),
           _navMenu(context, 'CRM', Icons.contacts_outlined, location,
@@ -415,13 +429,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
             badge: crmOverdue,
           ),
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
-            ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors', '/intelligence/report-builder'],
+            ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors'],
             [
               _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
               _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
               _menuItem(context, 'Placement Audit', Icons.checklist_outlined, '/intelligence/placement', location),
               _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
-              _menuItem(context, 'Report Builder', Icons.table_chart_outlined, '/intelligence/report-builder', location),
             ],
           ),
           if (show('/assets'))
