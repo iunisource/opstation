@@ -170,8 +170,9 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (r == 'sales_return_invoice' || r == 'sales_return_invoices' || r == 'sale_return_invoice') return 'sales_return_invoices';
     if (r == 'purchase_invoice' || r == 'purchase_invoices') return 'purchase_invoices';
     if (r == 'purchase_return_invoice' || r == 'purchase_return_invoices') return 'purchase_return_invoices';
+    if (r == 'purchase_return' || r == 'purchase_return_reversed' || r == 'purchase_return_note' || r == 'purchase_return_note_reversed') return 'purchase_returns';
     if (r == 'delivery_order' || r == 'delivery_orders') return 'delivery_orders';
-    if (r == 'grn' || r == 'goods_received_note' || r == 'goods_received_notes') return 'goods_received_notes';
+    if (r == 'grn' || r == 'grn_deleted' || r == 'goods_received_note' || r == 'goods_received_notes') return 'purchase_grns';
     if (r == 'stock_adjustment' || r == 'stock_adjustments') return 'stock_adjustments';
     return refType;
   }
@@ -194,7 +195,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       final ids = entry.value.toList();
       try {
         final rows = await client.from(tbl)
-            .select('id, voucher_number, invoice_number, transaction_number')
+            .select('*')
             .inFilter('id', ids);
         for (final r in rows as List) {
           final id = r['id'] as String?;
@@ -385,17 +386,15 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             }
           }
           break;
-        case 'goods_received_notes':
-          title = 'Goods Received Note';
-          voucher = await client.from('goods_received_notes').select('*, suppliers(name)').eq('id', refId).maybeSingle();
-          if (voucher != null) {
-            for (final fk in const ['grn_id', 'gr_id', 'note_id']) {
-              try {
-                final l = await client.from('grn_items').select('*, products(name, sku)').eq(fk, refId);
-                if ((l as List).isNotEmpty) { lines = l; break; }
-              } catch (_) { }
-            }
-          }
+        case 'purchase_grns':
+          title = 'Goods Receipt Note';
+          voucher = await client.from('purchase_grns').select('*, suppliers(name)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('purchase_grn_items').select('*, products(name, sku)').eq('grn_id', refId);
+          break;
+        case 'purchase_returns':
+          title = 'Purchase Return Note';
+          voucher = await client.from('purchase_returns').select('*, suppliers(name)').eq('id', refId).maybeSingle();
+          if (voucher != null) lines = await client.from('purchase_return_items').select('*, products(name, sku)').eq('return_id', refId);
           break;
         case 'stock_adjustments':
           title = 'Stock Adjustment';

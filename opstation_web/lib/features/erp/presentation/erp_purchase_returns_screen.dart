@@ -220,6 +220,27 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
 
     final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
     final uom  = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
+
+    // Can't return what isn't in stock — block zero / insufficient balance.
+    final chkBranch = (_detail['branch_id'] as String?) ?? _branchId;
+    final chkOrg = _orgId;
+    if (chkOrg != null && chkBranch != null) {
+      try {
+        final stock = await Supabase.instance.client.from('inventory_stock')
+            .select('quantity').eq('org_id', chkOrg).eq('product_id', _addProductId!)
+            .eq('branch_id', chkBranch).maybeSingle();
+        final available = (stock?['quantity'] as num?)?.toDouble() ?? 0;
+        if (available <= 0) {
+          _showSnack('${prod['name'] ?? 'This product'} has no stock at this branch — cannot return');
+          return;
+        }
+        if (qty > available) {
+          _showSnack('Only ${available.toStringAsFixed(available % 1 == 0 ? 0 : 2)} in stock — cannot return $qty');
+          return;
+        }
+      } catch (_) {}
+    }
+
     final itemId = 'pri_${DateTime.now().microsecondsSinceEpoch}';
     final cost = (prod['cost_price'] as num?)?.toDouble() ?? 0;
     final lineTotal = qty * cost;
@@ -355,8 +376,26 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  // Returns the name of the first line whose qty exceeds current branch stock, else null.
+  Future<String?> _insufficientItem() async {
+    final orgId = _orgId;
+    final branchId = (_detail['branch_id'] as String?) ?? _branchId;
+    if (orgId == null || branchId == null) return null;
+    for (final it in _items) {
+      final pid = it['product_id'] as String;
+      final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+      final stock = await Supabase.instance.client.from('inventory_stock')
+          .select('quantity').eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
+      final available = (stock?['quantity'] as num?)?.toDouble() ?? 0;
+      if (qty > available) return (it['products']?['name'] as String?) ?? 'an item';
+    }
+    return null;
+  }
+
   Future<void> _saveNote() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before saving'); return; }
+    final bad = await _insufficientItem();
+    if (bad != null) { _showSnack('Cannot save — "$bad" exceeds available stock at this branch'); return; }
     final userId = ref.read(currentUserProvider)?.id;
     try {
       // Saving confirms the physical return: stock moves OUT (back to supplier) and
@@ -393,7 +432,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
 
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Generate Purchase Return Invoice?'),
-      content: const Text('A draft invoice will be created. You can set prices and then Issue it to move stock.'),
+      content: const Text('A draft invoice will be created. You can set prices and then Issue it to post to the ledger.'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Generate')),
@@ -424,8 +463,20 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         'created_by': userId,
       });
 
+      // Prefill PRI price from each product's cost_price (still editable before Issue).
+      final pids = <String>{ for (final si in _items) si['product_id'] as String };
+      final Map<String, double> costMap = {};
+      if (pids.isNotEmpty) {
+        final prods = await Supabase.instance.client.from('products').select('id,cost_price').inFilter('id', pids.toList());
+        for (final p in (prods as List)) { costMap[p['id'] as String] = (p['cost_price'] as num?)?.toDouble() ?? 0; }
+      }
+      double seedSubtotal = 0;
       for (final si in _items) {
         final pid = si['product_id'] as String;
+        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
+        final price = costMap[pid] ?? 0;
+        final lt = qty * price;
+        seedSubtotal += lt;
         await Supabase.instance.client.from('purchase_return_invoice_items').insert({
           'id': 'prvi_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'voucher_id': invId,
@@ -433,10 +484,16 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
           'product_id': pid,
           'uom_id': si['uom_id'],
           'quantity': si['quantity'],
-          'unit_price': 0,
+          'unit_price': price,
           'discount': 0,
-          'line_total': 0,
+          'line_total': lt,
         });
+      }
+      if (seedSubtotal > 0) {
+        await Supabase.instance.client.from('purchase_return_invoices').update({
+          'subtotal': seedSubtotal, 'discount_total': 0, 'grand_total': seedSubtotal,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', invId);
       }
 
       await _logAudit(prnId, 'invoiced', 'Draft invoice $voucherNum created');
@@ -596,8 +653,11 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                           dense: true,
                           selected: selected,
                           selectedTileColor: AppTheme.primary.withOpacity(0.06),
-                          title: Text(r['voucher_number'] as String? ?? '-',
-                              style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null)),
+                          title: Row(children: [
+                            Expanded(child: Text(r['voucher_number'] as String? ?? '-',
+                                style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null))),
+                            _PrnStatusBadge(r['status'] as String? ?? 'draft'),
+                          ]),
                           subtitle: Text(r['suppliers']?['name'] as String? ?? 'Cash Supplier',
                               style: const TextStyle(fontSize: 11)),
                           trailing: Text(
@@ -933,6 +993,25 @@ class _PrnFilterTab extends StatelessWidget {
         decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)),
         child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
       ),
+    );
+  }
+}
+
+class _PrnStatusBadge extends StatelessWidget {
+  final String status;
+  const _PrnStatusBadge(this.status);
+  @override
+  Widget build(BuildContext context) {
+    Color bg, fg; String label;
+    switch (status) {
+      case 'saved':    bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success; label = 'Saved'; break;
+      case 'invoiced': bg = Colors.purple.withOpacity(0.12);    fg = Colors.purple;    label = 'Invoiced'; break;
+      default:         bg = Colors.orange.withOpacity(0.12);    fg = Colors.orange;    label = 'Draft';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }

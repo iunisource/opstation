@@ -194,8 +194,20 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         'created_by': userId,
       });
 
+      // Prefill price from each product's cost_price (still editable before Issue).
+      final pids = <String>{ for (final si in srnItems) si['product_id'] as String };
+      final Map<String, double> costMap = {};
+      if (pids.isNotEmpty) {
+        final prods = await Supabase.instance.client.from('products').select('id,cost_price').inFilter('id', pids.toList());
+        for (final p in (prods as List)) { costMap[p['id'] as String] = (p['cost_price'] as num?)?.toDouble() ?? 0; }
+      }
+      double seedSubtotal = 0;
       for (final si in srnItems) {
         final pid = si['product_id'] as String;
+        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
+        final price = costMap[pid] ?? 0;
+        final lt = qty * price;
+        seedSubtotal += lt;
         await Supabase.instance.client.from('purchase_return_invoice_items').insert({
           'id': 'prvi_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'voucher_id': invId,
@@ -203,14 +215,20 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
           'product_id': pid,
           'uom_id': si['uom_id'],
           'quantity': si['quantity'],
-          'unit_price': 0,
+          'unit_price': price,
           'discount': 0,
-          'line_total': 0,
+          'line_total': lt,
         });
+      }
+      if (seedSubtotal > 0) {
+        await Supabase.instance.client.from('purchase_return_invoices').update({
+          'subtotal': seedSubtotal, 'discount_total': 0, 'grand_total': seedSubtotal,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', invId);
       }
 
       await _logAudit(invId, 'created', 'Draft PRI from PRN ${prn['voucher_number']}');
-      _showSnack('$voucherNum created — set prices below, then issue to move stock');
+      _showSnack('$voucherNum created — set prices below, then issue to post to the ledger');
       await _loadList();
       _loadDetail(invId);
     } catch (e) {
@@ -468,7 +486,6 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                     itemBuilder: (_, i) {
                       final r = filtered[i];
                       final selected = r['id'] == _selectedId;
-                      final isDraft = (r['status'] as String? ?? '') == 'draft';
                       return ListTile(
                         dense: true,
                         selected: selected,
@@ -476,10 +493,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                         title: Row(children: [
                           Expanded(child: Text(r['voucher_number'] as String? ?? '-',
                               style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null))),
-                          if (isDraft)
-                            Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
-                                child: const Text('draft', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w600))),
+                          _PriStatusBadge(r['status'] as String? ?? 'draft'),
                         ]),
                         subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                           Text(r['suppliers']?['name'] as String? ?? 'Cash Supplier', style: const TextStyle(fontSize: 11)),
@@ -840,6 +854,24 @@ class _FilterTab extends StatelessWidget {
         child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
             color: active ? Colors.white : AppTheme.textSecondary)),
       ),
+    );
+  }
+}
+
+class _PriStatusBadge extends StatelessWidget {
+  final String status;
+  const _PriStatusBadge(this.status);
+  @override
+  Widget build(BuildContext context) {
+    Color bg, fg; String label;
+    switch (status) {
+      case 'issued': bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success; label = 'Issued'; break;
+      default:       bg = Colors.orange.withOpacity(0.12);    fg = Colors.orange;    label = 'Draft';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+      child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }
