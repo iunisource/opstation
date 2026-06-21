@@ -102,7 +102,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     try {
       final grns = await Supabase.instance.client.from('purchase_grns')
           .select('id,voucher_number,voucher_date,supplier_id,po_id,suppliers(name),purchase_orders(voucher_number)')
-          .eq('org_id', orgId).eq('branch_id', branchId).eq('status', 'saved').eq('is_locked', true)
+          .eq('org_id', orgId).eq('branch_id', branchId).inFilter('status', ['received', 'partially_received', 'saved']).eq('is_locked', true)
           .order('voucher_date', ascending: false);
       if ((grns as List).isEmpty) { _showSnack('No confirmed GRNs available. Confirm a GRN first.'); return; }
       final picked = await showDialog<Map<String, dynamic>?>(context: context,
@@ -133,13 +133,31 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         'subtotal': 0, 'discount_total': 0, 'grand_total': 0,
         'is_locked': false, 'created_by': ref.read(currentUserProvider)?.id,
       });
+      // Prefill unit cost from each product's cost_price (still editable before save/lock)
+      final pids = <String>{ for (final it in grnItems) it['product_id'] as String };
+      final Map<String, double> costMap = {};
+      if (pids.isNotEmpty) {
+        final prods = await Supabase.instance.client.from('products').select('id,cost_price').inFilter('id', pids.toList());
+        for (final p in (prods as List)) { costMap[p['id'] as String] = (p['cost_price'] as num?)?.toDouble() ?? 0; }
+      }
+      double seedSubtotal = 0;
       for (final item in grnItems) {
         final pid = item['product_id'] as String;
+        final qty = (item['qty_received'] as num?)?.toDouble() ?? 0;
+        final cost = costMap[pid] ?? 0;
+        final lt = qty * cost; // no discount at creation
+        seedSubtotal += lt;
         await Supabase.instance.client.from('purchase_invoice_items').insert({
           'id': 'pii_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
           'invoice_id': piId, 'product_id': pid, 'uom_id': item['uom_id'],
-          'qty_received': item['qty_received'], 'unit_cost': 0, 'discount': 0, 'line_total': 0,
+          'qty_received': item['qty_received'], 'unit_cost': cost, 'discount': 0, 'line_total': lt,
         });
+      }
+      if (seedSubtotal > 0) {
+        await Supabase.instance.client.from('purchase_invoices').update({
+          'subtotal': seedSubtotal, 'discount_total': 0, 'grand_total': seedSubtotal,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', piId);
       }
       await _logAudit(piId, 'created', 'PI $vNum from GRN ${grn['voucher_number']}');
       _showSnack('$vNum created — enter costs then save');
@@ -150,15 +168,22 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   Future<void> _saveItemCost(String itemId) async {
     final cost = double.tryParse(_costCtrl[itemId]?.text ?? '') ?? 0;
     final disc = (double.tryParse(_discCtrl[itemId]?.text ?? '') ?? 0).clamp(0.0, 100.0);
-    final qty = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => {})['qty_received'] as num?)?.toDouble() ?? 0;
+    final idx = _items.indexWhere((i) => i['id'] == itemId);
+    final row = idx >= 0 ? _items[idx] : <String, dynamic>{};
+    final oldCost = (row['unit_cost'] as num?)?.toDouble() ?? 0;
+    final oldDisc = (row['discount'] as num?)?.toDouble() ?? 0;
+    final qty = (row['qty_received'] as num?)?.toDouble() ?? 0;
     final lt = qty * cost * (1 - disc / 100);
     try {
       await Supabase.instance.client.from('purchase_invoice_items').update({'unit_cost': cost, 'discount': disc, 'line_total': lt}).eq('id', itemId);
       setState(() {
-        final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) { _items[idx]['unit_cost'] = cost; _items[idx]['discount'] = disc; _items[idx]['line_total'] = lt; }
       });
       await _recalcTotals();
+      if (cost != oldCost || disc != oldDisc) {
+        final pname = (row['products']?['name'] as String?) ?? 'item';
+        await _logAudit(_detail['id'] as String, 'edited', '$pname cost: ${oldCost.toStringAsFixed(2)} -> ${cost.toStringAsFixed(2)}, disc: ${oldDisc.toStringAsFixed(0)}% -> ${disc.toStringAsFixed(0)}%');
+      }
     } catch (e) { _showSnack('Save error: $e'); }
   }
 
@@ -233,14 +258,24 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     if (!_canDelete) return;
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete Purchase Invoice?'),
-      content: Text('Delete ${_detail['voucher_number']}? The GRN will be restored to saved.'),
+      content: Text('Delete ${_detail['voucher_number']}? The GRN will be restored to its received state.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete'))],
     ));
     if (ok != true) return;
     try {
       final grnId = _detail['grn_id'] as String?;
-      if (grnId != null) { await Supabase.instance.client.from('purchase_grns').update({'status': 'saved', 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', grnId); }
+      if (grnId != null) {
+        // Recompute the GRN's received status (full vs partial) when un-invoicing it.
+        final gItems = await Supabase.instance.client.from('purchase_grn_items').select('qty_ordered,qty_received').eq('grn_id', grnId);
+        bool partial = false;
+        for (final gi in (gItems as List)) {
+          final ord = (gi['qty_ordered'] as num?)?.toDouble() ?? 0;
+          final rcv = (gi['qty_received'] as num?)?.toDouble() ?? 0;
+          if (rcv < ord) { partial = true; break; }
+        }
+        await Supabase.instance.client.from('purchase_grns').update({'status': partial ? 'partially_received' : 'received', 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', grnId);
+      }
       await _logAudit(_detail['id'] as String, 'deleted', 'PI ${_detail['voucher_number']} deleted');
       await Supabase.instance.client.from('purchase_invoice_items').delete().eq('invoice_id', _detail['id']);
       await Supabase.instance.client.from('purchase_invoices').delete().eq('id', _detail['id']);
@@ -292,7 +327,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     final filtered = _invoices.where((r) {
       final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) || ((r['purchase_grns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
       final locked = r['is_locked'] as bool? ?? false;
-      final matchFilter = _filter == 'all' || (_filter == 'draft' && !locked) || (_filter == 'saved' && locked);
+      final matchFilter = _filter == 'all' || (_filter == 'draft' && !locked) || (_filter == 'invoiced' && locked);
       return matchSearch && matchFilter;
     }).toList();
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
@@ -309,7 +344,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         const SizedBox(width: 6),
         _PiFilterTab(label: 'Draft', value: 'draft', current: _filter, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
-        _PiFilterTab(label: 'Saved', value: 'saved', current: _filter, onTap: (v) => setState(() => _filter = v)),
+        _PiFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
       ])),
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
@@ -323,7 +358,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
                     Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null))),
                     Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(color: locked ? AppTheme.success.withOpacity(0.12) : Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                      child: Text(locked ? 'saved' : 'draft', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: locked ? AppTheme.success : Colors.orange))),
+                      child: Text(locked ? 'Invoiced' : 'Draft', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: locked ? AppTheme.success : Colors.orange))),
                   ]),
                   subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                     Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
@@ -362,7 +397,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
           _PiChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           if (_detail['purchase_grns']?['voucher_number'] != null) _PiChip(label: 'GRN #', value: _detail['purchase_grns']['voucher_number'] as String),
           if (_detail['purchase_orders']?['voucher_number'] != null) _PiChip(label: 'PO #', value: _detail['purchase_orders']['voucher_number'] as String),
-          _PiChip(label: 'Status', value: _isLocked ? 'saved' : 'draft'),
+          _PiChip(label: 'Status', value: _isLocked ? 'Invoiced' : 'Draft'),
           if (_isLocked) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
         ]),
         if (sup != null) _PiInfoStrip(address: sup['address'] as String?, contact: sup['contact_person'] as String?, phone: (sup['contact_number'] ?? sup['phone']) as String?, ntn: sup['ntn'] as String?, preparedBy: _meta.preparedBy),
@@ -495,7 +530,7 @@ class _PiAuditTrail extends StatelessWidget {
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)), const SizedBox(height: 8),
-            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'saved': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
+            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'saved': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
           ]));
       });
   }

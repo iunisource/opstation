@@ -29,9 +29,22 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
+  String _statusFilter = 'all';
 
   @override
   void initState() { super.initState(); _loadList(); }
+
+  // Pretty label for a GRN status string (handles legacy 'saved').
+  String _prettyStatus(String? s) {
+    switch (s) {
+      case 'received': return 'Received';
+      case 'partially_received': return 'Partially Received';
+      case 'invoiced': return 'Invoiced';
+      case 'saved': return 'Received';
+      case 'draft': return 'Draft';
+      default: return s ?? 'Draft';
+    }
+  }
   @override
   void dispose() { for (final c in _receivedCtrl.values) c.dispose(); super.dispose(); }
 
@@ -180,12 +193,16 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
 
   Future<void> _saveReceivedQty(String itemId) async {
     final qty = double.tryParse(_receivedCtrl[itemId]?.text ?? '') ?? 0;
+    final idx = _items.indexWhere((i) => i['id'] == itemId);
+    final old = idx >= 0 ? ((_items[idx]['qty_received'] as num?)?.toDouble() ?? 0) : 0.0;
+    if (idx >= 0 && old == qty) return; // no change — skip write + log
     try {
       await Supabase.instance.client.from('purchase_grn_items').update({'qty_received': qty}).eq('id', itemId);
+      final pname = idx >= 0 ? (_items[idx]['products']?['name'] as String? ?? 'item') : 'item';
       setState(() {
-        final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) _items[idx]['qty_received'] = qty;
       });
+      await _logAudit(_detail['id'] as String, 'edited', '$pname received qty: ${old.toStringAsFixed(2)} -> ${qty.toStringAsFixed(2)}');
     } catch (e) { _showSnack('Failed to save: $e'); }
   }
 
@@ -257,13 +274,21 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', poId);
       }
+      // Determine receipt completeness: full vs short against ordered qty
+      bool grnPartial = false;
+      for (final it in _items) {
+        final ord = (it['qty_ordered'] as num?)?.toDouble() ?? 0;
+        final rcv = (it['qty_received'] as num?)?.toDouble() ?? 0;
+        if (rcv < ord) { grnPartial = true; break; }
+      }
+      final newStatus = grnPartial ? 'partially_received' : 'received';
       // Lock GRN
       await Supabase.instance.client.from('purchase_grns').update({
-        'status': 'saved', 'is_locked': true,
+        'status': newStatus, 'is_locked': true,
         'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', grnId);
-      await _logAudit(grnId, 'confirmed', 'GRN confirmed, stock received');
+      await _logAudit(grnId, 'confirmed', 'Receipt confirmed (${newStatus.replaceAll('_', ' ')}), stock added to inventory');
       _showSnack('Receipt confirmed — stock added to inventory');
       _loadDetail(grnId); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -378,7 +403,13 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
 
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
-    final filtered = _grns.where((r) => q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) || ((r['purchase_orders']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q)).toList();
+    final filtered = _grns.where((r) {
+      final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) || ((r['purchase_orders']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final st = r['status'] as String? ?? 'draft';
+      final stNorm = st == 'saved' ? 'received' : st; // fold legacy 'saved'
+      final matchStatus = _statusFilter == 'all' || stNorm == _statusFilter;
+      return matchSearch && matchStatus;
+    }).toList();
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
       Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 12), child: Row(children: [
         const Expanded(child: Text('Goods Receipt Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
@@ -387,6 +418,14 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: TextField(
         decoration: const InputDecoration(hintText: 'Search GRN / supplier / PO#…', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
         onChanged: (v) => setState(() => _search = v))),
+      const SizedBox(height: 8),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Wrap(spacing: 6, runSpacing: 6, children: [
+        _GrnFilterTab(label: 'All', value: 'all', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Draft', value: 'draft', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Received', value: 'received', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Partial', value: 'partially_received', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Invoiced', value: 'invoiced', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
+      ])),
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
           : filtered.isEmpty ? const Center(child: Text('No GRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
@@ -437,7 +476,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           _GrnChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
           _GrnChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           if (poVoucher != null) _GrnChip(label: 'PO #', value: poVoucher),
-          _GrnChip(label: 'Status', value: _detail['status'] as String? ?? 'draft'),
+          _GrnChip(label: 'Status', value: _prettyStatus(_detail['status'] as String?)),
           if (_isLocked) const _GrnLockedChip(),
         ]),
         if (_isDraft && !_isLocked) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -515,7 +554,8 @@ class _PoPickerDialogState extends State<_PoPickerDialog> {
 
 class _GrnChip extends StatelessWidget { final String label, value; const _GrnChip({required this.label, required this.value}); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)), child: Row(mainAxisSize: MainAxisSize.min, children: [Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)), Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))])); }
 class _GrnLockedChip extends StatelessWidget { const _GrnLockedChip(); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])); }
-class _GrnBadge extends StatelessWidget { final String status; final bool locked; const _GrnBadge({required this.status, required this.locked}); @override Widget build(BuildContext context) { Color bg; Color fg; switch (status) { case 'saved': bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success; break; case 'invoiced': bg = Colors.purple.withOpacity(0.12); fg = Colors.purple; break; default: bg = Colors.orange.withOpacity(0.12); fg = Colors.orange; } return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)), child: Text(status, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg))); } }
+class _GrnBadge extends StatelessWidget { final String status; final bool locked; const _GrnBadge({required this.status, required this.locked}); @override Widget build(BuildContext context) { Color bg; Color fg; String label; switch (status) { case 'received': case 'saved': bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success; label = 'Received'; break; case 'partially_received': bg = AppTheme.warning.withOpacity(0.14); fg = AppTheme.warning; label = 'Partial'; break; case 'invoiced': bg = Colors.purple.withOpacity(0.12); fg = Colors.purple; label = 'Invoiced'; break; default: bg = Colors.orange.withOpacity(0.12); fg = Colors.orange; label = 'Draft'; } return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)), child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg))); } }
+class _GrnFilterTab extends StatelessWidget { final String label, value, current; final ValueChanged<String> onTap; const _GrnFilterTab({required this.label, required this.value, required this.current, required this.onTap}); @override Widget build(BuildContext context) { final active = value == current; return GestureDetector(onTap: () => onTap(value), child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)), child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)))); } }
 
 class _GrnAuditTrail extends StatelessWidget {
   final String voucherId; const _GrnAuditTrail({required this.voucherId});
@@ -529,7 +569,7 @@ class _GrnAuditTrail extends StatelessWidget {
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)), const SizedBox(height: 8),
-            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
+            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
           ]));
       });
   }
