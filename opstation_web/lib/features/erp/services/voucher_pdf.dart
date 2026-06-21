@@ -111,7 +111,8 @@ class VoucherPdf {
     final doc = pw.Document();
     final showTotals = subtotal != null || discountTotal != null || grandTotal != null;
     final hasMoney = lines.any((l) => l.unitPrice != null || l.lineTotal != null);
-    final isPurchase = voucherTypeLabel.toLowerCase().contains('purchase') || voucherTypeLabel.toLowerCase().contains('grn');
+    final _lbl = voucherTypeLabel.toLowerCase();
+    final isPurchase = _lbl.contains('purchase') || _lbl.contains('grn') || _lbl.contains('goods receipt') || _lbl.contains('receipt note');
 
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,

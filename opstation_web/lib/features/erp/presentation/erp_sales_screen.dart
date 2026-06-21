@@ -154,9 +154,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       bool hasDo = false;
       List<String> doRefs = [];
       try {
-        final d = await client.from('delivery_orders').select('voucher_number').eq('so_id', id);
-        doRefs = [for (final x in d as List) (x['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
-        hasDo = (d as List).isNotEmpty;
+        final d = await client.from('delivery_orders').select('voucher_number, is_voided').eq('so_id', id);
+        final active = (d as List).where((x) => x['is_voided'] != true).toList();
+        doRefs = [for (final x in active) (x['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
+        hasDo = active.isNotEmpty;
       } catch (_) {}
       setState(() {
         _detail = Map<String,dynamic>.from(order);
@@ -194,11 +195,12 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   Future<void> _deleteSO() async {
     // Cascade check: no DO should exist for this SO
     try {
-      final dos = await Supabase.instance.client.from('delivery_orders').select('id, voucher_number').eq('so_id', _detail['id']);
-      if ((dos as List).isNotEmpty) {
-        final refs = [for (final d in dos) (d['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
+      final dos = await Supabase.instance.client.from('delivery_orders').select('id, voucher_number, is_voided').eq('so_id', _detail['id']);
+      final active = (dos as List).where((d) => d['is_voided'] != true).toList();
+      if (active.isNotEmpty) {
+        final refs = [for (final d in active) (d['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
         _showSnack(refs.isEmpty
-            ? 'Cannot delete: ${dos.length} Delivery Order(s) exist. Delete them first.'
+            ? 'Cannot delete: ${active.length} Delivery Order(s) exist. Delete them first.'
             : 'Cannot delete: Delivery Order ${refs.join(', ')} exists. Delete it first.');
         return;
       }
