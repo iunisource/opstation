@@ -222,8 +222,6 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final inventoryItems = <Widget>[
       if (modules.contains('inventory')) ...[
         if (show('/erp/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/erp/products', location),
-        if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
-        if (show('/erp/uoms')) _menuItem(context, 'Units of Measure', Icons.straighten_outlined, '/erp/uoms', location),
         if (show('/erp/stock')) _menuItem(context, 'Stock Levels', Icons.stacked_bar_chart_outlined, '/erp/stock', location),
         if (show('/erp/low-stock-report')) _menuItem(context, 'Low Stock Report', Icons.warning_amber_outlined, '/erp/low-stock-report', location),
         if (show('/erp/stock-value-report')) _menuItem(context, 'Stock Value Report', Icons.payments_outlined, '/erp/stock-value-report', location),
@@ -353,7 +351,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     List<Widget> splitErpMenus() => [
       if (_hasItems(inventoryItems))
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
-          ['/erp/products', '/erp/branches', '/erp/uoms', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
+          ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger'],
           _trimDividers(inventoryItems)),
       if (_hasItems(purchaseItems))
@@ -393,9 +391,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-        ['/erp/onboarding', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
+        ['/erp/onboarding', '/erp/branches', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
           _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
+          if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
           if (_hasItems(erpAdminItems)) _menuDivider(),
           ..._trimDividers(erpAdminItems),
         ]),
@@ -429,7 +428,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
               _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
               if (user?.role == WebUserRole.masterAdmin)
-                _menuItem(context, 'Settings', Icons.settings_outlined, '/settings', location),
+                _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
             ],
           ),
           _navMenu(context, 'CRM', Icons.contacts_outlined, location,
