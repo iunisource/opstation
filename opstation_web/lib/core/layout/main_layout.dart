@@ -437,10 +437,17 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
             ],
           ),
-          if (show('/assets'))
-            _navButton(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
-          if (show('/facility'))
-            _navButton(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
+          if (show('/assets') || show('/facility'))
+            _navMenu(context, 'Management', Icons.domain_outlined, location,
+              ['/assets', '/facility'],
+              [
+                if (show('/assets'))
+                  _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
+                if (show('/facility'))
+                  _menuItem(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
+              ],
+              badge: assetsDue + facilityDue,
+            ),
           ...splitErpMenus(),
         ],
 
@@ -805,46 +812,49 @@ Widget _navMenu(
     ),
     menuChildren: items,
     builder: (ctx, controller, _) {
-      return InkWell(
-        onTap: () => controller.isOpen ? controller.close() : controller.open(),
-        borderRadius: BorderRadius.circular(6),
-        hoverColor: Colors.white10,
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: isActive
-              ? BoxDecoration(color: AppTheme.primary.withOpacity(0.3), borderRadius: BorderRadius.circular(6))
-              : null,
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 14, color: isActive ? Colors.white : AppTheme.sidebarText),
-            const SizedBox(width: 5),
-            Text(label, style: TextStyle(
-              color: isActive ? Colors.white : AppTheme.sidebarText,
-              fontSize: 13,
-              fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-            )),
-            if (badge > 0) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(
-                  color: AppTheme.danger,
-                  borderRadius: BorderRadius.circular(8),
+      return MouseRegion(
+        onEnter: (_) { if (!controller.isOpen) controller.open(); },
+        child: InkWell(
+          onTap: () => controller.isOpen ? controller.close() : controller.open(),
+          borderRadius: BorderRadius.circular(6),
+          hoverColor: Colors.white10,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: isActive
+                ? BoxDecoration(color: AppTheme.primary.withOpacity(0.3), borderRadius: BorderRadius.circular(6))
+                : null,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 14, color: isActive ? Colors.white : AppTheme.sidebarText),
+              const SizedBox(width: 5),
+              Text(label, style: TextStyle(
+                color: isActive ? Colors.white : AppTheme.sidebarText,
+                fontSize: 13,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+              )),
+              if (badge > 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: AppTheme.danger,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(badge > 99 ? '99+' : '$badge',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700)),
                 ),
-                child: Text(badge > 99 ? '99+' : '$badge',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700)),
+              ],
+              const SizedBox(width: 3),
+              Icon(
+                controller.isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                size: 13,
+                color: isActive ? Colors.white70 : AppTheme.sidebarText,
               ),
-            ],
-            const SizedBox(width: 3),
-            Icon(
-              controller.isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-              size: 13,
-              color: isActive ? Colors.white70 : AppTheme.sidebarText,
-            ),
-          ]),
+            ]),
+          ),
         ),
       );
     },
