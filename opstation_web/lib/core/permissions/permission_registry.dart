@@ -54,6 +54,7 @@ const List<PermModule> kPermissionRegistry = [
   ]),
   PermModule('purchase', 'Purchase', Icons.shopping_cart_outlined, [
     PermItem('purchase_dashboard', 'Purchase Dashboard', PermKind.report, '/erp/purchase-dashboard'),
+    PermItem('purchase_report', 'Purchase Report', PermKind.report, '/erp/purchase-report'),
     PermItem('suppliers', 'Suppliers', PermKind.doc, '/erp/suppliers'),
     PermItem('po', 'Purchase Orders', PermKind.doc, '/erp/purchase'),
     PermItem('grn', 'GRN', PermKind.doc, '/erp/grn'),

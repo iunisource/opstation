@@ -78,6 +78,7 @@ import '../../features/erp/presentation/erp_promoter_ledger_screen.dart';
 import '../../features/erp/presentation/erp_chart_of_accounts_screen.dart';
 import '../../features/erp/presentation/erp_chart_of_accounts_screen.dart';
 import '../../features/erp/presentation/erp_suppliers_screen.dart';
+import '../../features/erp/presentation/erp_purchase_report_screen.dart';
 import '../../features/erp/presentation/erp_product_classifications_screen.dart';
 import '../../features/erp/presentation/erp_users_screen.dart';
 import '../../features/erp/presentation/erp_admin_settings_screen.dart';
@@ -292,6 +293,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/sales-report', builder: (_, __) => const ErpSalesReportScreen()),
           GoRoute(path: '/erp/sales-dashboard', builder: (_, __) => const ErpSalesDashboardScreen()),
           GoRoute(path: '/erp/purchase-dashboard', builder: (_, __) => const ErpPurchaseDashboardScreen()),
+          GoRoute(path: '/erp/purchase-report', builder: (_, __) => const ErpPurchaseReportScreen()),
           GoRoute(path: '/erp/sales-returns', builder: (_, __) => const ErpSalesReturnsScreen()),
           GoRoute(path: '/erp/purchase-returns', builder: (_, __) => const ErpPurchaseReturnsScreen()),
           GoRoute(path: '/erp/sales-return-invoices', builder: (_, __) => const ErpSalesReturnInvoicesScreen()),
