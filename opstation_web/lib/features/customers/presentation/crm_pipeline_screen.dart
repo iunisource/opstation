@@ -40,6 +40,9 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
+  bool get _canEditStages =>
+      ref.read(currentUserProvider)?.role == WebUserRole.masterAdmin;
+
   @override
   void initState() {
     super.initState();
@@ -175,6 +178,76 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
         'closed_at': (won || lost) ? nowIso : null,
         'updated_at': nowIso,
       }).eq('id', opp['id']);
+    } catch (_) {
+      _load(); // resync on failure
+    }
+  }
+
+  // ── Stage admin (master admin only): rename + reorder ──────────────────
+  // Renaming changes only the display `label`; the stable `key` (which every
+  // opportunity references via crm_opportunities.stage) is never touched, so
+  // no card is ever stranded. Reordering swaps the `position` of two stages.
+  Future<void> _renameStage(Map<String, dynamic> stage) async {
+    final ctrl = TextEditingController(text: (stage['label'] as String?) ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename stage'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Stage name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+    final newLabel = result?.trim();
+    if (newLabel == null || newLabel.isEmpty || newLabel == stage['label']) {
+      return;
+    }
+    setState(() => stage['label'] = newLabel); // optimistic; key untouched
+    try {
+      await Supabase.instance.client
+          .from('crm_pipeline_stages')
+          .update({'label': newLabel}).eq('id', stage['id']);
+    } catch (_) {
+      _load(); // resync on failure
+    }
+  }
+
+  Future<void> _moveStage(Map<String, dynamic> stage, int delta) async {
+    final i = _stages.indexWhere((s) => s['id'] == stage['id']);
+    final j = i + delta;
+    if (i < 0 || j < 0 || j >= _stages.length) return;
+    final a = _stages[i];
+    final b = _stages[j];
+    final pa = a['position'] as int;
+    final pb = b['position'] as int;
+
+    // Optimistic swap, then persist both positions.
+    setState(() {
+      a['position'] = pb;
+      b['position'] = pa;
+      _stages.sort((x, y) =>
+          (x['position'] as int).compareTo(y['position'] as int));
+    });
+
+    try {
+      final client = Supabase.instance.client;
+      await client
+          .from('crm_pipeline_stages')
+          .update({'position': pb}).eq('id', a['id']);
+      await client
+          .from('crm_pipeline_stages')
+          .update({'position': pa}).eq('id', b['id']);
     } catch (_) {
       _load(); // resync on failure
     }
@@ -632,6 +705,59 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
     );
   }
 
+  Widget _stageMenu(Map<String, dynamic> stage) {
+    final idx = _stages.indexWhere((s) => s['id'] == stage['id']);
+    final isFirst = idx <= 0;
+    final isLast = idx >= _stages.length - 1;
+    return SizedBox(
+      width: 26,
+      height: 26,
+      child: PopupMenuButton<String>(
+        padding: EdgeInsets.zero,
+        tooltip: 'Stage options',
+        icon: const Icon(Icons.more_vert,
+            size: 16, color: AppTheme.textSecondary),
+        onSelected: (v) {
+          if (v == 'rename') {
+            _renameStage(stage);
+          } else if (v == 'left') {
+            _moveStage(stage, -1);
+          } else if (v == 'right') {
+            _moveStage(stage, 1);
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(
+            value: 'rename',
+            child: Row(children: [
+              Icon(Icons.edit_outlined, size: 16),
+              SizedBox(width: 8),
+              Text('Rename'),
+            ]),
+          ),
+          PopupMenuItem(
+            value: 'left',
+            enabled: !isFirst,
+            child: const Row(children: [
+              Icon(Icons.arrow_back, size: 16),
+              SizedBox(width: 8),
+              Text('Move left'),
+            ]),
+          ),
+          PopupMenuItem(
+            value: 'right',
+            enabled: !isLast,
+            child: const Row(children: [
+              Icon(Icons.arrow_forward, size: 16),
+              SizedBox(width: 8),
+              Text('Move right'),
+            ]),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _column(Map<String, dynamic> stage) {
     final key = stage['key'] as String;
     final cards =
@@ -690,6 +816,10 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
                         style: const TextStyle(
                             fontSize: 11, fontWeight: FontWeight.w700)),
                   ),
+                  if (_canEditStages) ...[
+                    const SizedBox(width: 4),
+                    _stageMenu(stage),
+                  ],
                 ]),
               ),
               if (total > 0)
