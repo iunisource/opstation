@@ -514,7 +514,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         Expanded(flex: 2, child: Text('Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
       ])),
       ...lines.map((line) {
-        final qty = ((line['quantity']) as num?)?.toDouble() ?? 0;
+        final qty = ((line['quantity'] ?? line['qty'] ?? line['qty_delivered'] ?? line['qty_received']) as num?)?.toDouble() ?? 0;
         final price = ((line['unit_price'] ?? line['price']) as num?)?.toDouble() ?? 0;
         final lineTotal = ((line['line_total'] ?? line['total'] ?? line['amount']) as num?)?.toDouble() ?? (qty * price);
         final prod = line['products'];
