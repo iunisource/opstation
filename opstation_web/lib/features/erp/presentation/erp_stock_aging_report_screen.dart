@@ -19,6 +19,7 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
   List<Map<String, dynamic>> _branches = [];
   String? _branchId; // null = all branches
   DateTime _asOf = DateTime.now();
+  bool _hideZero = false;
 
   @override
   void initState() {
@@ -60,6 +61,9 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
   String _fmtDisplay(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
+  List<Map<String, dynamic>> get _list =>
+      _hideZero ? _rows.where((r) => _num(r, 'on_hand') != 0).toList() : _rows;
+
   String get _branchName => _branchId == null
       ? 'All Branches'
       : ((_branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String?) ?? '-');
@@ -73,7 +77,7 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
   }
 
   void _print() {
-    final list = _rows;
+    final list = _list;
     final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
     final now = DateTime.now();
     final gen = '${_fmtDisplay(now)} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
@@ -126,7 +130,7 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
 
   @override
   Widget build(BuildContext context) {
-    final list = _rows;
+    final list = _list;
     return Container(
       color: AppTheme.background,
       padding: const EdgeInsets.all(32),
@@ -155,6 +159,11 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
             onPressed: _pickDate,
             icon: const Icon(Icons.calendar_today_outlined, size: 16),
             label: Text('As of ${_fmtDisplay(_asOf)}'),
+          ),
+          FilterChip(
+            label: const Text('Hide zero-stock'),
+            selected: _hideZero,
+            onSelected: (v) => setState(() => _hideZero = v),
           ),
         ]),
         const SizedBox(height: 16),

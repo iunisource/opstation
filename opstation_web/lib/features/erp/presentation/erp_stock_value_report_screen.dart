@@ -20,6 +20,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   String? _branchId;
   String? _fMain, _fGroup, _fClass, _fMov;
+  bool _hideZero = false;
 
   @override
   void initState() {
@@ -50,7 +51,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
       if (_branchId != null) {
         final products = await client.from('products')
             .select('id, name, sku, cost_price, selling_price, product_main_group, product_group, product_class, product_movement_category, uoms(abbreviation)')
-            .eq('org_id', orgId).eq('is_active', true);
+            .eq('org_id', orgId).eq('is_active', true).limit(5000);
         final byId = {for (final p in products as List) p['id'] as String: Map<String, dynamic>.from(p)};
 
         // Engine-costed unit costs from the cost layers (weighted-average of remaining
@@ -66,13 +67,14 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
 
         final stock = await client.from('inventory_stock')
             .select('product_id, quantity').eq('org_id', orgId).eq('branch_id', _branchId!);
+        final Map<String, double> stockMap = {};
         for (final s in stock as List) {
           final pid = s['product_id'] as String?;
-          if (pid == null) continue;
-          final p = byId[pid];
-          if (p == null) continue;
-          final qty = (s['quantity'] as num?)?.toDouble() ?? 0;
-          if (qty == 0) continue;                       // only on-hand stock
+          if (pid != null) stockMap[pid] = (s['quantity'] as num?)?.toDouble() ?? 0;
+        }
+        for (final p in byId.values) {
+          final pid = p['id'] as String;
+          final qty = stockMap[pid] ?? 0;               // 0 when no stock at branch
           // engine cost first; fall back to product cost_price when no remaining layers
           final cost = costMap[pid] ?? (p['cost_price'] as num?)?.toDouble() ?? 0;
           final sell = (p['selling_price'] as num?)?.toDouble() ?? 0;
@@ -105,6 +107,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
     if (_fGroup != null && r['group'] != _fGroup) return false;
     if (_fClass != null && r['class'] != _fClass) return false;
     if (_fMov != null && r['mov'] != _fMov) return false;
+    if (_hideZero && (r['qty'] as double) == 0) return false;
     return true;
   }).toList();
 
@@ -232,6 +235,11 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
           if (_fMain != null || _fGroup != null || _fClass != null || _fMov != null)
             TextButton.icon(onPressed: () => setState(() { _fMain = null; _fGroup = null; _fClass = null; _fMov = null; }),
                 icon: const Icon(Icons.clear, size: 16), label: const Text('Clear filters')),
+          FilterChip(
+            label: const Text('Hide zero-stock'),
+            selected: _hideZero,
+            onSelected: (v) => setState(() => _hideZero = v),
+          ),
         ]),
         const SizedBox(height: 12),
         Row(children: [

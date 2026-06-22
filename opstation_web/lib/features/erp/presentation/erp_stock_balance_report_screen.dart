@@ -17,9 +17,9 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
   bool _loading = true;
   List<Map<String, dynamic>> _rows = [];
   List<Map<String, dynamic>> _branches = [];
-  Map<String, String> _uoms = {};
-  String? _branchId;            // null = all branches
+  String? _branchId; // null = all branches
   DateTime _asOf = DateTime.now();
+  bool _hideZero = false;
 
   @override
   void initState() {
@@ -36,73 +36,58 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
     setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
-      final branches = await client.from('branches').select('id, name')
-          .eq('org_id', orgId).eq('is_active', true).order('name');
-      final branchList = List<Map<String, dynamic>>.from(branches);
-
-      // UOM labels — defensive about which label column the table uses.
-      final uoms = await client.from('uoms').select();
-      final uomMap = <String, String>{};
-      for (final u in (uoms as List)) {
-        final m = Map<String, dynamic>.from(u);
-        uomMap[m['id'] as String] =
-            (m['name'] ?? m['code'] ?? m['symbol'] ?? m['abbreviation'] ?? '').toString();
-      }
-
+      final branches = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
       final res = await client.rpc('rpc_stock_balance', params: {
         'p_org_id': orgId,
         'p_branch_id': _branchId,
-        'p_as_of': _asOf.toIso8601String().substring(0, 10),
+        'p_as_of': _fmtDate(_asOf),
       });
-      final rows = List<Map<String, dynamic>>.from(res as List);
-
       setState(() {
-        _branches = branchList;
-        _uoms = uomMap;
-        _rows = rows;
+        _branches = List<Map<String, dynamic>>.from(branches as List);
+        _rows = List<Map<String, dynamic>>.from(res as List);
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       setState(() => _loading = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load: $e')));
     }
   }
 
-  String _qty(num? v) {
-    final d = (v ?? 0).toDouble();
-    return d % 1 == 0 ? d.toInt().toString() : d.toStringAsFixed(2);
-  }
+  double _qty(Map<String, dynamic> r) => ((r['on_hand']) as num?)?.toDouble() ?? 0;
+  String _qtyStr(double v) => v % 1 == 0 ? v.toInt().toString() : v.toStringAsFixed(2);
 
-  String _uomFor(Map<String, dynamic> r) => _uoms[r['base_uom_id']] ?? '-';
+  String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  String _fmtDisplay(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  List<Map<String, dynamic>> get _list =>
+      _hideZero ? _rows.where((r) => _qty(r) != 0).toList() : _rows;
 
   String get _branchName => _branchId == null
       ? 'All Branches'
-      : (_branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String?) ?? '-';
-
-  String get _asOfStr =>
-      '${_asOf.day.toString().padLeft(2, '0')}/${_asOf.month.toString().padLeft(2, '0')}/${_asOf.year}';
+      : ((_branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String?) ?? '-');
 
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
-      context: context,
-      initialDate: _asOf,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
+      context: context, initialDate: _asOf,
+      firstDate: DateTime(2020), lastDate: DateTime.now(),
     );
     if (picked != null) { setState(() => _asOf = picked); _load(); }
   }
 
   void _print() {
-    final list = _rows;
+    final list = _list;
     final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
     final now = DateTime.now();
-    final dateStr = '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final gen = '${_fmtDisplay(now)} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     final body = list.map((r) {
       return '<tr>'
           '<td>${esc(r['product_name'])}</td>'
           '<td>${esc(r['sku'])}</td>'
-          '<td>${esc(_uomFor(r))}</td>'
-          '<td style="text-align:right">${_qty(r['on_hand'] as num?)}</td>'
+          '<td>${esc(r['uom'])}</td>'
+          '<td style="text-align:right">${_qtyStr(_qty(r))}</td>'
           '</tr>';
     }).join();
     final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Balance Report</title>'
@@ -115,8 +100,8 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
         'th{background:#f4f5f7}'
         '</style></head><body>'
         '<h1>$orgName &mdash; Stock Balance Report</h1>'
-        '<div class="muted">Branch: ${esc(_branchName)} &middot; As of: $_asOfStr</div>'
-        '<div class="muted">Generated: $dateStr &middot; ${list.length} item(s) on hand</div>'
+        '<div class="muted">Branch: ${esc(_branchName)} &middot; as of ${_fmtDisplay(_asOf)}${_hideZero ? ' &middot; on-hand only' : ''}</div>'
+        '<div class="muted">Generated: $gen &middot; ${list.length} item(s)</div>'
         '<table><thead><tr>'
         '<th>Product</th><th>SKU</th><th>UOM</th><th style="text-align:right">On Hand</th>'
         '</tr></thead><tbody>$body</tbody></table>'
@@ -130,7 +115,7 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
 
   @override
   Widget build(BuildContext context) {
-    final list = _rows;
+    final list = _list;
     return Container(
       color: AppTheme.background,
       padding: const EdgeInsets.all(32),
@@ -141,7 +126,7 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
           OutlinedButton.icon(onPressed: list.isEmpty ? null : _print, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
         ]),
         const SizedBox(height: 4),
-        Text('On-hand quantity per product as of the selected date. ${list.length} item${list.length == 1 ? '' : 's'}.',
+        Text('On-hand quantity as of ${_fmtDisplay(_asOf)}. ${list.length} item${list.length == 1 ? '' : 's'}.',
             style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -158,7 +143,12 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
           OutlinedButton.icon(
             onPressed: _pickDate,
             icon: const Icon(Icons.calendar_today_outlined, size: 16),
-            label: Text('As of: $_asOfStr'),
+            label: Text('As of ${_fmtDisplay(_asOf)}'),
+          ),
+          FilterChip(
+            label: const Text('Hide zero-stock'),
+            selected: _hideZero,
+            onSelected: (v) => setState(() => _hideZero = v),
           ),
         ]),
         const SizedBox(height: 16),
@@ -173,24 +163,25 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
                     child: const Row(children: [
                       Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('On Hand', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     ]),
                   ),
                   Expanded(child: list.isEmpty
-                      ? const Center(child: Text('No stock on hand for this branch / date.', style: TextStyle(color: AppTheme.textSecondary)))
+                      ? const Center(child: Text('No products to show.', style: TextStyle(color: AppTheme.textSecondary)))
                       : ListView.separated(
                           itemCount: list.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (_, i) {
                             final r = list[i];
+                            final q = _qty(r);
                             return Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
                               child: Row(children: [
                                 Expanded(flex: 4, child: Text(r['product_name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
                                 Expanded(flex: 2, child: Text(r['sku'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
-                                Expanded(flex: 2, child: Text(_uomFor(r), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
-                                Expanded(flex: 2, child: Text(_qty(r['on_hand'] as num?), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                                Expanded(flex: 1, child: Text(r['uom'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                                Expanded(flex: 2, child: Text(_qtyStr(q), textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: q == 0 ? AppTheme.textSecondary : AppTheme.textPrimary))),
                               ]),
                             );
                           },
