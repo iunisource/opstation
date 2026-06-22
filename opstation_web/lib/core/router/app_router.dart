@@ -63,6 +63,8 @@ import '../../features/erp/presentation/erp_payment_voucher_screen.dart';
 import '../../features/erp/presentation/erp_products_screen.dart';
 import '../../features/erp/presentation/erp_low_stock_report_screen.dart';
 import '../../features/erp/presentation/erp_stock_value_report_screen.dart';
+import '../../features/erp/presentation/erp_stock_balance_report_screen.dart';
+import '../../features/erp/presentation/erp_stock_aging_report_screen.dart';
 import '../../features/erp/presentation/erp_branches_screen.dart';
 import '../../features/erp/presentation/erp_uoms_screen.dart';
 import '../../features/erp/presentation/erp_stock_screen.dart';
@@ -238,6 +240,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/products',  builder: (_, __) => const ErpProductsScreen()),
           GoRoute(path: '/erp/low-stock-report', builder: (_, __) => const ErpLowStockReportScreen()),
           GoRoute(path: '/erp/stock-value-report', builder: (_, __) => const ErpStockValueReportScreen()),
+          GoRoute(path: '/erp/stock-balance-report', builder: (_, __) => const ErpStockBalanceReportScreen()),
+          GoRoute(path: '/erp/stock-aging-report', builder: (_, __) => const ErpStockAgingReportScreen()),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => const ErpProductClassificationsScreen()),
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
           GoRoute(path: '/erp/admin-settings', builder: (_, __) => const ErpAdminSettingsScreen()),
