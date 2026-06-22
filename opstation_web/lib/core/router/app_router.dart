@@ -12,6 +12,7 @@ import '../../features/erp/presentation/erp_production_inverse_voucher_screen.da
 import '../../features/erp/presentation/erp_damage_stock_voucher_screen.dart';
 import '../../features/erp/presentation/erp_claim_processing_voucher_screen.dart';
 import '../../features/erp/presentation/erp_production_waste_report_screen.dart';
+import '../../features/erp/presentation/erp_overheads_summary_screen.dart';
 import '../../features/erp/presentation/erp_job_card_screen.dart';
 import '../../features/erp/presentation/erp_qc_checkpoints_screen.dart';
 import '../../features/erp/presentation/erp_production_floor_screen.dart';
@@ -285,6 +286,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => const ErpDamageStockVoucherScreen()),
       GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => const ErpClaimProcessingVoucherScreen()),
       GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => const ErpProductionWasteReportScreen()),
+      GoRoute(path: '/manufacturing/overheads-summary', builder: (_, __) => const ErpOverheadsSummaryScreen()),
       GoRoute(path: '/hr/employees', builder: (_, __) => const HrEmployeesScreen()),
       GoRoute(path: '/hr/attendance', builder: (_, __) => const HrAttendanceScreen()),
       GoRoute(path: '/hr/leave', builder: (_, __) => const HrLeaveScreen()),

@@ -98,6 +98,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('damage_stock', 'Damage Stock Voucher', PermKind.doc, '/manufacturing/damage-stock-voucher'),
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
     PermItem('production_waste', 'Production Waste Report', PermKind.report, '/manufacturing/production-waste-report'),
+    PermItem('overheads_summary', 'Overheads Summary', PermKind.report, '/manufacturing/overheads-summary'),
   ]),
   PermModule('hr', 'HR', Icons.badge_outlined, [
     PermItem('hr_employees', 'Employee Directory', PermKind.doc, '/hr/employees'),
