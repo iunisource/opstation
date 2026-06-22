@@ -20,6 +20,8 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
   String? _branchId; // null = all branches
   DateTime _asOf = DateTime.now();
   bool _hideZero = false;
+  Map<String, List<Map<String, dynamic>>> _taxonomies = {};
+  String? _fMain, _fGroup, _fClass, _fMov;
 
   @override
   void initState() {
@@ -37,6 +39,12 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
     try {
       final client = Supabase.instance.client;
       final branches = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
+      final taxos = await client.from('product_taxonomies').select().eq('org_id', orgId).order('name');
+      final Map<String, List<Map<String, dynamic>>> grouped = {};
+      for (final t in (taxos as List)) {
+        final m = Map<String, dynamic>.from(t);
+        grouped.putIfAbsent(m['taxonomy_type'] as String, () => []).add(m);
+      }
       final res = await client.rpc('rpc_stock_balance', params: {
         'p_org_id': orgId,
         'p_branch_id': _branchId,
@@ -44,6 +52,7 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
       });
       setState(() {
         _branches = List<Map<String, dynamic>>.from(branches as List);
+        _taxonomies = grouped;
         _rows = List<Map<String, dynamic>>.from(res as List);
         _loading = false;
       });
@@ -61,8 +70,28 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
   String _fmtDisplay(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
-  List<Map<String, dynamic>> get _list =>
-      _hideZero ? _rows.where((r) => _qty(r) != 0).toList() : _rows;
+  List<Map<String, dynamic>> get _list => _rows.where((r) {
+        if (_hideZero && _qty(r) == 0) return false;
+        if (_fMain != null && r['product_main_group'] != _fMain) return false;
+        if (_fGroup != null && r['product_group'] != _fGroup) return false;
+        if (_fClass != null && r['product_class'] != _fClass) return false;
+        if (_fMov != null && r['product_movement_category'] != _fMov) return false;
+        return true;
+      }).toList();
+
+  Widget _filterDropdown(String label, String type, String? value, void Function(String?) onChanged) {
+    final items = _taxonomies[type] ?? [];
+    return SizedBox(width: 180, child: DropdownButtonFormField<String?>(
+      value: value,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: label, isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
+      items: [
+        const DropdownMenuItem<String?>(value: null, child: Text('All')),
+        ...items.map((t) => DropdownMenuItem<String?>(value: t['name'] as String, child: Text(t['name'] as String, overflow: TextOverflow.ellipsis))),
+      ],
+      onChanged: onChanged,
+    ));
+  }
 
   String get _branchName => _branchId == null
       ? 'All Branches'
@@ -145,6 +174,13 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
             icon: const Icon(Icons.calendar_today_outlined, size: 16),
             label: Text('As of ${_fmtDisplay(_asOf)}'),
           ),
+          _filterDropdown('Main Group', 'main_group', _fMain, (v) => setState(() => _fMain = v)),
+          _filterDropdown('Group', 'group', _fGroup, (v) => setState(() => _fGroup = v)),
+          _filterDropdown('Class', 'class', _fClass, (v) => setState(() => _fClass = v)),
+          _filterDropdown('Movement Category', 'movement_category', _fMov, (v) => setState(() => _fMov = v)),
+          if (_fMain != null || _fGroup != null || _fClass != null || _fMov != null)
+            TextButton.icon(onPressed: () => setState(() { _fMain = null; _fGroup = null; _fClass = null; _fMov = null; }),
+                icon: const Icon(Icons.clear, size: 16), label: const Text('Clear filters')),
           FilterChip(
             label: const Text('Hide zero-stock'),
             selected: _hideZero,
