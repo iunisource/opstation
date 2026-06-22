@@ -105,6 +105,7 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('financial_reporting', 'Financials', Icons.account_balance_outlined, [
     PermItem('chart_of_accounts', 'Chart of Accounts', PermKind.doc, '/erp/chart-of-accounts'),
     PermItem('jv', 'Journal Vouchers', PermKind.doc, '/financials/journal-vouchers'),
+    PermItem('opening_journal', 'Opening Journal', PermKind.doc, '/financials/opening-journal'),
     PermItem('cpv', 'Payment Vouchers', PermKind.doc, '/erp/payment-vouchers'),
     PermItem('crv', 'Receipt Vouchers', PermKind.doc, '/erp/receipt-vouchers'),
     PermItem('pdc', 'PDC Voucher', PermKind.doc, '/erp/pdc-voucher'),
