@@ -16,6 +16,13 @@ class AppTheme {
   static const danger = Color(0xFFEF4444);
   static const warning = Color(0xFFF59E0B);
 
+  // ── Motion tokens (shared timing + curves for animations) ──────────────
+  static const Duration motionFast = Duration(milliseconds: 120);
+  static const Duration motionBase = Duration(milliseconds: 220);
+  static const Duration motionSlow = Duration(milliseconds: 320);
+  static const Curve motionCurve = Curves.easeOutCubic;
+  static const Curve motionEmphasized = Cubic(0.2, 0.0, 0.0, 1.0);
+
   static ThemeData light() {
     return ThemeData(
       useMaterial3: true,

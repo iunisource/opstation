@@ -24,6 +24,7 @@ import '../../features/hr/presentation/hr_leave_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:animations/animations.dart';
 import '../../features/auth/auth_controller.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/dashboard/presentation/dashboard_screen.dart';
@@ -205,7 +206,17 @@ final webRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const RetailerPortalScreen(),
       ),
       ShellRoute(
-        builder: (context, state, child) => MainLayout(child: child),
+        builder: (context, state, child) => MainLayout(
+          child: PageTransitionSwitcher(
+            duration: const Duration(milliseconds: 220),
+            transitionBuilder: (w, primary, secondary) => FadeThroughTransition(
+              animation: primary,
+              secondaryAnimation: secondary,
+              child: w,
+            ),
+            child: KeyedSubtree(key: ValueKey(state.uri.path), child: child),
+          ),
+        ),
         routes: [
           GoRoute(path: '/dashboard', builder: (_, __) => const DashboardScreen()),
           GoRoute(path: '/team', builder: (_, __) => const TeamScreen()),

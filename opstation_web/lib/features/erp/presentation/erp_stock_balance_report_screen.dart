@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/skeleton_loader.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
@@ -189,7 +190,10 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
         ]),
         const SizedBox(height: 16),
         Expanded(child: _loading
-            ? const Center(child: CircularProgressIndicator())
+            ? Container(
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+                child: const TableSkeleton(),
+              )
             : Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
                 child: Column(children: [
