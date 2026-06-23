@@ -969,9 +969,19 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       if (pd is List && pd.isNotEmpty) {
         for (final tn in pd) {
           if (tn is! Map) continue;
-          final label = (tn['label'] as String?) ?? 'Other';
           final amt = (tn['amount'] as num?)?.toDouble() ?? 0;
-          if (amt != 0) out[label] = (out[label] ?? 0) + amt;
+          if (amt == 0) continue;
+          if (tn['is_credit'] == true) {
+            // positive = owed on account; negative = advance/credit to customer
+            if (amt > 0) {
+              out['Customer Account (owed)'] = (out['Customer Account (owed)'] ?? 0) + amt;
+            } else {
+              out['Customer Account (advance)'] = (out['Customer Account (advance)'] ?? 0) + (-amt);
+            }
+          } else {
+            final label = (tn['label'] as String?) ?? 'Other';
+            out[label] = (out[label] ?? 0) + amt;
+          }
         }
       } else {
         final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
@@ -981,7 +991,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         final pm = (t['payment_method'] as String?) ?? 'Cash';
         final label = pm.isEmpty ? 'Cash' : '${pm[0].toUpperCase()}${pm.substring(1)}';
         if (cashPortion != 0) out[label] = (out[label] ?? 0) + cashPortion;
-        if (credit > 0) out['Customer Account'] = (out['Customer Account'] ?? 0) + credit;
+        if (credit > 0) out['Customer Account (owed)'] = (out['Customer Account (owed)'] ?? 0) + credit;
       }
     }
     return out;
