@@ -140,8 +140,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
   Future<void> _addFilter(String field) async {
     final orgId = _orgId;
+    final isMeasure = _measures.any((m) => (m['field'] as String) == field);
     List<String> values = [];
-    if (orgId != null) {
+    if (orgId != null && !isMeasure) {
       try {
         final res = await Supabase.instance.client.rpc('rpc_report_distinct', params: {
           'p_org': orgId, 'p_source': _source, 'p_field': field,
@@ -162,7 +163,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     }
     if (!mounted) return;
     final existing = _filters[field];
-    String op = existing?.op ?? 'in';
+    String op = existing?.op ?? (isMeasure ? 'gt' : 'in');
     final selected = <String>{...?(existing != null && _opIsList(existing.op) ? existing.vals : null)};
     final v1Ctrl = TextEditingController(text: (existing != null && !_opIsList(existing.op) && existing.vals.isNotEmpty) ? existing.vals[0] : '');
     final v2Ctrl = TextEditingController(text: (existing != null && existing.op == 'between' && existing.vals.length > 1) ? existing.vals[1] : '');
@@ -275,6 +276,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   Future<void> _run() async {
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return; }
     final dims = [..._rows, ..._cols];
+    final measureFields = _measures.map((m) => m['field'] as String).toSet();
     if (dims.isEmpty && _values.isEmpty) { _snack('Add at least one field to Rows, Columns, or Values'); return; }
     setState(() { _running = true; _error = null; });
     try {
@@ -282,7 +284,8 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         'p_org': orgId, 'p_source': _source,
         'p_dims': dims, 'p_measures': _values,
         'p_filters': <String, dynamic>{},
-        'p_conditions': _filters.entries.map((e) => {'field': e.key, 'op': e.value.op, 'vals': e.value.vals}).toList(),
+        'p_conditions': _filters.entries.where((e) => !measureFields.contains(e.key)).map((e) => {'field': e.key, 'op': e.value.op, 'vals': e.value.vals}).toList(),
+        'p_having': _filters.entries.where((e) => measureFields.contains(e.key)).map((e) => {'measure': e.key, 'op': e.value.op, 'vals': e.value.vals}).toList(),
         'p_date_from': _dateFrom != null ? DateFormat('yyyy-MM-dd').format(_dateFrom!) : null,
         'p_date_to': _dateTo != null ? DateFormat('yyyy-MM-dd').format(_dateTo!) : null,
       });
@@ -508,6 +511,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     return Padding(padding: const EdgeInsets.symmetric(vertical: 1), child: Row(children: [
       Expanded(child: Text(label, style: TextStyle(fontSize: 12, color: used ? AppTheme.textSecondary : AppTheme.textPrimary))),
       _miniBtn('Σ', 'Add to Values', () => _assign(field, 'values')),
+      IconButton(icon: const Icon(Icons.filter_alt_outlined, size: 16), tooltip: 'Filter measure (after totals)', visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 26, minHeight: 26), onPressed: () => _addFilter(field)),
     ]));
   }
 
