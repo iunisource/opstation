@@ -19,12 +19,16 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
   final _ntnCtrl     = TextEditingController();
   final _contactCtrl = TextEditingController();
   String? _logoDataUri;
+  // Payment methods manager
+  List<Map<String, dynamic>> _methods = [];
+  List<Map<String, dynamic>> _coa = [];
+  bool _methodsLoading = true;
   bool _loading = true, _saving = false;
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   static const _keys = ['pos.company_name','pos.footer_note','pos.terms','pos.ntn','pos.contact','pos.logo'];
 
-  @override void initState() { super.initState(); _load(); }
+  @override void initState() { super.initState(); _load(); _loadMethods(); }
   @override void didChangeDependencies() { super.didChangeDependencies(); }
   @override void dispose() { _companyCtrl.dispose(); _footerCtrl.dispose(); _termsCtrl.dispose(); _ntnCtrl.dispose(); _contactCtrl.dispose(); super.dispose(); }
 
@@ -83,6 +87,87 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
   void _removeLogo() { setState(() => _logoDataUri = null); }
   void _snack(String msg) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating)); }
 
+  Future<void> _loadMethods() async {
+    final orgId = _orgId; if (orgId == null) return;
+    setState(() => _methodsLoading = true);
+    try {
+      final m = await Supabase.instance.client.from('pos_payment_methods')
+          .select('id, code, label, gl_account_id, is_credit, is_active, sort_order')
+          .eq('org_id', orgId).order('sort_order');
+      final coa = await Supabase.instance.client.from('chart_of_accounts')
+          .select('id, code, name').eq('org_id', orgId).eq('is_active', true).order('code');
+      setState(() {
+        _methods = List<Map<String, dynamic>>.from(m);
+        _coa = List<Map<String, dynamic>>.from(coa);
+        _methodsLoading = false;
+      });
+    } catch (e) { _snack('Methods load error: $e'); setState(() => _methodsLoading = false); }
+  }
+
+  String _accountName(String? id) {
+    if (id == null) return '—';
+    final a = _coa.firstWhere((c) => c['id'] == id, orElse: () => const {});
+    return a.isEmpty ? '—' : '${a['code']} — ${a['name']}';
+  }
+
+  Future<void> _saveMethod(Map<String, dynamic> m) async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('pos_payment_methods').upsert({
+        'id': m['id'], 'org_id': orgId, 'code': m['code'], 'label': m['label'],
+        'gl_account_id': m['gl_account_id'], 'is_credit': m['is_credit'] ?? false,
+        'is_active': m['is_active'] ?? true, 'sort_order': m['sort_order'] ?? 0,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }, onConflict: 'org_id,code');
+    } catch (e) { _snack('Save error: $e'); }
+  }
+
+  Future<void> _toggleActive(Map<String, dynamic> m, bool v) async {
+    setState(() => m['is_active'] = v);
+    await _saveMethod(m);
+  }
+
+  // Add or edit a method. Pass null to add.
+  void _methodDialog([Map<String, dynamic>? existing]) {
+    final labelCtrl = TextEditingController(text: existing?['label'] as String? ?? '');
+    String? acct = existing?['gl_account_id'] as String?;
+    bool isCredit = existing?['is_credit'] == true;
+    final isNew = existing == null;
+    showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
+      title: Text(isNew ? 'Add Payment Method' : 'Edit ${existing['label']}'),
+      content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: labelCtrl, decoration: const InputDecoration(labelText: 'Name (e.g. Easypaisa)')),
+        const SizedBox(height: 14),
+        DropdownButtonFormField<String>(value: acct, isExpanded: true, decoration: const InputDecoration(labelText: 'Posts to GL account'),
+          items: _coa.map((a) => DropdownMenuItem(value: a['id'] as String, child: Text('${a['code']} — ${a['name']}', overflow: TextOverflow.ellipsis))).toList(),
+          onChanged: (v) => setLocal(() => acct = v)),
+        const SizedBox(height: 6),
+        CheckboxListTile(contentPadding: EdgeInsets.zero, dense: true, controlAffinity: ListTileControlAffinity.leading,
+          title: const Text('On credit (customer account)', style: TextStyle(fontSize: 13)),
+          subtitle: const Text('Amount goes to the customer\'s balance instead of being collected', style: TextStyle(fontSize: 11)),
+          value: isCredit, onChanged: (v) => setLocal(() => isCredit = v ?? false)),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () async {
+          final label = labelCtrl.text.trim();
+          if (label.isEmpty || acct == null) { _snack('Enter a name and pick an account'); return; }
+          final orgId = _orgId!;
+          final code = isNew ? label.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_') : existing['code'] as String;
+          final id = isNew ? 'ppm_${orgId}_$code' : existing['id'] as String;
+          Navigator.pop(ctx);
+          await _saveMethod({
+            'id': id, 'code': code, 'label': label, 'gl_account_id': acct,
+            'is_credit': isCredit, 'is_active': existing?['is_active'] ?? true,
+            'sort_order': existing?['sort_order'] ?? _methods.length,
+          });
+          await _loadMethods();
+          _snack(isNew ? 'Added $label' : 'Updated $label');
+        }, child: Text(isNew ? 'Add' : 'Save')),
+      ],
+    )));
+  }
+
   @override
   Widget build(BuildContext context) {
     ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
@@ -139,6 +224,38 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
           _Section(title: 'Terms & Conditions', subtitle: 'Printed in small text at the very bottom of each receipt'),
           const SizedBox(height: 10),
           TextField(controller: _termsCtrl, maxLines: 4, decoration: const InputDecoration(hintText: 'e.g. Goods once sold cannot be returned. All disputes subject to local jurisdiction.', filled: true, fillColor: Colors.white, alignLabelWithHint: true)),
+          const SizedBox(height: 36),
+          Row(children: [
+            const Expanded(child: _Section(title: 'Payment Methods', subtitle: 'Tender types shown at POS checkout, and the account each posts to')),
+            OutlinedButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('Add Method'), onPressed: _methodsLoading ? null : () => _methodDialog()),
+          ]),
+          const SizedBox(height: 12),
+          if (_methodsLoading) const Padding(padding: EdgeInsets.all(16), child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))))
+          else if (_methods.isEmpty) const Padding(padding: EdgeInsets.all(12), child: Text('No payment methods configured yet.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+          else Column(children: _methods.map((m) {
+            final active = m['is_active'] == true;
+            final isCredit = m['is_credit'] == true;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+              child: Row(children: [
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Text(m['label'] as String? ?? '', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: active ? AppTheme.textPrimary : AppTheme.textSecondary)),
+                    if (isCredit) Container(margin: const EdgeInsets.only(left: 8), padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)), child: Text('On credit', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.orange.shade800))),
+                  ]),
+                  const SizedBox(height: 2),
+                  Text(_accountName(m['gl_account_id'] as String?), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                ])),
+                Tooltip(message: active ? 'Active at checkout' : 'Hidden at checkout', child: Switch(value: active, onChanged: (v) => _toggleActive(m, v))),
+                IconButton(icon: const Icon(Icons.edit_outlined, size: 18), tooltip: 'Edit', onPressed: () => _methodDialog(m)),
+              ]),
+            );
+          }).toList()),
+          const SizedBox(height: 8),
+          Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.withOpacity(0.2))),
+            child: const Row(children: [Icon(Icons.lightbulb_outline, size: 16, color: Colors.orange), SizedBox(width: 8), Expanded(child: Text('Turn a method off to hide it at checkout without deleting it. The "Customer Account" credit method is required for on-account and overpayment handling.', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)))])),
           const SizedBox(height: 28),
           Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.06), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.primary.withOpacity(0.2))),
             child: const Row(children: [Icon(Icons.info_outline, size: 18, color: AppTheme.primary), SizedBox(width: 10), Expanded(child: Text('Changes apply to the next receipt printed from any POS session.', style: TextStyle(fontSize: 13, color: AppTheme.primary)))])),
