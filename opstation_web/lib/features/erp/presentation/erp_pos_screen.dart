@@ -929,12 +929,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   bool _paymentValid() {
     final tenders = _buildTenders(_cartTotal);
     if (tenders.isEmpty) return false;
+    final collected = _collectedNonCredit(tenders);
+    final owed = _creditPortion(tenders);
+    final hasCust = _selectedCustomer != null || _selectedPosCustomer != null;
     if (_splitPayment) {
-      // entered tenders must sum to the bill (within a rounding cent)
-      if ((_tendersEntered() - _cartTotal).abs() > 0.01) return false;
+      final diff = collected - (_cartTotal - owed); // <0 short, >0 overpaid (advance)
+      if (diff < -0.01) return false;               // short — not allowed
+      if (diff > 0.01 && !hasCust) return false;    // surplus needs a customer
     }
-    // any on-credit portion requires a customer to attribute it to
-    if (_creditPortion(tenders) > 0 && _selectedCustomer == null && _selectedPosCustomer == null) return false;
+    // any on-credit (owed) portion requires a customer too
+    if (owed > 0 && !hasCust) return false;
     return true;
   }
 
@@ -972,7 +976,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     if (pd is List && pd.length > 1) {
       return pd.map((t) {
         final m = t as Map;
-        return '${m['label']}: ${((m['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}';
+        final amt = (m['amount'] as num?)?.toDouble() ?? 0;
+        return amt < 0
+            ? '${m['label']} (credit): ${(-amt).toStringAsFixed(0)}'
+            : '${m['label']}: ${amt.toStringAsFixed(0)}';
       }).join('  ·  ');
     }
     return '';
@@ -1009,9 +1016,24 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final cartSnapshot = List<Map<String, dynamic>>.from(_cart);
       final totalAmt = _cartTotal;
       final discountAmt = _totalDiscount;
-      final tenders = _buildTenders(totalAmt);
-      final collected = _collectedNonCredit(tenders);
-      final credit = _creditPortion(tenders);
+      final entered = _buildTenders(totalAmt);
+      final money = entered.where((t) => t['is_credit'] != true).toList();
+      final collected = money.fold<double>(0, (s, t) => s + (t['amount'] as num).toDouble());
+      final owed = _creditPortion(entered);
+      final advance = collected - (totalAmt - owed);        // >0 = overpaid (advance)
+      final netAr = owed - (advance > 0 ? advance : 0);      // +ve Dr AR (owed), -ve Cr AR (advance)
+      final creditMethod = _payMethods.firstWhere((m) => m['is_credit'] == true, orElse: () => <String, dynamic>{});
+      final tenders = <Map<String, dynamic>>[...money];
+      if (netAr.abs() > 0.01) {
+        tenders.add({
+          'code': 'customer',
+          'label': creditMethod.isEmpty ? 'Customer Account' : (creditMethod['label'] as String? ?? 'Customer Account'),
+          'account_id': creditMethod.isEmpty ? null : creditMethod['gl_account_id'],
+          'is_credit': true,
+          'amount': netAr,
+        });
+      }
+      final balanceChange = -netAr;                          // +ve credit added, -ve balance due
       final primaryMethod = tenders.length == 1 ? (tenders.first['label'] as String) : (tenders.isEmpty ? 'Cash' : 'Split');
       await client.from('pos_transactions').insert({
         'id': txnId, 'transaction_number': txnNumber, 'org_id': orgId, 'session_id': _session['id'],
@@ -1021,7 +1043,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'payment_method': primaryMethod,
         'payment_details': tenders,
         'amount_paid': collected,
-        'balance_change': -credit,
+        'balance_change': balanceChange,
         'transaction_type': 'sale',
         'created_by': userId, 'transacted_at': now,
       });
@@ -1050,13 +1072,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'moved_at': now, 'created_by': userId,
         });
       }
-      // On-credit portion goes to the POS customer's balance (they owe it)
-      if (credit > 0 && _selectedPosCustomer != null) {
+      // Net AR movement updates the POS customer's balance:
+      // owed reduces their balance, an advance (overpayment) increases it.
+      if (netAr.abs() > 0.01 && _selectedPosCustomer != null) {
         try {
           final custId = _selectedPosCustomer!['id'] as String;
           final existing = await client.from('pos_customers').select('balance').eq('id', custId).single();
           final curBal = (existing['balance'] as num?)?.toDouble() ?? 0;
-          await client.from('pos_customers').update({'balance': curBal - credit}).eq('id', custId);
+          await client.from('pos_customers').update({'balance': curBal + balanceChange}).eq('id', custId);
         } catch (_) {}
       }
       setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes(); }); _playSuccessSound();
@@ -1682,24 +1705,35 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     ])),
                   const SizedBox(height: 4),
                   Builder(builder: (_) {
-                    final entered = _tendersEntered();
-                    final diff = entered - _cartTotal;
-                    final credit = _creditPortion(_buildTenders(_cartTotal));
+                    final tenders = _buildTenders(_cartTotal);
+                    final collected = _collectedNonCredit(tenders);
+                    final owed = _creditPortion(tenders);
+                    final diff = collected - (_cartTotal - owed); // <0 short, >0 surplus(advance)
                     final hasCust = _selectedCustomer != null || _selectedPosCustomer != null;
-                    if (entered == 0) return const SizedBox.shrink();
+                    if (collected == 0 && owed == 0) return const SizedBox.shrink();
                     if (diff.abs() <= 0.01) {
                       return Row(children: [
                         const Icon(Icons.check_circle, size: 14, color: AppTheme.success),
                         const SizedBox(width: 4),
-                        Expanded(child: Text(credit > 0 ? 'Balanced — Rs. ${credit.toStringAsFixed(2)} on customer account' : 'Balanced', style: const TextStyle(fontSize: 12, color: AppTheme.success))),
-                        if (credit > 0 && !hasCust) const Text('Select customer', style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700)),
+                        Expanded(child: Text(owed > 0 ? 'Balanced — Rs. ${owed.toStringAsFixed(2)} on customer account' : 'Balanced', style: const TextStyle(fontSize: 12, color: AppTheme.success))),
+                        if (owed > 0 && !hasCust) const Text('Select customer', style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700)),
                       ]);
+                    }
+                    if (diff > 0) {
+                      // overpayment -> surplus becomes a credit/advance on the customer account
+                      return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.green.shade200)),
+                        child: Row(children: [
+                          Icon(Icons.savings_outlined, size: 16, color: Colors.green.shade700),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text('Credit Rs. ${diff.toStringAsFixed(2)} added to customer account', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w600))),
+                          if (!hasCust) const Text('Select customer', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w700)),
+                        ]));
                     }
                     return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.red.shade200)),
                       child: Row(children: [
-                        Icon(diff < 0 ? Icons.error_outline : Icons.warning_amber_outlined, size: 16, color: Colors.red.shade700),
+                        Icon(Icons.error_outline, size: 16, color: Colors.red.shade700),
                         const SizedBox(width: 6),
-                        Expanded(child: Text(diff < 0 ? 'Short by Rs. ${(-diff).toStringAsFixed(2)} — tenders must equal the bill' : 'Over by Rs. ${diff.toStringAsFixed(2)} — tenders must equal the bill', style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600))),
+                        Expanded(child: Text('Short by Rs. ${(-diff).toStringAsFixed(2)} — collect more or put the rest on Customer Account', style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600))),
                       ]));
                   }),
                 ],
@@ -1725,7 +1759,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   child: SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
                     focusNode: FocusNode(),
                     icon: const Icon(Icons.check_circle_outline, size: 20),
-                    label: Builder(builder: (_) { final credit = _creditPortion(_buildTenders(_cartTotal)); if (credit > 0) return Text('Complete Sale (On a/c: Rs. ${credit.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); return Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
+                    label: Builder(builder: (_) { final entered = _buildTenders(_cartTotal); final collected = _collectedNonCredit(entered); final owed = _creditPortion(entered); final advance = collected - (_cartTotal - owed); if (advance > 0.01) return Text('Complete Sale (Credit: Rs. ${advance.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); if (owed > 0.01) return Text('Complete Sale (On a/c: Rs. ${owed.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); return Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
                     style: ElevatedButton.styleFrom(backgroundColor: _cart.isNotEmpty && _isOpen ? AppTheme.primary : Colors.grey, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                     onPressed: _cart.isNotEmpty && _isOpen && _paymentValid() ? _checkout : null,
                   ))),
@@ -1987,6 +2021,21 @@ class _ReceiptDialog extends StatelessWidget {
   final String? footerNote;
   final Map<String, String> posConfig;
   const _ReceiptDialog({required this.transaction, required this.items, required this.orgName, required this.branchName, required this.cashierName, this.footerNote, this.posConfig = const {}});
+
+  // Human-readable split for a transaction's tenders, or '' if single/none.
+  static String _tenderSummary(Map<String, dynamic> txn) {
+    final pd = txn['payment_details'];
+    if (pd is List && pd.length > 1) {
+      return pd.map((t) {
+        final m = t as Map;
+        final amt = (m['amount'] as num?)?.toDouble() ?? 0;
+        return amt < 0
+            ? '${m['label']} (credit): ${(-amt).toStringAsFixed(0)}'
+            : '${m['label']}: ${amt.toStringAsFixed(0)}';
+      }).join('  ·  ');
+    }
+    return '';
+  }
 
   @override Widget build(BuildContext context) {
     final total = (transaction['total'] as num?)?.toDouble() ?? 0;
