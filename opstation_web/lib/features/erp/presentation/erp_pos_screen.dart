@@ -477,6 +477,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   // Split payment
   bool _splitPayment = false;
   final _amountPaidCtrl = TextEditingController();
+  // Phase 1: configurable payment methods (from pos_payment_methods) + per-method
+  // tender amounts when splitting across modes.
+  List<Map<String, dynamic>> _payMethods = [];
+  final Map<String, TextEditingController> _tenderCtrls = {};
   double _orderDiscount = 0;
   String _orderDiscountType = 'fixed'; // 'fixed' | 'percent'
   bool _loading = true;
@@ -588,6 +592,20 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         final s = await Supabase.instance.client.from('pos_settings').select('allow_sell_without_stock, allow_price_edit').eq('org_id', orgId).maybeSingle();
         allowNoStock = s != null && s['allow_sell_without_stock'] == true;
         allowPriceEdit = s != null && s['allow_price_edit'] == true;
+      } catch (_) {}
+
+      // Phase 1: configurable payment methods (active, ordered)
+      try {
+        final pm = await Supabase.instance.client.from('pos_payment_methods')
+            .select('code, label, gl_account_id, is_credit, sort_order')
+            .eq('org_id', orgId).eq('is_active', true).order('sort_order');
+        _payMethods = List<Map<String, dynamic>>.from(pm);
+        for (final m in _payMethods) {
+          _tenderCtrls.putIfAbsent(m['code'] as String, () => TextEditingController());
+        }
+        if (_payMethods.isNotEmpty && !_payMethods.any((m) => m['code'] == _paymentMethod)) {
+          _paymentMethod = _payMethods.first['code'] as String;
+        }
       } catch (_) {}
 
       // Receipt config from app_config (pos.*). Branch-scoped: a branch's own
@@ -869,6 +887,57 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   double get _totalDiscount => _cartItemDiscounts + _orderDiscountAmt;
 
   bool _checkingOut = false;
+  // ── Phase 1: tender helpers ─────────────────────────────────────────────
+  Map<String, dynamic>? _methodByCode(String code) {
+    for (final m in _payMethods) { if (m['code'] == code) return m; }
+    return null;
+  }
+
+  // Tenders for the current sale. Single mode: full total on selected method.
+  // Split mode: each method's entered amount (non-zero only).
+  List<Map<String, dynamic>> _buildTenders(double total) {
+    final out = <Map<String, dynamic>>[];
+    if (_splitPayment) {
+      for (final m in _payMethods) {
+        final code = m['code'] as String;
+        final amt = double.tryParse(_tenderCtrls[code]?.text.trim() ?? '') ?? 0;
+        if (amt != 0) {
+          out.add({'code': code, 'label': m['label'], 'account_id': m['gl_account_id'], 'is_credit': m['is_credit'] == true, 'amount': amt});
+        }
+      }
+    } else {
+      final m = _methodByCode(_paymentMethod);
+      if (m != null) {
+        out.add({'code': m['code'], 'label': m['label'], 'account_id': m['gl_account_id'], 'is_credit': m['is_credit'] == true, 'amount': total});
+      }
+    }
+    return out;
+  }
+
+  double _tendersEntered() {
+    double s = 0;
+    for (final m in _payMethods) { s += double.tryParse(_tenderCtrls[m['code']]?.text.trim() ?? '') ?? 0; }
+    return s;
+  }
+
+  double _collectedNonCredit(List<Map<String, dynamic>> tenders) =>
+      tenders.where((t) => t['is_credit'] != true).fold(0.0, (s, t) => s + (t['amount'] as num).toDouble());
+  double _creditPortion(List<Map<String, dynamic>> tenders) =>
+      tenders.where((t) => t['is_credit'] == true).fold(0.0, (s, t) => s + (t['amount'] as num).toDouble());
+
+  // Whether the current payment entry is valid to complete the sale.
+  bool _paymentValid() {
+    final tenders = _buildTenders(_cartTotal);
+    if (tenders.isEmpty) return false;
+    if (_splitPayment) {
+      // entered tenders must sum to the bill (within a rounding cent)
+      if ((_tendersEntered() - _cartTotal).abs() > 0.01) return false;
+    }
+    // any on-credit portion requires a customer to attribute it to
+    if (_creditPortion(tenders) > 0 && _selectedCustomer == null && _selectedPosCustomer == null) return false;
+    return true;
+  }
+
   Future<void> _checkout() async {
     if (_checkingOut) return;
     _checkingOut = true;
@@ -900,14 +969,19 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final cartSnapshot = List<Map<String, dynamic>>.from(_cart);
       final totalAmt = _cartTotal;
       final discountAmt = _totalDiscount;
+      final tenders = _buildTenders(totalAmt);
+      final collected = _collectedNonCredit(tenders);
+      final credit = _creditPortion(tenders);
+      final primaryMethod = tenders.length == 1 ? (tenders.first['label'] as String) : (tenders.isEmpty ? 'Cash' : 'Split');
       await client.from('pos_transactions').insert({
         'id': txnId, 'transaction_number': txnNumber, 'org_id': orgId, 'session_id': _session['id'],
         'customer_id': _selectedCustomer?['id'],
         'pos_customer_id': _selectedPosCustomer?['id'],
         'total': totalAmt, 'discount': discountAmt,
-        'payment_method': _paymentMethod == 'other' ? (_customPaymentCtrl.text.trim().isEmpty ? 'other' : _customPaymentCtrl.text.trim()) : _paymentMethod,
-        'amount_paid': _splitPayment ? (double.tryParse(_amountPaidCtrl.text.trim()) ?? totalAmt) : totalAmt,
-        'balance_change': _splitPayment ? ((double.tryParse(_amountPaidCtrl.text.trim()) ?? totalAmt) - totalAmt) : 0,
+        'payment_method': primaryMethod,
+        'payment_details': tenders,
+        'amount_paid': collected,
+        'balance_change': -credit,
         'transaction_type': 'sale',
         'created_by': userId, 'transacted_at': now,
       });
@@ -936,20 +1010,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'moved_at': now, 'created_by': userId,
         });
       }
-      // Update customer balance for split payment
-      if (_splitPayment && (_selectedPosCustomer != null || _selectedCustomer != null)) {
-        final paid = double.tryParse(_amountPaidCtrl.text.trim()) ?? totalAmt;
-        final diff = paid - totalAmt; // positive = credit, negative = balance due
-        if (diff != 0 && _selectedPosCustomer != null) {
-          try {
-            final custId = _selectedPosCustomer!['id'] as String;
-            final existing = await client.from('pos_customers').select('balance').eq('id', custId).single();
-            final curBal = (existing['balance'] as num?)?.toDouble() ?? 0;
-            await client.from('pos_customers').update({'balance': curBal + diff}).eq('id', custId);
-          } catch (_) {}
-        }
+      // On-credit portion goes to the POS customer's balance (they owe it)
+      if (credit > 0 && _selectedPosCustomer != null) {
+        try {
+          final custId = _selectedPosCustomer!['id'] as String;
+          final existing = await client.from('pos_customers').select('balance').eq('id', custId).single();
+          final curBal = (existing['balance'] as num?)?.toDouble() ?? 0;
+          await client.from('pos_customers').update({'balance': curBal - credit}).eq('id', custId);
+        } catch (_) {}
       }
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); _syncFocusNodes(); }); _playSuccessSound();
+      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes(); }); _playSuccessSound();
       await _loadData();
       // Show receipt
       if (mounted) {
@@ -1511,39 +1581,67 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 Row(children: [
                   const Text('Payment', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                   const Spacer(),
-                  if (_isOpen) TextButton.icon(icon: Icon(_splitPayment ? Icons.call_merge : Icons.call_split, size: 15), label: Text(_splitPayment ? 'Single' : 'Split', style: const TextStyle(fontSize: 11)), onPressed: () => setState(() { _splitPayment = !_splitPayment; if (!_splitPayment) _amountPaidCtrl.clear(); })),
+                  if (_isOpen) TextButton.icon(icon: Icon(_splitPayment ? Icons.call_merge : Icons.call_split, size: 15), label: Text(_splitPayment ? 'Single' : 'Split', style: const TextStyle(fontSize: 11)), onPressed: () => setState(() { _splitPayment = !_splitPayment; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } })),
                 ]),
-                SegmentedButton<String>(
-                segments: const [ButtonSegment(value: 'cash', label: Text('Cash', style: TextStyle(fontSize: 11))), ButtonSegment(value: 'card', label: Text('Card', style: TextStyle(fontSize: 11))), ButtonSegment(value: 'other', label: Text('Other', style: TextStyle(fontSize: 11)))],
-                selected: {_paymentMethod}, onSelectionChanged: _isOpen ? (s) => setState(() => _paymentMethod = s.first) : null,
-                style: const ButtonStyle(visualDensity: VisualDensity.compact)),
-              if (_paymentMethod == 'other') ...[
-                const SizedBox(height: 6),
-                TextField(controller: _customPaymentCtrl, decoration: const InputDecoration(hintText: 'Specify payment method…', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)), textCapitalization: TextCapitalization.words),
-              ],
-              if (_splitPayment) ...[
-                const SizedBox(height: 8),
-                Row(children: [
-                  const Text('Amount Paid', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                  const SizedBox(width: 8),
-                  Expanded(child: TextField(controller: _amountPaidCtrl, decoration: const InputDecoration(hintText: '0.00', isDense: true, prefixText: 'Rs. ', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)), keyboardType: const TextInputType.numberWithOptions(decimal: true), enabled: _isOpen, onChanged: (_) => setState(() {}))),
-                ]),
-                const SizedBox(height: 6),
-                Builder(builder: (_) {
-                  final paid = double.tryParse(_amountPaidCtrl.text.trim()) ?? 0;
-                  final diff = paid - _cartTotal;
-                  final hasCust = _selectedCustomer != null || _selectedPosCustomer != null;
-                  if (paid == 0) return const SizedBox.shrink();
-                  if (diff == 0) return const Row(children: [Icon(Icons.check_circle, size: 14, color: AppTheme.success), SizedBox(width: 4), Text('Fully paid', style: TextStyle(fontSize: 12, color: AppTheme.success))]);
-                  return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: diff < 0 ? Colors.red.shade50 : Colors.green.shade50, borderRadius: BorderRadius.circular(6), border: Border.all(color: diff < 0 ? Colors.red.shade200 : Colors.green.shade200)),
-                    child: Row(children: [
-                      Icon(diff < 0 ? Icons.account_balance_wallet_outlined : Icons.savings_outlined, size: 16, color: diff < 0 ? Colors.red.shade700 : Colors.green.shade700),
-                      const SizedBox(width: 6),
-                      Expanded(child: Text(diff < 0 ? 'Balance due Rs. ${(-diff).toStringAsFixed(2)} added to customer account' : 'Credit Rs. ${diff.toStringAsFixed(2)} added to customer account', style: TextStyle(fontSize: 11, color: diff < 0 ? Colors.red.shade700 : Colors.green.shade700, fontWeight: FontWeight.w600))),
-                      if (!hasCust) const Text('Select customer to proceed', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
-                    ]));
-                }),
-              ],
+                if (!_splitPayment) ...[
+                  Wrap(spacing: 6, runSpacing: 6, children: _payMethods.map((m) {
+                    final code = m['code'] as String;
+                    return ChoiceChip(
+                      label: Text(m['label'] as String, style: const TextStyle(fontSize: 11)),
+                      selected: _paymentMethod == code,
+                      visualDensity: VisualDensity.compact,
+                      onSelected: _isOpen ? (_) => setState(() => _paymentMethod = code) : null,
+                    );
+                  }).toList()),
+                  if (_methodByCode(_paymentMethod)?['is_credit'] == true) ...[
+                    const SizedBox(height: 6),
+                    Builder(builder: (_) {
+                      final hasCust = _selectedCustomer != null || _selectedPosCustomer != null;
+                      return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.shade200)),
+                        child: Row(children: [
+                          Icon(Icons.account_balance_wallet_outlined, size: 16, color: Colors.orange.shade700),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text('Full amount on customer account', style: TextStyle(fontSize: 11, color: Colors.orange.shade800, fontWeight: FontWeight.w600))),
+                          if (!hasCust) const Text('Select customer', style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700)),
+                        ]));
+                    }),
+                  ],
+                ] else ...[
+                  const SizedBox(height: 6),
+                  for (final m in _payMethods)
+                    Padding(padding: const EdgeInsets.only(bottom: 4), child: Row(children: [
+                      SizedBox(width: 120, child: Text(m['label'] as String, style: const TextStyle(fontSize: 12))),
+                      Expanded(child: TextField(
+                        controller: _tenderCtrls[m['code']],
+                        decoration: const InputDecoration(hintText: '0.00', isDense: true, prefixText: 'Rs. ', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        enabled: _isOpen,
+                        onChanged: (_) => setState(() {}),
+                      )),
+                    ])),
+                  const SizedBox(height: 4),
+                  Builder(builder: (_) {
+                    final entered = _tendersEntered();
+                    final diff = entered - _cartTotal;
+                    final credit = _creditPortion(_buildTenders(_cartTotal));
+                    final hasCust = _selectedCustomer != null || _selectedPosCustomer != null;
+                    if (entered == 0) return const SizedBox.shrink();
+                    if (diff.abs() <= 0.01) {
+                      return Row(children: [
+                        const Icon(Icons.check_circle, size: 14, color: AppTheme.success),
+                        const SizedBox(width: 4),
+                        Expanded(child: Text(credit > 0 ? 'Balanced — Rs. ${credit.toStringAsFixed(2)} on customer account' : 'Balanced', style: const TextStyle(fontSize: 12, color: AppTheme.success))),
+                        if (credit > 0 && !hasCust) const Text('Select customer', style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700)),
+                      ]);
+                    }
+                    return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.red.shade200)),
+                      child: Row(children: [
+                        Icon(diff < 0 ? Icons.error_outline : Icons.warning_amber_outlined, size: 16, color: Colors.red.shade700),
+                        const SizedBox(width: 6),
+                        Expanded(child: Text(diff < 0 ? 'Short by Rs. ${(-diff).toStringAsFixed(2)} — tenders must equal the bill' : 'Over by Rs. ${diff.toStringAsFixed(2)} — tenders must equal the bill', style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600))),
+                      ]));
+                  }),
+                ],
                 const SizedBox(height: 10),
                 // Totals
                 if (_totalDiscount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -1566,9 +1664,9 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   child: SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
                     focusNode: FocusNode(),
                     icon: const Icon(Icons.check_circle_outline, size: 20),
-                    label: Builder(builder: (_) { if (_splitPayment && _amountPaidCtrl.text.isNotEmpty) { final paid = double.tryParse(_amountPaidCtrl.text.trim()) ?? 0; final diff = paid - _cartTotal; if (diff < 0) return Text('Complete Sale (Balance: Rs. ${(-diff).toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); if (diff > 0) return Text('Complete Sale (Credit: Rs. ${diff.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); } return Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
+                    label: Builder(builder: (_) { final credit = _creditPortion(_buildTenders(_cartTotal)); if (credit > 0) return Text('Complete Sale (On a/c: Rs. ${credit.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); return Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
                     style: ElevatedButton.styleFrom(backgroundColor: _cart.isNotEmpty && _isOpen ? AppTheme.primary : Colors.grey, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                    onPressed: _cart.isNotEmpty && _isOpen && (!_splitPayment || (_amountPaidCtrl.text.isNotEmpty && (() { final paid = double.tryParse(_amountPaidCtrl.text.trim()) ?? 0; final diff = paid - _cartTotal; final needsCust = diff != 0 && _selectedCustomer == null && _selectedPosCustomer == null; return !needsCust; })())) ? _checkout : null,
+                    onPressed: _cart.isNotEmpty && _isOpen && _paymentValid() ? _checkout : null,
                   ))),
               ])),
           ]),
