@@ -938,6 +938,46 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     return true;
   }
 
+  // Session payment breakdown: amount collected per method/account label,
+  // from captured tenders (payment_details) with a legacy fallback for old rows.
+  Map<String, double> _sessionBreakdown() {
+    final out = <String, double>{};
+    for (final t in _transactions) {
+      if (((t['transaction_type'] as String?) ?? 'sale') == 'return') continue;
+      final pd = t['payment_details'];
+      if (pd is List && pd.isNotEmpty) {
+        for (final tn in pd) {
+          if (tn is! Map) continue;
+          final label = (tn['label'] as String?) ?? 'Other';
+          final amt = (tn['amount'] as num?)?.toDouble() ?? 0;
+          if (amt != 0) out[label] = (out[label] ?? 0) + amt;
+        }
+      } else {
+        final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
+        final paid = (t['amount_paid'] as num?)?.toDouble();
+        final cashPortion = (paid != null && paid < tot) ? paid : tot;
+        final credit = tot - cashPortion;
+        final pm = (t['payment_method'] as String?) ?? 'Cash';
+        final label = pm.isEmpty ? 'Cash' : '${pm[0].toUpperCase()}${pm.substring(1)}';
+        if (cashPortion != 0) out[label] = (out[label] ?? 0) + cashPortion;
+        if (credit > 0) out['Customer Account'] = (out['Customer Account'] ?? 0) + credit;
+      }
+    }
+    return out;
+  }
+
+  // Human-readable split for a transaction's tenders, or '' if single/none.
+  String _tenderSummary(Map<String, dynamic> txn) {
+    final pd = txn['payment_details'];
+    if (pd is List && pd.length > 1) {
+      return pd.map((t) {
+        final m = t as Map;
+        return '${m['label']}: ${((m['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}';
+      }).join('  ·  ');
+    }
+    return '';
+  }
+
   Future<void> _checkout() async {
     if (_checkingOut) return;
     _checkingOut = true;
@@ -1133,6 +1173,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final e in _expenses) {
       cashExpenses += (e['amount'] as num?)?.toDouble() ?? 0;
     }
+    final breakdown = _sessionBreakdown();
     final expectedClose = opening + cashSales - cashRefunds - cashExpenses;
     final cashCtrl = TextEditingController(text: expectedClose.toStringAsFixed(2));
     final notesCtrl = TextEditingController();
@@ -1158,6 +1199,18 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
             ccRow('Expected closing cash', expectedClose, bold: true),
           ]),
         ),
+        if (breakdown.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Collected by account', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+              const SizedBox(height: 4),
+              ...breakdown.entries.map((e) => ccRow(e.key, e.value)),
+            ]),
+          ),
+        ],
         const SizedBox(height: 4),
         const Align(alignment: Alignment.centerLeft, child: Text('Auto-filled - edit to the actual counted cash if it differs.', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontStyle: FontStyle.italic))),
         const SizedBox(height: 8),
@@ -1212,6 +1265,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final onAcct = tot - paid;
       if (onAcct > 0) customerAccountSale += onAcct;
     }
+    final breakdown = _sessionBreakdown();
+    String breakdownRows = '';
+    breakdown.forEach((k, v) {
+      breakdownRows += '<tr><td>$k</td><td style="text-align:right;font-weight:600">${v.toStringAsFixed(2)}</td></tr>';
+    });
     final openingCash = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
     final closingCash = (_session['closing_cash'] as num?)?.toDouble() ?? 0;
     double totalExpenses = 0; String expRows = '';
@@ -1281,6 +1339,9 @@ tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;
   <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${closingCash.toStringAsFixed(2)}</div></div>
   <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${cashDiff.abs().toStringAsFixed(2)}</div></div>
 </div>
+${breakdownRows.isNotEmpty ? '''<h2>Payment Breakdown</h2>
+<table><thead><tr><th>Account / Mode</th><th style="text-align:right">Collected</th></tr></thead>
+<tbody>$breakdownRows</tbody></table>''' : ''}
 ${txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
 <table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
 <tbody>$txnRows
@@ -1933,6 +1994,8 @@ class _ReceiptDialog extends StatelessWidget {
     final subtotal = items.fold(0.0, (s, i) => s + ((i['unit_price'] as double) * (i['quantity'] as double)));
     final customer = (transaction['pos_customers']?['name'] ?? transaction['customers']?['shop_name'] ?? 'Walk-in') as String;
     final method = (transaction['payment_method'] as String? ?? 'cash').toUpperCase();
+    final tenderSplit = _tenderSummary(transaction);
+    final splitHtml = tenderSplit.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#444;margin:2px 0">$tenderSplit</p>' : '';
     final ts = transaction['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(transaction['transacted_at'] as String).toLocal()) : DateFormat('d MMM yyyy  HH:mm').format(DateTime.now());
     final company = posConfig['pos.company_name']?.isNotEmpty == true ? posConfig['pos.company_name']! : orgName;
     final ntn = posConfig['pos.ntn'] ?? '';
@@ -2009,6 +2072,7 @@ class _ReceiptDialog extends StatelessWidget {
       ]),
       const SizedBox(height: 4),
       Text('Payment: $method', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      if (_tenderSummary(transaction).isNotEmpty) Text(_tenderSummary(transaction), style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
       Text('Cashier: $cashierName', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
       if (effFooter.isNotEmpty) ...[
         const Divider(),
@@ -2032,7 +2096,7 @@ class _ReceiptDialog extends StatelessWidget {
           final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? (dt == 'percent' ? "-Rs.${da.toStringAsFixed(2)} <small style='color:#aaa'>(${d.toStringAsFixed(0)}%)</small>" : "-Rs.${da.toStringAsFixed(2)}") : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
           final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
-          final content = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2><h3 style="font-weight:normal;color:#666">$branchName</h3>${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + (-bc).toStringAsFixed(2) : 'Credit Added: Rs. ' + bc.toStringAsFixed(2)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
+          final content = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2><h3 style="font-weight:normal;color:#666">$branchName</h3>${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>$splitHtml${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + (-bc).toStringAsFixed(2) : 'Credit Added: Rs. ' + bc.toStringAsFixed(2)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
           final blob = html.Blob([content], 'text/html;charset=utf-8'); final url = html.Url.createObjectUrlFromBlob(blob); html.window.open(url, '_blank');
         })),
         const SizedBox(width: 12),
