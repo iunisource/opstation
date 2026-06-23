@@ -14,6 +14,27 @@ import 'erp_pos_held_bills_screen.dart';
 import 'dart:js_util' as js_util;
 import 'dart:js_util' as js_util;
 
+// Cash actually collected for a transaction: the Cash tender from
+// payment_details, or a legacy fallback for old rows without tenders.
+double _posCashCollected(Map<String, dynamic> t) {
+  final pd = t['payment_details'];
+  if (pd is List && pd.isNotEmpty) {
+    double c = 0;
+    for (final tn in pd) {
+      if (tn is! Map) continue;
+      final code = (tn['code'] as String?)?.toLowerCase();
+      final label = (tn['label'] as String?)?.toLowerCase();
+      if (code == 'cash' || label == 'cash') c += (tn['amount'] as num?)?.toDouble() ?? 0;
+    }
+    return c;
+  }
+  final pm = ((t['payment_method'] as String?) ?? 'cash').toLowerCase();
+  if (pm != 'cash') return 0;
+  final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
+  final paid = (t['amount_paid'] as num?)?.toDouble();
+  return (paid != null && paid < tot) ? paid : tot;
+}
+
 class ErpPosScreen extends ConsumerStatefulWidget {
   const ErpPosScreen({super.key});
   @override
@@ -120,18 +141,14 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
       double cashSales = 0, cashRefunds = 0, cashExpenses = 0;
       final txns = await client
           .from('pos_transactions')
-          .select('total, amount_paid, payment_method, transaction_type')
+          .select('total, amount_paid, payment_method, transaction_type, payment_details')
           .eq('session_id', sid);
       for (final t in txns as List) {
-        final pm = ((t['payment_method'] as String?) ?? 'cash').toLowerCase();
-        if (pm != 'cash') continue;
-        final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
         final type = (t['transaction_type'] as String?) ?? 'sale';
         if (type == 'return') {
-          cashRefunds += tot;
+          cashRefunds += ((t['total'] as num?)?.toDouble() ?? 0).abs();
         } else {
-          final paid = (t['amount_paid'] as num?)?.toDouble();
-          cashSales += (paid != null && paid < tot) ? paid : tot;
+          cashSales += _posCashCollected(Map<String, dynamic>.from(t as Map));
         }
       }
       try {
@@ -1182,15 +1199,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final opening = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
     double cashSales = 0, cashRefunds = 0, cashExpenses = 0;
     for (final t in _transactions) {
-      final pm = ((t['payment_method'] as String?) ?? 'cash').toLowerCase();
-      if (pm != 'cash') continue;
-      final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
       final type = (t['transaction_type'] as String?) ?? 'sale';
       if (type == 'return') {
-        cashRefunds += tot;
+        cashRefunds += ((t['total'] as num?)?.toDouble() ?? 0).abs();
       } else {
-        final paid = (t['amount_paid'] as num?)?.toDouble();
-        cashSales += (paid != null && paid < tot) ? paid : tot;
+        cashSales += _posCashCollected(t);
       }
     }
     for (final e in _expenses) {
@@ -1204,7 +1217,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       padding: const EdgeInsets.symmetric(vertical: 1.5),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         Text(label, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w400, color: bold ? AppTheme.textPrimary : AppTheme.textSecondary)),
-        Text('Rs. ${val.toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, color: bold ? AppTheme.primary : AppTheme.textPrimary)),
+        Text('Rs. ${(val == 0 ? 0.0 : val).toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, color: bold ? AppTheme.primary : AppTheme.textPrimary)),
       ]),
     );
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
