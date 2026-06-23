@@ -133,6 +133,8 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     final lbl = _label(field).toLowerCase();
     if (f == 'product' || f == 'product_name' || lbl == 'product') return {'table': 'products', 'column': 'name'};
     if (f == 'sku' || lbl == 'sku') return {'table': 'products', 'column': 'sku'};
+    if (f == 'customer' || f == 'customer_name' || lbl == 'customer') return {'table': 'customers', 'column': 'shop_name'};
+    if (f == 'supplier' || f == 'supplier_name' || f == 'vendor' || lbl == 'supplier' || lbl == 'vendor') return {'table': 'suppliers', 'column': 'name'};
     return null;
   }
 
