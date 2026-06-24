@@ -74,6 +74,7 @@ import '../../features/erp/presentation/erp_po_screen.dart';
 import '../../features/erp/presentation/erp_grn_screen.dart';
 import '../../features/erp/presentation/erp_pi_screen.dart';
 import '../../features/erp/presentation/erp_sales_screen.dart';
+import '../../features/erp/presentation/erp_field_orders_screen.dart';
 import '../../features/erp/presentation/erp_sales_report_screen.dart';
 import '../../features/erp/presentation/erp_flow_dashboard_screen.dart';
 import '../../features/erp/presentation/erp_pos_screen.dart';
@@ -307,6 +308,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/suppliers', builder: (_, __) => const ErpSuppliersScreen()),
           GoRoute(path: '/erp/purchase',  builder: (_, __) => const ErpPurchaseScreen()),
           GoRoute(path: '/erp/sales',     builder: (_, __) => const ErpSalesScreen()),
+          GoRoute(path: '/erp/field-orders', builder: (_, __) => const ErpFieldOrdersScreen()),
           GoRoute(path: '/erp/sales-report', builder: (_, __) => const ErpSalesReportScreen()),
           GoRoute(path: '/erp/sales-dashboard', builder: (_, __) => const ErpSalesDashboardScreen()),
           GoRoute(path: '/erp/purchase-dashboard', builder: (_, __) => const ErpPurchaseDashboardScreen()),
