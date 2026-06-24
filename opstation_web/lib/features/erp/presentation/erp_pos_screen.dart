@@ -498,6 +498,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   // tender amounts when splitting across modes.
   List<Map<String, dynamic>> _payMethods = [];
   final Map<String, TextEditingController> _tenderCtrls = {};
+  // Bank accounts (children of the Bank Accounts COA node) for the Bank tender
+  List<Map<String, dynamic>> _bankAccounts = [];
+  String? _selectedBankId;
   double _orderDiscount = 0;
   String _orderDiscountType = 'fixed'; // 'fixed' | 'percent'
   bool _loading = true;
@@ -622,6 +625,22 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         }
         if (_payMethods.isNotEmpty && !_payMethods.any((m) => m['code'] == _paymentMethod)) {
           _paymentMethod = _payMethods.first['code'] as String;
+        }
+        // Bank accounts = active COA accounts whose parent is the "Bank Accounts" (1120) node
+        final bankParent = await Supabase.instance.client.from('chart_of_accounts')
+            .select('id').eq('org_id', orgId).eq('code', '1120').maybeSingle();
+        if (bankParent != null) {
+          final banks = await Supabase.instance.client.from('chart_of_accounts')
+              .select('id, code, name').eq('org_id', orgId).eq('parent_id', bankParent['id'])
+              .eq('is_active', true).order('code');
+          _bankAccounts = List<Map<String, dynamic>>.from(banks);
+        }
+        final bankMethod = _payMethods.firstWhere((m) => m['code'] == 'bank', orElse: () => <String, dynamic>{});
+        if (_selectedBankId == null || !_bankAccounts.any((b) => b['id'] == _selectedBankId)) {
+          final def = bankMethod.isEmpty ? null : bankMethod['gl_account_id'];
+          _selectedBankId = (def != null && _bankAccounts.any((b) => b['id'] == def))
+              ? def as String
+              : (_bankAccounts.isNotEmpty ? _bankAccounts.first['id'] as String : null);
         }
       } catch (_) {}
 
@@ -910,23 +929,36 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     return null;
   }
 
+  Widget _bankDropdown() => DropdownButtonFormField<String>(
+    value: _selectedBankId,
+    isExpanded: true,
+    decoration: const InputDecoration(isDense: true, labelText: 'Bank account', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+    items: _bankAccounts.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)))).toList(),
+    onChanged: _isOpen ? (v) => setState(() => _selectedBankId = v) : null,
+  );
+
   // Tenders for the current sale. Single mode: full total on selected method.
   // Split mode: each method's entered amount (non-zero only).
   List<Map<String, dynamic>> _buildTenders(double total) {
     final out = <Map<String, dynamic>>[];
+    void addTender(Map<String, dynamic> m, double amt) {
+      var acct = m['gl_account_id'];
+      var label = m['label'] as String;
+      if (m['code'] == 'bank' && _selectedBankId != null) {
+        acct = _selectedBankId;
+        final b = _bankAccounts.firstWhere((x) => x['id'] == _selectedBankId, orElse: () => const {});
+        if (b.isNotEmpty) label = '${m['label']} — ${b['name']}';
+      }
+      out.add({'code': m['code'], 'label': label, 'account_id': acct, 'is_credit': m['is_credit'] == true, 'amount': amt});
+    }
     if (_splitPayment) {
       for (final m in _payMethods) {
-        final code = m['code'] as String;
-        final amt = double.tryParse(_tenderCtrls[code]?.text.trim() ?? '') ?? 0;
-        if (amt != 0) {
-          out.add({'code': code, 'label': m['label'], 'account_id': m['gl_account_id'], 'is_credit': m['is_credit'] == true, 'amount': amt});
-        }
+        final amt = double.tryParse(_tenderCtrls[m['code'] as String]?.text.trim() ?? '') ?? 0;
+        if (amt != 0) addTender(m, amt);
       }
     } else {
       final m = _methodByCode(_paymentMethod);
-      if (m != null) {
-        out.add({'code': m['code'], 'label': m['label'], 'account_id': m['gl_account_id'], 'is_credit': m['is_credit'] == true, 'amount': total});
-      }
+      if (m != null) addTender(m, total);
     }
     return out;
   }
@@ -994,6 +1026,35 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         if (credit > 0) out['Customer Account (owed)'] = (out['Customer Account (owed)'] ?? 0) + credit;
       }
     }
+    return out;
+  }
+
+  // Per-customer customer-account detail for this session: name -> {owed, advance}.
+  Map<String, Map<String, double>> _customerAccountDetail() {
+    final out = <String, Map<String, double>>{};
+    for (final t in _transactions) {
+      if (((t['transaction_type'] as String?) ?? 'sale') == 'return') continue;
+      final name = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
+      void add(double owed, double adv) {
+        final m = out.putIfAbsent(name, () => {'owed': 0, 'advance': 0});
+        m['owed'] = m['owed']! + owed;
+        m['advance'] = m['advance']! + adv;
+      }
+      final pd = t['payment_details'];
+      if (pd is List && pd.isNotEmpty) {
+        for (final tn in pd) {
+          if (tn is! Map || tn['is_credit'] != true) continue;
+          final amt = (tn['amount'] as num?)?.toDouble() ?? 0;
+          if (amt > 0) { add(amt, 0); } else if (amt < 0) { add(0, -amt); }
+        }
+      } else {
+        final tot = ((t['total'] as num?)?.toDouble() ?? 0).abs();
+        final paid = (t['amount_paid'] as num?)?.toDouble();
+        final onAcct = (paid != null && paid < tot) ? (tot - paid) : 0.0;
+        if (onAcct > 0) add(onAcct, 0);
+      }
+    }
+    out.removeWhere((k, m) => (m['owed'] ?? 0) == 0 && (m['advance'] ?? 0) == 0);
     return out;
   }
 
@@ -1316,6 +1377,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     breakdown.forEach((k, v) {
       breakdownRows += '<tr><td>$k</td><td style="text-align:right;font-weight:600">${v.toStringAsFixed(2)}</td></tr>';
     });
+    final custDetail = _customerAccountDetail();
+    String custRows = '';
+    custDetail.forEach((name, m) {
+      final owed = m['owed'] ?? 0; final adv = m['advance'] ?? 0;
+      if (owed != 0) custRows += '<tr><td>$name</td><td style="text-align:right;font-weight:600">${owed.toStringAsFixed(2)}</td></tr>';
+      if (adv != 0) custRows += '<tr><td>$name <span style="color:#27ae60">(advance / credit)</span></td><td style="text-align:right;font-weight:600;color:#27ae60">${adv.toStringAsFixed(2)}</td></tr>';
+    });
     final openingCash = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
     final closingCash = (_session['closing_cash'] as num?)?.toDouble() ?? 0;
     double totalExpenses = 0; String expRows = '';
@@ -1325,7 +1393,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final et = e['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
       expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>${en}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${ea.toStringAsFixed(2)}</td></tr>';
     }
-    final cashDiff = totalSales - totalReturns - totalExpenses + openingCash - closingCash;  // +ve = cash short, -ve = cash over
+    double cashSales = 0;
+    for (final t in sales) { cashSales += _posCashCollected(t); }
+    final expectedDrawer = openingCash + cashSales - totalReturns - totalExpenses; // refunds & expenses are cash out of drawer
+    final cashDiff = expectedDrawer - closingCash;  // +ve = cash short, -ve = cash over
     final branch = _session['branches']?['name'] as String? ?? '-';
     final user = ref.read(currentUserProvider);
     final cashier = user?.name ?? user?.id ?? '-';
@@ -1344,14 +1415,22 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final itemStr = items.map((i) { final q = (i['quantity'] as num?)?.toDouble() ?? 0; final p = (i['unit_price'] as num?)?.toDouble() ?? 0; final d = (i['discount'] as num?)?.toDouble() ?? 0; final n = i['products']?['name'] as String? ?? '-'; return '$n × ${q.toStringAsFixed(0)} @ ${p.toStringAsFixed(2)}${d > 0 ? ' (-${d.toStringAsFixed(2)})' : ''}'; }).join('<br>');
       txnRows += '<tr><td>$time</td><td style="font-size:11px;color:#666">${tid.substring(0, 10)}…</td><td>$customer</td><td style="font-size:11px">$itemStr</td><td>$method</td>${disc > 0 ? '<td style="color:#e67e22">-${disc.toStringAsFixed(2)}</td>' : '<td>-</td>'}<td style="text-align:right;font-weight:bold">$total</td></tr>';
     }
+    final Map<String, String> origNumbers = {};
+    final refIds = returns.map((t) => t['reference_transaction_id'] as String?).whereType<String>().toSet().toList();
+    if (refIds.isNotEmpty) {
+      try {
+        final origs = await Supabase.instance.client.from('pos_transactions').select('id, transaction_number').inFilter('id', refIds);
+        for (final o in origs as List) { origNumbers[o['id'] as String] = (o['transaction_number'] as String?) ?? ''; }
+      } catch (_) {}
+    }
     String retRows = '';
     for (final t in returns) {
       final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
-      final refId = t['reference_transaction_id'] as String? ?? '-';
-      final refShort = refId.length > 10 ? '${refId.substring(0, 10)}…' : refId;
+      final refId = t['reference_transaction_id'] as String? ?? '';
+      final refNum = (origNumbers[refId]?.isNotEmpty == true) ? origNumbers[refId]! : (refId.isEmpty ? '-' : refId);
       final total = ((t['total'] as num?)?.toDouble() ?? 0).abs().toStringAsFixed(2);
       final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
-      retRows += '<tr style="background:#fff5f5"><td>$time</td><td>$customer</td><td style="font-size:11px;color:#666">← $refShort</td><td style="text-align:right;color:#e74c3c;font-weight:bold">-$total</td></tr>';
+      retRows += '<tr style="background:#fff5f5"><td>$time</td><td>$customer</td><td style="font-size:12px;color:#666">← $refNum</td><td style="text-align:right;color:#e74c3c;font-weight:bold">-$total</td></tr>';
     }
 
     final htmlContent = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>POS Session Summary</title>
@@ -1388,6 +1467,9 @@ tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;
 ${breakdownRows.isNotEmpty ? '''<h2>Payment Breakdown</h2>
 <table><thead><tr><th>Account / Mode</th><th style="text-align:right">Collected</th></tr></thead>
 <tbody>$breakdownRows</tbody></table>''' : ''}
+${custRows.isNotEmpty ? '''<h2>Customer Account Detail</h2>
+<table><thead><tr><th>Customer</th><th style="text-align:right">Amount</th></tr></thead>
+<tbody>$custRows</tbody></table>''' : ''}
 ${txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
 <table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
 <tbody>$txnRows
@@ -1700,6 +1782,10 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       onSelected: _isOpen ? (_) => setState(() => _paymentMethod = code) : null,
                     );
                   }).toList()),
+                  if (_paymentMethod == 'bank' && _bankAccounts.length > 1) ...[
+                    const SizedBox(height: 8),
+                    _bankDropdown(),
+                  ],
                   if (_methodByCode(_paymentMethod)?['is_credit'] == true) ...[
                     const SizedBox(height: 6),
                     Builder(builder: (_) {
@@ -1726,6 +1812,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                         onChanged: (_) => setState(() {}),
                       )),
                     ])),
+                  if (_bankAccounts.length > 1 && (double.tryParse(_tenderCtrls['bank']?.text.trim() ?? '') ?? 0) > 0) ...[
+                    Padding(padding: const EdgeInsets.only(bottom: 4), child: Row(children: [
+                      const SizedBox(width: 120, child: Text('Bank account', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                      Expanded(child: _bankDropdown()),
+                    ])),
+                  ],
                   const SizedBox(height: 4),
                   Builder(builder: (_) {
                     final tenders = _buildTenders(_cartTotal);
