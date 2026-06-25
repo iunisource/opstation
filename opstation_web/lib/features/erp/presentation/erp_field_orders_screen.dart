@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:js_util' as js_util;
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
 /// Field Orders review queue. Salespeople submit orders from the mobile app;
@@ -18,6 +19,7 @@ class ErpFieldOrdersScreen extends ConsumerStatefulWidget {
 class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
+  String? get _currentBranchId => ref.read(selectedBranchProvider)?['id'] as String?;
 
   String _filter = 'submitted';
   bool _loading = true, _saving = false;
@@ -31,13 +33,25 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
   List<Map<String, dynamic>> _lines = [];    // editable line list
   RealtimeChannel? _channel;
   int _newWhileAway = 0;                      // submitted arrivals while not on Submitted filter
+  List<Map<String, dynamic>> _branches = [];
+  String? _approveBranchId;                    // branch chosen for the order under review
 
   @override
   void initState() {
     super.initState();
     _loadProducts();
     _loadOrders();
+    _loadBranches();
     _subscribe();
+  }
+
+  Future<void> _loadBranches() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final b = await Supabase.instance.client.from('branches')
+          .select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
+      if (mounted) setState(() => _branches = List<Map<String, dynamic>>.from(b));
+    } catch (_) {}
   }
 
   @override
@@ -148,7 +162,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
   }
 
   Future<void> _openOrder(Map<String, dynamic> o) async {
-    setState(() { _selected = o; _lines = []; });
+    setState(() { _selected = o; _lines = []; _approveBranchId = (o['branch_id'] as String?) ?? _currentBranchId; });
     try {
       final items = await Supabase.instance.client.from('field_order_items')
           .select('*').eq('field_order_id', o['id'] as String);
@@ -213,6 +227,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     final o = _selected; if (o == null) return;
     if (_lines.isEmpty) { _snack('Add at least one line before approving'); return; }
     if (_lines.any((l) => (l['quantity'] as double) <= 0)) { _snack('Every line needs a quantity above zero'); return; }
+    if (_approveBranchId == null) { _snack('Select a branch for this order'); return; }
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Approve order?'),
       content: Text('This creates a draft Sales Order for ${_custNames[o['customer_id']] ?? 'this customer'} with ${_lines.length} line(s), priced at current rates. You can finalise and lock it in Sales Orders.'),
@@ -231,7 +246,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
         'id': l['id'], 'field_order_id': foId, 'product_id': l['product_id'],
         'uom_id': l['uom_id'], 'quantity': l['quantity'], 'price_at_submit': l['price_at_submit'],
       }).toList());
-      final soId = await client.rpc('approve_field_order', params: {'p_id': foId, 'p_user': _userId});
+      final soId = await client.rpc('approve_field_order', params: {'p_id': foId, 'p_user': _userId, 'p_branch': _approveBranchId});
       final soNum = await client.from('sales_orders').select('voucher_number').eq('id', soId as String).maybeSingle();
       if (!mounted) return;
       setState(() { _saving = false; _selected = null; });
@@ -355,6 +370,13 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
             const SizedBox(height: 2),
             Text('Submitted by ${_spNames[o['salesperson_id']] ?? '—'}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ])),
+          if (!readOnly && _branches.isNotEmpty) Padding(padding: const EdgeInsets.only(right: 10), child: SizedBox(width: 180, child: DropdownButtonFormField<String>(
+            value: _branches.any((b) => b['id'] == _approveBranchId) ? _approveBranchId : null,
+            isExpanded: true,
+            decoration: const InputDecoration(isDense: true, labelText: 'Branch', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+            items: _branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))).toList(),
+            onChanged: (v) => setState(() => _approveBranchId = v),
+          ))),
           if (!readOnly) OutlinedButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('Add Product'), onPressed: _addLine),
         ])),
         const Divider(height: 1),
