@@ -319,19 +319,33 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     final status = _filter[0].toUpperCase() + _filter.substring(1);
     final reviewed = _filter != 'submitted';
     final rangeLabel = (_fromDate != null || _toDate != null)
-        ? '  (${_fromDate != null ? DateFormat('d MMM yyyy').format(_fromDate!) : '…'} – ${_toDate != null ? DateFormat('d MMM yyyy').format(_toDate!) : '…'})'
+        ? '  (${_fromDate != null ? DateFormat('d MMM yyyy').format(_fromDate!) : '...'} - ${_toDate != null ? DateFormat('d MMM yyyy').format(_toDate!) : '...'})'
         : '';
+    // Resolve SO ids -> SO-YYYY-#### voucher numbers for the Approved export.
+    final Map<String, String> soNums = {};
+    if (_filter == 'approved') {
+      final soIds = _orders.map((o) => o['sales_order_id'] as String?).whereType<String>().toSet().toList();
+      if (soIds.isNotEmpty) {
+        try {
+          final rows = await Supabase.instance.client.from('sales_orders')
+              .select('id, voucher_number').inFilter('id', soIds);
+          for (final r in rows as List) { soNums[r['id'] as String] = (r['voucher_number'] as String?) ?? '-'; }
+        } catch (_) {}
+      }
+    }
     final headers = reviewed
         ? ['Submitted', 'Customer', 'Salesperson', '$status by', 'On', _filter == 'rejected' ? 'Reason' : 'SO #']
         : ['Submitted', 'Customer', 'Salesperson', 'Notes'];
     final rows = _orders.map((o) {
-      final sub = o['submitted_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '—';
-      final cust = _custNames[o['customer_id']] ?? '—';
-      final sp = _spNames[o['salesperson_id']] ?? '—';
+      final sub = o['submitted_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '-';
+      final cust = _custNames[o['customer_id']] ?? '-';
+      final sp = _spNames[o['salesperson_id']] ?? '-';
       if (!reviewed) return [sub, cust, sp, (o['notes'] as String?) ?? ''];
-      final by = _spNames[o['reviewed_by']] ?? '—';
-      final on = o['reviewed_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal()) : '—';
-      final last = _filter == 'rejected' ? ((o['reject_reason'] as String?) ?? '') : ((o['sales_order_id'] as String?) ?? '—');
+      final by = _spNames[o['reviewed_by']] ?? '-';
+      final on = o['reviewed_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal()) : '-';
+      final last = _filter == 'rejected'
+          ? ((o['reject_reason'] as String?) ?? '')
+          : (soNums[o['sales_order_id']] ?? '-');
       return [sub, cust, sp, by, on, last];
     }).toList();
 
@@ -341,14 +355,14 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
       header: (ctx) => ctx.pageNumber == 1 ? pw.SizedBox.shrink() : pw.Padding(
         padding: const pw.EdgeInsets.only(bottom: 8),
-        child: pw.Text('Field Orders — $status', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600))),
+        child: pw.Text('Field Orders - $status', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600))),
       footer: (ctx) => pw.Padding(padding: const pw.EdgeInsets.only(top: 8),
         child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
           pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
           pw.Text('Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
         ])),
       build: (ctx) => [
-        pw.Text('Field Orders — $status$rangeLabel', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+        pw.Text('Field Orders - $status$rangeLabel', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
         pw.Text('${_orders.length} order(s)', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
         pw.SizedBox(height: 12),
