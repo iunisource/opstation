@@ -403,6 +403,10 @@ class DeliveryStops extends Table {
   /// Sales-order or invoice reference number. Nullable.
   TextColumn get soInvoiceNumber => text().nullable()();
 
+  /// Source delivery order id when this stop was created from an approved
+  /// DO (the dispatch DO-picking flow). Null for manually-created stops.
+  TextColumn get doId => text().nullable()();
+
   /// Proof-of-delivery photos captured by the driver, stored as JSON
   /// array of absolute local file paths. Mirrors the pattern used by
   /// the salesperson visits table (photoPathsJson). The actual files
@@ -437,11 +441,14 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
+          if (from < 20) {
+            await m.addColumn(deliveryStops, deliveryStops.doId);
+          }
           if (from < 19) {
             await m.addColumn(customers, customers.syncStatus);
           }

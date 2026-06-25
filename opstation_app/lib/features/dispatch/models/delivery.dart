@@ -213,6 +213,7 @@ class DeliveryStop {
   final DeliveryStopVerification verification;
   final String? driverNote;
   final String? soInvoiceNumber;
+  final String? doId;
   final List<String> photoPaths;
 
   const DeliveryStop({
@@ -235,6 +236,7 @@ class DeliveryStop {
     this.verification = DeliveryStopVerification.pending,
     this.driverNote,
     this.soInvoiceNumber,
+    this.doId,
     this.photoPaths = const [],
   });
 
@@ -268,6 +270,7 @@ class DeliveryStop {
       verification: DeliveryStopVerificationX.fromWire(r.verification),
       driverNote: r.driverNote,
       soInvoiceNumber: r.soInvoiceNumber,
+      doId: r.doId,
       photoPaths: paths,
     );
   }

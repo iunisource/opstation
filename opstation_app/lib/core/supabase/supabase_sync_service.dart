@@ -208,6 +208,7 @@ class SupabaseSyncService {
       'distance_meters': s.distanceMeters,
       'verification': s.verification,
       'photo_paths_json': s.photoPathsJson,
+      'do_id': s.doId,
     });
   }
 
