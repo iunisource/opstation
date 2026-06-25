@@ -1267,6 +1267,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                       'voucher_number': voucherNum,
                       'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
                       'so_id': soId, 'customer_id': so['customer_id'],
+                      'remarks': so['remarks'],
                       'status': 'saved', 'is_locked': false,
                       'created_by': ref.read(currentUserProvider)?.id,
                     });
@@ -1399,6 +1400,20 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   Future<void> _createInvoice() async {
     if (_items.isEmpty) { _showSnack('No items to invoice'); return; }
+    // Guard: one DO -> one live (non-voided) SI. The auto-create path
+    // (_saveDeliveryOrder) and the manual button can both reach here; without
+    // this check a DO can be invoiced twice. Root-cause fix for duplicate SIs.
+    try {
+      final existing = await Supabase.instance.client.from('sales_invoices')
+          .select('voucher_number, is_voided').eq('do_id', _detail['id']);
+      final live = (existing as List).where((s) => (s['is_voided'] as bool? ?? false) == false).toList();
+      if (live.isNotEmpty) {
+        _showSnack('Invoice already exists for this DO (${live.first['voucher_number']})');
+        await _loadList();
+        _loadDetail(_detail['id'] as String);
+        return;
+      }
+    } catch (_) {}
     final orgId = _orgId; final branchId = _detail['branch_id'] as String;
     final userId = ref.read(currentUserProvider)?.id;
     final year = DateTime.now().year;
@@ -1427,6 +1442,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'voucher_number': voucherNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'so_id': _detail['so_id'], 'do_id': _detail['id'], 'customer_id': _detail['customer_id'],
         'subtotal': subtotal, 'discount_total': 0, 'grand_total': subtotal,
+        'remarks': _detail['remarks'],
         'is_locked': false, 'created_by': userId,
       });
       for (int i = 0; i < siItems.length; i++) {
@@ -2222,6 +2238,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   const SizedBox(width: 16),
                   Expanded(child: _InfoRow(label: 'DO #', value: _detail['delivery_orders']?['voucher_number'] as String? ?? '-')),
                 ]),
+                if ((_detail['remarks'] as String?)?.trim().isNotEmpty == true) ...[
+                  const SizedBox(height: 12),
+                  _InfoRow(label: 'Remarks', value: _detail['remarks'] as String? ?? '-'),
+                ],
               ]),
             ),
 
