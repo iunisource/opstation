@@ -1,621 +1,302 @@
-import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
-import '../services/order_photo_capture_service.dart';
-import '../services/order_service.dart';
 
-/// Modal sheet to create a new order.
-///
-/// If [customerId] is provided, the customer is pre-locked and the
-/// picker is hidden. Otherwise the modal loads the salesperson's
-/// route-assigned customers and shows a searchable list.
-class OrderCreateModal extends ConsumerStatefulWidget {
-  final String? customerId;
-  final String? customerName;
-  final String? customerCode;
-
-  const OrderCreateModal({
-    super.key,
-    this.customerId,
-    this.customerName,
-    this.customerCode,
-  });
-
-  static Future<bool?> show(
+/// Salesperson order entry. Opened two ways (both already wired in the app):
+///  - home FAB:      OrderCreateModal.show(context)                      -> search customer
+///  - customer tile: OrderCreateModal.show(context, customerId:…, …)     -> customer preset
+/// Adds products (price read-only) + quantities and submits a field order
+/// (status 'submitted') for admin review on web. Online-only write.
+class OrderCreateModal {
+  static Future<void> show(
     BuildContext context, {
     String? customerId,
     String? customerName,
     String? customerCode,
   }) {
-    return showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    return Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => _OrderCreatePage(
+        presetCustomerId: customerId,
+        presetCustomerName: customerName,
+        presetCustomerCode: customerCode,
       ),
-      builder: (_) => OrderCreateModal(
-        customerId: customerId,
-        customerName: customerName,
-        customerCode: customerCode,
-      ),
-    );
+    ));
   }
-
-  @override
-  ConsumerState<OrderCreateModal> createState() => _OrderCreateModalState();
 }
 
-class _OrderCreateModalState extends ConsumerState<OrderCreateModal> {
-  late final String _orderId;
-  late final TextEditingController _notesCtrl;
-  final TextEditingController _searchCtrl = TextEditingController();
-  final List<String> _photoPaths = [];
-  Timer? _searchDebounce;
+class _OrderCreatePage extends ConsumerStatefulWidget {
+  final String? presetCustomerId, presetCustomerName, presetCustomerCode;
+  const _OrderCreatePage({this.presetCustomerId, this.presetCustomerName, this.presetCustomerCode});
+  @override
+  ConsumerState<_OrderCreatePage> createState() => _OrderCreatePageState();
+}
 
-  // For the customer picker (when no pre-selected customer)
-  Map<String, dynamic>? _selectedCustomer; // {id, shop_name, code}
-  List<Map<String, dynamic>>? _availableCustomers;
-  bool _loadingCustomers = false;
-  String? _customersError;
-
-  bool _capturing = false;
+class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
+  Map<String, dynamic>? _customer; // {id, shop_name, code}
+  final List<Map<String, dynamic>> _lines = [];
+  final _notesCtrl = TextEditingController();
   bool _submitting = false;
-  String? _error;
-
-  bool get _preLocked => widget.customerId != null;
 
   @override
   void initState() {
     super.initState();
-    _orderId =
-        'order_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecond.toRadixString(16)}';
-    _notesCtrl = TextEditingController();
-    if (_preLocked) {
-      _selectedCustomer = {
-        'id': widget.customerId,
-        'shop_name': widget.customerName,
-        'code': widget.customerCode,
+    if (widget.presetCustomerId != null) {
+      _customer = {
+        'id': widget.presetCustomerId,
+        'shop_name': widget.presetCustomerName ?? '—',
+        'code': widget.presetCustomerCode,
       };
-    } else {
-      _loadAssignedCustomers();
     }
   }
 
   @override
-  void dispose() {
-    _notesCtrl.dispose();
-    _searchCtrl.dispose();
-    _searchDebounce?.cancel();
-    super.dispose();
-  }
+  void dispose() { _notesCtrl.dispose(); super.dispose(); }
 
-  Future<void> _loadAssignedCustomers([String query = '']) async {
-    final isFirstLoad = _availableCustomers == null;
-    setState(() {
-      if (isFirstLoad) _loadingCustomers = true;
-      _customersError = null;
-    });
-    try {
-      final auth = ref.read(authControllerProvider).valueOrNull;
-      if (auth == null) {
-        setState(() {
-          _loadingCustomers = false;
-          _customersError = 'Not authenticated';
-        });
-        return;
-      }
-      final orgId = auth.organizationId;
-      if (orgId == null) {
-        setState(() {
-          _loadingCustomers = false;
-          _customersError = 'No organization';
-        });
-        return;
-      }
-      final client = Supabase.instance.client;
+  bool get _preset => widget.presetCustomerId != null;
+  String? get _orgId => ref.read(authControllerProvider).valueOrNull?.organizationId;
+  double get _total => _lines.fold(0.0, (s, l) => s + (l['qty'] as double) * (l['price'] as double));
 
-      // Server-side ilike search. PostgREST caps unbounded selects at
-      // ~1000 rows by default, which is why client-side filtering missed
-      // customers further down the alphabet. Push the filter to Postgres
-      // and cap displayed results at 50 — enough for a dropdown picker.
-      var builder = client
-          .from('customers')
-          .select('id, code, shop_name, phone')
-          .eq('org_id', orgId)
-          .eq('is_active', true);
-
-      final q = query.trim().replaceAll(',', '');
-      if (q.isNotEmpty) {
-        final pattern = '%$q%';
-        builder = builder
-            .or('shop_name.ilike.$pattern,code.ilike.$pattern');
-      }
-
-      final rows = await builder.order('shop_name').limit(50);
-
-      setState(() {
-        _loadingCustomers = false;
-        _availableCustomers = (rows as List).cast<Map<String, dynamic>>();
-      });
-    } catch (e) {
-      setState(() {
-        _loadingCustomers = false;
-        _customersError = e.toString();
-      });
-    }
-  }
-
-  void _onSearchChanged(String value) {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(
-        const Duration(milliseconds: 300),
-        () => _loadAssignedCustomers(value));
-  }
-
-  Future<void> _addPhoto() async {
-    if (_capturing) return;
-    final source = await _pickPhotoSource();
-    if (source == null) return;
-    setState(() => _capturing = true);
-    try {
-      final svc = ref.read(orderPhotoCaptureServiceProvider);
-      final path = await svc.capture(orderId: _orderId, source: source);
-      if (path != null && mounted) {
-        setState(() => _photoPaths.add(path));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Photo error: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _capturing = false);
-    }
-  }
-
-  Future<OrderPhotoSource?> _pickPhotoSource() {
-    return showModalBottomSheet<OrderPhotoSource>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Take photo'),
-              onTap: () => Navigator.of(ctx).pop(OrderPhotoSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Pick from gallery'),
-              onTap: () => Navigator.of(ctx).pop(OrderPhotoSource.gallery),
-            ),
-          ],
-        ),
+  Future<void> _pickCustomer() async {
+    final orgId = _orgId; if (orgId == null) return;
+    final chosen = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context, isScrollControlled: true, backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => _SearchSheet(
+        title: 'Select customer', hint: 'Search shop name…',
+        onSearch: (q) async {
+          var query = Supabase.instance.client.from('customers')
+              .select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true);
+          if (q.isNotEmpty) query = query.ilike('shop_name', '%$q%');
+          final rows = await query.order('shop_name').limit(30);
+          return List<Map<String, dynamic>>.from(rows);
+        },
+        titleOf: (r) => r['shop_name'] as String? ?? '—',
+        subtitleOf: (r) => (r['code'] as String?) ?? '',
       ),
     );
+    if (chosen != null) setState(() => _customer = chosen);
+  }
+
+  Future<void> _addProduct() async {
+    final orgId = _orgId; if (orgId == null) return;
+    final chosen = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context, isScrollControlled: true, backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => _SearchSheet(
+        title: 'Add product', hint: 'Search name or SKU…',
+        onSearch: (q) async {
+          var query = Supabase.instance.client.from('products')
+              .select('id, name, sku, selling_price, base_uom_id').eq('org_id', orgId).eq('is_active', true);
+          if (q.isNotEmpty) query = query.or('name.ilike.%$q%,sku.ilike.%$q%');
+          final rows = await query.order('name').limit(30);
+          return List<Map<String, dynamic>>.from(rows);
+        },
+        titleOf: (r) => r['name'] as String? ?? '—',
+        subtitleOf: (r) => '${r['sku'] ?? ''}   Rs. ${((r['selling_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
+        disabledIf: (r) => _lines.any((l) => l['product_id'] == r['id']),
+      ),
+    );
+    if (chosen != null) {
+      setState(() => _lines.add({
+        'product_id': chosen['id'], 'name': chosen['name'],
+        'price': (chosen['selling_price'] as num?)?.toDouble() ?? 0,
+        'uom_id': chosen['base_uom_id'], 'qty': 1.0,
+      }));
+    }
   }
 
   Future<void> _submit() async {
-    if (_selectedCustomer == null) {
-      setState(() => _error = 'Pick a customer first');
-      return;
-    }
-    final notes = _notesCtrl.text.trim();
-    if (notes.isEmpty && _photoPaths.isEmpty) {
-      setState(() => _error = 'Add a note or a photo');
-      return;
-    }
-    setState(() {
-      _submitting = true;
-      _error = null;
-    });
+    final user = ref.read(authControllerProvider).valueOrNull;
+    final orgId = user?.organizationId;
+    if (_customer == null) { _snack('Select a customer first'); return; }
+    if (_lines.isEmpty) { _snack('Add at least one product'); return; }
+    if (orgId == null || user == null) { _snack('Session error — please sign in again'); return; }
+    setState(() => _submitting = true);
     try {
-      final auth = ref.read(authControllerProvider).valueOrNull;
-      if (auth == null) throw 'Not authenticated';
-      final orgId = auth.organizationId;
-      if (orgId == null) throw 'No organization';
-
-      await ref.read(orderServiceProvider).create(
-            id: _orderId,
-            orgId: orgId,
-            customerId: _selectedCustomer!['id'] as String,
-            customerName: _selectedCustomer!['shop_name'] as String?,
-            customerCode: _selectedCustomer!['code'] as String?,
-            salespersonId: auth.id,
-            salespersonName: auth.name,
-            notes: notes,
-            photoPaths: _photoPaths,
-          );
-      if (!mounted) return;
-      Navigator.of(context).pop(true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Order submitted for review.')),
-      );
-    } catch (e) {
-      setState(() {
-        _submitting = false;
-        _error = e.toString();
+      final client = Supabase.instance.client;
+      final now = DateTime.now().microsecondsSinceEpoch;
+      final foId = 'fo_$now';
+      await client.from('field_orders').insert({
+        'id': foId, 'org_id': orgId, 'customer_id': _customer!['id'],
+        'salesperson_id': user.id, 'status': 'submitted',
+        'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
       });
+      int i = 0;
+      await client.from('field_order_items').insert(_lines.map((l) => {
+        'id': 'foi_${now}_${i++}', 'field_order_id': foId,
+        'product_id': l['product_id'], 'uom_id': l['uom_id'],
+        'quantity': l['qty'], 'price_at_submit': l['price'],
+      }).toList());
+      if (!mounted) return;
+      _snack('Order submitted for review');
+      Navigator.of(context).pop();
+    } catch (e) {
+      final s = e.toString().toLowerCase();
+      final msg = (s.contains('socket') || s.contains('network') || s.contains('connection') || s.contains('failed host'))
+          ? 'No connection — order not submitted. Try again when online.'
+          : 'Could not submit: $e';
+      _snack(msg);
+      setState(() => _submitting = false);
+    }
+  }
+
+  void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF6F7F9),
+      appBar: AppBar(title: const Text('New Order'), backgroundColor: Colors.white, foregroundColor: AppColors.textPrimaryLight, elevation: 0.5),
+      body: Column(children: [
+        Container(width: double.infinity, color: Colors.white, padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('CUSTOMER', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textTertiaryLight, letterSpacing: 0.5)),
+            const SizedBox(height: 6),
+            if (_customer == null)
+              OutlinedButton.icon(icon: const Icon(Icons.person_search, size: 18), label: const Text('Select customer'), onPressed: _pickCustomer)
+            else
+              Row(children: [
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_customer!['shop_name'] as String? ?? '—', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  if ((_customer!['code'] as String?)?.isNotEmpty == true)
+                    Text('#${_customer!['code']}', style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
+                ])),
+                if (!_preset) TextButton(onPressed: _pickCustomer, child: const Text('Change')),
+              ]),
+          ])),
+        const SizedBox(height: 8),
+        Expanded(child: _lines.isEmpty
+          ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.add_shopping_cart_outlined, size: 40, color: AppColors.textTertiaryLight),
+              const SizedBox(height: 8),
+              Text('No products yet', style: TextStyle(color: AppColors.textSecondaryLight)),
+            ]))
+          : ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              itemCount: _lines.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 6),
+              itemBuilder: (_, i) {
+                final l = _lines[i];
+                final qty = l['qty'] as double;
+                final price = l['price'] as double;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.borderLight)),
+                  child: Row(children: [
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(l['name'] as String, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      Text('Rs. ${price.toStringAsFixed(2)} each', style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
+                    ])),
+                    IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: qty <= 1 ? null : () => setState(() => l['qty'] = qty - 1)),
+                    SizedBox(width: 32, child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+                    IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => setState(() => l['qty'] = qty + 1)),
+                    IconButton(icon: const Icon(Icons.close, size: 18, color: Colors.redAccent), onPressed: () => setState(() => _lines.removeAt(i))),
+                  ]),
+                );
+              },
+            )),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: SizedBox(width: double.infinity, child: OutlinedButton.icon(icon: const Icon(Icons.add), label: const Text('Add Product'), onPressed: _addProduct))),
+        Container(color: Colors.white, padding: EdgeInsets.fromLTRB(16, 10, 16, 10 + MediaQuery.of(context).padding.bottom),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(controller: _notesCtrl, decoration: const InputDecoration(hintText: 'Notes (optional)', isDense: true), maxLines: 1),
+            const SizedBox(height: 10),
+            Row(children: [
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${_lines.length} item${_lines.length == 1 ? '' : 's'}', style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
+                Text('Rs. ${_total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              ]),
+              const Spacer(),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14)),
+                onPressed: _submitting ? null : _submit,
+                child: _submitting
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Submit Order', style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ]),
+          ])),
+      ]),
+    );
+  }
+}
+
+/// Reusable search bottom-sheet; taps return the chosen row.
+class _SearchSheet extends StatefulWidget {
+  final String title, hint;
+  final Future<List<Map<String, dynamic>>> Function(String q) onSearch;
+  final String Function(Map<String, dynamic>) titleOf;
+  final String Function(Map<String, dynamic>) subtitleOf;
+  final bool Function(Map<String, dynamic>)? disabledIf;
+  const _SearchSheet({required this.title, required this.hint, required this.onSearch, required this.titleOf, required this.subtitleOf, this.disabledIf});
+  @override
+  State<_SearchSheet> createState() => _SearchSheetState();
+}
+
+class _SearchSheetState extends State<_SearchSheet> {
+  final _ctrl = TextEditingController();
+  List<Map<String, dynamic>> _results = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() { super.initState(); _run(''); }
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  Future<void> _run(String q) async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final r = await widget.onSearch(q);
+      if (!mounted) return;
+      setState(() { _results = r; _loading = false; });
+    } catch (e) {
+      if (!mounted) return;
+      final s = e.toString().toLowerCase();
+      setState(() { _loading = false; _error = (s.contains('connection') || s.contains('socket') || s.contains('network')) ? 'No connection' : 'Search failed'; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final mq = MediaQuery.of(context);
     return Padding(
-      padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _grabber(),
-            _header(),
-            const Divider(height: 1),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _customerSection(),
-                    const SizedBox(height: 16),
-                    _photosSection(),
-                    const SizedBox(height: 16),
-                    _notesSection(),
-                    if (_error != null) ...[
-                      const SizedBox(height: 8),
-                      Text(_error!,
-                          style: const TextStyle(color: AppColors.danger)),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            _footer(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _grabber() => Center(
-        child: Container(
-          margin: const EdgeInsets.only(top: 8, bottom: 4),
-          width: 40,
-          height: 4,
-          decoration: BoxDecoration(
-            color: Colors.grey.shade300,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-      );
-
-  Widget _header() => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
-        child: Row(
-          children: [
-            const Expanded(
-              child: Text('New Order',
-                  style:
-                      TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close, size: 22),
-              onPressed:
-                  _submitting ? null : () => Navigator.of(context).pop(false),
-            ),
-          ],
-        ),
-      );
-
-  Widget _customerSection() {
-    final c = _selectedCustomer;
-    if (_preLocked && c != null) {
-      return _customerCard(c, lockedReason: 'From this route stop');
-    }
-    if (_loadingCustomers && _availableCustomers == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-    if (_customersError != null) {
-      return Text('Could not load customers: $_customersError',
-          style: const TextStyle(color: AppColors.danger));
-    }
-    if (c != null) {
-      return Column(
-        children: [
-          _customerCard(c),
-          const SizedBox(height: 6),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              icon: const Icon(Icons.swap_horiz, size: 16),
-              label: const Text('Change customer'),
-              onPressed: _submitting
-                  ? null
-                  : () => setState(() => _selectedCustomer = null),
-            ),
-          ),
-        ],
-      );
-    }
-    return _customerPicker();
-  }
-
-  Widget _customerCard(Map<String, dynamic> c, {String? lockedReason}) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.primaryLight.withOpacity(0.3),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.primaryLight),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.store, color: AppColors.primary),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  (c['shop_name'] as String?) ?? '(no name)',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w700, fontSize: 15),
-                ),
-                if (c['code'] != null)
-                  Text('#${c['code']}',
-                      style: const TextStyle(
-                          fontSize: 12, color: Colors.black54)),
-                if (lockedReason != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(lockedReason,
-                        style: const TextStyle(
-                            fontSize: 11, color: Colors.black45)),
-                  ),
-              ],
-            ),
-          ),
-          if (lockedReason != null)
-            const Icon(Icons.lock_outline, size: 16, color: Colors.black38),
-        ],
-      ),
-    );
-  }
-
-  Widget _customerPicker() {
-    final filtered = _availableCustomers ?? const [];
-    final hasQuery = _searchCtrl.text.trim().isNotEmpty;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          controller: _searchCtrl,
-          decoration: InputDecoration(
-            hintText: 'Search by name or code',
-            prefixIcon: const Icon(Icons.search, size: 18),
-            isDense: true,
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10)),
-          ),
-          onChanged: _onSearchChanged,
-        ),
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SizedBox(height: MediaQuery.of(context).size.height * 0.75, child: Column(children: [
+        const SizedBox(height: 10),
+        Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.borderLight, borderRadius: BorderRadius.circular(2))),
+        Padding(padding: const EdgeInsets.all(16), child: Row(children: [
+          Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          const Spacer(),
+          IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+        ])),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: TextField(
+          controller: _ctrl, autofocus: true,
+          decoration: InputDecoration(hintText: widget.hint, prefixIcon: const Icon(Icons.search), isDense: true, border: const OutlineInputBorder()),
+          textInputAction: TextInputAction.search,
+          onSubmitted: _run,
+          onChanged: (v) { if (v.isEmpty || v.length >= 2) _run(v); },
+        )),
         const SizedBox(height: 8),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 280),
-          child: filtered.isEmpty
-              ? Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: Text(
-                      hasQuery
-                          ? 'No matches'
-                          : 'No active customers in your org',
-                      style: const TextStyle(color: Colors.black54),
-                    ),
-                  ),
-                )
-              : ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: filtered.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final c = filtered[i];
-                    return ListTile(
-                      leading:
-                          const Icon(Icons.store_outlined, size: 20),
-                      title: Text((c['shop_name'] as String?) ?? '',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w500)),
-                      subtitle:
-                          Text('#${(c['code'] as String?) ?? ''}'),
-                      dense: true,
-                      onTap: () =>
-                          setState(() => _selectedCustomer = c),
-                    );
-                  },
-                ),
-        ),
-      ],
-    );
-  }
-
-  Widget _photosSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Text('Photos',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-            const Spacer(),
-            TextButton.icon(
-              onPressed: _capturing || _submitting ? null : _addPhoto,
-              icon: _capturing
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.add_a_photo_outlined, size: 18),
-              label: const Text('Add photo'),
-            ),
-          ],
-        ),
-        if (_photoPaths.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text('No photos yet (optional)',
-                style: TextStyle(
-                    color: Colors.grey.shade600, fontSize: 13)),
-          )
-        else
-          SizedBox(
-            height: 90,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _photoPaths.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final path = _photoPaths[i];
-                return Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.network(
-                        Supabase.instance.client.storage
-                            .from('opstation-photos')
-                            .getPublicUrl(path),
-                        width: 90,
-                        height: 90,
-                        fit: BoxFit.cover,
-                        loadingBuilder: (_, child, progress) {
-                          if (progress == null) return child;
-                          return Container(
-                            width: 90,
-                            height: 90,
-                            color: Colors.grey.shade100,
-                            alignment: Alignment.center,
-                            child: const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2),
-                            ),
-                          );
-                        },
-                        errorBuilder: (_, __, ___) => Container(
-                          width: 90,
-                          height: 90,
-                          color: Colors.grey.shade100,
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.broken_image_outlined,
-                              size: 22, color: Colors.black38),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 2,
-                      right: 2,
-                      child: InkWell(
-                        onTap: _submitting
-                            ? null
-                            : () => setState(() => _photoPaths.removeAt(i)),
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: const BoxDecoration(
-                            color: Colors.black54,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.close,
-                              size: 14, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _notesSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('Order details',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _notesCtrl,
-          maxLines: 5,
-          minLines: 3,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: InputDecoration(
-            hintText: 'Items, quantities, special instructions…',
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _footer() {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _submitting
-                    ? null
-                    : () => Navigator.of(context).pop(false),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(0, 48),
-                ),
-                child: const Text('Cancel'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              flex: 2,
-              child: ElevatedButton.icon(
-                onPressed: _submitting ? null : _submit,
-                icon: _submitting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.send, size: 18),
-                label: const Text('Submit'),
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size(0, 48),
-                  backgroundColor: AppColors.primary,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+        Expanded(child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+            ? Center(child: Text(_error!, style: TextStyle(color: AppColors.textSecondaryLight)))
+            : _results.isEmpty
+              ? Center(child: Text('No results', style: TextStyle(color: AppColors.textSecondaryLight)))
+              : ListView.builder(itemCount: _results.length, itemBuilder: (_, i) {
+                  final r = _results[i];
+                  final disabled = widget.disabledIf?.call(r) ?? false;
+                  return ListTile(
+                    title: Text(widget.titleOf(r), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    subtitle: Text(widget.subtitleOf(r), style: const TextStyle(fontSize: 12)),
+                    trailing: disabled ? const Icon(Icons.check, color: Colors.green, size: 18) : const Icon(Icons.chevron_right),
+                    onTap: disabled ? null : () => Navigator.pop(context, r),
+                  );
+                })),
+      ])),
     );
   }
 }
