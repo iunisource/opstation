@@ -798,6 +798,9 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   String _statusFilter = 'all';
   // inline delivery qty
   final Map<String, TextEditingController> _deliverQtyCtrl = {};
+  // collect-amount at DO approval (default off = non-collection delivery)
+  bool _collectEnabled = false;
+  num? _collectAmount;
 
   @override
   void initState() { super.initState(); _loadList(); }
@@ -875,6 +878,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _linkedSo = Map<String,dynamic>.from(so);
         _stockByProduct = stockMap;
         _meta = meta;
+        _collectAmount = (do_['collect_amount'] as num?);
+        _collectEnabled = _collectAmount != null;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -1298,6 +1303,51 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     } catch (_) {}
   }
 
+  Widget _collectToggle() {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      const Text('Collect', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      Switch(
+        value: _collectEnabled,
+        onChanged: (v) async {
+          if (v) {
+            final amt = await _promptCollectAmount();
+            if (amt != null && amt > 0) {
+              setState(() { _collectEnabled = true; _collectAmount = amt; });
+            }
+          } else {
+            setState(() { _collectEnabled = false; _collectAmount = null; });
+          }
+        },
+      ),
+      if (_collectEnabled && _collectAmount != null)
+        InkWell(
+          onTap: () async {
+            final amt = await _promptCollectAmount();
+            if (amt != null && amt > 0) setState(() => _collectAmount = amt);
+          },
+          child: Text('Rs. ${_collectAmount!.toStringAsFixed(0)}',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+        ),
+    ]);
+  }
+
+  Future<num?> _promptCollectAmount() async {
+    final ctrl = TextEditingController(text: _collectAmount?.toStringAsFixed(0) ?? '');
+    return showDialog<num>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Amount to collect'),
+      content: TextField(
+        controller: ctrl, autofocus: true,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(labelText: 'Amount (Rs.)', prefixText: 'Rs. '),
+        onSubmitted: (_) => Navigator.pop(ctx, num.tryParse(ctrl.text.trim())),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, num.tryParse(ctrl.text.trim())), child: const Text('Set')),
+      ],
+    ));
+  }
+
   Future<void> _saveDeliveryOrder() async {
     await _saveDelivery();
     // Lock the DO after saving
@@ -1306,6 +1356,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'is_locked': true,
         'locked_by': ref.read(currentUserProvider)?.id,
         'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'collect_amount': _collectEnabled ? _collectAmount : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved');
@@ -1635,7 +1686,9 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           ],
           const Spacer(),
           if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
-            ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Save Delivery Order')),
+            _collectToggle(),
+            const SizedBox(width: 10),
+            ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
             const SizedBox(width: 8),
           ],
           if (!isVoided && !isInvoiced && _items.isNotEmpty) ...[
