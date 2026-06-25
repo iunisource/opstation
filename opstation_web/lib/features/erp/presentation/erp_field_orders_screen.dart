@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'dart:js_util' as js_util;
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -28,12 +29,84 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
 
   Map<String, dynamic>? _selected;          // the order open for review
   List<Map<String, dynamic>> _lines = [];    // editable line list
+  RealtimeChannel? _channel;
+  int _newWhileAway = 0;                      // submitted arrivals while not on Submitted filter
 
   @override
   void initState() {
     super.initState();
     _loadProducts();
     _loadOrders();
+    _subscribe();
+  }
+
+  @override
+  void dispose() {
+    final ch = _channel;
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
+    super.dispose();
+  }
+
+  void _subscribe() {
+    final orgId = _orgId; if (orgId == null) return;
+    _channel = Supabase.instance.client
+        .channel('field_orders_$orgId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'field_orders',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
+          callback: (payload) => _onNewOrder(payload.newRecord),
+        )
+        .subscribe();
+  }
+
+  Future<void> _onNewOrder(Map<String, dynamic> row) async {
+    if ((row['status'] as String?) != 'submitted') return;
+    _playNewOrderTone();
+    if (_filter == 'submitted') {
+      // resolve names then prepend silently
+      final cid = row['customer_id'] as String?;
+      final sid = row['salesperson_id'] as String?;
+      try {
+        if (cid != null && !_custNames.containsKey(cid)) {
+          final c = await Supabase.instance.client.from('customers').select('shop_name').eq('id', cid).maybeSingle();
+          if (c != null) _custNames[cid] = (c['shop_name'] as String?) ?? '—';
+        }
+        if (sid != null && !_spNames.containsKey(sid)) {
+          final u = await Supabase.instance.client.from('users').select('name').eq('id', sid).maybeSingle();
+          if (u != null) _spNames[sid] = (u['name'] as String?) ?? '—';
+        }
+      } catch (_) {}
+      if (!mounted) return;
+      if (!_orders.any((o) => o['id'] == row['id'])) {
+        setState(() => _orders = [row, ..._orders]);
+      }
+    } else {
+      // on another filter: just badge the Submitted chip
+      if (!mounted) return;
+      setState(() => _newWhileAway += 1);
+    }
+  }
+
+  // Distinct two-tone "ding-dong" (different from the POS rising chime).
+  void _playNewOrderTone() {
+    _tone(880, 0.18, 'sine');
+    Future.delayed(const Duration(milliseconds: 180), () => _tone(587, 0.28, 'sine'));
+  }
+
+  void _tone(double freq, double duration, String type) {
+    try {
+      js_util.callMethod(js_util.globalThis, 'eval', [
+        'try{var a=new(window.AudioContext||window.webkitAudioContext)();'
+        'var o=a.createOscillator();var g=a.createGain();'
+        'o.connect(g);g.connect(a.destination);'
+        'o.type="$type";o.frequency.value=$freq;'
+        'g.gain.setValueAtTime(0.3,a.currentTime);'
+        'g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+$duration);'
+        'o.start();o.stop(a.currentTime+$duration);}catch(e){}'
+      ]);
+    } catch (_) {}
   }
 
   Future<void> _loadProducts() async {
@@ -193,6 +266,24 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
+  Future<void> _editQty(Map<String, dynamic> line) async {
+    final ctrl = TextEditingController(text: (line['quantity'] as double).toStringAsFixed(0));
+    final v = await showDialog<double>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(line['name'] as String? ?? 'Quantity', style: const TextStyle(fontSize: 15)),
+      content: TextField(
+        controller: ctrl, autofocus: true,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(labelText: 'Quantity'),
+        onSubmitted: (_) => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())), child: const Text('Set')),
+      ],
+    ));
+    if (v != null && v > 0) setState(() => line['quantity'] = v);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -203,9 +294,11 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       Row(children: [
         for (final f in const ['submitted', 'approved', 'rejected'])
           Padding(padding: const EdgeInsets.only(right: 8), child: ChoiceChip(
-            label: Text(f[0].toUpperCase() + f.substring(1)),
+            label: Text(f == 'submitted' && _newWhileAway > 0 && _filter != 'submitted'
+                ? '${f[0].toUpperCase()}${f.substring(1)} ($_newWhileAway new)'
+                : f[0].toUpperCase() + f.substring(1)),
             selected: _filter == f,
-            onSelected: (_) { setState(() { _filter = f; _selected = null; }); _loadOrders(); })),
+            onSelected: (_) { setState(() { _filter = f; _selected = null; if (f == 'submitted') _newWhileAway = 0; }); _loadOrders(); })),
         const Spacer(),
         IconButton(icon: const Icon(Icons.refresh), tooltip: 'Refresh', onPressed: _loadOrders),
       ]),
@@ -284,7 +377,15 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
                     Text('× ${qty.toStringAsFixed(0)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))
                   else ...[
                     IconButton(icon: const Icon(Icons.remove_circle_outline, size: 20), onPressed: qty <= 1 ? null : () => setState(() => l['quantity'] = qty - 1)),
-                    SizedBox(width: 46, child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
+                    InkWell(
+                      onTap: () => _editQty(l),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        width: 52, padding: const EdgeInsets.symmetric(vertical: 4),
+                        decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6)),
+                        child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                      ),
+                    ),
                     IconButton(icon: const Icon(Icons.add_circle_outline, size: 20), onPressed: () => setState(() => l['quantity'] = qty + 1)),
                   ],
                   SizedBox(width: 92, child: Text('Rs. ${(qty * price).toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
