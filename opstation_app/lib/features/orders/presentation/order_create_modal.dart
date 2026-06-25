@@ -82,16 +82,42 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
 
   Future<void> _addProduct() async {
     final orgId = _orgId; if (orgId == null) return;
+    // Step 1: pick a brand (product_sub_group). Step 2: pick a product within it.
+    final brandRow = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context, isScrollControlled: true, backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => _SearchSheet(
+        title: 'Select brand', hint: 'Search brand…',
+        onSearch: (q) async {
+          var query = Supabase.instance.client.from('products')
+              .select('product_sub_group').eq('org_id', orgId).eq('is_active', true)
+              .not('product_sub_group', 'is', null);
+          if (q.isNotEmpty) query = query.ilike('product_sub_group', '%$q%');
+          final rows = await query.limit(5000);
+          final brands = <String>{for (final r in rows as List) (r['product_sub_group'] as String?) ?? ''}..removeWhere((b) => b.isEmpty);
+          final sorted = brands.toList()..sort();
+          return sorted.map((b) => {'brand': b}).toList();
+        },
+        titleOf: (r) => r['brand'] as String,
+        subtitleOf: (_) => '',
+      ),
+    );
+    if (brandRow == null) return;
+    await _pickProductInBrand(orgId, brandRow['brand'] as String);
+  }
+
+  Future<void> _pickProductInBrand(String orgId, String brand) async {
     final chosen = await showModalBottomSheet<Map<String, dynamic>>(
       context: context, isScrollControlled: true, backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) => _SearchSheet(
-        title: 'Add product', hint: 'Search name or SKU…',
+        title: brand, hint: 'Search name or SKU…',
         onSearch: (q) async {
           var query = Supabase.instance.client.from('products')
-              .select('id, name, sku, selling_price, base_uom_id').eq('org_id', orgId).eq('is_active', true);
+              .select('id, name, sku, selling_price, base_uom_id')
+              .eq('org_id', orgId).eq('is_active', true).eq('product_sub_group', brand);
           if (q.isNotEmpty) query = query.or('name.ilike.%$q%,sku.ilike.%$q%');
-          final rows = await query.order('name').limit(30);
+          final rows = await query.order('name').limit(200);
           return List<Map<String, dynamic>>.from(rows);
         },
         titleOf: (r) => r['name'] as String? ?? '—',
@@ -145,6 +171,24 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
+  Future<void> _editQty(Map<String, dynamic> line) async {
+    final ctrl = TextEditingController(text: (line['qty'] as double).toStringAsFixed(0));
+    final v = await showDialog<double>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(line['name'] as String, style: const TextStyle(fontSize: 15)),
+      content: TextField(
+        controller: ctrl, autofocus: true,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(labelText: 'Quantity'),
+        onSubmitted: (_) => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())), child: const Text('Set')),
+      ],
+    ));
+    if (v != null && v > 0) setState(() => line['qty'] = v);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -191,7 +235,14 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
                       Text('Rs. ${price.toStringAsFixed(2)} each', style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
                     ])),
                     IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: qty <= 1 ? null : () => setState(() => l['qty'] = qty - 1)),
-                    SizedBox(width: 32, child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+                    GestureDetector(
+                      onTap: () => _editQty(l),
+                      child: Container(
+                        width: 44, padding: const EdgeInsets.symmetric(vertical: 4),
+                        decoration: BoxDecoration(border: Border.all(color: AppColors.borderLight), borderRadius: BorderRadius.circular(6)),
+                        child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      ),
+                    ),
                     IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => setState(() => l['qty'] = qty + 1)),
                     IconButton(icon: const Icon(Icons.close, size: 18, color: Colors.redAccent), onPressed: () => setState(() => _lines.removeAt(i))),
                   ]),
