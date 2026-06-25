@@ -1311,7 +1311,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved');
     } catch (_) {}
     // Auto create invoice
-    await _createInvoice();
+    await _createInvoice(auto: true);
   }
 
   Future<void> _saveDelivery() async {
@@ -1398,20 +1398,27 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  Future<void> _createInvoice() async {
-    if (_items.isEmpty) { _showSnack('No items to invoice'); return; }
-    // Guard: one DO -> one live (non-voided) SI. The auto-create path
-    // (_saveDeliveryOrder) and the manual button can both reach here; without
-    // this check a DO can be invoiced twice. Root-cause fix for duplicate SIs.
+  Future<void> _createInvoice({bool auto = false}) async {
+    if (_items.isEmpty) { if (!auto) _showSnack('No items to invoice'); return; }
+    // A DO may legitimately carry more than one invoice. But the auto path
+    // (right after a DO save) must never silently create a second one — that
+    // was the accidental-duplicate source. The manual button asks first.
     try {
       final existing = await Supabase.instance.client.from('sales_invoices')
           .select('voucher_number, is_voided').eq('do_id', _detail['id']);
       final live = (existing as List).where((s) => (s['is_voided'] as bool? ?? false) == false).toList();
       if (live.isNotEmpty) {
-        _showSnack('Invoice already exists for this DO (${live.first['voucher_number']})');
-        await _loadList();
-        _loadDetail(_detail['id'] as String);
-        return;
+        if (auto) return; // first invoice already exists — don't auto-duplicate
+        final nums = live.map((s) => s['voucher_number']).join(', ');
+        final again = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+          title: const Text('Invoice already exists'),
+          content: Text('This delivery order already has: $nums.\n\nCreate another invoice for it?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Create Another')),
+          ],
+        ));
+        if (again != true) return;
       }
     } catch (_) {}
     final orgId = _orgId; final branchId = _detail['branch_id'] as String;
