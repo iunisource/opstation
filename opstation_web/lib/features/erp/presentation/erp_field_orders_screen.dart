@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'dart:js_util' as js_util;
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
@@ -22,6 +25,8 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
   String? get _currentBranchId => ref.read(selectedBranchProvider)?['id'] as String?;
 
   String _filter = 'submitted';
+  DateTime? _fromDate;                          // review-date range (approved/rejected)
+  DateTime? _toDate;
   bool _loading = true, _saving = false;
   List<Map<String, dynamic>> _orders = [];
   final Map<String, String> _custNames = {};
@@ -144,17 +149,29 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
-      final orders = List<Map<String, dynamic>>.from(await client.from('field_orders')
-          .select('*').eq('org_id', orgId).eq('status', _filter)
-          .order('submitted_at', ascending: false));
+      var q = client.from('field_orders')
+          .select('*').eq('org_id', orgId).eq('status', _filter);
+      // Approved/Rejected can be narrowed by review-date range.
+      if (_filter != 'submitted' && _fromDate != null) {
+        q = q.gte('reviewed_at', _fromDate!.toUtc().toIso8601String());
+      }
+      if (_filter != 'submitted' && _toDate != null) {
+        final end = DateTime(_toDate!.year, _toDate!.month, _toDate!.day, 23, 59, 59);
+        q = q.lte('reviewed_at', end.toUtc().toIso8601String());
+      }
+      final orders = List<Map<String, dynamic>>.from(await q.order('submitted_at', ascending: false));
       final custIds = orders.map((o) => o['customer_id'] as String?).whereType<String>().toSet().toList();
-      final spIds = orders.map((o) => o['salesperson_id'] as String?).whereType<String>().toSet().toList();
+      // salespeople + reviewers are both users — resolve all names in one lookup
+      final userIds = {
+        ...orders.map((o) => o['salesperson_id'] as String?).whereType<String>(),
+        ...orders.map((o) => o['reviewed_by'] as String?).whereType<String>(),
+      }.toList();
       if (custIds.isNotEmpty) {
         final cs = await client.from('customers').select('id, shop_name').inFilter('id', custIds);
         for (final c in cs as List) { _custNames[c['id'] as String] = (c['shop_name'] as String?) ?? '—'; }
       }
-      if (spIds.isNotEmpty) {
-        final us = await client.from('users').select('id, name').inFilter('id', spIds);
+      if (userIds.isNotEmpty) {
+        final us = await client.from('users').select('id, name').inFilter('id', userIds);
         for (final u in us as List) { _spNames[u['id'] as String] = (u['name'] as String?) ?? '—'; }
       }
       setState(() { _orders = orders; _loading = false; });
@@ -281,6 +298,85 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 3),
+      lastDate: DateTime(now.year + 1),
+      initialDateRange: (_fromDate != null && _toDate != null)
+          ? DateTimeRange(start: _fromDate!, end: _toDate!) : null,
+    );
+    if (picked != null) {
+      setState(() { _fromDate = picked.start; _toDate = picked.end; });
+      _loadOrders();
+    }
+  }
+
+  // Export the orders currently in view (the selected filter + any date range).
+  Future<void> _exportPdf() async {
+    if (_orders.isEmpty) { _snack('Nothing to export'); return; }
+    final status = _filter[0].toUpperCase() + _filter.substring(1);
+    final reviewed = _filter != 'submitted';
+    final rangeLabel = (_fromDate != null || _toDate != null)
+        ? '  (${_fromDate != null ? DateFormat('d MMM yyyy').format(_fromDate!) : '…'} – ${_toDate != null ? DateFormat('d MMM yyyy').format(_toDate!) : '…'})'
+        : '';
+    final headers = reviewed
+        ? ['Submitted', 'Customer', 'Salesperson', '$status by', 'On', _filter == 'rejected' ? 'Reason' : 'SO #']
+        : ['Submitted', 'Customer', 'Salesperson', 'Notes'];
+    final rows = _orders.map((o) {
+      final sub = o['submitted_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '—';
+      final cust = _custNames[o['customer_id']] ?? '—';
+      final sp = _spNames[o['salesperson_id']] ?? '—';
+      if (!reviewed) return [sub, cust, sp, (o['notes'] as String?) ?? ''];
+      final by = _spNames[o['reviewed_by']] ?? '—';
+      final on = o['reviewed_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal()) : '—';
+      final last = _filter == 'rejected' ? ((o['reject_reason'] as String?) ?? '') : ((o['sales_order_id'] as String?) ?? '—');
+      return [sub, cust, sp, by, on, last];
+    }).toList();
+
+    final doc = pw.Document();
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+      header: (ctx) => ctx.pageNumber == 1 ? pw.SizedBox.shrink() : pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 8),
+        child: pw.Text('Field Orders — $status', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600))),
+      footer: (ctx) => pw.Padding(padding: const pw.EdgeInsets.only(top: 8),
+        child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+          pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+          pw.Text('Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+        ])),
+      build: (ctx) => [
+        pw.Text('Field Orders — $status$rangeLabel', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 2),
+        pw.Text('${_orders.length} order(s)', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+        pw.SizedBox(height: 12),
+        pw.Table(
+          border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+          columnWidths: reviewed
+              ? {0: const pw.FlexColumnWidth(2.2), 1: const pw.FlexColumnWidth(2.4), 2: const pw.FlexColumnWidth(1.8), 3: const pw.FlexColumnWidth(1.8), 4: const pw.FlexColumnWidth(2.2), 5: const pw.FlexColumnWidth(2.6)}
+              : {0: const pw.FlexColumnWidth(2.2), 1: const pw.FlexColumnWidth(2.6), 2: const pw.FlexColumnWidth(2), 3: const pw.FlexColumnWidth(3.2)},
+          children: [
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+              children: headers.map((h) => pw.Padding(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: pw.Text(h, style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+              )).toList(),
+            ),
+            for (final r in rows)
+              pw.TableRow(children: r.map((c) => pw.Padding(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                child: pw.Text(c, style: const pw.TextStyle(fontSize: 9)),
+              )).toList()),
+          ],
+        ),
+      ],
+    ));
+    await Printing.layoutPdf(onLayout: (PdfPageFormat f) async => doc.save(), name: 'field_orders_$_filter');
+  }
+
   Future<void> _editQty(Map<String, dynamic> line) async {
     final ctrl = TextEditingController(text: (line['quantity'] as double).toStringAsFixed(0));
     final v = await showDialog<double>(context: context, builder: (ctx) => AlertDialog(
@@ -315,6 +411,21 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
             selected: _filter == f,
             onSelected: (_) { setState(() { _filter = f; _selected = null; if (f == 'submitted') _newWhileAway = 0; }); _loadOrders(); })),
         const Spacer(),
+        if (_filter != 'submitted') ...[
+          OutlinedButton.icon(
+            icon: const Icon(Icons.date_range, size: 16),
+            label: Text(_fromDate == null && _toDate == null
+                ? 'Date range'
+                : '${_fromDate != null ? DateFormat('d MMM').format(_fromDate!) : '…'} – ${_toDate != null ? DateFormat('d MMM').format(_toDate!) : '…'}'),
+            onPressed: _pickDateRange,
+          ),
+          if (_fromDate != null || _toDate != null)
+            IconButton(icon: const Icon(Icons.clear, size: 18), tooltip: 'Clear range',
+              onPressed: () { setState(() { _fromDate = null; _toDate = null; }); _loadOrders(); }),
+          const SizedBox(width: 8),
+        ],
+        OutlinedButton.icon(icon: const Icon(Icons.picture_as_pdf, size: 16), label: const Text('Export PDF'), onPressed: _exportPdf),
+        const SizedBox(width: 8),
         IconButton(icon: const Icon(Icons.refresh), tooltip: 'Refresh', onPressed: _loadOrders),
       ]),
       const SizedBox(height: 12),
@@ -369,6 +480,16 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
             Text(_custNames[o['customer_id']] ?? 'Customer', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text('Submitted by ${_spNames[o['salesperson_id']] ?? '—'}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            if (readOnly && o['reviewed_at'] != null) Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                '${o['status'] == 'approved' ? 'Approved' : 'Rejected'} by '
+                '${_spNames[o['reviewed_by']] ?? '—'} · '
+                '${DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal())}',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                  color: o['status'] == 'approved' ? AppTheme.success : AppTheme.danger),
+              ),
+            ),
           ])),
           if (!readOnly && _branches.isNotEmpty) Padding(padding: const EdgeInsets.only(right: 10), child: SizedBox(width: 180, child: DropdownButtonFormField<String>(
             value: _branches.any((b) => b['id'] == _approveBranchId) ? _approveBranchId : null,
