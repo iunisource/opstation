@@ -69,6 +69,7 @@ class _ErpStockAdjustmentScreenState
   List<Map<String, dynamic>> _products = [];
   Map<String, Map<String, dynamic>> _prodById = {};
   String? _pickProductId;
+  TextEditingController? _pickProductCtrl; // bound by the Autocomplete field
   final TextEditingController _pickIn = TextEditingController();
   final TextEditingController _pickOut = TextEditingController();
 
@@ -110,7 +111,7 @@ class _ErpStockAdjustmentScreenState
       // products(id, name, base_uom_id, is_active, org_id)
       final rows = await _supa
           .from('products')
-          .select('id, name, base_uom_id')
+          .select('id, name, sku, base_uom_id')
           .eq('org_id', _orgId)
           .eq('is_active', true)
           .order('name');
@@ -232,6 +233,7 @@ class _ErpStockAdjustmentScreenState
         outQty: outQ,
       ));
       _pickProductId = null;
+      _pickProductCtrl?.clear();
       _pickIn.clear();
       _pickOut.clear();
     });
@@ -674,18 +676,54 @@ class _ErpStockAdjustmentScreenState
               children: [
                 Expanded(
                   flex: 4,
-                  child: DropdownButtonFormField<String>(
-                    value: _pickProductId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Product', isDense: true),
-                    items: [
-                      for (final p in _products)
-                        DropdownMenuItem(
-                          value: p['id'] as String,
-                          child: Text((p['name'] ?? '') as String, overflow: TextOverflow.ellipsis),
+                  child: Autocomplete<Map<String, dynamic>>(
+                    displayStringForOption: (p) => (p['name'] ?? '') as String,
+                    optionsBuilder: (TextEditingValue tev) {
+                      final q = tev.text.trim().toLowerCase();
+                      if (q.isEmpty) return _products;
+                      return _products.where((p) =>
+                          ((p['name'] ?? '') as String).toLowerCase().contains(q) ||
+                          ((p['sku'] ?? '') as String).toLowerCase().contains(q));
+                    },
+                    onSelected: (p) => setState(() => _pickProductId = p['id'] as String),
+                    fieldViewBuilder: (context, ctrl, focus, onSubmit) {
+                      _pickProductCtrl = ctrl;
+                      return TextField(
+                        controller: ctrl,
+                        focusNode: focus,
+                        decoration: const InputDecoration(
+                          labelText: 'Product', isDense: true,
+                          hintText: 'Search name or SKU…',
+                          prefixIcon: Icon(Icons.search, size: 18),
                         ),
-                    ],
-                    onChanged: (v) => setState(() => _pickProductId = v),
+                        onChanged: (_) { if (_pickProductId != null) setState(() => _pickProductId = null); },
+                      );
+                    },
+                    optionsViewBuilder: (context, onSelected, options) {
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 320, maxWidth: 420),
+                            child: ListView.builder(
+                              padding: EdgeInsets.zero,
+                              shrinkWrap: true,
+                              itemCount: options.length,
+                              itemBuilder: (_, i) {
+                                final p = options.elementAt(i);
+                                return ListTile(
+                                  dense: true,
+                                  title: Text((p['name'] ?? '') as String, style: const TextStyle(fontSize: 13)),
+                                  subtitle: ((p['sku'] ?? '') as String).isEmpty ? null : Text(p['sku'] as String, style: const TextStyle(fontSize: 11)),
+                                  onTap: () => onSelected(p),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(width: 12),
