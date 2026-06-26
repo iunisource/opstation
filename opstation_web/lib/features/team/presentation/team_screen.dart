@@ -30,6 +30,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
           .from('users')
           .select()
           .eq('org_id', orgId)
+          .neq('role', 'retailer')
           .order('name');
       setState(() { _users = List<Map<String, dynamic>>.from(rows); _loading = false; });
     } catch (_) { setState(() => _loading = false); }

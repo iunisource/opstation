@@ -25,6 +25,56 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
   @override
+  void initState() {
+    super.initState();
+    _loadExisting();
+  }
+
+  /// Preload customers that already have a retailer login, so the screen
+  /// opens showing existing accounts rather than a blank search.
+  Future<void> _loadExisting() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    setState(() => _searching = true);
+    try {
+      final client = Supabase.instance.client;
+      final loginRows = await client
+          .from('users')
+          .select('customer_id, email, password_temporary, is_active')
+          .eq('org_id', orgId)
+          .eq('role', 'retailer');
+      final logins = <String, Map<String, dynamic>>{};
+      final ids = <String>[];
+      for (final l in loginRows as List) {
+        final cid = l['customer_id'] as String?;
+        if (cid == null) continue;
+        logins[cid] = Map<String, dynamic>.from(l);
+        ids.add(cid);
+      }
+      var results = <Map<String, dynamic>>[];
+      if (ids.isNotEmpty) {
+        final rows = await client
+            .from('customers')
+            .select('id, shop_name, code, phone, location_capture_allowed')
+            .inFilter('id', ids)
+            .order('shop_name');
+        results = List<Map<String, dynamic>>.from(rows);
+      }
+      if (!mounted) return;
+      setState(() {
+        _logins
+          ..clear()
+          ..addAll(logins);
+        _results = results;
+        _searching = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _searching = false);
+    }
+  }
+
+  @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
@@ -170,7 +220,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Retailers',
+          const Text('Retailer Accounts',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           const Text(
@@ -206,7 +256,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
           Expanded(
             child: _results.isEmpty
                 ? const Center(
-                    child: Text('Search for a customer to begin.',
+                    child: Text('No retailer accounts yet. Search for a customer to create one.',
                         style: TextStyle(color: AppTheme.textSecondary)))
                 : ListView.separated(
                     itemCount: _results.length,
