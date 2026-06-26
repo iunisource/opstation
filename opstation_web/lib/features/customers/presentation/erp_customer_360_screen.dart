@@ -965,37 +965,54 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
               ),
             ),
           ],
-          if (!_loadingAr && owed.abs() > 0.005 && !isCredit) ...[
+          if (!_loadingAr && !isCredit && creditLimit != null && creditLimit > 0) ...[
             const SizedBox(height: 14),
-            _agingBar(),
+            _creditUtilizationBar(creditLimit),
           ],
         ],
       ),
     );
   }
 
-  Widget _agingBar() {
-    final segs = <(double, Color)>[
-      (_current.clamp(0, double.infinity), AppTheme.success),
-      (_b1, AppTheme.warning),
-      (_b2, Colors.orange),
-      (_b3, Colors.deepOrange),
-      (_b4, AppTheme.danger),
-    ];
-    final sum = segs.fold<double>(0, (s, e) => s + e.$1);
-    if (sum <= 0) return const SizedBox.shrink();
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(6),
-      child: Row(
-        children: [
-          for (final s in segs)
-            if (s.$1 > 0)
-              Expanded(
-                flex: (s.$1 / sum * 1000).round().clamp(1, 1000000),
-                child: Container(height: 8, color: s.$2),
-              ),
-        ],
-      ),
+  /// Credit-limit utilization: how much of the customer's credit limit the
+  /// current outstanding consumes. Green < 75%, amber 75–90%, deep-orange
+  /// 90–100%, red over limit (bar caps full). Only shown when a positive
+  /// limit is set and the customer isn't in a credit balance.
+  Widget _creditUtilizationBar(double creditLimit) {
+    final owed = _arTotal;
+    final ratio = owed / creditLimit;
+    final filled = (ratio.clamp(0.0, 1.0)).toDouble();
+    final over = ratio > 1.0 + 1e-6;
+    final color = over
+        ? AppTheme.danger
+        : (ratio >= 0.9
+            ? Colors.deepOrange
+            : (ratio >= 0.75 ? AppTheme.warning : AppTheme.success));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('Credit used',
+                style:
+                    TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const Spacer(),
+            Text('${(ratio * 100).round()}%',
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: filled,
+            minHeight: 8,
+            backgroundColor: AppTheme.border,
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+          ),
+        ),
+      ],
     );
   }
 
