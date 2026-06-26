@@ -506,7 +506,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
 
         if (isErpUser) ...[
           if (erpMenuItems.isNotEmpty) ...splitErpMenus(),
-          _navButton(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
+          // Operations menu surfaces for erpUsers with Files only (unconditional);
+          // the other Operations items stay admin-only (not registry-gated, so
+          // they cannot be permission-scoped — kept in the isAdminTier block).
+          _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
+            ['/operations/files'],
+            [_menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location)]),
         ],
   ];
 }
