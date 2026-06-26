@@ -152,14 +152,16 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     // 1. Sales Invoices -> Debit
     try {
       // Org-wide: a customer's receivable is owed to the org, not a branch.
-      final sis = await client.from('sales_invoices').select('*')
+      final sis = await client.from('sales_invoices').select('*, sales_orders(remarks)')
           .eq('org_id', orgId).eq('customer_id', customerId);
       for (final si in sis as List) {
         final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;
         final vno = ((si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '') as String);
         final date = extractDate(si as Map, const ['voucher_date', 'invoice_date', 'si_date', 'date', 'posted_at', 'created_at']);
         if (total > 0) {
-          final rmk = (si['remarks'] as String?)?.trim() ?? '';
+          final siRmk = (si['remarks'] as String?)?.trim() ?? '';
+          final soRmk = (si['sales_orders']?['remarks'] as String?)?.trim() ?? '';
+          final rmk = siRmk.isNotEmpty ? siRmk : soRmk;
           final baseDesc = vno.isNotEmpty ? 'Sales Invoice ' + vno : 'Sales Invoice';
           entries.add({
             'date': date, 'voucher': vno,

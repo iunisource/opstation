@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
@@ -87,6 +88,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   final Map<String, TextEditingController> _qtyControllers = {};
   bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
   List<String> _doRefs = []; // DO voucher numbers against this SO (for messages)
+  String? _linkedDoId; // most recent active DO id, for the jump-to-DO button
 
   @override
   void initState() { super.initState(); _loadList(); _loadMeta(); }
@@ -167,11 +169,13 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       );
       bool hasDo = false;
       List<String> doRefs = [];
+      String? linkedDoId;
       try {
-        final d = await client.from('delivery_orders').select('voucher_number, is_voided').eq('so_id', id);
+        final d = await client.from('delivery_orders').select('id, voucher_number, is_voided, created_at').eq('so_id', id).order('created_at', ascending: false);
         final active = (d as List).where((x) => x['is_voided'] != true).toList();
         doRefs = [for (final x in active) (x['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
         hasDo = active.isNotEmpty;
+        if (active.isNotEmpty) linkedDoId = active.first['id'] as String?;
       } catch (_) {}
       setState(() {
         _detail = Map<String,dynamic>.from(order);
@@ -179,6 +183,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         _meta = meta;
         _hasDo = hasDo;
         _doRefs = doRefs;
+        _linkedDoId = linkedDoId;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -585,6 +590,12 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               tooltip: isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
             ),
+          if (_linkedDoId != null)
+            IconButton(
+              icon: const Icon(Icons.local_shipping_outlined, color: AppTheme.primary),
+              tooltip: 'Go to Delivery Order',
+              onPressed: () => context.go('/erp/delivery-orders?focus=$_linkedDoId'),
+            ),
           IconButton(
             icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
             tooltip: 'Print / PDF',
@@ -779,7 +790,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 // ─── Delivery Orders (Master-Detail) ─────────────────────────────────────────
 
 class ErpDeliveryOrdersScreen extends ConsumerStatefulWidget {
-  const ErpDeliveryOrdersScreen({super.key});
+  const ErpDeliveryOrdersScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpDeliveryOrdersScreen> createState() => _ErpDeliveryOrdersScreenState();
 }
@@ -802,9 +814,14 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   // collect-amount at DO approval (default off = non-collection delivery)
   bool _collectEnabled = false;
   num? _collectAmount;
+  String? _linkedSiId; // most recent live SI id, for the jump-to-SI button
 
   @override
-  void initState() { super.initState(); _loadList(); }
+  void initState() {
+    super.initState();
+    _loadList();
+    if (widget.focusId != null) _loadDetail(widget.focusId!);
+  }
 
   @override
   void dispose() {
@@ -872,6 +889,14 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         createdById: do_['created_by'] as String?,
       );
 
+      String? linkedSiId;
+      try {
+        final sis = await client.from('sales_invoices')
+            .select('id, is_voided, created_at').eq('do_id', id).order('created_at', ascending: false);
+        final live = (sis as List).where((s) => s['is_voided'] != true).toList();
+        if (live.isNotEmpty) linkedSiId = live.first['id'] as String?;
+      } catch (_) {}
+
       setState(() {
         _detail = Map<String,dynamic>.from(do_);
         _items = List<Map<String,dynamic>>.from(items);
@@ -881,6 +906,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _meta = meta;
         _collectAmount = (do_['collect_amount'] as num?);
         _collectEnabled = _collectAmount != null;
+        _linkedSiId = linkedSiId;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -1733,6 +1759,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               tooltip: _isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
             ),
+          if (_linkedSiId != null)
+            IconButton(
+              icon: const Icon(Icons.receipt_long_outlined, color: AppTheme.primary),
+              tooltip: 'Go to Sales Invoice',
+              onPressed: () => context.go('/erp/sales-invoices?focus=$_linkedSiId'),
+            ),
           IconButton(
             icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
             tooltip: 'Print / PDF',
@@ -1922,7 +1954,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 // ─── Sales Invoices (Master-Detail) ──────────────────────────────────────────
 
 class ErpSalesInvoicesScreen extends ConsumerStatefulWidget {
-  const ErpSalesInvoicesScreen({super.key});
+  const ErpSalesInvoicesScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpSalesInvoicesScreen> createState() => _ErpSalesInvoicesScreenState();
 }
@@ -1940,7 +1973,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   final TextEditingController _remarksCtrl = TextEditingController();
 
   @override
-  void initState() { super.initState(); _loadList(); }
+  void initState() {
+    super.initState();
+    _loadList();
+    if (widget.focusId != null) _loadDetail(widget.focusId!);
+  }
 
   @override
   void dispose() {
