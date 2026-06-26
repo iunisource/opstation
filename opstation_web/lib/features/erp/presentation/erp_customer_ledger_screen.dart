@@ -159,9 +159,11 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         final vno = ((si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '') as String);
         final date = extractDate(si as Map, const ['voucher_date', 'invoice_date', 'si_date', 'date', 'posted_at', 'created_at']);
         if (total > 0) {
+          final rmk = (si['remarks'] as String?)?.trim() ?? '';
+          final baseDesc = vno.isNotEmpty ? 'Sales Invoice ' + vno : 'Sales Invoice';
           entries.add({
             'date': date, 'voucher': vno,
-            'description': vno.isNotEmpty ? 'Sales Invoice ' + vno : 'Sales Invoice',
+            'description': rmk.isNotEmpty ? baseDesc + ' — ' + rmk : baseDesc,
             'debit': total, 'credit': 0.0, 'id': si['id'] as String?, 'type': 'Sales Invoice',
           });
         }
