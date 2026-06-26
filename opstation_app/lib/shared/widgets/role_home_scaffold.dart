@@ -9,6 +9,9 @@ class RoleHomeScaffold extends StatelessWidget {
   final String appBarTitle;
   final Widget body;
   final Widget? floatingActionButton;
+  /// Optional navigation drawer. When provided, the AppBar automatically
+  /// shows a hamburger that opens it. Null for roles that don't use one.
+  final Widget? drawer;
   /// When provided, wraps the body in a RefreshIndicator so the user
   /// can drag-down to reload stats and lists.
   final Future<void> Function()? onRefresh;
@@ -18,6 +21,7 @@ class RoleHomeScaffold extends StatelessWidget {
     required this.appBarTitle,
     required this.body,
     this.floatingActionButton,
+    this.drawer,
     this.onRefresh,
   });
 
@@ -25,6 +29,7 @@ class RoleHomeScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final content = SafeArea(top: false, child: body);
     return Scaffold(
+      drawer: drawer,
       appBar: AppBar(
         title: Text(
           appBarTitle,

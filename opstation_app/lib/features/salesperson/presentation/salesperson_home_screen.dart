@@ -15,6 +15,7 @@ import '../../auth/providers/auth_controller.dart';
 import '../../orders/presentation/order_create_modal.dart';
 import '../../reports/presentation/export_pdf_sheet.dart';
 import '../data/salesperson_repository.dart';
+import 'salesperson_drawer.dart';
 import '../models/sales_route.dart';
 import '../models/trip.dart';
 import '../providers/trip_controller.dart';
@@ -166,6 +167,7 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
 
     return RoleHomeScaffold(
       appBarTitle: 'Home',
+      drawer: const SalespersonDrawer(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => OrderCreateModal.show(context),
         icon: const Icon(Icons.add),
