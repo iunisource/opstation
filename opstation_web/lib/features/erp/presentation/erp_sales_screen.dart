@@ -2044,7 +2044,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     try {
       await Supabase.instance.client.from('sales_invoices').update({
         'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       _detail['remarks'] = _remarksCtrl.text.trim();
       if (mounted) _showSnack('Remarks saved');
@@ -2109,6 +2108,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       createdAt: createdAt,
       footerNote: _meta.footerNote,
       relatedRefs: refs.isNotEmpty ? refs : null,
+      watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
     );
   }
 
