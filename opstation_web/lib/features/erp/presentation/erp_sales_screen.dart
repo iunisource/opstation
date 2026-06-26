@@ -196,12 +196,13 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   // against this SO (standalone) — even on a confirmed/locked SO, and even for
   // admins once a DO exists they are cascade-locked. Header fields stay on
   // _canEdit (draft only). Whole-SO delete has the same DO guard.
-  bool get _canEditLines => !_hasDo;
+  bool get _canEditLines => !_hasDo && !_isLocked;
   // Human-readable DO reference(s) for cascade-lock messages.
   String get _doMsg => _doRefs.isEmpty
       ? 'a Delivery Order exists against this SO. Delete it first.'
       : 'Delivery Order ${_doRefs.join(', ')} exists against this SO. Delete it first.';
   bool get _canDelete {
+    if (_isLocked) return false; // locked/delivered SOs cannot be deleted
     final role = ref.read(currentUserProvider)?.role;
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
   }
