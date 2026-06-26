@@ -380,10 +380,17 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _menuItem(context, 'Admin Settings', Icons.admin_panel_settings_outlined, '/erp/admin-settings', location),
     ];
 
+    final crmItems = <Widget>[
+      if (show('/crm/customers')) _menuItem(context, 'Customers', Icons.store_outlined, '/crm/customers', location),
+      if (show('/crm/pipeline')) _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
+      if (show('/crm/follow-ups')) _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location, badge: crmOverdue),
+      if (show('/crm/tasks')) _menuItem(context, 'Tasks', Icons.checklist_outlined, '/crm/tasks', location, badge: assignedToMe),
+    ];
+
     // Legacy combined list (still used for isNotEmpty guards)
     final erpMenuItems = <Widget>[
       ...inventoryItems, ...purchaseItems, ...salesItems, ...posItems,
-      ...financialItems, ...manufacturingItems, ...hrItems, ...erpAdminItems,
+      ...financialItems, ...manufacturingItems, ...hrItems, ...crmItems, ...erpAdminItems,
     ];
 
     List<Widget> splitErpMenus() => [
@@ -426,6 +433,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
+      if (_hasItems(crmItems))
+        _navMenu(context, 'CRM', Icons.contacts_outlined, location,
+          ['/crm/customers', '/crm/pipeline', '/crm/follow-ups', '/crm/tasks'],
+          _trimDividers(crmItems), badge: crmOverdue + assignedToMe),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
         ['/erp/onboarding', '/erp/branches', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
@@ -466,16 +477,6 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               if (user?.role == WebUserRole.masterAdmin)
                 _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
             ],
-          ),
-          _navMenu(context, 'CRM', Icons.contacts_outlined, location,
-            ['/crm/customers', '/crm/follow-ups', '/crm/pipeline', '/crm/tasks'],
-            [
-              _menuItem(context, 'Customers', Icons.store_outlined, '/crm/customers', location),
-              _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
-              _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location, badge: crmOverdue),
-              _menuItem(context, 'Tasks', Icons.checklist_outlined, '/crm/tasks', location, badge: assignedToMe),
-            ],
-            badge: crmOverdue + assignedToMe,
           ),
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
             ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors',

@@ -180,7 +180,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc.startsWith('/financials/') ||
                 loc.startsWith('/manufacturing/') ||
                 loc.startsWith('/hr/');
-            if (!inErp) return false;
+            // CRM screens are permission-scoped (registry-gated), not blocked
+            // by the ERP path prefix. Let them through to the permission check.
+            final permScopedCrm = loc.startsWith('/crm/');
+            if (!inErp && !permScopedCrm) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/no-access') return true;
             if (access == null) return true;

@@ -124,6 +124,14 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('facility', 'Facility', Icons.cleaning_services_outlined, [
     PermItem('facility', 'Facility Maintenance', PermKind.doc, '/facility'),
   ]),
+  // CRM is not a real org_modules toggle here (moduleGated: false) — each item
+  // is purely permission-gated. Single "show" access toggle per screen.
+  PermModule('crm', 'CRM', Icons.contacts_outlined, [
+    PermItem('crm_customers', 'Customers', PermKind.report, '/crm/customers'),
+    PermItem('crm_pipeline', 'Pipeline', PermKind.report, '/crm/pipeline'),
+    PermItem('crm_follow_ups', 'Follow-ups', PermKind.report, '/crm/follow-ups'),
+    PermItem('crm_tasks', 'Tasks', PermKind.report, '/crm/tasks'),
+  ], moduleGated: false),
 ];
 
 /// route -> PermItem (for menu + router gating).
