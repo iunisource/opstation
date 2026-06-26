@@ -183,7 +183,9 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // CRM screens are permission-scoped (registry-gated), not blocked
             // by the ERP path prefix. Let them through to the permission check.
             final permScopedCrm = loc.startsWith('/crm/');
-            if (!inErp && !permScopedCrm) return false;
+            // Files is a standalone area open to all erpUsers (unconditional).
+            final filesArea = loc == '/operations/files';
+            if (!inErp && !permScopedCrm && !filesArea) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/no-access') return true;
             if (access == null) return true;

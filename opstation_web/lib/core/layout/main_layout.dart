@@ -504,8 +504,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ...splitErpMenus(),
         ],
 
-        if (isErpUser && erpMenuItems.isNotEmpty)
-          ...splitErpMenus(),
+        if (isErpUser) ...[
+          if (erpMenuItems.isNotEmpty) ...splitErpMenus(),
+          _navButton(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
+        ],
   ];
 }
 
