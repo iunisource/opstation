@@ -1930,6 +1930,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _detailLoading = false;
   String _search = '';
   final Map<String, TextEditingController> _discountCtrl = {};
+  final TextEditingController _remarksCtrl = TextEditingController();
 
   @override
   void initState() { super.initState(); _loadList(); }
@@ -1937,6 +1938,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   @override
   void dispose() {
     for (final c in _discountCtrl.values) c.dispose();
+    _remarksCtrl.dispose();
     super.dispose();
   }
 
@@ -1960,7 +1962,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     try {
       final client = Supabase.instance.client;
       final inv = await client.from('sales_invoices')
-          .select('*, customers(shop_name, code, address, contact_person, phone), sales_orders(voucher_number, customer_id, customers(shop_name, code, address, contact_person, phone)), delivery_orders(voucher_number), branches(name)')
+          .select('*, customers(shop_name, code, address, contact_person, phone), sales_orders(voucher_number, remarks, customer_id, customers(shop_name, code, address, contact_person, phone)), delivery_orders(voucher_number), branches(name)')
           .eq('id', id).single();
       final items = await client.from('sales_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', id);
@@ -1979,6 +1981,9 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         _detail = Map<String,dynamic>.from(inv);
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
+        final siRemarks = (inv['remarks'] as String?)?.trim() ?? '';
+        final soRemarks = (inv['sales_orders']?['remarks'] as String?)?.trim() ?? '';
+        _remarksCtrl.text = siRemarks.isNotEmpty ? siRemarks : soRemarks;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -2034,6 +2039,19 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     }
   }
 
+  Future<void> _saveRemarks() async {
+    try {
+      await Supabase.instance.client.from('sales_invoices').update({
+        'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      _detail['remarks'] = _remarksCtrl.text.trim();
+      if (mounted) _showSnack('Remarks saved');
+    } catch (e) {
+      if (mounted) _showSnack('Could not save remarks: $e');
+    }
+  }
+
   Future<void> _printSI() async {
     final user = ref.read(currentUserProvider);
     final lines = _items.map((it) {
@@ -2081,6 +2099,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       customerContact: cust?['contact_person'] as String?,
       customerPhone: cust?['phone'] as String?,
       salespersonName: _meta.salespersonName,
+      remarks: _detail['remarks'] as String?,
       lines: lines,
       subtotal: subtotal,
       discountTotal: discountTotal,
@@ -2319,10 +2338,28 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   const SizedBox(width: 16),
                   Expanded(child: _InfoRow(label: 'DO #', value: _detail['delivery_orders']?['voucher_number'] as String? ?? '-')),
                 ]),
-                if ((_detail['remarks'] as String?)?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 12),
-                  _InfoRow(label: 'Remarks', value: _detail['remarks'] as String? ?? '-'),
-                ],
+                const SizedBox(height: 12),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('REMARKS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.5)),
+                  const SizedBox(height: 4),
+                  if (_isLocked)
+                    Text((_detail['remarks'] as String?)?.trim().isNotEmpty == true ? _detail['remarks'] as String : '—',
+                        style: const TextStyle(fontSize: 13))
+                  else
+                    Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Expanded(child: TextField(
+                        controller: _remarksCtrl,
+                        minLines: 1, maxLines: 3,
+                        decoration: const InputDecoration(
+                          hintText: 'Remarks (carried from the order; editable)',
+                          isDense: true, border: OutlineInputBorder(),
+                        ),
+                        style: const TextStyle(fontSize: 13),
+                      )),
+                      const SizedBox(width: 8),
+                      OutlinedButton(onPressed: _saveRemarks, child: const Text('Save')),
+                    ]),
+                ]),
               ]),
             ),
 
