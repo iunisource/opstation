@@ -1356,12 +1356,16 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   }
 
   Future<void> _saveDeliveryOrder() async {
+    // Capture collect state BEFORE _saveDelivery() — it ends by reloading
+    // _detail, which resets these from the DB (still null at that point).
+    final bool collectOn = _collectEnabled;
+    final num? collectAmt = _collectAmount;
     await _saveDelivery();
     // Persist collect amount while the DO is still unlocked — the lock update
     // below can't change other columns once is_locked flips (locked-DO rule).
     try {
       await Supabase.instance.client.from('delivery_orders').update({
-        'collect_amount': _collectEnabled ? _collectAmount : null,
+        'collect_amount': collectOn ? collectAmt : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
     } catch (_) {}
@@ -1375,8 +1379,9 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved');
     } catch (_) {}
-    // Auto create invoice
-    await _createInvoice(auto: true);
+    // Reload so the collect-amount chip and lock state reflect what was saved.
+    // (Invoice is NOT auto-created — use the explicit "Create Invoice" button.)
+    await _loadDetail(_detail['id'] as String);
   }
 
   Future<void> _saveDelivery() async {
