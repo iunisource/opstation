@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
@@ -95,6 +96,28 @@ class SalespersonDrawer extends ConsumerWidget {
             subtitle: 'Orders you submitted',
             onTap: () => _go(context, const MyOrdersScreen()),
           ),
+          const Divider(height: 1),
+          _tile(
+            context,
+            icon: Icons.history,
+            label: 'Route History',
+            subtitle: 'Your past routes',
+            onTap: () => _goPath(context, '/salesperson/history'),
+          ),
+          _tile(
+            context,
+            icon: Icons.picture_as_pdf_outlined,
+            label: 'Reports',
+            subtitle: 'Export your activity',
+            onTap: () {
+              final userId =
+                  ref.read(authControllerProvider).valueOrNull?.id;
+              Navigator.pop(context); // close the drawer first
+              if (userId != null) {
+                context.push('/salesperson/reports?uid=$userId');
+              }
+            },
+          ),
         ]),
       ),
     );
@@ -104,6 +127,11 @@ class SalespersonDrawer extends ConsumerWidget {
     Navigator.pop(context); // close the drawer first
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => screen));
+  }
+
+  void _goPath(BuildContext context, String path) {
+    Navigator.pop(context); // close the drawer first
+    context.push(path);
   }
 
   Widget _tile(

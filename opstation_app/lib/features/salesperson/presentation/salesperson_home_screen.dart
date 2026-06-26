@@ -386,35 +386,6 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
           _VisitScoreCard(score: score),
           const SizedBox(height: 12),
           _CollectedCard(amount: totalCollected),
-          const SizedBox(height: 24),
-
-          const SectionLabel('Quick access'),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _QuickAccessCard(
-                  icon: Icons.history,
-                  label: 'Route history',
-                  onTap: () => context.push('/salesperson/history'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _QuickAccessCard(
-                  icon: Icons.picture_as_pdf_outlined,
-                  label: 'Reports',
-                  onTap: () {
-                    final userId =
-                        ref.read(authControllerProvider).valueOrNull?.id;
-                    if (userId != null) {
-                      context.push('/salesperson/reports?uid=$userId');
-                    }
-                  },
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
@@ -857,54 +828,6 @@ class _CollectedCard extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _QuickAccessCard extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback? onTap;
-
-  const _QuickAccessCard({
-    required this.icon,
-    required this.label,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: AppColors.primaryLight,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                alignment: Alignment.center,
-                child: Icon(icon, color: AppColors.primary, size: 20),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  label,
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const Icon(Icons.chevron_right, size: 20, color: AppColors.textTertiaryLight),
-            ],
-          ),
         ),
       ),
     );
