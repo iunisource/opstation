@@ -20,6 +20,10 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   List<Map<String, dynamic>> _customers = [];
   final _searchCtrl = TextEditingController();
   bool _loading = true;
+  bool _targetsEnabled = false;
+  // route_id -> rpc_route_target_achievement row (target/achieved/etc).
+  // Populated only when the customer-targets toggle is ON.
+  final Map<String, Map<String, dynamic>> _routeAch = {};
 
   @override
   void initState() {
@@ -86,6 +90,37 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
           )
       ];
       _customers = customers;
+
+      // Sales-targets overlay (gated). Read the org toggle; if ON, pull
+      // accumulated route target/achievement in a single RPC call. This is
+      // an optional overlay — any failure leaves the routes list intact.
+      _routeAch.clear();
+      var targetsOn = false;
+      try {
+        final tgl = await client
+            .from('app_config')
+            .select('value')
+            .eq('org_id', orgId)
+            .eq('key', 'org.customer_targets_enabled')
+            .maybeSingle();
+        targetsOn = (tgl?['value'] as String?) == 'true';
+        if (targetsOn) {
+          final rows = await client.rpc(
+            'rpc_route_target_achievement',
+            params: {'p_org_id': orgId},
+          );
+          for (final r in (rows as List)) {
+            final m = Map<String, dynamic>.from(r as Map);
+            final rid = m['route_id'] as String?;
+            if (rid != null) _routeAch[rid] = m;
+          }
+        }
+      } catch (_) {
+        targetsOn = false;
+        _routeAch.clear();
+      }
+      _targetsEnabled = targetsOn;
+
       _filter();
       setState(() => _loading = false);
     } catch (_) {
@@ -105,6 +140,103 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
           .toList();
     }
     setState(() {});
+  }
+
+  /// Compact target/progress strip for a route, shown only when the
+  /// customer-targets feature is enabled. Reads from the _routeAch map
+  /// populated in _load() via rpc_route_target_achievement (accumulated
+  /// across all of the route's customers for the running calendar month).
+  Widget _routeProgress(String routeId) {
+    final ach = _routeAch[routeId];
+    if (ach == null) return const SizedBox.shrink();
+    final target = (ach['target'] as num?)?.toDouble() ?? 0;
+    final achieved = (ach['achieved'] as num?)?.toDouble() ?? 0;
+    final salesperson = (ach['salesperson_name'] as String?)?.trim();
+    final pct = target <= 0 ? 0.0 : (achieved / target).clamp(0.0, 1.0);
+    final pctLabel =
+        target <= 0 ? '—' : '${(achieved / target * 100).round()}%';
+    final met = target > 0 && achieved >= target;
+    final remaining = target - achieved;
+    final barColor = met ? AppTheme.success : AppTheme.primary;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, left: 56),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.flag_outlined,
+                size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text(
+              'Rs ${_money(achieved)} of Rs ${_money(target)}',
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                  color: barColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10)),
+              child: Text(pctLabel,
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: barColor)),
+            ),
+            const Spacer(),
+            if (salesperson != null && salesperson.isNotEmpty)
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.person_outline,
+                    size: 13, color: AppTheme.textSecondary),
+                const SizedBox(width: 4),
+                Text(salesperson,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
+              ]),
+          ]),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: pct,
+              minHeight: 6,
+              backgroundColor: AppTheme.border,
+              valueColor: AlwaysStoppedAnimation<Color>(barColor),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            met
+                ? 'Target met'
+                : (target <= 0
+                    ? 'No target set'
+                    : 'Rs ${_money(remaining)} to go'),
+            style: TextStyle(
+                fontSize: 11,
+                color: met ? AppTheme.success : AppTheme.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Whole-rupee formatting with thousands separators (no decimals; sales
+  /// targets and invoice totals are tracked as whole rupees here).
+  String _money(num v) {
+    final n = v.round();
+    final neg = n < 0;
+    final digits = n.abs().toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) buf.write(',');
+      buf.write(digits[i]);
+    }
+    return '${neg ? '-' : ''}$buf';
   }
 
   @override
@@ -161,72 +293,82 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                             borderRadius: BorderRadius.circular(12),
                             border:
                                 Border.all(color: AppTheme.border)),
-                        child: Row(children: [
-                          Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                                color: kind == 'recurring'
-                                    ? AppTheme.success.withOpacity(0.1)
-                                    : AppTheme.warning.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(8)),
-                            child: Icon(
-                                kind == 'recurring'
-                                    ? Icons.all_inclusive
-                                    : Icons.event_available_outlined,
-                                color: kind == 'recurring'
-                                    ? AppTheme.success
-                                    : AppTheme.warning,
-                                size: 20),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                              child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                Text(r['name'] as String? ?? '',
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15)),
-                                Text(
-                                    '${kind == 'recurring' ? 'Recurring' : 'One-time'} · ${row.stops.length} stops',
-                                    style: const TextStyle(
-                                        color: AppTheme.textSecondary,
-                                        fontSize: 13)),
-                              ])),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                                color: isActive
-                                    ? AppTheme.success.withOpacity(0.1)
-                                    : AppTheme.danger.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6)),
-                            child: Text(isActive ? 'Active' : 'Inactive',
-                                style: TextStyle(
-                                    color: isActive
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                    color: kind == 'recurring'
+                                        ? AppTheme.success.withOpacity(0.1)
+                                        : AppTheme.warning.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8)),
+                                child: Icon(
+                                    kind == 'recurring'
+                                        ? Icons.all_inclusive
+                                        : Icons.event_available_outlined,
+                                    color: kind == 'recurring'
                                         ? AppTheme.success
-                                        : AppTheme.danger,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600)),
-                          ),
-                          const SizedBox(width: 8),
-                          if (row.stops.length > 1)
-                            IconButton(
-                                icon: const Icon(Icons.swap_vert, size: 18, color: AppTheme.primary),
-                                onPressed: () => _showReorderDialog(context, row),
-                                tooltip: 'Reorder stops'),
-                          IconButton(
-                              icon:
-                                  const Icon(Icons.edit_outlined, size: 18),
-                              onPressed: () => _showDialog(context, row)),
-                          IconButton(
-                              icon: const Icon(Icons.delete_outline,
-                                  size: 18, color: AppTheme.danger),
-                              onPressed: () =>
-                                  _delete(r['id'] as String)),
-                        ]),
+                                        : AppTheme.warning,
+                                    size: 20),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                    Text(r['name'] as String? ?? '',
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 15)),
+                                    Text(
+                                        '${kind == 'recurring' ? 'Recurring' : 'One-time'} · ${row.stops.length} stops',
+                                        style: const TextStyle(
+                                            color: AppTheme.textSecondary,
+                                            fontSize: 13)),
+                                  ])),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                    color: isActive
+                                        ? AppTheme.success.withOpacity(0.1)
+                                        : AppTheme.danger.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(6)),
+                                child: Text(isActive ? 'Active' : 'Inactive',
+                                    style: TextStyle(
+                                        color: isActive
+                                            ? AppTheme.success
+                                            : AppTheme.danger,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600)),
+                              ),
+                              const SizedBox(width: 8),
+                              if (row.stops.length > 1)
+                                IconButton(
+                                    icon: const Icon(Icons.swap_vert,
+                                        size: 18, color: AppTheme.primary),
+                                    onPressed: () =>
+                                        _showReorderDialog(context, row),
+                                    tooltip: 'Reorder stops'),
+                              IconButton(
+                                  icon: const Icon(Icons.edit_outlined,
+                                      size: 18),
+                                  onPressed: () => _showDialog(context, row)),
+                              IconButton(
+                                  icon: const Icon(Icons.delete_outline,
+                                      size: 18, color: AppTheme.danger),
+                                  onPressed: () =>
+                                      _delete(r['id'] as String)),
+                            ]),
+                            if (_targetsEnabled &&
+                                _routeAch[r['id'] as String] != null)
+                              _routeProgress(r['id'] as String),
+                          ],
+                        ),
                       );
                     },
                   ),
