@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import '../../../core/storage/photo_url.dart';
 import '../../../core/theme/app_theme.dart';
 
@@ -104,6 +107,120 @@ class _DeliveryDetailScreenState
     }
   }
 
+  Future<void> _printDelivery() async {
+    final d = _delivery;
+    if (d == null) return;
+    int totalAmount = 0, totalCash = 0, totalCredit = 0;
+    for (final s in _stops) {
+      final amt = (s['amount'] as int?) ?? 0;
+      totalAmount += amt;
+      if (s['payment_type'] == 'cash') {
+        totalCash += amt;
+      } else {
+        totalCredit += amt;
+      }
+    }
+    final muted = PdfColor.fromInt(0xFF6B7280);
+    final border = PdfColor.fromInt(0xFFE5E7EB);
+
+    final doc = pw.Document();
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+      build: (ctx) => [
+        pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              pw.Text('Delivery',
+                  style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 2),
+              pw.Text('Driver: ${d['driver_name'] ?? '—'}',
+                  style: const pw.TextStyle(fontSize: 12)),
+              pw.Text('Created ${_fmtTime(d['created_at'])} by ${d['created_by_name'] ?? '—'}',
+                  style: pw.TextStyle(fontSize: 9, color: muted)),
+            ]),
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: border),
+                  borderRadius: pw.BorderRadius.circular(4)),
+              child: pw.Text((d['status'] as String? ?? '').toUpperCase(),
+                  style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+            ),
+          ],
+        ),
+        pw.SizedBox(height: 6),
+        pw.Row(children: [
+          pw.Text('Started ${_fmtTime(d['started_at'])}',
+              style: pw.TextStyle(fontSize: 9, color: muted)),
+          pw.SizedBox(width: 16),
+          pw.Text('Completed ${_fmtTime(d['completed_at'])}',
+              style: pw.TextStyle(fontSize: 9, color: muted)),
+          pw.SizedBox(width: 16),
+          pw.Text('Stops ${_stops.length}',
+              style: pw.TextStyle(fontSize: 9, color: muted)),
+        ]),
+        pw.SizedBox(height: 4),
+        pw.Text('Total Rs $totalAmount   ·   Cash Rs $totalCash   ·   Credit Rs $totalCredit',
+            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 14),
+        pw.Table(
+          border: pw.TableBorder.all(color: border, width: 0.5),
+          columnWidths: {
+            0: const pw.FixedColumnWidth(24),
+            1: const pw.FlexColumnWidth(2.4),
+            2: const pw.FlexColumnWidth(1.6),
+            3: const pw.FlexColumnWidth(1),
+            4: const pw.FlexColumnWidth(1),
+            5: const pw.FlexColumnWidth(1.2),
+          },
+          children: [
+            pw.TableRow(
+              decoration: pw.BoxDecoration(color: PdfColor.fromInt(0xFFF3F4F6)),
+              children: [
+                _pdfCell('#', bold: true),
+                _pdfCell('Customer', bold: true),
+                _pdfCell('DO# / Note', bold: true),
+                _pdfCell('Payment', bold: true),
+                _pdfCell('Amount', bold: true),
+                _pdfCell('Status', bold: true),
+              ],
+            ),
+            for (final s in _stops)
+              pw.TableRow(children: [
+                _pdfCell('${s['sequence'] ?? ''}'),
+                _pdfCell('${s['customer_code'] ?? ''} · ${s['customer_name'] ?? ''}'),
+                _pdfCell([
+                  if ((s['so_invoice_number'] as String?)?.trim().isNotEmpty == true)
+                    'DO# ${s['so_invoice_number']}',
+                  if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
+                    'Note: ${s['driver_note']}',
+                ].join('\n')),
+                _pdfCell((s['payment_type'] == 'cash') ? 'Cash' : 'Credit'),
+                _pdfCell('Rs ${(s['amount'] as int?) ?? 0}'),
+                _pdfCell((s['status'] as String? ?? '').toUpperCase()),
+              ]),
+          ],
+        ),
+        if ((d['notes'] as String?)?.trim().isNotEmpty == true) ...[
+          pw.SizedBox(height: 12),
+          pw.Text('Delivery notes: ${d['notes']}', style: const pw.TextStyle(fontSize: 10)),
+        ],
+      ],
+    ));
+    await Printing.layoutPdf(onLayout: (f) => doc.save());
+  }
+
+  static pw.Widget _pdfCell(String text, {bool bold = false}) => pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+        child: pw.Text(text,
+            style: pw.TextStyle(
+                fontSize: 9,
+                fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal)),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -121,6 +238,13 @@ class _DeliveryDetailScreenState
               const Text('Delivery Details',
                   style: TextStyle(
                       fontSize: 28, fontWeight: FontWeight.w800)),
+              const Spacer(),
+              if (!_loading && _error == null && _delivery != null)
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.print_outlined, size: 18),
+                  label: const Text('Print / PDF'),
+                  onPressed: _printDelivery,
+                ),
             ]),
             const SizedBox(height: 24),
             if (_loading)
@@ -367,6 +491,8 @@ class _StopRow extends StatelessWidget {
     final verification =
         stop['verification'] as String? ?? 'pending';
     final failureReason = stop['failure_reason'] as String?;
+    final doRef = (stop['so_invoice_number'] as String?)?.trim();
+    final driverNote = (stop['driver_note'] as String?)?.trim();
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -393,6 +519,14 @@ class _StopRow extends StatelessWidget {
                         style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w700)),
+                    if (doRef != null && doRef.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text('DO# $doRef',
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.primary)),
+                    ],
                     const SizedBox(height: 2),
                     Text(stop['item_description'] as String? ?? '',
                         style: const TextStyle(
@@ -433,6 +567,22 @@ class _StopRow extends StatelessWidget {
                 ],
               ]),
             ),
+            if (driverNote != null && driverNote.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.only(left: 40),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.sticky_note_2_outlined,
+                      size: 14, color: AppTheme.textSecondary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('Note: $driverNote',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppTheme.textSecondary)),
+                  ),
+                ]),
+              ),
+            ],
             if (failureReason != null && failureReason.isNotEmpty) ...[
               const SizedBox(height: 8),
               Padding(
