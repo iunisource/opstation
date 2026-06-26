@@ -324,15 +324,17 @@ class DispatchOrderService {
     String? branchId,
     DateTime? from,
     DateTime? to,
+    bool deliveryFlowEnabled = true,
   }) async {
-    // 1) Candidate DOs: dispatchable or delivered, not voided, org/branch scoped.
+    // 1) Candidate DOs: not voided, org/branch scoped. Delivery is tracked by
+    //    delivered_at (a separate dimension from billing `status`).
     var q = _client.from('delivery_orders')
         .select('id, voucher_number, customer_id, collect_amount, status, '
-            'branch_id, is_voided, created_at, '
+            'delivered_at, branch_id, is_voided, created_at, '
             'customers(shop_name, code), sales_orders(voucher_number)')
         .eq('org_id', orgId)
         .inFilter('status',
-            const ['saved', 'invoiced', 'partially_delivered', 'delivered']);
+            const ['saved', 'invoiced', 'partially_delivered']);
     if (branchId != null) q = q.eq('branch_id', branchId);
     if (from != null) q = q.gte('created_at', from.toIso8601String());
     if (to != null) q = q.lte('created_at', to.toIso8601String());
@@ -363,7 +365,12 @@ class DispatchOrderService {
       final custId = d['customer_id'] as String?;
       if (custId == null) continue;
       final collect = (d['collect_amount'] as num?);
-      final doDelivered = (d['status'] as String?) == 'delivered';
+      // "Delivered" = the fulfillment dimension. When the delivery flow is OFF,
+      // an invoiced DO is treated as delivered (invoicing = completion).
+      final hasDeliveredAt = d['delivered_at'] != null;
+      final invoiced = (d['status'] as String?) == 'invoiced';
+      final doDelivered =
+          hasDeliveredAt || (!deliveryFlowEnabled && invoiced);
 
       OrderStatus st;
       String? driverId, driverName, deliveryId;

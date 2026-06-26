@@ -27,6 +27,7 @@ class _DispatchOrdersScreenState
   List<Order> _orders = [];
   List<Map<String, dynamic>> _drivers = [];
   bool _loading = true;
+  bool _deliveryFlow = true; // org.delivery_flow_enabled (default on)
   String? _error;
   final Set<String> _selectedIds = {};
 
@@ -48,8 +49,22 @@ class _DispatchOrdersScreenState
     try {
       final drivers = await DispatchOrderService(Supabase.instance.client)
           .listDrivers(auth!.orgId!);
+      // Read the delivery-flow org setting (default ON if unset).
+      bool flow = true;
+      try {
+        final cfg = await Supabase.instance.client
+            .from('app_config')
+            .select('value')
+            .eq('org_id', auth.orgId!)
+            .eq('key', 'org.delivery_flow_enabled')
+            .maybeSingle();
+        if (cfg != null) flow = (cfg['value'] as String?) == 'true';
+      } catch (_) {}
       if (!mounted) return;
-      setState(() => _drivers = drivers);
+      setState(() {
+        _drivers = drivers;
+        _deliveryFlow = flow;
+      });
     } catch (_) {}
   }
 
@@ -70,6 +85,7 @@ class _DispatchOrdersScreenState
       final orders = await DispatchOrderService(Supabase.instance.client)
           .listDeliveryOrdersForDispatch(
         orgId: auth!.orgId!,
+        deliveryFlowEnabled: _deliveryFlow,
         from: _from,
         to: _to.add(const Duration(days: 1)),
       );

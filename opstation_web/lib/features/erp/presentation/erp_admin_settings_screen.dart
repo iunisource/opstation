@@ -119,6 +119,16 @@ const List<_AdminToggle> _toggles = [
     text: _TextSetting('org.backup_emails', 'Backup recipients',
         hint: 'Comma- or newline-separated email addresses'),
   ),
+
+  _AdminToggle(
+    'org.delivery_flow_enabled',
+    'Delivery flow for Delivery Orders',
+    'When ON, Delivery Orders track delivery separately from invoicing: a DO '
+        'can be dispatched, assigned to a driver, and marked Delivered, and '
+        'shows two tags (Delivered + Invoiced / Invoice Pending). When OFF, a '
+        'DO is considered complete once invoiced — no dispatch needed — and '
+        'shows only its billing status.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
