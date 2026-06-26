@@ -129,6 +129,16 @@ const List<_AdminToggle> _toggles = [
         'DO is considered complete once invoiced — no dispatch needed — and '
         'shows only its billing status.',
   ),
+
+  _AdminToggle(
+    'org.customer_targets_enabled',
+    'Customer sales targets',
+    'When ON, each customer carries a monthly sales target. The target and '
+        'this month\'s achievement (from sales invoices) appear on the customer '
+        'profile and in CRM 360, routes show accumulated targets, and the '
+        'Performance section becomes available. When OFF, targets are hidden '
+        'everywhere.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {

@@ -26,6 +26,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   List<String> _categories = [];
   List<String> _groups = [];
   bool _loading = true;
+  bool _targetsEnabled = false; // org.customer_targets_enabled
   final _searchCtrl = TextEditingController();
   String _missingFilter = 'all'; // all | contact | phone | either
 
@@ -96,11 +97,20 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         } catch (_) {}
       }
 
+      final tgtRow = await client
+          .from('app_config')
+          .select('value')
+          .eq('key', 'org.customer_targets_enabled')
+          .eq('org_id', orgId)
+          .maybeSingle();
+      final targetsOn = (tgtRow?['value'] as String?) == 'true';
+
       setState(() {
         _customers = List<Map<String, dynamic>>.from(rows);
         _filtered = _customers;
         _categories = cats;
         _groups = grps;
+        _targetsEnabled = targetsOn;
         _loading = false;
       });
     } catch (_) { setState(() => _loading = false); }
@@ -465,6 +475,11 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     final latCtrl = TextEditingController(text: customer?['latitude']?.toString() ?? '');
     final lngCtrl = TextEditingController(text: customer?['longitude']?.toString() ?? '');
     final creditLimitCtrl = TextEditingController(text: customer?['credit_limit']?.toString() ?? '');
+    final targetCtrl = TextEditingController(
+        text: (customer?['monthly_sale_target'] != null &&
+                (customer?['monthly_sale_target'] as num) != 0)
+            ? customer!['monthly_sale_target'].toString()
+            : '');
     final ntnCtrl = TextEditingController(text: customer?['ntn_gst'] ?? '');
     String? category = customer?['category'] as String?;
        String? group = customer?['group_name'] as String?;
@@ -542,6 +557,19 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   Expanded(child: TextField(controller: ntnCtrl,
                       decoration: const InputDecoration(labelText: 'NTN'))),
                 ]),
+                if (_targetsEnabled) ...[
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(child: TextField(controller: targetCtrl,
+                        decoration: const InputDecoration(
+                            labelText: 'Monthly Sales Target (optional)',
+                            hintText: 'Target sales value per month'),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))])),
+                    const SizedBox(width: 12),
+                    const Spacer(),
+                  ]),
+                ],
                 const SizedBox(height: 16),
                 // Address
                 const Align(alignment: Alignment.centerLeft,
@@ -636,6 +664,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   'latitude': lat,
                   'longitude': lng,
                   'credit_limit': creditLimitCtrl.text.trim().isEmpty ? null : double.tryParse(creditLimitCtrl.text.trim()),
+                  'monthly_sale_target': targetCtrl.text.trim().isEmpty ? 0 : (double.tryParse(targetCtrl.text.trim()) ?? 0),
                   'ntn_gst': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
                   'org_id': orgId,
                   'is_active': true,

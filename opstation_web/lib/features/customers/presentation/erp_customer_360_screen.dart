@@ -56,6 +56,11 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   bool _loadingComplaints = true;
   List<Map<String, dynamic>> _complaints = [];
 
+  bool _targetsEnabled = false;
+  bool _loadingTarget = true;
+  double _target = 0;
+  double _achieved = 0;
+
   final _money = NumberFormat('#,##0');
   final _money2 = NumberFormat('#,##0.00');
 
@@ -72,6 +77,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadIntel();
     _loadActivities();
     _loadComplaints();
+    _loadTarget();
   }
 
   @override
@@ -86,6 +92,46 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadIntel();
     _loadActivities();
     _loadComplaints();
+    _loadTarget();
+  }
+
+  Future<void> _loadTarget() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) {
+      setState(() => _loadingTarget = false);
+      return;
+    }
+    try {
+      final client = Supabase.instance.client;
+      final tgl = await client.from('app_config').select('value')
+          .eq('org_id', orgId)
+          .eq('key', 'org.customer_targets_enabled').maybeSingle();
+      final on = (tgl?['value'] as String?) == 'true';
+      if (!on) {
+        if (mounted) setState(() {
+          _targetsEnabled = false;
+          _loadingTarget = false;
+        });
+        return;
+      }
+      final rows = await client.rpc('rpc_customer_target_achievement',
+          params: {'p_org_id': orgId, 'p_customer_id': _customerId}) as List;
+      double target = 0, achieved = 0;
+      if (rows.isNotEmpty) {
+        final r = rows.first as Map;
+        target = (r['monthly_sale_target'] as num?)?.toDouble() ?? 0;
+        achieved = (r['achieved'] as num?)?.toDouble() ?? 0;
+      }
+      if (!mounted) return;
+      setState(() {
+        _targetsEnabled = true;
+        _target = target;
+        _achieved = achieved;
+        _loadingTarget = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingTarget = false);
+    }
   }
 
   Future<void> _loadComplaints() async {
@@ -666,6 +712,10 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
       children: [
         // Credit vs outstanding — the headline.
         _creditCard(creditLimit),
+        if (_targetsEnabled) ...[
+          const SizedBox(height: 16),
+          _targetCard(),
+        ],
         const SizedBox(height: 16),
         _card(
           title: 'Profile',
@@ -729,6 +779,98 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                       TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
         ),
       ],
+    );
+  }
+
+  Widget _targetCard() {
+    final pct = _target > 0 ? (_achieved / _target).clamp(0.0, 1.0) : 0.0;
+    final pctLabel = _target > 0 ? (_achieved / _target * 100).round() : 0;
+    final met = _target > 0 && _achieved >= _target - 0.005;
+    final barColor = met
+        ? AppTheme.success
+        : (pct >= 0.5 ? AppTheme.primary : Colors.orange);
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.flag_outlined,
+                  size: 18, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              const Text('Sales target — this month',
+                  style:
+                      TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              const Spacer(),
+              if (_loadingTarget)
+                const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+              else if (_target > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                      color: barColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(6)),
+                  child: Text('$pctLabel%',
+                      style: TextStyle(
+                          color: barColor,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (_target <= 0)
+            const Text('No target set for this customer.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))
+          else ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text('Rs ${_money.format(_achieved)}',
+                    style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: barColor)),
+                const SizedBox(width: 6),
+                Text('/ Rs ${_money.format(_target)}',
+                    style: const TextStyle(
+                        fontSize: 14, color: AppTheme.textSecondary)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: pct,
+                minHeight: 10,
+                backgroundColor: AppTheme.border.withOpacity(0.4),
+                valueColor: AlwaysStoppedAnimation<Color>(barColor),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              met
+                  ? 'Target met'
+                  : 'Rs ${_money.format(_target - _achieved)} to go',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: met ? AppTheme.success : AppTheme.textSecondary),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
