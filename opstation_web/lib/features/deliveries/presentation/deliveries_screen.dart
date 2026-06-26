@@ -382,6 +382,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         status == 'draft' || status == 'assigned';
                     final canCancel =
                         status != 'completed' && status != 'cancelled';
+                    final canComplete =
+                        status == 'assigned' || status == 'in_progress';
                     final createdAt = d['created_at'] != null
                         ? DateFormat('d MMM · HH:mm').format(
                             DateTime.parse(d['created_at'] as String)
@@ -467,6 +469,15 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                                       onPressed: () =>
                                           _assign(d['id'] as String),
                                       tooltip: 'Assign'),
+                                if (canComplete)
+                                  IconButton(
+                                      icon: const Icon(
+                                          Icons.check_circle_outline,
+                                          size: 18,
+                                          color: AppTheme.success),
+                                      onPressed: () =>
+                                          _markCompleted(d['id'] as String),
+                                      tooltip: 'Mark Completed'),
                                 if (canCancel)
                                   IconButton(
                                       icon: const Icon(
@@ -496,6 +507,50 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
       _load();
     } catch (e) {
       _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _markCompleted(String id) async {
+    final confirm = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+              title: const Text('Mark Delivery Completed'),
+              content: const Text(
+                  'Mark this delivery completed? All its stops will be marked '
+                  'delivered (use this for third-party / manual deliveries done '
+                  'outside the driver app).'),
+              actions: [
+                TextButton(
+                    onPressed: () =>
+                        Navigator.of(context, rootNavigator: true).pop(false),
+                    child: const Text('Cancel')),
+                ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.success),
+                    onPressed: () =>
+                        Navigator.of(context, rootNavigator: true).pop(true),
+                    child: const Text('Mark Completed')),
+              ],
+            ));
+    if (confirm == true) {
+      final now = DateTime.now().toIso8601String();
+      try {
+        // Flip undelivered stops -> delivered. The trg_mark_do_delivered
+        // trigger cascades this to each linked DO's delivered_at.
+        await Supabase.instance.client
+            .from('delivery_stops')
+            .update({'status': 'delivered', 'delivered_at': now})
+            .eq('delivery_id', id)
+            .neq('status', 'delivered');
+        await Supabase.instance.client.from('deliveries').update({
+          'status': 'completed',
+          'completed_at': now,
+        }).eq('id', id);
+        _showSnack('Delivery marked completed');
+        _load();
+      } catch (e) {
+        _showSnack('Failed: ${e.toString().split('\n').first}');
+      }
     }
   }
 

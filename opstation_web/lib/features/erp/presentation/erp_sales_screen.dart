@@ -815,6 +815,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   bool _collectEnabled = false;
   num? _collectAmount;
   String? _linkedSiId; // most recent live SI id, for the jump-to-SI button
+  bool _deliveryFlow = true; // org.delivery_flow_enabled (default on)
 
   @override
   void initState() {
@@ -909,6 +910,13 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _linkedSiId = linkedSiId;
         _detailLoading = false;
       });
+      // Read the delivery-flow org setting (default ON if unset).
+      try {
+        final cfg = await client.from('app_config').select('value')
+            .eq('org_id', _orgId ?? '')
+            .eq('key', 'org.delivery_flow_enabled').maybeSingle();
+        if (mounted) setState(() => _deliveryFlow = (cfg?['value'] as String?) != 'false');
+      } catch (_) {}
     } catch (_) { setState(() => _detailLoading = false); }
   }
 
@@ -1028,6 +1036,29 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       await _loadList();
       await _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Could not void: $e'); }
+  }
+
+  Future<void> _markDelivered() async {
+    final confirm = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Mark as Delivered?'),
+      content: Text('Mark ${_detail['voucher_number']} as delivered (self-pickup or '
+          'manual fulfillment — no driver needed)?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Mark Delivered')),
+      ],
+    ));
+    if (confirm != true) return;
+    try {
+      await Supabase.instance.client.from('delivery_orders').update({
+        'delivered_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _loadDetail(_detail['id'] as String);
+      if (mounted) _showSnack('Marked delivered');
+    } catch (e) {
+      if (mounted) _showSnack('Could not mark delivered: $e');
+    }
   }
 
   Future<void> _printDO() async {
@@ -1719,7 +1750,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             const Text('Delivery Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ]),
           const SizedBox(width: 12),
-          _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
+          if (_deliveryFlow) ...[
+            _StatusChip(
+              status: status == 'invoiced' ? 'Invoiced' : 'Invoice Pending',
+              color: status == 'invoiced' ? AppTheme.success : Colors.orange,
+            ),
+            if (_detail['delivered_at'] != null) ...[
+              const SizedBox(width: 6),
+              const _StatusChip(status: 'Delivered', color: AppTheme.success),
+            ],
+          ] else
+            _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
           if (_isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
           if ((_detail['collect_amount'] as num?) != null) ...[
             const SizedBox(width: 8),
@@ -1764,6 +1805,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               icon: const Icon(Icons.receipt_long_outlined, color: AppTheme.primary),
               tooltip: 'Go to Sales Invoice',
               onPressed: () => context.go('/erp/sales-invoices?focus=$_linkedSiId'),
+            ),
+          if (_deliveryFlow && !isVoided && _detail['delivered_at'] == null)
+            IconButton(
+              icon: const Icon(Icons.check_circle_outline, color: AppTheme.success),
+              tooltip: 'Mark Delivered (self-pickup / manual)',
+              onPressed: _markDelivered,
             ),
           IconButton(
             icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
