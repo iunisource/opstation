@@ -440,7 +440,7 @@ class _DeliveryWizardScreenState
   /// user pick one or more to add as stops, each carrying its do_id.
   Future<void> _addFromDo() async {
     final auth = ref.read(authControllerProvider).valueOrNull;
-    final orgId = auth?.orgId;
+    final orgId = auth?.organizationId;
     if (orgId == null) return;
     final client = Supabase.instance.client;
 
