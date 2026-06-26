@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/services/notification_service.dart';
 
 import '../../../core/theme/app_colors.dart';
@@ -113,12 +114,19 @@ class _DeliveryWizardScreenState
                     children: [
                       _sectionLabel('Stops'),
                       const Spacer(),
-                      if (_canEdit)
+                      if (_canEdit) ...[
+                        TextButton.icon(
+                          onPressed: _addFromDo,
+                          icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                          label: const Text('Add from DO'),
+                        ),
+                        const SizedBox(width: 4),
                         TextButton.icon(
                           onPressed: _addStop,
                           icon: const Icon(Icons.add, size: 18),
                           label: const Text('Add stop'),
                         ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -428,6 +436,102 @@ class _DeliveryWizardScreenState
     }
   }
 
+  /// Fetches the dispatch pool (approved DOs not yet assigned) and lets the
+  /// user pick one or more to add as stops, each carrying its do_id.
+  Future<void> _addFromDo() async {
+    final auth = ref.read(authControllerProvider).valueOrNull;
+    final orgId = auth?.orgId;
+    if (orgId == null) return;
+    final client = Supabase.instance.client;
+
+    List<Map<String, dynamic>> pool = [];
+    try {
+      // Candidate DOs: dispatchable, not voided, org-scoped.
+      final dos = await client
+          .from('delivery_orders')
+          .select('id, voucher_number, customer_id, collect_amount, status, '
+              'is_voided, customers(shop_name, code)')
+          .eq('org_id', orgId)
+          .inFilter('status', const ['saved', 'invoiced', 'partially_delivered'])
+          .order('created_at', ascending: false);
+
+      // Pool-exit: do_ids already on a stop of a non-cancelled delivery.
+      final taken = <String>{};
+      try {
+        final t = await client
+            .from('delivery_stops')
+            .select('do_id, deliveries(status)')
+            .not('do_id', 'is', null);
+        for (final s in t as List) {
+          if ((s['deliveries']?['status']) != 'cancelled') {
+            final id = s['do_id'] as String?;
+            if (id != null) taken.add(id);
+          }
+        }
+      } catch (_) {}
+
+      // Exclude any already in this wizard's stop list.
+      final inWizard = _stops.map((s) => s.doId).whereType<String>().toSet();
+
+      for (final d in dos as List) {
+        final id = d['id'] as String?;
+        if (id == null || taken.contains(id) || inWizard.contains(id)) continue;
+        if ((d['is_voided'] as bool?) == true) continue;
+        if ((d['customer_id'] as String?) == null) continue;
+        pool.add(Map<String, dynamic>.from(d as Map));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Failed to load DOs: $e')));
+      return;
+    }
+
+    if (!mounted) return;
+    if (pool.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No unassigned delivery orders available.')),
+      );
+      return;
+    }
+
+    final selectedIds = await showModalBottomSheet<Set<String>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => _DoPickerSheet(pool: pool),
+    );
+
+    if (selectedIds == null || selectedIds.isEmpty) return;
+
+    setState(() {
+      for (final d in pool) {
+        final id = d['id'] as String;
+        if (!selectedIds.contains(id)) continue;
+        final collect = (d['collect_amount'] as num?) ?? 0;
+        final draft = _StopDraft(
+          customer: Customer(
+            id: d['customer_id'] as String,
+            code: d['customers']?['code'] as String? ?? '',
+            shopName: d['customers']?['shop_name'] as String? ?? '',
+            contactPerson: '',
+            phone: '',
+            address: '',
+            isActive: true,
+          ),
+          description: d['voucher_number'] as String? ?? '',
+          amount: collect.round(),
+          paymentType: collect > 0 ? PaymentType.cash : PaymentType.credit,
+          doId: id,
+        );
+        _stops.add(draft);
+      }
+    });
+  }
+
   Future<void> _editStop(int index) async {
     final draft = _stops[index];
     final ok = await _openStopEditor(draft, isNew: false);
@@ -498,6 +602,7 @@ class _DeliveryWizardScreenState
               itemDescription: s.descriptionCtrl.text.trim(),
               amount: s.amount,
               paymentType: s.paymentType,
+              doId: s.doId,
             ))
         .toList();
 
@@ -1128,12 +1233,17 @@ class _StopDraft {
   final TextEditingController amountCtrl;
   PaymentType paymentType;
 
+  /// Source Delivery Order id when this stop was created from the
+  /// "Add from DO" picker. Null for manually-added stops.
+  String? doId;
+
   _StopDraft({
     this.existingId,
     this.customer,
     String description = '',
     int amount = 0,
     this.paymentType = PaymentType.cash,
+    this.doId,
   })  : uid = ++_seq,
         descriptionCtrl = TextEditingController(text: description),
         amountCtrl =
@@ -1145,6 +1255,7 @@ class _StopDraft {
       description: s.itemDescription,
       amount: s.amount,
       paymentType: s.paymentType,
+      doId: s.doId,
     );
     d.customer = Customer(
       id: s.customerId,
@@ -1163,5 +1274,162 @@ class _StopDraft {
   void dispose() {
     descriptionCtrl.dispose();
     amountCtrl.dispose();
+  }
+}
+
+/// Multi-select bottom sheet listing unassigned Delivery Orders. Returns the
+/// set of selected DO ids, or null if cancelled.
+class _DoPickerSheet extends StatefulWidget {
+  final List<Map<String, dynamic>> pool;
+  const _DoPickerSheet({required this.pool});
+
+  @override
+  State<_DoPickerSheet> createState() => _DoPickerSheetState();
+}
+
+class _DoPickerSheetState extends State<_DoPickerSheet> {
+  final Set<String> _selected = {};
+  String _search = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _search.trim().toLowerCase();
+    final items = q.isEmpty
+        ? widget.pool
+        : widget.pool.where((d) {
+            final vno = (d['voucher_number'] as String? ?? '').toLowerCase();
+            final name =
+                (d['customers']?['shop_name'] as String? ?? '').toLowerCase();
+            final code =
+                (d['customers']?['code'] as String? ?? '').toLowerCase();
+            return vno.contains(q) || name.contains(q) || code.contains(q);
+          }).toList();
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        expand: false,
+        builder: (context, scrollCtrl) {
+          return Column(
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.borderLight,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Row(
+                  children: [
+                    const Text('Add from Delivery Orders',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    Text('${_selected.length} selected',
+                        style: TextStyle(
+                            color: AppColors.textSecondaryLight, fontSize: 13)),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    prefixIcon: Icon(Icons.search, size: 20),
+                    hintText: 'Search DO / customer',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (v) => setState(() => _search = v),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView.separated(
+                  controller: scrollCtrl,
+                  itemCount: items.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, i) {
+                    final d = items[i];
+                    final id = d['id'] as String;
+                    final collect = (d['collect_amount'] as num?) ?? 0;
+                    final checked = _selected.contains(id);
+                    return CheckboxListTile(
+                      value: checked,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: (v) => setState(() {
+                        if (v == true) {
+                          _selected.add(id);
+                        } else {
+                          _selected.remove(id);
+                        }
+                      }),
+                      title: Text(
+                        d['voucher_number'] as String? ?? '—',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 14),
+                      ),
+                      subtitle: Text(
+                        d['customers']?['shop_name'] as String? ?? 'Walk-in',
+                        style: TextStyle(
+                            color: AppColors.textSecondaryLight, fontSize: 12),
+                      ),
+                      secondary: Text(
+                        collect > 0
+                            ? 'Rs. ${collect.round()}'
+                            : 'No collection',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: collect > 0
+                              ? AppColors.successDark
+                              : AppColors.textTertiaryLight,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _selected.isEmpty
+                              ? null
+                              : () => Navigator.pop(context, _selected),
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary),
+                          child: Text('Add ${_selected.length}'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 }

@@ -21,6 +21,7 @@ class DeliveryStopInput {
   final String itemDescription;
   final int amount;
   final PaymentType paymentType;
+  final String? doId;
 
   const DeliveryStopInput({
     this.id,
@@ -30,6 +31,7 @@ class DeliveryStopInput {
     required this.itemDescription,
     required this.amount,
     required this.paymentType,
+    this.doId,
   });
 }
 
@@ -123,6 +125,7 @@ class DeliveryRepository {
               itemDescription: Value(s.itemDescription),
               amount: Value(s.amount),
               paymentType: Value(s.paymentType.wire),
+              doId: Value(s.doId),
               status: const Value('pending'),
             ));
       }
@@ -226,6 +229,7 @@ class DeliveryRepository {
               itemDescription: Value(s.itemDescription),
               amount: Value(s.amount),
               paymentType: Value(s.paymentType.wire),
+              doId: Value(s.doId),
               status: const Value('pending'),
             ));
       }
