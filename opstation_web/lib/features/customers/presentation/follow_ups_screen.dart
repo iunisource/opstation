@@ -54,7 +54,8 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
           .from('customer_activities')
           .select()
           .eq('org_id', orgId)
-          .inFilter('status', ['open', 'done'])
+          .not('customer_id', 'is', null)
+          .inFilter('status', ['open', 'in_progress', 'done'])
           .not('due_date', 'is', null)
           .order('due_date', ascending: true);
       final list = List<Map<String, dynamic>>.from(rows);
@@ -69,7 +70,11 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
         names[u['id'] as String] = (u['name'] as String?) ?? 'Unknown';
       }
 
-      final cids = list.map((e) => e['customer_id'] as String).toSet().toList();
+      final cids = list
+          .map((e) => e['customer_id'] as String?)
+          .whereType<String>()
+          .toSet()
+          .toList();
       final cust = <String, Map<String, dynamic>>{};
       if (cids.isNotEmpty) {
         final cs =
@@ -100,16 +105,20 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
     }
   }
 
-  Future<void> _markDone(Map<String, dynamic> a) async {
+  Future<void> _setStatus(Map<String, dynamic> a, String status) async {
     try {
       await Supabase.instance.client.from('customer_activities').update({
-        'status': 'done',
-        'completed_at': DateTime.now().toIso8601String(),
+        'status': status,
+        'completed_at':
+            status == 'done' ? DateTime.now().toIso8601String() : null,
         'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', a['id']);
       _load();
     } catch (_) {/* ignore */}
   }
+
+  // done = closed; open + in_progress both count as active.
+  bool _active(String? s) => s == 'open' || s == 'in_progress';
 
   bool _isOverdue(DateTime? d) {
     if (d == null) return false;
@@ -139,7 +148,7 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
       if (showCompleted) {
         if (status != 'done') return false;
       } else {
-        if (status != 'open') return false;
+        if (!_active(status)) return false;
         final due = DateTime.tryParse('${a['due_date']}');
         if (_due == 'overdue' && !_isOverdue(due)) return false;
         if (_due == 'today' && !_isToday(due)) return false;
@@ -162,16 +171,16 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
 
   int get _overdueCount => _rows
       .where((a) =>
-          a['status'] == 'open' &&
+          _active(a['status'] as String?) &&
           _isOverdue(DateTime.tryParse('${a['due_date']}')))
       .length;
   int get _todayCount => _rows
       .where((a) =>
-          a['status'] == 'open' &&
+          _active(a['status'] as String?) &&
           _isToday(DateTime.tryParse('${a['due_date']}')))
       .length;
   int get _upcomingCount => _rows.where((a) {
-        if (a['status'] != 'open') return false;
+        if (!_active(a['status'] as String?)) return false;
         final d = DateTime.tryParse('${a['due_date']}');
         return d != null && !_isOverdue(d) && !_isToday(d);
       }).length;
@@ -329,13 +338,7 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(children: [
-          (a['status'] == 'done')
-              ? const Icon(Icons.check_circle, size: 20, color: Colors.green)
-              : InkWell(
-                  onTap: () => _markDone(a),
-                  child: const Icon(Icons.radio_button_unchecked,
-                      size: 20, color: AppTheme.textSecondary),
-                ),
+          _statusControl(a),
           const SizedBox(width: 12),
           SizedBox(
             width: 64,
@@ -400,6 +403,35 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
             ),
         ]),
       ),
+    );
+  }
+
+  Widget _statusControl(Map<String, dynamic> a) {
+    final status = a['status'] as String? ?? 'open';
+    IconData icon;
+    Color color;
+    switch (status) {
+      case 'done':
+        icon = Icons.check_circle;
+        color = AppTheme.success;
+        break;
+      case 'in_progress':
+        icon = Icons.timelapse;
+        color = AppTheme.warning;
+        break;
+      default:
+        icon = Icons.radio_button_unchecked;
+        color = AppTheme.textSecondary;
+    }
+    return PopupMenuButton<String>(
+      tooltip: 'Set status',
+      onSelected: (v) => _setStatus(a, v),
+      itemBuilder: (_) => const [
+        PopupMenuItem(value: 'open', child: Text('Open')),
+        PopupMenuItem(value: 'in_progress', child: Text('In progress')),
+        PopupMenuItem(value: 'done', child: Text('Done')),
+      ],
+      child: Icon(icon, size: 20, color: color),
     );
   }
 

@@ -91,6 +91,26 @@ final crmOverdueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of active tasks assigned to THIS user (open + in_progress), any link
+// type. Drives the per-assignee Tasks badge — distinct from the org-wide
+// crmOverdueCountProvider above.
+final assignedToMeCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final res = await client
+        .from('customer_activities')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('assigned_to', user.id)
+        .inFilter('status', ['open', 'in_progress']);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // Whether the customer sales-targets feature is enabled for this org. Gates the
 // Intelligence → Performance menu item (and target widgets elsewhere). Mirrors
 // the org.customer_targets_enabled flag read by the targets screens.
@@ -230,6 +250,7 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
 List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, String location) {
   final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
   final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
+  final assignedToMe = ref.watch(assignedToMeCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
@@ -447,13 +468,14 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
             ],
           ),
           _navMenu(context, 'CRM', Icons.contacts_outlined, location,
-            ['/crm/customers', '/crm/follow-ups', '/crm/pipeline'],
+            ['/crm/customers', '/crm/follow-ups', '/crm/pipeline', '/crm/tasks'],
             [
               _menuItem(context, 'Customers', Icons.store_outlined, '/crm/customers', location),
               _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
               _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location, badge: crmOverdue),
+              _menuItem(context, 'Tasks', Icons.checklist_outlined, '/crm/tasks', location, badge: assignedToMe),
             ],
-            badge: crmOverdue,
+            badge: crmOverdue + assignedToMe,
           ),
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
             ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors',
