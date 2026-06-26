@@ -231,29 +231,30 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
       // Note: costing_method is intentionally NOT updated here — it is fixed at creation.
 
       if (existingMaster != null) {
-        // Profile fields ONLY. Never write password_hash here — login reads
-        // Supabase Auth (auth.users), not public.users, so a hash written here
-        // silently locks the master admin out. The password goes through the
-        // admin-API Edge Function below so it lands in auth.users.
-        final updates = <String, dynamic>{
-          'name': maName,
-          'email': maEmail,
-          'updated_at': now.toIso8601String(),
-        };
-        await client.from('users').update(updates).eq('id', existingMaster['id']);
+        final currentAuthEmail =
+            (existingMaster['email'] as String?) ?? maEmail;
+        final newEmail = maEmail.trim();
+        final emailChanged = newEmail.isNotEmpty &&
+            newEmail.toLowerCase() != currentAuthEmail.toLowerCase();
+        final passwordProvided = maPassword.isNotEmpty;
+        if (passwordProvided && maPassword.length < 6) {
+          throw Exception('Password must be at least 6 characters.');
+        }
 
-        if (maPassword.isNotEmpty) {
-          if (maPassword.length < 6) {
-            throw Exception('Password must be at least 6 characters.');
-          }
-          // Target the master's CURRENT auth email so the reset hits the right
-          // auth.users row even if the profile email was just edited.
-          final authEmail =
-              (existingMaster['email'] as String?) ?? maEmail;
+        // Any auth change (email and/or password) goes through the admin-API
+        // Edge Function FIRST, so auth.users (the login source of truth) is
+        // updated before the profile. Writing the profile first is exactly what
+        // caused email desync (profile ≠ login); if the auth call fails we abort
+        // here and never touch the profile.
+        if (emailChanged || passwordProvided) {
           try {
             final resp = await client.functions.invoke(
               'reset-team-user-password',
-              body: {'email': authEmail, 'newPassword': maPassword},
+              body: {
+                'email': currentAuthEmail, // locate the auth.users row
+                if (emailChanged) 'newEmail': newEmail,
+                if (passwordProvided) 'newPassword': maPassword,
+              },
             );
             if (resp.status != 200) {
               throw Exception(_adminApiErr(resp.data, resp.status));
@@ -262,6 +263,16 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
             throw Exception(_adminApiErr(e.details, e.status));
           }
         }
+
+        // Profile fields. Email is safe to persist now — auth is already
+        // updated, so the two stay in sync. Never write password_hash here:
+        // login reads Supabase Auth (auth.users), not public.users.
+        final updates = <String, dynamic>{
+          'name': maName,
+          'email': newEmail,
+          'updated_at': now.toIso8601String(),
+        };
+        await client.from('users').update(updates).eq('id', existingMaster['id']);
       } else {
         await _enforceMaxUsers(client, orgId);
         final existing = await client
