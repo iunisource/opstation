@@ -37,6 +37,7 @@ import '../../features/products/presentation/products_screen.dart';
 import '../../features/competitor_categories/presentation/competitor_categories_screen.dart';
 import '../../features/intelligence/presentation/intelligence_placement_screen.dart';
 import '../../features/intelligence/presentation/intelligence_competitors_screen.dart';
+import '../../features/intelligence/presentation/intelligence_performance_screen.dart';
 import '../../features/routes/presentation/routes_screen.dart';
 import '../../features/customers/presentation/bulk_import_customers_screen.dart';
 import '../../features/routes/presentation/bulk_import_routes_screen.dart';
@@ -231,6 +232,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/competitor-categories', builder: (_, __) => const CompetitorCategoriesScreen()),
           GoRoute(path: '/intelligence/placement', builder: (_, __) => const IntelligencePlacementScreen()),
           GoRoute(path: '/intelligence/competitors', builder: (_, __) => const IntelligenceCompetitorsScreen()),
+          GoRoute(path: '/intelligence/performance', builder: (_, __) => const IntelligencePerformanceScreen()),
           GoRoute(path: '/routes', builder: (_, __) => const RoutesScreen()),
           GoRoute(path: '/routes/import', builder: (_, __) => const BulkImportRoutesScreen()),
           GoRoute(path: '/deliveries', builder: (_, __) => const DeliveriesScreen()),

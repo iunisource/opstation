@@ -91,6 +91,26 @@ final crmOverdueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Whether the customer sales-targets feature is enabled for this org. Gates the
+// Intelligence → Performance menu item (and target widgets elsewhere). Mirrors
+// the org.customer_targets_enabled flag read by the targets screens.
+final customerTargetsEnabledProvider = FutureProvider<bool>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return false;
+  final client = Supabase.instance.client;
+  try {
+    final res = await client
+        .from('app_config')
+        .select('value')
+        .eq('org_id', user.orgId!)
+        .eq('key', 'org.customer_targets_enabled')
+        .maybeSingle();
+    return (res?['value'] as String?) == 'true';
+  } catch (_) {
+    return false;
+  }
+});
+
 // Count of assets with maintenance overdue for the current org (nav badge).
 final assetsDueCountProvider = FutureProvider<int>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
@@ -212,6 +232,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
+  final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
   final isAdminTier = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin;
@@ -435,12 +456,15 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
             badge: crmOverdue,
           ),
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
-            ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors'],
+            ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors',
+             if (targetsOn) '/intelligence/performance'],
             [
               _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
               _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
               _menuItem(context, 'Placement Audit', Icons.checklist_outlined, '/intelligence/placement', location),
               _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
+              if (targetsOn)
+                _menuItem(context, 'Performance', Icons.leaderboard_outlined, '/intelligence/performance', location),
             ],
           ),
           if (show('/assets') || show('/facility'))
