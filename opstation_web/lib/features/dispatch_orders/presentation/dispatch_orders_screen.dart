@@ -68,10 +68,8 @@ class _DispatchOrdersScreenState
     });
     try {
       final orders = await DispatchOrderService(Supabase.instance.client)
-          .listOrdersForDispatch(
+          .listDeliveryOrdersForDispatch(
         orgId: auth!.orgId!,
-        status: _statusFilter,
-        driverId: _driverIdFilter,
         from: _from,
         to: _to.add(const Duration(days: 1)),
       );
@@ -90,14 +88,24 @@ class _DispatchOrdersScreenState
   }
 
   List<Order> get _filtered {
-    if (_searchTerm.isEmpty) return _orders;
-    final q = _searchTerm.toLowerCase();
-    return _orders.where((o) {
-      return (o.customerName?.toLowerCase().contains(q) ?? false) ||
-          (o.customerCode?.toLowerCase().contains(q) ?? false) ||
-          (o.notes?.toLowerCase().contains(q) ?? false) ||
-          (o.driverName?.toLowerCase().contains(q) ?? false);
-    }).toList();
+    Iterable<Order> list = _orders;
+    // Status filter (Pool=approved, Assigned=dispatched, Delivered).
+    final sf = OrderStatusX.fromKey(_statusFilter);
+    if (sf != null) list = list.where((o) => o.status == sf);
+    // Driver filter.
+    if (_driverIdFilter != null) {
+      list = list.where((o) => o.driverId == _driverIdFilter);
+    }
+    if (_searchTerm.isNotEmpty) {
+      final q = _searchTerm.toLowerCase();
+      list = list.where((o) {
+        return (o.customerName?.toLowerCase().contains(q) ?? false) ||
+            (o.customerCode?.toLowerCase().contains(q) ?? false) ||
+            (o.soInvoiceNumber?.toLowerCase().contains(q) ?? false) ||
+            (o.driverName?.toLowerCase().contains(q) ?? false);
+      });
+    }
+    return list.toList();
   }
 
   Future<void> _pickDate(bool isFrom) async {
@@ -149,7 +157,7 @@ class _DispatchOrdersScreenState
       try {
         deliveryOrders =
             await DispatchOrderService(Supabase.instance.client)
-                .listOrdersInDelivery(o.deliveryId!);
+                .listDeliveryOrdersInDelivery(o.deliveryId!);
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -222,12 +230,10 @@ class _DispatchOrdersScreenState
                   ),
                   value: _statusFilter,
                   items: const [
-                    DropdownMenuItem(value: null, child: Text('Active queue')),
-                    DropdownMenuItem(value: 'approved', child: Text('Approved')),
-                    DropdownMenuItem(value: 'dispatched', child: Text('Dispatched')),
-                    DropdownMenuItem(value: 'on_hold', child: Text('On hold')),
+                    DropdownMenuItem(value: null, child: Text('All')),
+                    DropdownMenuItem(value: 'approved', child: Text('Pool (unassigned)')),
+                    DropdownMenuItem(value: 'dispatched', child: Text('Assigned')),
                     DropdownMenuItem(value: 'delivered', child: Text('Delivered')),
-                    DropdownMenuItem(value: 'cancelled', child: Text('Cancelled')),
                   ],
                   onChanged: (v) => setState(() => _statusFilter = v),
                 ),

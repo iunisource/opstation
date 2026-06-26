@@ -92,7 +92,7 @@ class _DispatchAssignModalState extends ConsumerState<DispatchAssignModal> {
     });
     try {
       await DispatchOrderService(Supabase.instance.client)
-          .assignOrdersToDriver(
+          .assignDeliveryOrdersToDriver(
         orders: [widget.order],
         driverId: _driverId!,
         driverName: _driverName!,

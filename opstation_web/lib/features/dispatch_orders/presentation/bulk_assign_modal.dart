@@ -127,7 +127,7 @@ class _BulkAssignModalState extends ConsumerState<BulkAssignModal> {
     });
     try {
       await DispatchOrderService(Supabase.instance.client)
-          .assignOrdersToDriver(
+          .assignDeliveryOrdersToDriver(
         orders: widget.orders,
         driverId: _driverId!,
         driverName: _driverName!,

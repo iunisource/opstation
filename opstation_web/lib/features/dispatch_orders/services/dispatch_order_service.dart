@@ -247,9 +247,16 @@ class DispatchOrderService {
               .eq('delivery_id', deliveryId)
               .eq('order_id', o.id);
         } catch (_) {
-          // Stop may be locked (already delivered). Skip silently — the
-          // order-level update still went through above.
+          // Stop may be locked (already delivered). Skip silently.
         }
+        // DO-based stops carry do_id (order_id is null), so mirror there too.
+        try {
+          await _client
+              .from('delivery_stops')
+              .update(stopPayload)
+              .eq('delivery_id', deliveryId)
+              .eq('do_id', o.id);
+        } catch (_) {}
       }
     }
 
@@ -296,5 +303,219 @@ class DispatchOrderService {
       'status': 'completed',
       'completed_at': now,
     }).eq('id', deliveryId);
+  }
+
+  // ===================================================================
+  // STAGE 2 — DO-based dispatch (replaces the obsolete `orders` pool).
+  // The dispatch pool is approved Delivery Orders that haven't yet been
+  // assigned to a driver. A DO is "taken" once its id appears as `do_id`
+  // on a delivery_stop whose delivery is not cancelled.
+  // ===================================================================
+
+  /// Lists Delivery Orders for the dispatch board, mapped into the web
+  /// `Order` model. Returns the full lifecycle so the status filter works:
+  ///   • approved  = pool (not yet assigned)
+  ///   • dispatched = assigned to a driver, in progress
+  ///   • delivered = delivered (DO marked delivered, or its stop delivered)
+  /// A DO's assignment/driver come from the delivery_stop carrying its do_id
+  /// (on a non-cancelled delivery).
+  Future<List<Order>> listDeliveryOrdersForDispatch({
+    required String orgId,
+    String? branchId,
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    // 1) Candidate DOs: dispatchable or delivered, not voided, org/branch scoped.
+    var q = _client.from('delivery_orders')
+        .select('id, voucher_number, customer_id, collect_amount, status, '
+            'branch_id, is_voided, created_at, '
+            'customers(shop_name, code), sales_orders(voucher_number)')
+        .eq('org_id', orgId)
+        .inFilter('status',
+            const ['saved', 'invoiced', 'partially_delivered', 'delivered']);
+    if (branchId != null) q = q.eq('branch_id', branchId);
+    if (from != null) q = q.gte('created_at', from.toIso8601String());
+    if (to != null) q = q.lte('created_at', to.toIso8601String());
+    final dos = await q.order('created_at', ascending: false);
+
+    // 2) Assignment map: do_id -> {delivery, driver, stop status}.
+    final assign = <String, Map<String, dynamic>>{};
+    try {
+      final taken = await _client
+          .from('delivery_stops')
+          .select('do_id, status, delivery_id, '
+              'deliveries(id, driver_id, driver_name, status)')
+          .not('do_id', 'is', null);
+      for (final s in taken as List) {
+        final delStatus = (s['deliveries']?['status']) as String?;
+        if (delStatus == 'cancelled') continue;
+        final id = s['do_id'] as String?;
+        if (id != null) assign[id] = Map<String, dynamic>.from(s as Map);
+      }
+    } catch (_) {}
+
+    // 3) Map DOs into the Order model with the right lifecycle status.
+    final result = <Order>[];
+    for (final d in dos as List) {
+      final id = d['id'] as String?;
+      if (id == null) continue;
+      if ((d['is_voided'] as bool?) == true) continue;
+      final custId = d['customer_id'] as String?;
+      if (custId == null) continue;
+      final collect = (d['collect_amount'] as num?);
+      final doDelivered = (d['status'] as String?) == 'delivered';
+
+      OrderStatus st;
+      String? driverId, driverName, deliveryId;
+      final a = assign[id];
+      if (a != null) {
+        deliveryId = a['delivery_id'] as String?;
+        driverId = a['deliveries']?['driver_id'] as String?;
+        driverName = a['deliveries']?['driver_name'] as String?;
+        final stopDelivered = (a['status'] as String?) == 'delivered';
+        st = (stopDelivered || doDelivered)
+            ? OrderStatus.delivered
+            : OrderStatus.dispatched;
+      } else {
+        st = doDelivered ? OrderStatus.delivered : OrderStatus.approved;
+      }
+
+      result.add(Order(
+        id: id,
+        orgId: orgId,
+        customerId: custId,
+        customerName: d['customers']?['shop_name'] as String?,
+        customerCode: d['customers']?['code'] as String?,
+        status: st,
+        driverId: driverId,
+        driverName: driverName,
+        deliveryId: deliveryId,
+        // DO voucher is the dispatch reference shown to the driver.
+        soInvoiceNumber: d['voucher_number'] as String?,
+        createdAt: DateTime.parse(d['created_at'] as String).toLocal(),
+        updatedAt: DateTime.parse(d['created_at'] as String).toLocal(),
+        // collect_amount drives cash-collection; null/0 = non-collection (credit).
+        paymentType: (collect ?? 0) > 0 ? 'cash' : 'credit',
+        amount: (collect ?? 0).round(),
+      ));
+    }
+    return result;
+  }
+
+  /// Assigns Delivery Orders to a driver as one multi-stop delivery. Mirrors
+  /// assignOrdersToDriver but writes `do_id` on each stop (order_id stays
+  /// null) and does NOT write back to the obsolete `orders` table. The DO's
+  /// own accounting was already done at approval; pool-exit is tracked by the
+  /// do_id on the stop.
+  Future<void> assignDeliveryOrdersToDriver({
+    required List<Order> orders,
+    required String driverId,
+    required String driverName,
+    required String currentUserId,
+    required String currentUserName,
+    required String orgId,
+    Map<String, String?>? driverNoteOverrides,
+    Map<String, String?>? soInvoiceOverrides,
+  }) async {
+    if (orders.isEmpty) return;
+    final now = DateTime.now();
+    final ts = now.millisecondsSinceEpoch;
+    final hex = ts.toRadixString(16);
+    final deliveryId = 'delivery_${ts}_$hex';
+
+    await _client.from('deliveries').insert({
+      'id': deliveryId,
+      'driver_id': driverId,
+      'driver_name': driverName,
+      'driver_role': 'driver',
+      'created_by': currentUserId,
+      'created_by_name': currentUserName,
+      'created_by_role': 'dispatchManager',
+      'created_at': now.toIso8601String(),
+      'status': 'assigned',
+      'org_id': orgId,
+      'order_id': null,
+    });
+
+    final stopRows = <Map<String, dynamic>>[];
+    for (var i = 0; i < orders.length; i++) {
+      final o = orders[i];
+      final dn = (driverNoteOverrides != null && driverNoteOverrides.containsKey(o.id))
+          ? driverNoteOverrides[o.id]
+          : o.driverNote;
+      final so = (soInvoiceOverrides != null && soInvoiceOverrides.containsKey(o.id))
+          ? soInvoiceOverrides[o.id]
+          : o.soInvoiceNumber;
+      stopRows.add({
+        'id': 'stop_${ts}_${i}_$hex',
+        'delivery_id': deliveryId,
+        'customer_id': o.customerId,
+        'customer_name': o.customerName ?? '',
+        'customer_code': o.customerCode ?? '',
+        'sequence': i + 1,
+        'item_description': '',
+        'amount': o.amount,
+        'payment_type': o.paymentType,
+        'status': 'pending',
+        'verification': 'none',
+        'photo_paths_json': '[]',
+        'do_id': o.id,
+        'order_id': null,
+        'driver_note': (dn == null || dn.trim().isEmpty) ? null : dn.trim(),
+        'so_invoice_number': (so == null || so.trim().isEmpty) ? null : so.trim(),
+      });
+    }
+    await _client.from('delivery_stops').insert(stopRows);
+
+    // Fire-and-forget FCM notification to the driver.
+    try {
+      final firstName = orders.first.customerName ?? 'a stop';
+      final body = orders.length == 1
+          ? 'New delivery for $firstName'
+          : '${orders.length} stops assigned';
+      await _client.functions.invoke('send-notification', body: {
+        'userId': driverId,
+        'title': 'New delivery assigned',
+        'body': body,
+        'data': {'type': 'delivery_assigned', 'delivery_id': deliveryId},
+      });
+    } catch (_) {}
+  }
+
+  /// DO-based counterpart of listOrdersInDelivery: reads the delivery's stops
+  /// (those carrying a do_id) and maps them back into Order objects so the
+  /// edit/mark-delivered modal works for DO deliveries.
+  Future<List<Order>> listDeliveryOrdersInDelivery(String deliveryId) async {
+    final stops = await _client
+        .from('delivery_stops')
+        .select('do_id, customer_id, customer_name, customer_code, amount, '
+            'payment_type, status, driver_note, so_invoice_number')
+        .eq('delivery_id', deliveryId)
+        .not('do_id', 'is', null)
+        .order('sequence');
+    final result = <Order>[];
+    for (final s in stops as List) {
+      final doId = s['do_id'] as String?;
+      final custId = s['customer_id'] as String?;
+      if (doId == null || custId == null) continue;
+      result.add(Order(
+        id: doId,
+        orgId: '',
+        customerId: custId,
+        customerName: s['customer_name'] as String?,
+        customerCode: s['customer_code'] as String?,
+        status: (s['status'] as String?) == 'delivered'
+            ? OrderStatus.delivered
+            : OrderStatus.dispatched,
+        deliveryId: deliveryId,
+        driverNote: s['driver_note'] as String?,
+        soInvoiceNumber: s['so_invoice_number'] as String?,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        paymentType: s['payment_type'] as String? ?? 'cash',
+        amount: (s['amount'] as num?)?.round() ?? 0,
+      ));
+    }
+    return result;
   }
 }
