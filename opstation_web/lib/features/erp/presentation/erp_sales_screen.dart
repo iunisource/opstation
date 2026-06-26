@@ -1017,6 +1017,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     final createdAt = _detail['created_at'] != null
         ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     final soVoucher = _linkedSo['voucher_number'] as String?;
+    final pdfRefs = <String, String>{
+      if (soVoucher != null) 'SO #': soVoucher,
+      if ((_detail['collect_amount'] as num?) != null)
+        'Collect': 'Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
+    };
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Delivery Order',
@@ -1033,7 +1038,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
       footerNote: _meta.footerNote,
-      relatedRefs: soVoucher != null ? {'SO #': soVoucher} : null,
+      relatedRefs: pdfRefs.isEmpty ? null : pdfRefs,
     );
   }
 
@@ -1350,13 +1355,20 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   Future<void> _saveDeliveryOrder() async {
     await _saveDelivery();
+    // Persist collect amount while the DO is still unlocked — the lock update
+    // below can't change other columns once is_locked flips (locked-DO rule).
+    try {
+      await Supabase.instance.client.from('delivery_orders').update({
+        'collect_amount': _collectEnabled ? _collectAmount : null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+    } catch (_) {}
     // Lock the DO after saving
     try {
       await Supabase.instance.client.from('delivery_orders').update({
         'is_locked': true,
         'locked_by': ref.read(currentUserProvider)?.id,
         'locked_at': DateTime.now().toUtc().toIso8601String(),
-        'collect_amount': _collectEnabled ? _collectAmount : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved');
@@ -1676,6 +1688,15 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           const SizedBox(width: 12),
           _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
           if (_isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
+          if ((_detail['collect_amount'] as num?) != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+              child: Text('Collect: Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
+                  style: const TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w700)),
+            ),
+          ],
           if (isVoided) ...[
             const SizedBox(width: 8),
             Container(
