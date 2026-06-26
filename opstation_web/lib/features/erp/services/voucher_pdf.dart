@@ -131,13 +131,26 @@ class VoucherPdf {
                       angle: 0.6,
                       child: pw.Opacity(
                         opacity: 0.12,
-                        child: pw.Text(
-                          watermark,
-                          style: pw.TextStyle(
-                            fontSize: 130,
-                            fontWeight: pw.FontWeight.bold,
-                            color: PdfColors.red,
-                          ),
+                        child: pw.Column(
+                          mainAxisSize: pw.MainAxisSize.min,
+                          children: [
+                            pw.Text(
+                              watermark,
+                              style: pw.TextStyle(
+                                fontSize: 130,
+                                fontWeight: pw.FontWeight.bold,
+                                color: PdfColors.red,
+                              ),
+                            ),
+                            pw.Text(
+                              'This document is no longer valid',
+                              style: pw.TextStyle(
+                                fontSize: 22,
+                                fontWeight: pw.FontWeight.bold,
+                                color: PdfColors.red,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

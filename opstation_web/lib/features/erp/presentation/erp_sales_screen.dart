@@ -1040,6 +1040,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       createdAt: createdAt,
       footerNote: _meta.footerNote,
       relatedRefs: pdfRefs.isEmpty ? null : pdfRefs,
+      watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
     );
   }
 
