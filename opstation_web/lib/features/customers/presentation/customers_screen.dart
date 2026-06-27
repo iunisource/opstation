@@ -169,11 +169,32 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
             return !hasLoc;
           case 'has_location':
             return hasLoc;
+          case 'malformed':
+            return _isMalformed(c);
           default:
             return true;
         }
       }).toList();
     });
+  }
+
+  /// Heuristic for junk contact/phone data (distinct from simply missing):
+  ///   • phone present but not a plausible number — contains a '.', or its
+  ///     digit count falls outside 10–13 (PK mobile/landline range); or
+  ///   • contact_person present but contains no letters at all (a number or
+  ///     phone dumped into the name field).
+  bool _isMalformed(Map<String, dynamic> c) {
+    final phone = (c['phone'] as String? ?? '').trim();
+    final contact = (c['contact_person'] as String? ?? '').trim();
+    if (phone.isNotEmpty) {
+      if (phone.contains('.')) return true;
+      final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+      if (digits.length < 10 || digits.length > 13) return true;
+    }
+    if (contact.isNotEmpty && !RegExp(r'[A-Za-z]').hasMatch(contact)) {
+      return true;
+    }
+    return false;
   }
 
   void _showSnack(String msg) {
@@ -255,6 +276,9 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   DropdownMenuItem(
                       value: 'has_location',
                       child: Text('Has Location')),
+                  DropdownMenuItem(
+                      value: 'malformed',
+                      child: Text('Malformed: Contact/Phone')),
                 ],
                 onChanged: (v) {
                   if (v == null) return;
