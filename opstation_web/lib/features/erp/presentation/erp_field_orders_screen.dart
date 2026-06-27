@@ -40,10 +40,14 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
   int _newWhileAway = 0;                      // submitted arrivals while not on Submitted filter
   List<Map<String, dynamic>> _branches = [];
   String? _approveBranchId;                    // branch chosen for the order under review
+  bool _soundOn = true;                        // new-order chime enabled (persisted)
+  bool _audioHintShown = false;                // one-time "click to enable sound" nudge
 
   @override
   void initState() {
     super.initState();
+    _installAudio();
+    _restoreSoundPref();
     _loadProducts();
     _loadOrders();
     _loadBranches();
@@ -83,6 +87,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
   Future<void> _onNewOrder(Map<String, dynamic> row) async {
     if ((row['status'] as String?) != 'submitted') return;
     _playNewOrderTone();
+    _maybeWarnAudioBlocked();
     if (_filter == 'submitted') {
       // resolve names then prepend silently
       final cid = row['customer_id'] as String?;
@@ -108,23 +113,90 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     }
   }
 
-  // Distinct two-tone "ding-dong" (different from the POS rising chime).
-  void _playNewOrderTone() {
-    _tone(880, 0.18, 'sine');
-    Future.delayed(const Duration(milliseconds: 180), () => _tone(587, 0.28, 'sine'));
+  // ---------------------------------------------------------------------------
+  // New-order chime (web).
+  //
+  // Previous version created a brand-new AudioContext on every tone. Two bugs:
+  //   1) A context created without a prior user gesture starts SUSPENDED, so it
+  //      stays silent on a passive monitor screen (Chrome autoplay policy).
+  //   2) Contexts were never closed; the browser caps them (~6/page), after which
+  //      `new AudioContext()` throws and sound dies for the rest of the session.
+  //
+  // Now: one cached context, resumed on the first user gesture (listeners are
+  // installed once by the bootstrap below) and on demand; both ding-dong tones
+  // are scheduled on that single context via currentTime offsets (no
+  // Future.delayed, which Chrome throttles in background tabs).
+  // ---------------------------------------------------------------------------
+  static const String _audioBootstrapJs =
+      '(function(){'
+      'if(window.__foAudio)return;'
+      'var F=window.AudioContext||window.webkitAudioContext;var ctx=null;'
+      'function get(){if(!ctx){try{ctx=new F();}catch(e){return null;}}return ctx;}'
+      'function unlock(){var c=get();if(c&&c.state==="suspended"){try{c.resume();}catch(e){}}}'
+      'function beep(freq,dur,type,when){var c=get();if(!c)return;'
+      'if(c.state==="suspended"){try{c.resume();}catch(e){}}'
+      'try{var t0=c.currentTime+(when||0);var o=c.createOscillator();var g=c.createGain();'
+      'o.connect(g);g.connect(c.destination);o.type=type||"sine";o.frequency.value=freq;'
+      'g.gain.setValueAtTime(0.3,t0);g.gain.exponentialRampToValueAtTime(0.001,t0+dur);'
+      'o.start(t0);o.stop(t0+dur);}catch(e){}}'
+      'function state(){var c=get();return c?c.state:"none";}'
+      '["pointerdown","keydown","touchstart","mousedown"].forEach(function(ev){'
+      'window.addEventListener(ev,unlock,{passive:true});});'
+      'window.__foAudio={unlock:unlock,beep:beep,state:state};'
+      '})();';
+
+  void _installAudio() {
+    try { js_util.callMethod(js_util.globalThis, 'eval', [_audioBootstrapJs]); } catch (_) {}
   }
 
-  void _tone(double freq, double duration, String type) {
+  void _unlockAudio() {
+    try { js_util.callMethod(js_util.globalThis, 'eval', ['window.__foAudio&&window.__foAudio.unlock()']); } catch (_) {}
+  }
+
+  void _restoreSoundPref() {
+    try {
+      final v = js_util.callMethod(js_util.globalThis, 'eval', ['window.localStorage.getItem("fo_sound")']);
+      if (v == 'off') _soundOn = false;
+    } catch (_) {}
+  }
+
+  void _toggleSound() {
+    setState(() => _soundOn = !_soundOn);
+    try {
+      js_util.callMethod(js_util.globalThis, 'eval',
+          ['window.localStorage.setItem("fo_sound","${_soundOn ? 'on' : 'off'}")']);
+    } catch (_) {}
+    if (_soundOn) {
+      _audioHintShown = true;          // arming counts as the gesture; no nudge needed
+      _unlockAudio();                  // runs inside the click handler => valid gesture
+      // short confirmation blip so the dispatcher hears it's armed
+      try { js_util.callMethod(js_util.globalThis, 'eval', ['window.__foAudio&&window.__foAudio.beep(740,0.12,"sine",0)']); } catch (_) {}
+    }
+  }
+
+  // Distinct two-tone "ding-dong" (different from the POS rising chime),
+  // both tones scheduled on the one shared context.
+  void _playNewOrderTone() {
+    if (!_soundOn) return;
     try {
       js_util.callMethod(js_util.globalThis, 'eval', [
-        'try{var a=new(window.AudioContext||window.webkitAudioContext)();'
-        'var o=a.createOscillator();var g=a.createGain();'
-        'o.connect(g);g.connect(a.destination);'
-        'o.type="$type";o.frequency.value=$freq;'
-        'g.gain.setValueAtTime(0.3,a.currentTime);'
-        'g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+$duration);'
-        'o.start();o.stop(a.currentTime+$duration);}catch(e){}'
+        'if(window.__foAudio){window.__foAudio.beep(880,0.18,"sine",0);'
+        'window.__foAudio.beep(587,0.28,"sine",0.18);}'
       ]);
+    } catch (_) {}
+  }
+
+  // If an order lands before the page has ever been interacted with, the audio
+  // context is still suspended and the chime can't play. Nudge the user once.
+  void _maybeWarnAudioBlocked() {
+    if (_audioHintShown || !_soundOn) return;
+    try {
+      final s = js_util.callMethod(js_util.globalThis, 'eval',
+          ['(window.__foAudio&&window.__foAudio.state&&window.__foAudio.state())||"none"']);
+      if (s == 'suspended' || s == 'none') {
+        _audioHintShown = true;
+        if (mounted) _snack('🔔 Click anywhere on the page once to enable the new-order sound.');
+      }
     } catch (_) {}
   }
 
@@ -440,6 +512,12 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
         ],
         OutlinedButton.icon(icon: const Icon(Icons.picture_as_pdf, size: 16), label: const Text('Export PDF'), onPressed: _exportPdf),
         const SizedBox(width: 8),
+        IconButton(
+          icon: Icon(_soundOn ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+              color: _soundOn ? AppTheme.primary : AppTheme.textSecondary),
+          tooltip: _soundOn ? 'New-order sound on (click to mute)' : 'New-order sound off (click to enable)',
+          onPressed: _toggleSound,
+        ),
         IconButton(icon: const Icon(Icons.refresh), tooltip: 'Refresh', onPressed: _loadOrders),
       ]),
       const SizedBox(height: 12),
