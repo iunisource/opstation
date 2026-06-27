@@ -29,6 +29,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   bool _targetsEnabled = false; // org.customer_targets_enabled
   final _searchCtrl = TextEditingController();
   String _missingFilter = 'all'; // all | contact | phone | either
+  String _routeFilter = 'all'; // all | assigned | unassigned
+  Set<String> _assignedCustomerIds = {}; // customers present in any route stop
 
   @override
   void initState() {
@@ -105,12 +107,34 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           .maybeSingle();
       final targetsOn = (tgtRow?['value'] as String?) == 'true';
 
+      // Which customers are on a route? route_stops has no org_id, so scope by
+      // this org's routes. Used by the "Route" filter (assigned/unassigned).
+      final Set<String> assignedIds = {};
+      try {
+        final routeRows = await client
+            .from('sales_routes')
+            .select('id')
+            .eq('org_id', orgId);
+        final routeIds = [for (final r in routeRows) r['id'] as String];
+        if (routeIds.isNotEmpty) {
+          final stopRows = await client
+              .from('route_stops')
+              .select('customer_id, route_id')
+              .inFilter('route_id', routeIds);
+          for (final s in stopRows) {
+            final cid = s['customer_id'] as String?;
+            if (cid != null) assignedIds.add(cid);
+          }
+        }
+      } catch (_) {/* filter just falls back to showing all */}
+
       setState(() {
         _customers = List<Map<String, dynamic>>.from(rows);
         _filtered = _customers;
         _categories = cats;
         _groups = grps;
         _targetsEnabled = targetsOn;
+        _assignedCustomerIds = assignedIds;
         _loading = false;
       });
     } catch (_) { setState(() => _loading = false); }
@@ -125,6 +149,11 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
             (c['code'] as String? ?? '').toLowerCase().contains(q) ||
             (c['phone'] as String? ?? '').toLowerCase().contains(q);
         if (!matchesSearch) return false;
+        // Route assignment filter (independent of the missing-info filter).
+        if (_routeFilter == 'assigned' &&
+            !_assignedCustomerIds.contains(c['id'])) return false;
+        if (_routeFilter == 'unassigned' &&
+            _assignedCustomerIds.contains(c['id'])) return false;
         final noContact =
             (c['contact_person'] as String? ?? '').trim().isEmpty;
         final noPhone = (c['phone'] as String? ?? '').trim().isEmpty;
@@ -230,6 +259,30 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                 onChanged: (v) {
                   if (v == null) return;
                   setState(() => _missingFilter = v);
+                  _filter();
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                value: _routeFilter,
+                decoration: const InputDecoration(
+                  labelText: 'Route',
+                  isDense: true,
+                ),
+                items: const [
+                  DropdownMenuItem(
+                      value: 'all', child: Text('All customers')),
+                  DropdownMenuItem(
+                      value: 'assigned', child: Text('Assigned to a route')),
+                  DropdownMenuItem(
+                      value: 'unassigned', child: Text('Route not assigned')),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _routeFilter = v);
                   _filter();
                 },
               ),
