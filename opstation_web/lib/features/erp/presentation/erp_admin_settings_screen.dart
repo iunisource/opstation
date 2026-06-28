@@ -160,6 +160,17 @@ const List<_AdminToggle> _toggles = [
         'written, and only products on the invoice are touched. When OFF, Cost '
         'Price is left unchanged.',
   ),
+
+  _AdminToggle(
+    'org.kiosk_capture_photo',
+    'Capture punch photo at Attendance Kiosk',
+    'When ON, the Attendance Kiosk takes a webcam snapshot at each check-in '
+        'and check-out and stores it with the attendance record (kept for 30 '
+        'days, then overwritten). Helps verify who actually punched and deters '
+        'buddy-punching. Requires the kiosk camera to be active; if a kiosk '
+        'uses only a hardware scanner with no camera, the punch still works '
+        'but no photo is captured. When OFF, no photos are taken.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {

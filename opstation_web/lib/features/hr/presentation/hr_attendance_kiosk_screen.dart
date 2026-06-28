@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
 import 'dart:ui_web' as ui_web;
@@ -49,6 +51,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   _Result? _result;
   Timer? _clearTimer;
   bool _busy = false;
+  bool _captureEnabled = false;  // org.kiosk_capture_photo
 
   // hardware scanner / keyboard-wedge capture
   final _wedgeCtrl = TextEditingController();
@@ -74,6 +77,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
     super.initState();
     _registerCameraView();
     WidgetsBinding.instance.addPostFrameCallback((_) => _refocusWedge());
+    _loadConfig();
     _initCamera();
   }
 
@@ -85,6 +89,41 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
     _wedgeCtrl.dispose();
     _wedgeFocus.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadConfig() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final row = await Supabase.instance.client.from('app_config')
+          .select('value').eq('org_id', orgId).eq('key', 'org.kiosk_capture_photo').maybeSingle();
+      if (mounted) setState(() => _captureEnabled = (row?['value'] as String?) == 'true');
+    } catch (_) { }
+  }
+
+  // Best-effort: snap the current camera frame and store it with the punch.
+  // Never blocks or fails the punch — wrapped in try/catch, fire-and-forget.
+  Future<void> _capturePhoto(String empCode, String inOrOut, String attId, String today) async {
+    if (!_captureEnabled || !_cameraOn || _video == null) return;
+    try {
+      final vw = _video!.videoWidth;
+      final vh = _video!.videoHeight;
+      if (vw == 0 || vh == 0) return;
+      final canvas = html.CanvasElement(width: vw, height: vh);
+      canvas.context2D.drawImage(_video!, 0, 0);
+      final dataUrl = canvas.toDataUrl('image/jpeg', 0.7);
+      final b64 = dataUrl.split(',').last;
+      final Uint8List bytes = base64Decode(b64);
+      final orgId = _orgId; if (orgId == null) return;
+      final client = Supabase.instance.client;
+      final path = 'att/$today/${empCode}_${inOrOut}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await client.storage.from('kiosk-punches').uploadBinary(path, bytes,
+          fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'));
+      final url = client.storage.from('kiosk-punches').getPublicUrl(path);
+      await client.from('hr_attendance')
+          .update({inOrOut == 'in' ? 'punch_in_photo' : 'punch_out_photo': url})
+          .eq('id', attId);
+    } catch (_) { /* capture is best-effort */ }
   }
 
   // ── sound ──────────────────────────────────────────────────────────────────
@@ -315,6 +354,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
           'changes': 'Kiosk check-out $cout', 'changed_by': null, 'changed_by_name': 'Kiosk',
         });
         _lastPunch[empId] = now;
+        _capturePhoto(empCode ?? code, 'out', id, today);
         _beep(ok: true);
         _show(_Result(_Outcome.checkedOut, 'Checked Out',
             name: name, code: empCode, photoUrl: photo, time: cout));
@@ -333,6 +373,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
           'changes': 'Kiosk check-in $cin', 'changed_by': null, 'changed_by_name': 'Kiosk',
         });
         _lastPunch[empId] = now;
+        _capturePhoto(empCode ?? code, 'in', id, today);
         _beep(ok: true);
         _show(_Result(_Outcome.checkedIn, 'Checked In',
             name: name, code: empCode, photoUrl: photo, time: cin));
@@ -437,7 +478,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
 
   Widget _cameraBox() {
     return Container(
-      width: 280, height: 280,
+      width: 460, height: 360,
       decoration: BoxDecoration(
         color: Colors.black26, borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white24),

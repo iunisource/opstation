@@ -50,6 +50,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   final _bankName = TextEditingController();
   final _bankAcct = TextEditingController();
   final _notes = TextEditingController();
+  final _notifyEmail = TextEditingController();
+  bool _notifyPunch = false;
   // form state
   String? _deptId, _desigId, _branchId, _gender, _empType;
   DateTime? _dob, _joinDate;
@@ -84,7 +86,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   @override
   void dispose() {
-    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes]) c.dispose();
+    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail]) c.dispose();
     super.dispose();
   }
 
@@ -137,11 +139,11 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   void _newEmployee() {
     setState(() {
       _current = null; _status = 'active';
-      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes]) c.clear();
+      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail]) c.clear();
       _deptId = null; _desigId = null; _gender = null; _empType = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
       _dob = null; _joinDate = null;
-      _shiftId = null; _photoUrl = null;
+      _shiftId = null; _photoUrl = null; _notifyPunch = false;
       _docs = [];
     });
   }
@@ -171,6 +173,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _joinDate = e['join_date'] != null ? DateTime.tryParse(e['join_date'] as String) : null;
       _shiftId = e['shift_id'] as String?;
       _photoUrl = e['photo_url'] as String?;
+      _notifyPunch = e['notify_punch'] == true;
+      _notifyEmail.text = e['notify_email'] as String? ?? '';
     });
     _loadDocs();
   }
@@ -266,6 +270,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'join_date': _joinDate != null ? DateFormat('yyyy-MM-dd').format(_joinDate!) : null,
         'status': _status, 'basic_salary': double.tryParse(_salary.text) ?? 0,
         'shift_id': _shiftId, 'photo_url': _photoUrl,
+        'notify_punch': _notifyPunch, 'notify_email': _t(_notifyEmail),
         'approval_status': _isAdmin ? 'approved' : 'pending',
         'bank_name': _t(_bankName), 'bank_account': _t(_bankAcct), 'notes': _t(_notes),
         'updated_at': DateTime.now().toIso8601String(),
@@ -804,6 +809,16 @@ $docsHtml
               ]),
               const SizedBox(height: 12),
               _labeled('Address', _tf(_address, lines: 2)),
+              const SizedBox(height: 12),
+              _labeled('Punch notifications', Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Switch(value: _notifyPunch, onChanged: _canWrite ? (v) => setState(() => _notifyPunch = v) : null),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('Email an admin whenever this employee punches in or out at the kiosk', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+              ])),
+              if (_notifyPunch) ...[
+                const SizedBox(height: 8),
+                _labeled('Notification email', _tf(_notifyEmail, hint: 'admin@company.com')),
+              ],
             ]),
             const SizedBox(height: 16),
             _card('Bank & notes', [
