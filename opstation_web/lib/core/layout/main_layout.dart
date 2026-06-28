@@ -180,30 +180,61 @@ Widget _navLayoutToggle(WidgetRef ref, NavLayout current) {
   );
 }
 
-class MainLayout extends ConsumerWidget {
+class MainLayout extends ConsumerStatefulWidget {
   final Widget child;
   const MainLayout({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MainLayout> createState() => _MainLayoutState();
+}
+
+class _MainLayoutState extends ConsumerState<MainLayout> {
+  bool _fullscreen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    html.document.addEventListener('fullscreenchange', _onFsChange);
+  }
+
+  @override
+  void dispose() {
+    html.document.removeEventListener('fullscreenchange', _onFsChange);
+    super.dispose();
+  }
+
+  void _onFsChange(html.Event _) {
+    final fs = html.document.fullscreenElement != null;
+    if (mounted && fs != _fullscreen) setState(() => _fullscreen = fs);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
     if (auth.isLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final user = auth.valueOrNull;
+
+    // In browser full-screen, drop the app chrome (top bar / sidebar) entirely
+    // so a wall display (e.g. the Attendance Board) shows only its own content.
+    if (_fullscreen) {
+      return Scaffold(body: widget.child);
+    }
+
     final layout = ref.watch(navLayoutProvider);
     if (layout == NavLayout.side) {
       return Scaffold(
         body: Row(children: [
           _SideNav(user: user),
-          Expanded(child: child),
+          Expanded(child: widget.child),
         ]),
       );
     }
     return Scaffold(
       body: Column(children: [
         _TopNav(user: user),
-        Expanded(child: child),
+        Expanded(child: widget.child),
       ]),
     );
   }
