@@ -23,6 +23,7 @@ import '../../features/erp/presentation/erp_customer_balance_report_screen.dart'
 import '../../features/hr/presentation/hr_employees_screen.dart';
 import '../../features/hr/presentation/hr_attendance_screen.dart';
 import '../../features/hr/presentation/hr_attendance_kiosk_screen.dart';
+import '../../features/hr/presentation/hr_attendance_board_screen.dart';
 import '../../features/hr/presentation/hr_leave_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -302,6 +303,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/hr/employees', builder: (_, __) => const HrEmployeesScreen()),
       GoRoute(path: '/hr/attendance', builder: (_, __) => const HrAttendanceScreen()),
       GoRoute(path: '/hr/attendance-kiosk', builder: (_, __) => const HrAttendanceKioskScreen()),
+      GoRoute(path: '/hr/attendance-board', builder: (_, __) => const HrAttendanceBoardScreen()),
       GoRoute(path: '/hr/leave', builder: (_, __) => const HrLeaveScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),

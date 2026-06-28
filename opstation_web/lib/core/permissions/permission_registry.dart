@@ -107,6 +107,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('hr_employees', 'Employee Directory', PermKind.doc, '/hr/employees'),
     PermItem('hr_attendance', 'Attendance', PermKind.doc, '/hr/attendance'),
     PermItem('hr_attendance_kiosk', 'Attendance Kiosk', PermKind.report, '/hr/attendance-kiosk'),
+    PermItem('hr_attendance_board', 'Attendance Board', PermKind.report, '/hr/attendance-board'),
     PermItem('hr_leave', 'Leave', PermKind.doc, '/hr/leave'),
   ]),
   PermModule('financial_reporting', 'Financials', Icons.account_balance_outlined, [

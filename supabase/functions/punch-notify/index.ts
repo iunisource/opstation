@@ -91,7 +91,7 @@ serve(async (req: Request) => {
       <b>${employeeName}</b>${codeBit} ${verb}${timeDisp ? " at <b>" + timeDisp + "</b>" : ""}${date ? " on " + date : ""}${orgBranch ? " &mdash; " + orgBranch : ""}.
     </p>
     <div style="display:inline-block;background:${accent};color:#fff;font-weight:700;font-size:14px;padding:9px 16px;border-radius:8px;">
-      ${verb.toUpperCase()}${timeDisp ? "  -  " + timeDisp : ""}
+      ${verb.toUpperCase()}${timeDisp ? "&nbsp;&middot;&nbsp;" + timeDisp : ""}
     </div>
     ${photoUrl ? `<div style="margin-top:14px;">
       <a href="${photoUrl}" style="display:inline-block;background:#0f1729;color:#fff;text-decoration:none;font-weight:700;font-size:13px;padding:9px 16px;border-radius:8px;">
