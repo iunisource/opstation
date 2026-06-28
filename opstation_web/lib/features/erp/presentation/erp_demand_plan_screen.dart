@@ -450,11 +450,12 @@ class _ErpDemandPlanScreenState extends ConsumerState<ErpDemandPlanScreen> {
         Expanded(flex: 5, child: Text('Product', style: h())),
         if (showBranch) Expanded(flex: 3, child: Text('Branch', style: h())),
         Expanded(flex: 2, child: Text('Demand/day', textAlign: TextAlign.right, style: h())),
+        Expanded(flex: 2, child: Text('Confidence', textAlign: TextAlign.right, style: h())),
         Expanded(flex: 2, child: Text('Stock', textAlign: TextAlign.right, style: h())),
         Expanded(flex: 2, child: Text('Cover (d)', textAlign: TextAlign.right, style: h())),
-        Expanded(flex: 2, child: Text('Reorder', textAlign: TextAlign.right, style: h())),
-        Expanded(flex: 2, child: Text('On order', textAlign: TextAlign.right, style: h())),
-        Expanded(flex: 2, child: Text('Suggested', textAlign: TextAlign.right, style: h())),
+        Expanded(flex: 2, child: Text('Reorder Point', textAlign: TextAlign.right, style: h())),
+        Expanded(flex: 2, child: Text('Already Ordered', textAlign: TextAlign.right, style: h())),
+        Expanded(flex: 2, child: Text('Suggest Qty', textAlign: TextAlign.right, style: h())),
         Expanded(flex: 3, child: Text('Status', textAlign: TextAlign.right, style: h())),
       ]),
     );
@@ -492,17 +493,16 @@ class _ErpDemandPlanScreenState extends ConsumerState<ErpDemandPlanScreen> {
                 kind == 'make' ? Colors.purple.shade400 : AppTheme.textSecondary),
             if (neg) ...[const SizedBox(width: 4), _tag('NEG STOCK', AppTheme.danger)],
           ]),
-          if ((r['sku'] as String?)?.isNotEmpty == true || conf != '-')
-            Text([
-              if ((r['sku'] as String?)?.isNotEmpty == true) 'SKU ${r['sku']}',
-              if (conf != '-') 'confidence: $conf',
-            ].join('   ·   '),
+          if ((r['sku'] as String?)?.isNotEmpty == true)
+            Text('SKU ${r['sku']}',
                 style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ])),
         if (showBranch) Expanded(flex: 3, child: Text(_branchName(r['branch_id'] as String?),
             style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
         Expanded(flex: 2, child: Text(_num0(r['avg_daily_demand'] as num?),
             textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+        Expanded(flex: 2, child: Align(alignment: Alignment.centerRight,
+            child: _confidenceChip(conf))),
         Expanded(flex: 2, child: Text(_num0(r['stock_on_hand'] as num?),
             textAlign: TextAlign.right,
             style: TextStyle(fontSize: 13, color: neg ? AppTheme.danger : null,
@@ -530,6 +530,28 @@ class _ErpDemandPlanScreenState extends ConsumerState<ErpDemandPlanScreen> {
         child: Text(text, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color)),
       );
 
+  Color _confidenceColor(String c) {
+    switch (c) {
+      case 'High': return AppTheme.success;
+      case 'Medium': return Colors.amber.shade800;
+      case 'Low': return AppTheme.danger;
+      default: return const Color(0xFFCBD5E1); // '-' (no demand)
+    }
+  }
+
+  Widget _confidenceChip(String conf) {
+    if (conf == '-') {
+      return const Text('—', textAlign: TextAlign.right,
+          style: TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)));
+    }
+    final c = _confidenceColor(conf);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(6)),
+      child: Text(conf, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
+    );
+  }
+
   Widget _statusChip(String status) {
     final c = _statusColor(status);
     return Container(
@@ -545,14 +567,15 @@ class _ErpDemandPlanScreenState extends ConsumerState<ErpDemandPlanScreen> {
     final rows = _filtered;
     final showBranch = _branchId == null;
     final headers = [
-      'Product', if (showBranch) 'Branch', 'Type', 'Demand/day', 'Stock',
-      'Cover', 'Reorder', 'On order', 'Suggested', 'Status',
+      'Product', if (showBranch) 'Branch', 'Type', 'Demand/day', 'Confidence', 'Stock',
+      'Cover', 'Reorder Pt', 'Already Ordered', 'Suggest Qty', 'Status',
     ];
     final data = rows.map((r) => [
       _ascii('${r['product_name'] ?? ''}'),
       if (showBranch) _ascii(_branchName(r['branch_id'] as String?)),
       (r['plan_kind'] as String? ?? 'buy') == 'make' ? 'Make' : 'Buy',
       _num0(r['avg_daily_demand'] as num?),
+      _ascii('${r['confidence'] ?? '-'}'),
       _num0(r['stock_on_hand'] as num?),
       _cover(r['days_of_cover']),
       _num0(r['reorder_point'] as num?),

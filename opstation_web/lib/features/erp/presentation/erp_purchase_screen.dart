@@ -243,6 +243,44 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
   }
 
+  final Map<String, TextEditingController> _qtyCtrls = {};
+
+  @override
+  void dispose() {
+    for (final c in _qtyCtrls.values) { c.dispose(); }
+    super.dispose();
+  }
+
+  // Rebuild the per-line qty controllers from the current items.
+  void _syncQtyCtrls() {
+    for (final c in _qtyCtrls.values) { c.dispose(); }
+    _qtyCtrls.clear();
+    for (final it in _items) {
+      final id = it['id'] as String;
+      final q = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
+      _qtyCtrls[id] = TextEditingController(text: q.toStringAsFixed(q % 1 == 0 ? 0 : 2));
+    }
+  }
+
+  Future<void> _saveLineQty(String itemId) async {
+    if (!_canEdit) return;
+    final cur = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => {})['quantity_ordered'] as num?)?.toDouble() ?? 0;
+    final q = double.tryParse(_qtyCtrls[itemId]?.text.trim() ?? '');
+    if (q == null || q <= 0) {
+      _qtyCtrls[itemId]?.text = cur.toStringAsFixed(cur % 1 == 0 ? 0 : 2);
+      _showSnack('Enter a quantity greater than 0');
+      return;
+    }
+    if (q == cur) return; // no change
+    try {
+      await Supabase.instance.client.from('purchase_order_items')
+          .update({'quantity_ordered': q}).eq('id', itemId);
+      final idx = _items.indexWhere((i) => i['id'] == itemId);
+      if (idx >= 0) setState(() => _items[idx]['quantity_ordered'] = q);
+      _showSnack('Quantity updated');
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   Future<void> _load() async {
     final orgId = _orgId;
     try {
@@ -262,6 +300,7 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
       setState(() {
         _order = Map<String, dynamic>.from(order);
         _items = List<Map<String, dynamic>>.from(items);
+        _syncQtyCtrls();
         _products = List<Map<String, dynamic>>.from(products);
         _uoms = List<Map<String, dynamic>>.from(uoms);
         _meta = meta;
@@ -618,7 +657,22 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
                                         Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                                     ])),
                                     Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary))),
-                                    Expanded(flex: 2, child: Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
+                                    Expanded(flex: 2, child: _canEdit
+                                        ? SizedBox(
+                                            width: 96,
+                                            child: Focus(
+                                              onFocusChange: (has) { if (!has) _saveLineQty(item['id'] as String); },
+                                              child: TextField(
+                                                controller: _qtyCtrls[item['id']],
+                                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                                style: const TextStyle(fontWeight: FontWeight.w600),
+                                                decoration: const InputDecoration(
+                                                    isDense: true,
+                                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
+                                                onSubmitted: (_) => _saveLineQty(item['id'] as String),
+                                              ),
+                                            ))
+                                        : Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
                                     Expanded(flex: 2, child: Text(cost.toStringAsFixed(2))),
                                     Expanded(flex: 2, child: Text((qty * cost).toStringAsFixed(2), style: const TextStyle(fontWeight: FontWeight.w600))),
                                     SizedBox(width: 48, child: _canDeleteLine
