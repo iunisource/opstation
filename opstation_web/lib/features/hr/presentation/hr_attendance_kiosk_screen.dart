@@ -55,7 +55,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   final _wedgeFocus = FocusNode();
 
   // audio
-  html.AudioContext? _audio;
+  Object? _audio;            // Web Audio context via JS interop
   bool _soundReady = false;
 
   // camera
@@ -90,8 +90,16 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   // ── sound ──────────────────────────────────────────────────────────────────
   void _ensureAudio() {
     try {
-      _audio ??= html.AudioContext();
-      if (_audio?.state == 'suspended') { _audio?.resume(); }
+      if (_audio == null) {
+        var ctor = js_util.getProperty(html.window, 'AudioContext');
+        ctor ??= js_util.getProperty(html.window, 'webkitAudioContext');
+        if (ctor == null) { _soundReady = false; return; }
+        _audio = js_util.callConstructor(ctor, const []);
+      }
+      final ctx = _audio;
+      if (ctx != null && js_util.getProperty(ctx, 'state') == 'suspended') {
+        js_util.callMethod(ctx, 'resume', const []);
+      }
       _soundReady = true;
     } catch (_) { _soundReady = false; }
   }
@@ -101,17 +109,19 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
     final ctx = _audio;
     if (ctx == null) return;
     try {
+      final now = js_util.getProperty(ctx, 'currentTime') as num;
+      final dest = js_util.getProperty(ctx, 'destination');
       void tone(double freq, double start, double dur, double vol) {
-        final osc = ctx.createOscillator();
-        final gain = ctx.createGain();
-        osc.connectNode(gain);
-        gain.connectNode(ctx.destination!);
-        osc.type = ok ? 'square' : 'sawtooth';
-        osc.frequency!.value = freq;
-        gain.gain!.value = vol;
-        final t0 = ctx.currentTime! + start;
-        osc.start(t0);
-        osc.stop(t0 + dur);
+        final osc = js_util.callMethod(ctx, 'createOscillator', const []);
+        final gain = js_util.callMethod(ctx, 'createGain', const []);
+        js_util.callMethod(osc, 'connect', [gain]);
+        js_util.callMethod(gain, 'connect', [dest]);
+        js_util.setProperty(osc, 'type', ok ? 'square' : 'sawtooth');
+        js_util.setProperty(js_util.getProperty(osc, 'frequency'), 'value', freq);
+        js_util.setProperty(js_util.getProperty(gain, 'gain'), 'value', vol);
+        final t0 = now + start;
+        js_util.callMethod(osc, 'start', [t0]);
+        js_util.callMethod(osc, 'stop', [t0 + dur]);
       }
       if (ok) {
         tone(880, 0.0, 0.12, 0.5);
