@@ -190,6 +190,10 @@ class MainLayout extends ConsumerStatefulWidget {
 
 class _MainLayoutState extends ConsumerState<MainLayout> {
   bool _fullscreen = false;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  String? _lastLoc;
+
+  static const double kMobileBreakpoint = 768;
 
   @override
   void initState() {
@@ -222,6 +226,43 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
       return Scaffold(body: widget.child);
     }
 
+    // ── Mobile: hamburger AppBar + slide-in Drawer (nav as inline expanders) ──
+    final width = MediaQuery.of(context).size.width;
+    if (width < kMobileBreakpoint) {
+      // Close the drawer automatically after navigating to a new route.
+      final loc = GoRouterState.of(context).matchedLocation;
+      if (_lastLoc != null && _lastLoc != loc) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scaffoldKey.currentState?.closeDrawer());
+      }
+      _lastLoc = loc;
+      return Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: AppTheme.background,
+        appBar: AppBar(
+          backgroundColor: AppTheme.sidebar,
+          elevation: 0,
+          iconTheme: const IconThemeData(color: Colors.white),
+          titleSpacing: 0,
+          title: InkWell(
+            onTap: () => GoRouter.of(context).go('/dashboard'),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(width: 26, height: 26, alignment: Alignment.center,
+                decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
+                child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))),
+              const SizedBox(width: 8),
+              const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
+            ]),
+          ),
+          actions: [_userMenu(ref, user, const Offset(0, 8)), const SizedBox(width: 6)],
+        ),
+        drawer: Drawer(
+          backgroundColor: AppTheme.sidebar,
+          child: SafeArea(child: _mobileDrawer(user)),
+        ),
+        body: widget.child,
+      );
+    }
+
     final layout = ref.watch(navLayoutProvider);
     if (layout == NavLayout.side) {
       return Scaffold(
@@ -237,6 +278,47 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         Expanded(child: widget.child),
       ]),
     );
+  }
+
+  // Drawer body — reuses the shared nav builder, so there is a single source of
+  // truth for routes/permissions across top-bar, sidebar and mobile drawer.
+  Widget _mobileDrawer(WebUser? user) {
+    final location = GoRouterState.of(context).matchedLocation;
+    final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
+    final navItems = _buildNavItems(context, ref, user, location);
+    final show = _showFn(ref, user);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if ((user?.orgName ?? '').isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 10),
+          child: Row(children: [
+            const Icon(Icons.apartment_rounded, size: 14, color: Colors.white54),
+            const SizedBox(width: 6),
+            Expanded(child: Text(user?.orgName ?? '', maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13))),
+          ]),
+        ),
+      const Divider(height: 1, color: Colors.white12),
+      Expanded(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: navItems),
+        ),
+      ),
+      const Divider(height: 1, color: Colors.white12),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+        child: Align(alignment: Alignment.centerLeft, child: _branchSelector(ref, modules)),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+        child: Row(children: [
+          _searchButton(context, user, show),
+          const Spacer(),
+          _userMenu(ref, user, const Offset(0, 8)),
+        ]),
+      ),
+    ]);
   }
 }
 
@@ -863,6 +945,14 @@ Widget _navMenu(
   List<Widget> items, {
   int badge = 0,
 }) {
+  // On phones the nav lives in a Drawer, where a hover/click popup is poor UX.
+  // Render an inline expand/collapse section instead.
+  if (MediaQuery.of(context).size.width < _MainLayoutState.kMobileBreakpoint) {
+    return _DrawerNavMenu(
+      label: label, icon: icon, location: location,
+      activePaths: activePaths, items: items, badge: badge,
+    );
+  }
   return _HoverNavMenu(
     label: label,
     icon: icon,
@@ -871,6 +961,75 @@ Widget _navMenu(
     items: items,
     badge: badge,
   );
+}
+
+/// Inline expand/collapse nav section used inside the mobile Drawer. Expands by
+/// default when one of its routes is active.
+class _DrawerNavMenu extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final String location;
+  final List<String> activePaths;
+  final List<Widget> items;
+  final int badge;
+  const _DrawerNavMenu({
+    required this.label,
+    required this.icon,
+    required this.location,
+    required this.activePaths,
+    required this.items,
+    this.badge = 0,
+  });
+  @override
+  State<_DrawerNavMenu> createState() => _DrawerNavMenuState();
+}
+
+class _DrawerNavMenuState extends State<_DrawerNavMenu> {
+  late bool _open;
+  @override
+  void initState() {
+    super.initState();
+    _open = widget.activePaths.any((p) => widget.location.startsWith(p));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = widget.activePaths.any((p) => widget.location.startsWith(p));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      InkWell(
+        onTap: () => setState(() => _open = !_open),
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+          decoration: isActive
+              ? BoxDecoration(color: AppTheme.primary.withOpacity(0.18), borderRadius: BorderRadius.circular(6))
+              : null,
+          child: Row(children: [
+            Icon(widget.icon, size: 16, color: isActive ? Colors.white : AppTheme.sidebarText),
+            const SizedBox(width: 10),
+            Expanded(child: Text(widget.label, style: TextStyle(
+              color: isActive ? Colors.white : AppTheme.sidebarText,
+              fontSize: 14, fontWeight: FontWeight.w600))),
+            if (widget.badge > 0) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(8)),
+                child: Text('${widget.badge}', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Icon(_open ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.sidebarText),
+          ]),
+        ),
+      ),
+      if (_open)
+        Padding(
+          padding: const EdgeInsets.only(left: 14, bottom: 4),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: widget.items),
+        ),
+    ]);
+  }
 }
 
 /// Top-nav dropdown that opens on hover and closes shortly after the pointer
