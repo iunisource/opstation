@@ -98,6 +98,7 @@ import '../../features/erp/presentation/erp_receipt_vouchers_screen.dart';
 import '../../features/erp/presentation/erp_supplier_ledger_screen.dart';
 import '../../features/erp/presentation/erp_customer_ledger_screen.dart';
 import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
+import '../../features/erp/presentation/erp_demand_plan_screen.dart';
 import '../../features/erp/presentation/erp_pos_catalog_screen.dart';
 import '../../features/erp/presentation/erp_pos_config_screen.dart';
 import '../../features/erp/presentation/erp_pos_customer_history_screen.dart';
@@ -183,9 +184,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // CRM screens are permission-scoped (registry-gated), not blocked
             // by the ERP path prefix. Let them through to the permission check.
             final permScopedCrm = loc.startsWith('/crm/');
-            // Files is a standalone area open to all erpUsers (unconditional).
-            final filesArea = loc == '/operations/files';
-            if (!inErp && !permScopedCrm && !filesArea) return false;
+            if (!inErp && !permScopedCrm) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/no-access') return true;
             if (access == null) return true;
@@ -302,6 +301,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/hr/leave', builder: (_, __) => const HrLeaveScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),
+          GoRoute(path: '/erp/demand-plan', builder: (_, __) => const ErpDemandPlanScreen()),
           GoRoute(path: '/erp/pos-config', builder: (_, __) => const ErpPosConfigScreen()),
           GoRoute(path: '/erp/pos-catalog', builder: (_, __) => const ErpPosCatalogScreen()),
           GoRoute(path: '/erp/pos-customer-history', builder: (_, __) => const ErpPosCustomerHistoryScreen()),

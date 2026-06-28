@@ -53,6 +53,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('opening_stock', 'Opening Stock', PermKind.doc, '/erp/opening-stock'),
     PermItem('stock_transfer', 'Stock Transfers', PermKind.doc, '/erp/stock-transfers'),
     PermItem('stock_adjustment', 'Stock Adjustment', PermKind.doc, '/erp/stock-adjustment'),
+    PermItem('demand_plan', 'Demand Planner', PermKind.report, '/erp/demand-plan'),
   ]),
   PermModule('purchase', 'Purchase', Icons.shopping_cart_outlined, [
     PermItem('purchase_dashboard', 'Purchase Dashboard', PermKind.report, '/erp/purchase-dashboard'),
@@ -123,15 +124,6 @@ const List<PermModule> kPermissionRegistry = [
   ]),
   PermModule('facility', 'Facility', Icons.cleaning_services_outlined, [
     PermItem('facility', 'Facility Maintenance', PermKind.doc, '/facility'),
-  ]),
-  // CRM is a real, licensable org module (toggled in the super-admin Modules
-  // modal via kAppModules 'crm'). Module-gated AND permission-gated: an org
-  // without CRM enabled hides it wholesale; per-user grants refine within.
-  PermModule('crm', 'CRM', Icons.contacts_outlined, [
-    PermItem('crm_customers', 'Customers', PermKind.report, '/crm/customers'),
-    PermItem('crm_pipeline', 'Pipeline', PermKind.report, '/crm/pipeline'),
-    PermItem('crm_follow_ups', 'Follow-ups', PermKind.report, '/crm/follow-ups'),
-    PermItem('crm_tasks', 'Tasks', PermKind.report, '/crm/tasks'),
   ]),
 ];
 

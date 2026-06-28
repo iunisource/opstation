@@ -91,26 +91,6 @@ final crmOverdueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
-// Count of active tasks assigned to THIS user (open + in_progress), any link
-// type. Drives the per-assignee Tasks badge — distinct from the org-wide
-// crmOverdueCountProvider above.
-final assignedToMeCountProvider = FutureProvider<int>((ref) async {
-  final user = await ref.watch(authControllerProvider.future);
-  if (user == null || user.orgId == null) return 0;
-  final client = Supabase.instance.client;
-  try {
-    final res = await client
-        .from('customer_activities')
-        .select('id')
-        .eq('org_id', user.orgId!)
-        .eq('assigned_to', user.id)
-        .inFilter('status', ['open', 'in_progress']);
-    return (res as List).length;
-  } catch (_) {
-    return 0;
-  }
-});
-
 // Whether the customer sales-targets feature is enabled for this org. Gates the
 // Intelligence → Performance menu item (and target widgets elsewhere). Mirrors
 // the org.customer_targets_enabled flag read by the targets screens.
@@ -250,7 +230,6 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
 List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, String location) {
   final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
   final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
-  final assignedToMe = ref.watch(assignedToMeCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
@@ -275,6 +254,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location),
         if (show('/erp/stock-adjustment')) _menuItem(context, 'Stock Adjustment', Icons.tune_outlined, '/erp/stock-adjustment', location),
         if (show('/erp/inventory-ledger')) _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
+        if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
       ],
     ];
 
@@ -380,17 +360,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _menuItem(context, 'Admin Settings', Icons.admin_panel_settings_outlined, '/erp/admin-settings', location),
     ];
 
-    final crmItems = <Widget>[
-      if (show('/crm/customers')) _menuItem(context, 'Customers', Icons.store_outlined, '/crm/customers', location),
-      if (show('/crm/pipeline')) _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
-      if (show('/crm/follow-ups')) _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location, badge: crmOverdue),
-      if (show('/crm/tasks')) _menuItem(context, 'Tasks', Icons.checklist_outlined, '/crm/tasks', location, badge: assignedToMe),
-    ];
-
     // Legacy combined list (still used for isNotEmpty guards)
     final erpMenuItems = <Widget>[
       ...inventoryItems, ...purchaseItems, ...salesItems, ...posItems,
-      ...financialItems, ...manufacturingItems, ...hrItems, ...crmItems, ...erpAdminItems,
+      ...financialItems, ...manufacturingItems, ...hrItems, ...erpAdminItems,
     ];
 
     List<Widget> splitErpMenus() => [
@@ -398,7 +371,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report',
-           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger'],
+           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan'],
           _trimDividers(inventoryItems)),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
@@ -433,10 +406,6 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
-      if (_hasItems(crmItems))
-        _navMenu(context, 'CRM', Icons.contacts_outlined, location,
-          ['/crm/customers', '/crm/pipeline', '/crm/follow-ups', '/crm/tasks'],
-          _trimDividers(crmItems), badge: crmOverdue + assignedToMe),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
         ['/erp/onboarding', '/erp/branches', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
@@ -478,6 +447,15 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
                 _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
             ],
           ),
+          _navMenu(context, 'CRM', Icons.contacts_outlined, location,
+            ['/crm/customers', '/crm/follow-ups', '/crm/pipeline'],
+            [
+              _menuItem(context, 'Customers', Icons.store_outlined, '/crm/customers', location),
+              _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
+              _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location, badge: crmOverdue),
+            ],
+            badge: crmOverdue,
+          ),
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
             ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors',
              if (targetsOn) '/intelligence/performance'],
@@ -504,15 +482,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ...splitErpMenus(),
         ],
 
-        if (isErpUser) ...[
-          if (erpMenuItems.isNotEmpty) ...splitErpMenus(),
-          // Operations menu surfaces for erpUsers with Files only (unconditional);
-          // the other Operations items stay admin-only (not registry-gated, so
-          // they cannot be permission-scoped — kept in the isAdminTier block).
-          _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/operations/files'],
-            [_menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location)]),
-        ],
+        if (isErpUser && erpMenuItems.isNotEmpty)
+          ...splitErpMenus(),
   ];
 }
 
