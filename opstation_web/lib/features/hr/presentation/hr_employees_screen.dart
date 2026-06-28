@@ -10,6 +10,11 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:http/http.dart' as http;
+import 'package:barcode/barcode.dart';
 
 class HrEmployeesScreen extends ConsumerStatefulWidget {
   const HrEmployeesScreen({super.key});
@@ -437,6 +442,108 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   }
 
   // ---- print profile ----
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  // Print-ready employee ID card at standard CR80 size (85.6 x 54 mm).
+  // The QR encodes the employee_code, so the printed card is the kiosk credential.
+  Future<void> _printCard() async {
+    final e = _current;
+    if (e == null) return;
+    final code = (e['employee_code'] as String?) ?? '';
+    if (code.isEmpty) { _snack('Employee has no code yet \u2014 save a code first'); return; }
+    final name = (e['full_name'] as String?) ?? '';
+    final father = (e['father_name'] as String?) ?? '';
+    final dept = _deptName[e['department_id'] as String?] ?? '';
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
+
+    Uint8List? photoBytes;
+    final purl = e['photo_url'] as String?;
+    if (purl != null && purl.isNotEmpty) {
+      try {
+        final r = await http.get(Uri.parse(purl));
+        if (r.statusCode == 200) photoBytes = r.bodyBytes;
+      } catch (_) { }
+    }
+
+    final brand = PdfColor.fromInt(0xFF244C97);
+    final doc = pw.Document();
+    final cardW = 85.6 * PdfPageFormat.mm;
+    final cardH = 54.0 * PdfPageFormat.mm;
+    doc.addPage(pw.Page(
+      pageFormat: PdfPageFormat(cardW, cardH, marginAll: 0),
+      build: (ctx) {
+        return pw.Container(
+          decoration: pw.BoxDecoration(
+            border: pw.Border.all(color: brand, width: 0.8),
+            borderRadius: pw.BorderRadius.circular(6),
+          ),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: [
+              pw.Container(
+                color: brand,
+                padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: pw.Text(org.isEmpty ? 'EMPLOYEE CARD' : org.toUpperCase(),
+                    style: pw.TextStyle(color: PdfColors.white, fontSize: 9, fontWeight: pw.FontWeight.bold)),
+              ),
+              pw.Expanded(child: pw.Padding(
+                padding: const pw.EdgeInsets.all(8),
+                child: pw.Row(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Container(
+                      width: 56, height: 70,
+                      decoration: pw.BoxDecoration(
+                        color: PdfColors.grey200,
+                        borderRadius: pw.BorderRadius.circular(4),
+                        image: photoBytes != null ? pw.DecorationImage(image: pw.MemoryImage(photoBytes), fit: pw.BoxFit.cover) : null,
+                      ),
+                      child: photoBytes == null ? pw.Center(child: pw.Text(_initials(name), style: pw.TextStyle(fontSize: 18, color: PdfColors.grey500))) : null,
+                    ),
+                    pw.SizedBox(width: 8),
+                    pw.Expanded(child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      mainAxisAlignment: pw.MainAxisAlignment.center,
+                      children: [
+                        pw.Text(name, style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold), maxLines: 2),
+                        if (father.isNotEmpty) pw.Padding(padding: const pw.EdgeInsets.only(top: 1),
+                            child: pw.Text('S/O ' + father, style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700))),
+                        if (dept.isNotEmpty) pw.Padding(padding: const pw.EdgeInsets.only(top: 2),
+                            child: pw.Text(dept, style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700))),
+                        pw.SizedBox(height: 4),
+                        pw.Container(
+                          padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: pw.BoxDecoration(color: brand, borderRadius: pw.BorderRadius.circular(3)),
+                          child: pw.Text(code, style: pw.TextStyle(fontSize: 9, color: PdfColors.white, fontWeight: pw.FontWeight.bold)),
+                        ),
+                      ],
+                    )),
+                    pw.SizedBox(width: 6),
+                    pw.Container(
+                      width: 58, height: 58,
+                      child: pw.BarcodeWidget(
+                        barcode: Barcode.qrCode(),
+                        data: code,
+                        drawText: false,
+                        color: PdfColors.black,
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+            ],
+          ),
+        );
+      },
+    ));
+    await Printing.layoutPdf(onLayout: (PdfPageFormat f) async => doc.save(), name: 'employee-card-' + code + '.pdf');
+  }
+
   void _printProfile() {
     final e = _current; if (e == null) return;
     String esc(String? s) => (s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -615,6 +722,7 @@ $docsHtml
             if (_current != null) _statusChip(),
             if (_current != null) const SizedBox(width: 6),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 19), tooltip: 'Print / PDF', onPressed: _printProfile),
+            if (_current != null) IconButton(icon: const Icon(Icons.badge_outlined, size: 19), tooltip: 'Employee Card (PDF)', onPressed: _printCard),
             if (_isAdmin && _pending && !_voided)
               Padding(padding: const EdgeInsets.only(left: 2), child: ElevatedButton.icon(
                 icon: const Icon(Icons.verified_outlined, size: 15), label: const Text('Approve', style: TextStyle(fontSize: 12)),

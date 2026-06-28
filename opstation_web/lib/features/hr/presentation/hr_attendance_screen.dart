@@ -41,7 +41,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
   String get _userName => ref.read(currentUserProvider)?.name ?? ref.read(currentUserProvider)?.id ?? '-';
-  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin; }
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin; }
   DateTime _d0(DateTime d) => DateTime(d.year, d.month, d.day);
   bool get _canNext => _d0(_date).isBefore(_d0(DateTime.now()));
 
@@ -213,7 +213,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   @override
   Widget build(BuildContext context) {
     final access = ref.watch(accessSyncProvider);
-    _canWrite = (access?.canAddDoc('hr_attendance') ?? false) || (access?.canEditDoc('hr_attendance') ?? false);
+    _canWrite = _isAdmin;  // attendance editable by admin / masterAdmin / superAdmin only
     final vis = _visible;
     final counts = <String, int>{};
     for (final r in vis) counts[r.status] = (counts[r.status] ?? 0) + 1;
