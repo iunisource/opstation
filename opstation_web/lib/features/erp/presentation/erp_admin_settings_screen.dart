@@ -139,6 +139,17 @@ const List<_AdminToggle> _toggles = [
         'Performance section becomes available. When OFF, targets are hidden '
         'everywhere.',
   ),
+
+  _AdminToggle(
+    'org.pri_price_editable',
+    'Editable price on Purchase Return Invoices',
+    'When ON, users can type any unit price on a Purchase Return Invoice. When '
+        'OFF (default), the price is frozen to each product\'s Cost Price and '
+        'the return value is adjusted only through Discount. Either way a zero '
+        'price is never allowed — value is reduced via Discount, not a zero '
+        'price. Admins and master admins can always edit the price regardless '
+        'of this setting.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {

@@ -1020,18 +1020,83 @@ class _PrnStatusBadge extends StatelessWidget {
 class _AuditTrailWidget extends StatelessWidget {
   final String voucherId, voucherType;
   const _AuditTrailWidget({required this.voucherId, required this.voucherType});
+
+  // Load the log WITHOUT a PostgREST users(name) embed. That embed needs a
+  // declared FK from voucher_audit_log.performed_by -> users; when it isn't
+  // present the request 400s, and the old `if (snap.hasError) shrink()` made
+  // this whole panel silently disappear. We fetch the rows plainly and resolve
+  // performer names in a second lookup, so a missing FK can never hide it.
+  Future<List<Map<String, dynamic>>> _load() async {
+    final sb = Supabase.instance.client;
+    final rows = List<Map<String, dynamic>>.from(
+      await sb
+          .from('voucher_audit_log')
+          .select('action, details, performed_by, created_at')
+          .eq('voucher_id', voucherId)
+          .eq('voucher_type', voucherType)
+          .order('created_at', ascending: false)
+          .limit(30),
+    );
+    final ids = rows
+        .map((e) => e['performed_by'] as String?)
+        .whereType<String>()
+        .toSet()
+        .toList();
+    final names = <String, String>{};
+    if (ids.isNotEmpty) {
+      try {
+        final us = await sb.from('users').select('id, name').inFilter('id', ids);
+        for (final u in us as List) {
+          names[u['id'] as String] = (u['name'] as String?) ?? '—';
+        }
+      } catch (_) {/* names are best-effort; never block the trail on them */}
+    }
+    for (final e in rows) {
+      e['_by'] = names[e['performed_by'] as String?] ?? '—';
+    }
+    return rows;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (voucherId.isEmpty) return const SizedBox.shrink();
-    return FutureBuilder<List<dynamic>>(
-      future: Supabase.instance.client.from('voucher_audit_log')
-          .select('*, users(name)')
-          .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
-          .order('created_at', ascending: false).limit(20),
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _load(),
       builder: (ctx, snap) {
-        if (snap.hasError) return const SizedBox.shrink();
-        if (!snap.hasData || (snap.data as List).isEmpty) return Padding(padding: const EdgeInsets.only(top: 4), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Color(0xFFE5E7EB))), child: const Row(children: [Icon(Icons.history, size: 14, color: Color(0xFF9CA3AF)), SizedBox(width: 8), Text('No activity logged yet', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))])));
-        final entries = List<Map<String, dynamic>>.from(snap.data!);
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const SizedBox.shrink();
+        }
+        if (snap.hasError) {
+          // Surface failures instead of vanishing — this is exactly the case
+          // that previously looked like "no audit trail at all".
+          return Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+              child: Row(children: [
+                const Icon(Icons.error_outline, size: 14, color: AppTheme.danger),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Couldn\'t load audit trail: ${snap.error}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+              ]),
+            ),
+          );
+        }
+        final entries = snap.data ?? const <Map<String, dynamic>>[];
+        if (entries.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE5E7EB))),
+              child: const Row(children: [
+                Icon(Icons.history, size: 14, color: Color(0xFF9CA3AF)),
+                SizedBox(width: 8),
+                Text('No activity logged yet', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+              ]),
+            ),
+          );
+        }
         return Container(
           margin: const EdgeInsets.only(top: 4),
           padding: const EdgeInsets.all(12),
@@ -1040,22 +1105,29 @@ class _AuditTrailWidget extends StatelessWidget {
             const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)),
             const SizedBox(height: 8),
             ...entries.map((e) {
-              final action  = e['action'] as String? ?? '-';
+              final action = e['action'] as String? ?? '-';
+              final ts = e['created_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal())
+                  : '';
+              final by = e['_by'] as String? ?? '—';
               final details = e['details'] as String? ?? '';
-              final by = e['users']?['name'] as String? ?? '—';
-              final ts      = e['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
               Color color;
+              IconData icon;
               switch (action) {
-                case 'created': case 'saved':   color = AppTheme.primary; break;
-                case 'invoiced':                color = AppTheme.success; break;
-                case 'locked':                  color = Colors.orange; break;
-                case 'deleted': case 'cancelled': color = AppTheme.danger; break;
-                default:                        color = AppTheme.textSecondary;
+                case 'created':  icon = Icons.add_circle_outline;   color = AppTheme.success; break;
+                case 'saved':    icon = Icons.save_outlined;        color = AppTheme.primary; break;
+                case 'invoiced': icon = Icons.receipt_long_outlined; color = AppTheme.success; break;
+                case 'issued':   icon = Icons.check_circle_outline; color = AppTheme.success; break;
+                case 'locked':   icon = Icons.lock_outline;         color = Colors.orange; break;
+                case 'unlocked': icon = Icons.lock_open;            color = AppTheme.textSecondary; break;
+                case 'deleted':
+                case 'cancelled': icon = Icons.delete_outline;      color = AppTheme.danger; break;
+                default:         icon = Icons.history;              color = AppTheme.textSecondary;
               }
-              return Padding(padding: const EdgeInsets.symmetric(vertical: 3),
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Icon(Icons.history, size: 14, color: color),
+                  Icon(icon, size: 14, color: color),
                   const SizedBox(width: 8),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
@@ -1067,7 +1139,8 @@ class _AuditTrailWidget extends StatelessWidget {
                     ]),
                     if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   ])),
-                ]));
+                ]),
+              );
             }),
           ]),
         );

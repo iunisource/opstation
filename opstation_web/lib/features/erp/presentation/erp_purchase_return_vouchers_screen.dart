@@ -33,9 +33,44 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   bool _detailLoading = false;
   String _search = '';
   String _filter = 'all';
+  // Org setting (Admin Settings → "PRI price editable"). When false (default),
+  // the return price is frozen to each product's Cost Price and adjusted only
+  // via Discount; when true, the price field is freely editable.
+  bool _priceEditable = false;
 
   @override
-  void initState() { super.initState(); _loadList(); }
+  void initState() { super.initState(); _loadPriceSetting(); _loadList(); }
+
+  Future<void> _loadPriceSetting() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final row = await Supabase.instance.client.from('app_config')
+          .select('value').eq('key', 'org.pri_price_editable').eq('org_id', orgId).maybeSingle();
+      if (mounted) setState(() => _priceEditable = (row?['value'] as String?) == 'true');
+    } catch (_) {}
+  }
+
+  // Product cost price for a return line (used when the price is frozen).
+  double _costOf(Map<String, dynamic> it) =>
+      (it['products']?['cost_price'] as num?)?.toDouble() ?? 0;
+
+  // Admin-tier users can always edit the price, even when the org setting
+  // freezes it for everyone else.
+  bool get _isPriceAdmin {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.admin ||
+        role == WebUserRole.masterAdmin ||
+        role == WebUserRole.superAdmin;
+  }
+
+  // Whether the price field is actually editable for the current user:
+  // the org toggle OR admin-tier override.
+  bool get _priceFieldEditable => _priceEditable || _isPriceAdmin;
+
+  // Effective unit price: the product's cost price when frozen, otherwise the
+  // edited/stored unit price.
+  double _effPrice(Map<String, dynamic> it) =>
+      _priceFieldEditable ? ((it['unit_price'] as num?)?.toDouble() ?? 0) : _costOf(it);
 
   @override
   void dispose() {
@@ -66,7 +101,10 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     _discCtrl = {};
     for (final it in _items) {
       final id = it['id'] as String;
-      final price = (it['unit_price'] as num?)?.toStringAsFixed(2) ?? '0.00';
+      // Frozen mode shows the product cost price (read-only); editable mode
+      // shows the stored unit price.
+      final priceVal = _priceFieldEditable ? ((it['unit_price'] as num?)?.toDouble() ?? 0) : _costOf(it);
+      final price = priceVal.toStringAsFixed(2);
       final disc  = (it['discount']   as num?)?.toStringAsFixed(2) ?? '0.00';
       _priceCtrl[id] = TextEditingController(text: price);
       _discCtrl[id]  = TextEditingController(text: disc);
@@ -102,7 +140,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
           .select('*, suppliers(*), branches(name), purchase_returns(voucher_number)')
           .eq('id', id).single();
       final items = await client.from('purchase_return_invoice_items')
-          .select('*, products(name, sku), uoms(abbreviation)')
+          .select('*, products(name, sku, cost_price), uoms(abbreviation)')
           .eq('voucher_id', id);
       final meta = await VoucherMeta.fetch(
         orgId: _orgId ?? '',
@@ -239,9 +277,14 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
 
   // ── Save price/discount edit for one item ────────────────────────────────
   Future<void> _saveItemPrice(String itemId) async {
-    final price = double.tryParse(_priceCtrl[itemId]?.text ?? '') ?? 0;
+    final item  = _items.firstWhere((i) => i['id'] == itemId, orElse: () => {});
+    // When price is frozen, persist the product's cost price regardless of any
+    // controller text; value is adjusted only through discount.
+    final price = _priceFieldEditable
+        ? (double.tryParse(_priceCtrl[itemId]?.text ?? '') ?? 0)
+        : _costOf(item);
     final disc  = (double.tryParse(_discCtrl[itemId]?.text ?? '') ?? 0).clamp(0.0, 100.0);
-    final qty   = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => {})['quantity'] as num?)?.toDouble() ?? 0;
+    final qty   = (item['quantity'] as num?)?.toDouble() ?? 0;
     final lt    = qty * price * (1 - disc / 100);
     try {
       await Supabase.instance.client.from('purchase_return_invoice_items').update({
@@ -263,7 +306,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     double subtotal = 0, discount = 0;
     for (final it in _items) {
       final qty   = (it['quantity']   as num?)?.toDouble() ?? 0;
-      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+      final price = _effPrice(it);
       final disc  = (it['discount']   as num?)?.toDouble() ?? 0;
       subtotal += qty * price;
       discount += qty * price * (disc / 100);
@@ -290,6 +333,16 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     // Save any unsaved prices first
     for (final it in _items) {
       await _saveItemPrice(it['id'] as String);
+    }
+    // Zero-value guard: every line must carry a price > 0. Value is reduced via
+    // Discount, never by a zero price.
+    final zero = _items.where((it) => ((it['unit_price'] as num?)?.toDouble() ?? 0) <= 0).toList();
+    if (zero.isNotEmpty) {
+      final names = zero.map((it) => (it['products']?['name'] as String?) ?? 'item').take(4).join(', ');
+      _showSnack(_priceFieldEditable
+          ? 'Cannot issue — price must be greater than 0 for: $names. Reduce value using Discount, not a zero price.'
+          : 'Cannot issue — no Cost Price set on: $names. Set their cost price in the product profile first.');
+      return;
     }
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Issue Purchase Return Invoice?'),
@@ -581,11 +634,14 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.orange.withOpacity(0.3)),
                 ),
-                child: const Row(children: [
-                  Icon(Icons.edit_note, size: 16, color: Colors.orange),
-                  SizedBox(width: 8),
-                  Expanded(child: Text('Draft — set prices below, then click "Issue Invoice" to post it to the ledger.',
-                      style: TextStyle(fontSize: 12, color: Colors.orange))),
+                child: Row(children: [
+                  const Icon(Icons.edit_note, size: 16, color: Colors.orange),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(
+                      _priceFieldEditable
+                          ? 'Draft — set prices below, then click "Issue Invoice" to post it to the ledger.'
+                          : 'Draft — prices are frozen to each product\'s Cost Price; adjust value using Discount. Click "Issue Invoice" to post.',
+                      style: const TextStyle(fontSize: 12, color: Colors.orange))),
                 ]),
               ),
 
@@ -613,8 +669,13 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                 ..._items.map((it) {
                   final id    = it['id'] as String;
                   final qty   = (it['quantity']   as num?)?.toDouble() ?? 0;
-                  final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
                   final disc  = (it['discount']   as num?)?.toDouble() ?? 0;
+                  // Frozen drafts show cost price (read-only); editable drafts
+                  // show the stored unit price in an editable field; issued
+                  // invoices show the locked-in unit price.
+                  final price = (_isDraft && !_priceFieldEditable)
+                      ? _costOf(it)
+                      : ((it['unit_price'] as num?)?.toDouble() ?? 0);
                   final lt    = price > 0 ? qty * price * (1 - disc / 100) : 0.0;
                   return Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -622,13 +683,16 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                       Expanded(flex: 4, child: Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
                       Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
-                      Expanded(flex: 2, child: _isDraft
+                      Expanded(flex: 2, child: (_isDraft && _priceFieldEditable)
                           ? TextField(controller: _priceCtrl[id],
                               decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)),
                               textAlign: TextAlign.right,
                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
                               onSubmitted: (_) => _saveItemPrice(id))
-                          : Text(price.toStringAsFixed(2), textAlign: TextAlign.right)),
+                          : Tooltip(
+                              message: (_isDraft && !_priceFieldEditable) ? 'Frozen to product Cost Price — adjust value via Discount' : '',
+                              child: Text(price.toStringAsFixed(2), textAlign: TextAlign.right,
+                                  style: TextStyle(color: (_isDraft && !_priceFieldEditable) ? AppTheme.textSecondary : null)))),
                       Expanded(flex: 1, child: _isDraft
                           ? TextField(controller: _discCtrl[id],
                               decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)),
@@ -776,18 +840,83 @@ class _Chip extends StatelessWidget {
 class _AuditTrailWidget extends StatelessWidget {
   final String voucherId, voucherType;
   const _AuditTrailWidget({required this.voucherId, required this.voucherType});
+
+  // Load the log WITHOUT a PostgREST users(name) embed. That embed needs a
+  // declared FK from voucher_audit_log.performed_by -> users; when it isn't
+  // present the request 400s, and the old `if (snap.hasError) shrink()` made
+  // this whole panel silently disappear. We fetch the rows plainly and resolve
+  // performer names in a second lookup, so a missing FK can never hide it.
+  Future<List<Map<String, dynamic>>> _load() async {
+    final sb = Supabase.instance.client;
+    final rows = List<Map<String, dynamic>>.from(
+      await sb
+          .from('voucher_audit_log')
+          .select('action, details, performed_by, created_at')
+          .eq('voucher_id', voucherId)
+          .eq('voucher_type', voucherType)
+          .order('created_at', ascending: false)
+          .limit(30),
+    );
+    final ids = rows
+        .map((e) => e['performed_by'] as String?)
+        .whereType<String>()
+        .toSet()
+        .toList();
+    final names = <String, String>{};
+    if (ids.isNotEmpty) {
+      try {
+        final us = await sb.from('users').select('id, name').inFilter('id', ids);
+        for (final u in us as List) {
+          names[u['id'] as String] = (u['name'] as String?) ?? '—';
+        }
+      } catch (_) {/* names are best-effort; never block the trail on them */}
+    }
+    for (final e in rows) {
+      e['_by'] = names[e['performed_by'] as String?] ?? '—';
+    }
+    return rows;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (voucherId.isEmpty) return const SizedBox.shrink();
-    return FutureBuilder<List<dynamic>>(
-      future: Supabase.instance.client.from('voucher_audit_log')
-          .select('*, users(name)')
-          .eq('voucher_id', voucherId).eq('voucher_type', voucherType)
-          .order('created_at', ascending: false).limit(30),
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _load(),
       builder: (ctx, snap) {
-        if (snap.hasError) return const SizedBox.shrink();
-        if (!snap.hasData || (snap.data as List).isEmpty) return Padding(padding: const EdgeInsets.only(top: 4), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Color(0xFFE5E7EB))), child: const Row(children: [Icon(Icons.history, size: 14, color: Color(0xFF9CA3AF)), SizedBox(width: 8), Text('No activity logged yet', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))])));
-        final entries = List<Map<String, dynamic>>.from(snap.data!);
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const SizedBox.shrink();
+        }
+        if (snap.hasError) {
+          // Surface failures instead of vanishing — this is exactly the case
+          // that previously looked like "no audit trail at all".
+          return Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+              child: Row(children: [
+                const Icon(Icons.error_outline, size: 14, color: AppTheme.danger),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Couldn\'t load audit trail: ${snap.error}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+              ]),
+            ),
+          );
+        }
+        final entries = snap.data ?? const <Map<String, dynamic>>[];
+        if (entries.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE5E7EB))),
+              child: const Row(children: [
+                Icon(Icons.history, size: 14, color: Color(0xFF9CA3AF)),
+                SizedBox(width: 8),
+                Text('No activity logged yet', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+              ]),
+            ),
+          );
+        }
         return Container(
           margin: const EdgeInsets.only(top: 4),
           padding: const EdgeInsets.all(12),
@@ -798,21 +927,25 @@ class _AuditTrailWidget extends StatelessWidget {
             ...entries.map((e) {
               final action = e['action'] as String? ?? '-';
               final ts = e['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
-              final by = e['users']?['name'] as String? ?? '—';
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal())
+                  : '';
+              final by = e['_by'] as String? ?? '—';
               final details = e['details'] as String? ?? '';
               Color color;
               IconData icon;
               switch (action) {
-                case 'created':  icon = Icons.add_circle_outline;    color = AppTheme.success; break;
-                case 'saved':    icon = Icons.save_outlined;         color = AppTheme.primary; break;
-                case 'issued':   icon = Icons.check_circle_outline;  color = AppTheme.success; break;
-                case 'locked':   icon = Icons.lock_outline;          color = Colors.orange; break;
-                case 'unlocked': icon = Icons.lock_open;             color = AppTheme.textSecondary; break;
-                case 'deleted':  icon = Icons.delete_outline;        color = AppTheme.danger; break;
-                default:         icon = Icons.history;               color = AppTheme.textSecondary;
+                case 'created':  icon = Icons.add_circle_outline;   color = AppTheme.success; break;
+                case 'saved':    icon = Icons.save_outlined;        color = AppTheme.primary; break;
+                case 'invoiced': icon = Icons.receipt_long_outlined; color = AppTheme.success; break;
+                case 'issued':   icon = Icons.check_circle_outline; color = AppTheme.success; break;
+                case 'locked':   icon = Icons.lock_outline;         color = Colors.orange; break;
+                case 'unlocked': icon = Icons.lock_open;            color = AppTheme.textSecondary; break;
+                case 'deleted':
+                case 'cancelled': icon = Icons.delete_outline;      color = AppTheme.danger; break;
+                default:         icon = Icons.history;              color = AppTheme.textSecondary;
               }
-              return Padding(padding: const EdgeInsets.symmetric(vertical: 3),
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Icon(icon, size: 14, color: color),
                   const SizedBox(width: 8),
@@ -826,7 +959,8 @@ class _AuditTrailWidget extends StatelessWidget {
                     ]),
                     if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   ])),
-                ]));
+                ]),
+              );
             }),
           ]),
         );
