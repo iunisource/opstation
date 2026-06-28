@@ -101,6 +101,8 @@ class _State extends ConsumerState<HrAttendanceScreen> {
         checkIn: rec?['check_in'] as String?, checkOut: rec?['check_out'] as String?,
       );
       row.remarks.text = rec?['remarks'] as String? ?? '';
+      row.inPhoto = rec?['punch_in_photo'] as String?;
+      row.outPhoto = rec?['punch_out_photo'] as String?;
       row.snapshot();
       _rows.add(row);
     }
@@ -314,9 +316,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           items: _statuses.map((s) => DropdownMenuItem(value: s['v'], child: Text(s['l'] ?? '', style: TextStyle(fontSize: 12, color: _statusColor(s['v']!), fontWeight: FontWeight.w600)))).toList(),
           onChanged: _canWrite ? (v) => setState(() => r.status = v ?? 'present') : null)),
         const SizedBox(width: 8),
-        SizedBox(width: 142, child: _timeCell(r.checkIn, timesEnabled, () => _stampNow(r, true), () => _pickTime(r, true), () => setState(() => r.checkIn = null), 'In')),
+        SizedBox(width: 142, child: _timeCell(r.checkIn, timesEnabled, () => _stampNow(r, true), () => _pickTime(r, true), () => setState(() => r.checkIn = null), 'In', photoUrl: r.inPhoto)),
         const SizedBox(width: 8),
-        SizedBox(width: 142, child: _timeCell(r.checkOut, timesEnabled && r.checkIn != null, () => _stampNow(r, false), () => _pickTime(r, false), () => setState(() => r.checkOut = null), 'Out')),
+        SizedBox(width: 142, child: _timeCell(r.checkOut, timesEnabled && r.checkIn != null, () => _stampNow(r, false), () => _pickTime(r, false), () => setState(() => r.checkOut = null), 'Out', photoUrl: r.outPhoto)),
         const SizedBox(width: 8),
         SizedBox(width: 52, child: Text(worked != null ? worked.toString() : '\u2014', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
         SizedBox(width: 50, child: Text(total != null ? total.toString() : '\u2014', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
@@ -331,7 +333,28 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       ]));
   }
 
-  Widget _timeCell(String? value, bool enabled, VoidCallback onStamp, VoidCallback onPick, VoidCallback onClear, String label) {
+  void _viewPhoto(String url, String label) {
+    showDialog(context: context, builder: (ctx) => Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480, maxHeight: 560),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(padding: const EdgeInsets.all(12),
+            child: Row(children: [
+              Icon(label == 'In' ? Icons.login : Icons.logout, size: 18, color: AppTheme.primary),
+              const SizedBox(width: 8),
+              Text('Punch photo \u2014 ' + (label == 'In' ? 'Check in' : 'Check out'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(ctx).pop()),
+            ])),
+          Flexible(child: Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Image.network(url, fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Padding(padding: EdgeInsets.all(24), child: Text('Image unavailable', style: TextStyle(color: AppTheme.textSecondary)))))),
+        ]),
+      ),
+    ));
+  }
+
+  Widget _timeCell(String? value, bool enabled, VoidCallback onStamp, VoidCallback onPick, VoidCallback onClear, String label, {String? photoUrl}) {
     if (value == null) {
       return OutlinedButton.icon(
         onPressed: enabled ? onStamp : null,
@@ -341,6 +364,15 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     }
     return Container(padding: const EdgeInsets.only(left: 8), decoration: BoxDecoration(borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
       child: Row(children: [
+        if (photoUrl != null && photoUrl.isNotEmpty) ...[
+          InkWell(
+            onTap: () => _viewPhoto(photoUrl, label),
+            child: Padding(padding: const EdgeInsets.only(right: 6),
+              child: ClipRRect(borderRadius: BorderRadius.circular(3),
+                child: Image.network(photoUrl, width: 22, height: 22, fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const Icon(Icons.image_not_supported_outlined, size: 16, color: AppTheme.textSecondary)))),
+          ),
+        ],
         Expanded(child: Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
         InkWell(onTap: enabled ? onPick : null, child: const Padding(padding: EdgeInsets.all(5), child: Icon(Icons.edit_outlined, size: 13, color: AppTheme.textSecondary))),
         InkWell(onTap: enabled ? onClear : null, child: const Padding(padding: EdgeInsets.all(5), child: Icon(Icons.close, size: 13, color: AppTheme.textSecondary))),
@@ -524,6 +556,7 @@ class _Row {
   String? recordId;
   String status;
   String? checkIn, checkOut;
+  String? inPhoto, outPhoto;
   final TextEditingController remarks = TextEditingController();
   String origStatus = 'present'; String? origIn, origOut; String origRemarks = '';
   bool saving = false;
