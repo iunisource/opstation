@@ -176,6 +176,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (r.startsWith('delivery_order')) return 'delivery_orders';
     if (r.startsWith('grn') || r.startsWith('purchase_grn') || r.startsWith('goods_received')) return 'purchase_grns';
     if (r.startsWith('stock_adjustment')) return 'stock_adjustments';
+    if (r == 'damage' || r.startsWith('damage')) return 'damage_vouchers';
     return refType;
   }
 
@@ -431,6 +432,18 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           voucher = await client.from('stock_adjustments').select('*').eq('id', refId).maybeSingle();
           if (voucher != null) {
             try { lines = await client.from('stock_adjustment_items').select('*, products(name, sku)').eq('adjustment_id', refId); } catch (_) { }
+          }
+          break;
+        case 'damage_vouchers':
+          title = 'Damage Voucher';
+          voucher = await client.from('damage_vouchers').select('*').eq('id', refId).maybeSingle();
+          if (voucher != null) {
+            for (final fk in const ['voucher_id', 'damage_id', 'damage_voucher_id']) {
+              try {
+                final l = await client.from('damage_voucher_lines').select('*, products(name, sku)').eq(fk, refId);
+                if ((l as List).isNotEmpty) { lines = l; break; }
+              } catch (_) { }
+            }
           }
           break;
         default:
