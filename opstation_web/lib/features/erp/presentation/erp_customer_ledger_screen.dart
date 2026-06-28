@@ -162,10 +162,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           final siRmk = (si['remarks'] as String?)?.trim() ?? '';
           final soRmk = (si['sales_orders']?['remarks'] as String?)?.trim() ?? '';
           final rmk = siRmk.isNotEmpty ? siRmk : soRmk;
-          final baseDesc = vno.isNotEmpty ? 'Sales Invoice ' + vno : 'Sales Invoice';
           entries.add({
             'date': date, 'voucher': vno,
-            'description': rmk.isNotEmpty ? baseDesc + ' — ' + rmk : baseDesc,
+            'description': rmk,
             'debit': total, 'credit': 0.0, 'id': si['id'] as String?, 'type': 'Sales Invoice',
           });
         }
@@ -205,9 +204,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         entries.add({
           'date': ((t['transacted_at'] ?? t['created_at'] ?? '') as String),
           'voucher': vno,
-          'description': isReturn
-            ? (refTrxNo.isNotEmpty ? 'POS Return (ref ' + refTrxNo + ')' : 'POS Return ' + vno)
-            : 'POS Sale ' + vno,
+          'description': (isReturn && refTrxNo.isNotEmpty) ? 'Ref ' + refTrxNo : '',
           'debit': isReturn ? 0.0 : amt,
           'credit': isReturn ? amt : 0.0,
           'id': tid.isNotEmpty ? tid : null, 'type': isReturn ? 'POS Return' : 'POS Sale',
@@ -234,7 +231,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           if (total > 0) {
             entries.add({
               'date': date, 'voucher': vno,
-              'description': vno.isNotEmpty ? 'Sale Return ' + vno : 'Sale Return',
+              'description': (sr['remarks'] as String?)?.trim() ?? '',
               'debit': 0.0, 'credit': total, 'id': sr['id'] as String?, 'type': 'Sale Return',
             });
             sriAdded++;
@@ -267,7 +264,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           entries.add({
             'date': date,
             'voucher': (v['voucher_number'] as String?) ?? '',
-            'description': 'Receipt — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
+            'description': (line['description'] as String?)?.trim() ?? '',
             'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
             'id': v['id'] as String?, 'type': 'Receipt (CRV)',
           });
@@ -298,7 +295,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           entries.add({
             'date': date,
             'voucher': (v['voucher_number'] as String?) ?? '',
-            'description': 'Payment — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
+            'description': (line['description'] as String?)?.trim() ?? '',
             'debit': (line['amount'] as num?)?.toDouble() ?? 0,
             'credit': 0.0, 'id': v['id'] as String?, 'type': 'Payment (CPV)',
           });
@@ -327,7 +324,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           final lineDesc = (line['description'] as String?) ?? '';
           entries.add({
             'date': date, 'voucher': vno,
-            'description': (isOpening ? 'Opening Balance — ' : 'Journal — ') + (lineDesc.isNotEmpty ? lineDesc : (v['description'] as String? ?? vno)),
+            'description': lineDesc.isNotEmpty ? lineDesc : ((v['description'] as String?)?.trim() ?? ''),
             'debit': (line['debit'] as num?)?.toDouble() ?? 0,
             'credit': (line['credit'] as num?)?.toDouble() ?? 0,
             'id': v['id'] as String?, 'type': isOpening ? 'Opening Balance' : 'Journal (JV)',
