@@ -150,6 +150,16 @@ const List<_AdminToggle> _toggles = [
         'price. Admins and master admins can always edit the price regardless '
         'of this setting.',
   ),
+
+  _AdminToggle(
+    'org.pi_updates_cost_price',
+    'Update product Cost Price from Purchase Invoices',
+    'When ON, saving a Purchase Invoice updates each line item\'s product Cost '
+        'Price in the product profile to the invoiced unit cost — keeping costs '
+        'current and Purchase Return pricing accurate. Only non-zero costs are '
+        'written, and only products on the invoice are touched. When OFF, Cost '
+        'Price is left unchanged.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
