@@ -59,11 +59,18 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
 
   Color _statusColor(String s) {
     switch (s) {
+      case 'pending_approval': return Colors.orange;
       case 'ordered': return Colors.blue;
+      case 'partially_received': return Colors.teal;
       case 'received': return AppTheme.success;
       case 'cancelled': return AppTheme.danger;
       default: return AppTheme.textSecondary;
     }
+  }
+
+  String _statusLabel(String s) {
+    final parts = s.split('_');
+    return parts.map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ');
   }
 
   void _openOrder(Map<String, dynamic> order) {
@@ -106,8 +113,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 final userId = ref.read(currentUserProvider)?.id;
                 final year = DateTime.now().year;
                 try {
-                  final voucherNum = await Supabase.instance.client
+                  final _vSeq = await Supabase.instance.client
                       .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PO', 'p_year': year});
+                  final voucherNum = 'PO-$year-${_vSeq.toString().padLeft(4, '0')}';
                   final id = 'po_${DateTime.now().millisecondsSinceEpoch}';
                   await Supabase.instance.client.from('purchase_orders').insert({
                     'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -154,7 +162,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           items: const [
             DropdownMenuItem(value: 'all', child: Text('All')),
             DropdownMenuItem(value: 'draft', child: Text('Draft')),
+            DropdownMenuItem(value: 'pending_approval', child: Text('Pending Approval')),
             DropdownMenuItem(value: 'ordered', child: Text('Ordered')),
+            DropdownMenuItem(value: 'partially_received', child: Text('Partially Received')),
             DropdownMenuItem(value: 'received', child: Text('Received')),
             DropdownMenuItem(value: 'cancelled', child: Text('Cancelled')),
           ],
@@ -200,7 +210,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                               Expanded(flex: 2, child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-                                child: Text(status[0].toUpperCase() + status.substring(1),
+                                child: Text(_statusLabel(status),
                                     style: TextStyle(color: _statusColor(status), fontSize: 12, fontWeight: FontWeight.w600)),
                               )),
                               const SizedBox(width: 48, child: Icon(Icons.chevron_right, color: AppTheme.textSecondary)),
@@ -403,6 +413,11 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
   }
 
   bool get _isDraft => (_order['status'] as String? ?? 'draft') == 'draft';
+  bool get _isPending => (_order['status'] as String? ?? '') == 'pending_approval';
+  bool get _isAdmin {
+    final role = ref.read(currentUserProvider)?.role;
+    return role == WebUserRole.masterAdmin || role == WebUserRole.admin || role == WebUserRole.superAdmin;
+  }
   bool get _isLocked => _order['is_locked'] as bool? ?? false;
   bool get _canEdit => _isDraft && !_isLocked;
   // Line-item deletion is gated on the lock ONLY — not on approval/status.
@@ -494,6 +509,48 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', widget.orderId);
       _showSnack('PO marked as ordered and locked');
+      ref.invalidate(poPendingApprovalCountProvider);
+      widget.onUpdated();
+      _load();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _submitForApproval() async {
+    if (_items.isEmpty) { _showSnack('Add items first'); return; }
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'status': 'pending_approval', 'is_locked': true,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', widget.orderId);
+      _showSnack('Submitted for approval');
+      ref.invalidate(poPendingApprovalCountProvider);
+      widget.onUpdated();
+      _load();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _approve() async {
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'status': 'ordered', 'is_locked': true,
+        'ordered_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', widget.orderId);
+      _showSnack('PO approved and ordered');
+      ref.invalidate(poPendingApprovalCountProvider);
+      widget.onUpdated();
+      _load();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _returnToDraft() async {
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'status': 'draft', 'is_locked': false,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', widget.orderId);
+      _showSnack('Returned to draft');
+      ref.invalidate(poPendingApprovalCountProvider);
       widget.onUpdated();
       _load();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -558,7 +615,10 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
         actions: [
           if (_isDraft) ...[
             if (!_isLocked) ...[
-              ElevatedButton(onPressed: _markOrdered, child: const Text('Mark Ordered')),
+              if (_isAdmin)
+                ElevatedButton(onPressed: _markOrdered, child: const Text('Mark Ordered'))
+              else
+                ElevatedButton(onPressed: _submitForApproval, child: const Text('Submit for Approval')),
               const SizedBox(width: 8),
               TextButton(onPressed: _cancelOrder,
                   style: TextButton.styleFrom(foregroundColor: AppTheme.danger), child: const Text('Cancel')),
@@ -569,6 +629,28 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
               label: Text(_isLocked ? 'Unlock' : 'Lock'),
               style: TextButton.styleFrom(foregroundColor: _isLocked ? Colors.orange : AppTheme.textSecondary),
             ),
+          ],
+          if (_isPending) ...[
+            if (_isAdmin) ...[
+              ElevatedButton.icon(
+                onPressed: _approve,
+                icon: const Icon(Icons.check, size: 16),
+                label: const Text('Approve'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+              ),
+              const SizedBox(width: 8),
+              TextButton(onPressed: _returnToDraft,
+                  style: TextButton.styleFrom(foregroundColor: Colors.orange), child: const Text('Return to Draft')),
+            ] else
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(6)),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.hourglass_top, size: 14, color: Colors.orange),
+                  SizedBox(width: 6),
+                  Text('Awaiting approval', style: TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.w600)),
+                ]),
+              ),
           ],
           if (status == 'ordered')
             TextButton.icon(
@@ -599,7 +681,7 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
                   _InfoChip(label: 'Branch', value: _order['branches']?['name'] as String? ?? '-'),
                   _InfoChip(label: 'Date', value: _order['voucher_date'] != null
                       ? DateFormat('d MMM yyyy').format(DateTime.parse(_order['voucher_date'] as String)) : '-'),
-                  _InfoChip(label: 'Status', value: status[0].toUpperCase() + status.substring(1)),
+                  _InfoChip(label: 'Status', value: status.split('_').map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ')),
                   if (_order['remarks'] != null) _InfoChip(label: 'Remarks', value: _order['remarks'] as String),
                   if (_isLocked) const _LockedChip(),
                 ]),
@@ -836,8 +918,9 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                 final year = DateTime.now().year;
                 try {
                   final po = pos.firstWhere((p) => p['id'] == poId);
-                  final voucherNum = await Supabase.instance.client
+                  final _vSeq = await Supabase.instance.client
                       .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'GRN', 'p_year': year});
+                  final voucherNum = 'GRN-$year-${_vSeq.toString().padLeft(4, '0')}';
                   final id = 'grn_${DateTime.now().millisecondsSinceEpoch}';
                   await Supabase.instance.client.from('purchase_grns').insert({
                     'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -1306,8 +1389,9 @@ class _GrnDetailScreenState extends ConsumerState<GrnDetailScreen> {
     final userId = ref.read(currentUserProvider)?.id;
     final year = DateTime.now().year;
     try {
-      final voucherNum = await Supabase.instance.client
+      final _vSeq = await Supabase.instance.client
           .rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PI', 'p_year': year});
+      final voucherNum = 'PI-$year-${_vSeq.toString().padLeft(4, '0')}';
       final piId = 'pi_${DateTime.now().millisecondsSinceEpoch}';
       double subtotal = 0;
       final piItems = _items.map((item) {

@@ -154,6 +154,23 @@ final facilityDueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of purchase orders awaiting approval for the current org (nav badge).
+final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final res = await client
+        .from('purchase_orders')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'pending_approval');
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 
 // ─── Nav layout mode (top bar ↔ sidebar) ───────────────────────
@@ -345,6 +362,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
+  final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -377,7 +395,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/purchase-dashboard')) _menuItem(context, 'Purchase Dashboard',      Icons.dashboard_outlined,         '/erp/purchase-dashboard',       location),
         if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
         if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
-        if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location),
+        if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
         if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location),
         if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location),
         _menuDivider(),
@@ -494,7 +512,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
            '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
            '/erp/supplier-ledger', '/erp/supplier-aging'],
-          _trimDividers(purchaseItems)),
+          _trimDividers(purchaseItems), badge: poPending),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/erp/sales', '/erp/field-orders', '/erp/delivery-orders', '/erp/sales-invoices',
