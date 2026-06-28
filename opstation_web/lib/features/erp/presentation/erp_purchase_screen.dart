@@ -238,6 +238,7 @@ class PurchaseOrderDetailScreen extends ConsumerStatefulWidget {
 
 class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailScreen> {
   Map<String, dynamic> _order = {};
+  bool _approvalRequired = false;
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _uoms = [];
@@ -302,6 +303,8 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
       final products = await client.from('products')
           .select('id, name, sku, base_uom_id, cost_price').eq('org_id', orgId!).eq('is_active', true).order('name').limit(10000);
       final uoms = await client.from('uoms').select().eq('org_id', orgId).order('name');
+      final cfg = await client.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', 'org.po_approval_required').maybeSingle();
       final meta = await VoucherMeta.fetch(
         orgId: orgId,
         customerId: null,  // PO has no customer; salesperson lookup will be null
@@ -309,6 +312,7 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
       );
       setState(() {
         _order = Map<String, dynamic>.from(order);
+        _approvalRequired = (cfg?['value'] as String?) == 'true';
         _items = List<Map<String, dynamic>>.from(items);
         _syncQtyCtrls();
         _products = List<Map<String, dynamic>>.from(products);
@@ -615,10 +619,10 @@ class _PurchaseOrderDetailScreenState extends ConsumerState<PurchaseOrderDetailS
         actions: [
           if (_isDraft) ...[
             if (!_isLocked) ...[
-              if (_isAdmin)
-                ElevatedButton(onPressed: _markOrdered, child: const Text('Mark Ordered'))
+              if (_approvalRequired)
+                ElevatedButton(onPressed: _submitForApproval, child: const Text('Submit for Approval'))
               else
-                ElevatedButton(onPressed: _submitForApproval, child: const Text('Submit for Approval')),
+                ElevatedButton(onPressed: _markOrdered, child: const Text('Mark Ordered')),
               const SizedBox(width: 8),
               TextButton(onPressed: _cancelOrder,
                   style: TextButton.styleFrom(foregroundColor: AppTheme.danger), child: const Text('Cancel')),
