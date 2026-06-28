@@ -103,27 +103,27 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
 
   // Best-effort: snap the current camera frame and store it with the punch.
   // Never blocks or fails the punch — wrapped in try/catch, fire-and-forget.
-  Future<void> _capturePhoto(String empCode, String inOrOut, String attId, String today) async {
-    if (!_captureEnabled || !_cameraOn || _video == null) return;
+  // Capture the current camera frame, upload it, and return the public URL.
+  // Returns null if disabled / no camera / fails. Called BEFORE the punch write
+  // so the URL is on the row when the email trigger fires. Guarded by a timeout
+  // at the call site so a slow upload never hangs the punch.
+  Future<String?> _captureAndUpload(String empCode, String inOrOut, String today) async {
+    if (!_captureEnabled || !_cameraOn || _video == null) return null;
     try {
       final vw = _video!.videoWidth;
       final vh = _video!.videoHeight;
-      if (vw == 0 || vh == 0) return;
+      if (vw == 0 || vh == 0) return null;
       final canvas = html.CanvasElement(width: vw, height: vh);
       canvas.context2D.drawImage(_video!, 0, 0);
       final dataUrl = canvas.toDataUrl('image/jpeg', 0.7);
-      final b64 = dataUrl.split(',').last;
-      final Uint8List bytes = base64Decode(b64);
-      final orgId = _orgId; if (orgId == null) return;
+      final Uint8List bytes = base64Decode(dataUrl.split(',').last);
+      final orgId = _orgId; if (orgId == null) return null;
       final client = Supabase.instance.client;
       final path = 'att/$today/${empCode}_${inOrOut}_${DateTime.now().millisecondsSinceEpoch}.jpg';
       await client.storage.from('kiosk-punches').uploadBinary(path, bytes,
           fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'));
-      final url = client.storage.from('kiosk-punches').getPublicUrl(path);
-      await client.from('hr_attendance')
-          .update({inOrOut == 'in' ? 'punch_in_photo' : 'punch_out_photo': url})
-          .eq('id', attId);
-    } catch (_) { /* capture is best-effort */ }
+      return client.storage.from('kiosk-punches').getPublicUrl(path);
+    } catch (_) { return null; }
   }
 
   // ── sound ──────────────────────────────────────────────────────────────────
@@ -343,10 +343,13 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
         final cin = row['check_in'] as String?;
         final cout = _hhmm(now);
         final id = row['id'] as String;
+        final photoUrl = await _captureAndUpload(empCode ?? code, 'out', today)
+            .timeout(const Duration(seconds: 4), onTimeout: () => null);
         await client.from('hr_attendance').upsert({
           'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': branchId, 'att_date': today,
           'status': 'present', 'check_in': cin, 'check_out': cout,
           'work_hours': _workHours(cin, cout), 'updated_at': now.toIso8601String(),
+          if (photoUrl != null) 'punch_out_photo': photoUrl,
         }, onConflict: 'org_id,employee_id,att_date');
         await client.from('hr_attendance_audit').insert({
           'id': 'aud_${now.microsecondsSinceEpoch}_$empId', 'org_id': orgId, 'attendance_id': id,
@@ -354,7 +357,6 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
           'changes': 'Kiosk check-out $cout', 'changed_by': null, 'changed_by_name': 'Kiosk',
         });
         _lastPunch[empId] = now;
-        _capturePhoto(empCode ?? code, 'out', id, today);
         _beep(ok: true);
         _show(_Result(_Outcome.checkedOut, 'Checked Out',
             name: name, code: empCode, photoUrl: photo, time: cout));
@@ -362,10 +364,13 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
         // PUNCH IN
         final cin = _hhmm(now);
         final id = row?['id'] as String? ?? 'att_${now.microsecondsSinceEpoch}_$empId';
+        final photoUrl = await _captureAndUpload(empCode ?? code, 'in', today)
+            .timeout(const Duration(seconds: 4), onTimeout: () => null);
         await client.from('hr_attendance').upsert({
           'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': branchId, 'att_date': today,
           'status': 'present', 'check_in': cin, 'check_out': null,
           'work_hours': null, 'updated_at': now.toIso8601String(),
+          if (photoUrl != null) 'punch_in_photo': photoUrl,
         }, onConflict: 'org_id,employee_id,att_date');
         await client.from('hr_attendance_audit').insert({
           'id': 'aud_${now.microsecondsSinceEpoch}_$empId', 'org_id': orgId, 'attendance_id': id,
@@ -373,7 +378,6 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
           'changes': 'Kiosk check-in $cin', 'changed_by': null, 'changed_by_name': 'Kiosk',
         });
         _lastPunch[empId] = now;
-        _capturePhoto(empCode ?? code, 'in', id, today);
         _beep(ok: true);
         _show(_Result(_Outcome.checkedIn, 'Checked In',
             name: name, code: empCode, photoUrl: photo, time: cin));
