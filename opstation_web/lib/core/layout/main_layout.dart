@@ -336,6 +336,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final hrItems = <Widget>[
       if (show('/hr/employees')) _menuItem(context, 'Employee Directory', Icons.groups_outlined, '/hr/employees', location),
       if (show('/hr/attendance')) _menuItem(context, 'Attendance', Icons.fact_check_outlined, '/hr/attendance', location),
+      if (show('/hr/attendance-kiosk')) _menuItem(context, 'Attendance Kiosk', Icons.qr_code_scanner_outlined, '/hr/attendance-kiosk', location),
       if (show('/hr/leave')) _menuItem(context, 'Leave', Icons.beach_access_outlined, '/hr/leave', location),
     ];
 
@@ -406,7 +407,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(financialItems)),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
-          ['/hr/employees', '/hr/attendance', '/hr/leave'], _trimDividers(hrItems)),
+          ['/hr/employees', '/hr/attendance', '/hr/attendance-kiosk', '/hr/leave'], _trimDividers(hrItems)),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
         ['/erp/onboarding', '/erp/branches', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
