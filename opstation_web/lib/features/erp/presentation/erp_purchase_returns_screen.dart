@@ -1031,10 +1031,10 @@ class _AuditTrailWidget extends StatelessWidget {
     final rows = List<Map<String, dynamic>>.from(
       await sb
           .from('voucher_audit_log')
-          .select('action, details, performed_by, created_at')
+          .select('action, details, performed_by, performed_at')
           .eq('voucher_id', voucherId)
           .eq('voucher_type', voucherType)
-          .order('created_at', ascending: false)
+          .order('performed_at', ascending: false)
           .limit(30),
     );
     final ids = rows
@@ -1106,8 +1106,8 @@ class _AuditTrailWidget extends StatelessWidget {
             const SizedBox(height: 8),
             ...entries.map((e) {
               final action = e['action'] as String? ?? '-';
-              final ts = e['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal())
+              final ts = e['performed_at'] != null
+                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['performed_at'] as String).toLocal())
                   : '';
               final by = e['_by'] as String? ?? '—';
               final details = e['details'] as String? ?? '';
