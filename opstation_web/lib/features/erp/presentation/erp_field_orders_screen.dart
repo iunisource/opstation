@@ -129,20 +129,20 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
   // ---------------------------------------------------------------------------
   static const String _audioBootstrapJs =
       '(function(){'
-      'if(window.__foAudio)return;'
+      'if(window.__foAudio2)return;'
       'var F=window.AudioContext||window.webkitAudioContext;var ctx=null;'
       'function get(){if(!ctx){try{ctx=new F();}catch(e){return null;}}return ctx;}'
       'function unlock(){var c=get();if(c&&c.state==="suspended"){try{c.resume();}catch(e){}}}'
-      'function beep(freq,dur,type,when){var c=get();if(!c)return;'
+      'function beep(freq,dur,type,when,gain){var c=get();if(!c)return;'
       'if(c.state==="suspended"){try{c.resume();}catch(e){}}'
       'try{var t0=c.currentTime+(when||0);var o=c.createOscillator();var g=c.createGain();'
       'o.connect(g);g.connect(c.destination);o.type=type||"sine";o.frequency.value=freq;'
-      'g.gain.setValueAtTime(0.3,t0);g.gain.exponentialRampToValueAtTime(0.001,t0+dur);'
+      'g.gain.setValueAtTime(gain||0.3,t0);g.gain.exponentialRampToValueAtTime(0.001,t0+dur);'
       'o.start(t0);o.stop(t0+dur);}catch(e){}}'
       'function state(){var c=get();return c?c.state:"none";}'
       '["pointerdown","keydown","touchstart","mousedown"].forEach(function(ev){'
       'window.addEventListener(ev,unlock,{passive:true});});'
-      'window.__foAudio={unlock:unlock,beep:beep,state:state};'
+      'window.__foAudio2={unlock:unlock,beep:beep,state:state};window.__foAudio=window.__foAudio2;'
       '})();';
 
   void _installAudio() {
@@ -180,8 +180,8 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     if (!_soundOn) return;
     try {
       js_util.callMethod(js_util.globalThis, 'eval', [
-        'if(window.__foAudio){window.__foAudio.beep(880,0.18,"sine",0);'
-        'window.__foAudio.beep(587,0.28,"sine",0.18);}'
+        'if(window.__foAudio){window.__foAudio.beep(659.25,0.55,"triangle",0,0.9);'
+        'window.__foAudio.beep(523.25,0.95,"triangle",0.30,0.9);}'
       ]);
     } catch (_) {}
   }
