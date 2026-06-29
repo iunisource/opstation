@@ -659,6 +659,10 @@ class _DeliveryWizardScreenState
                 targetUserId: saved.driverId!,
                 title: 'New Delivery Assigned',
                 body: 'You have a new delivery with ${saved.stops.length} stops.',
+                data: {
+                  'type': 'delivery_assigned',
+                  'delivery_id': saved.id,
+                },
               );
             } catch (_) {}
           });

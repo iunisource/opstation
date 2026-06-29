@@ -20,6 +20,46 @@ import '../../dispatch/models/delivery.dart';
 /// Business rule enforced in the repository: one delivery can be
 /// in_progress at a time per driver. If one's active, other assigned
 /// ones show as visually blocked until it's done.
+/// Reactive driver-home data: watches the driver's deliveries in local Drift
+/// and partitions them into assigned / in-progress / recent-completed. Emits a
+/// fresh value whenever local deliveries change (e.g. after an FCM-triggered
+/// pull writes a newly-assigned row) — so the home auto-loads new jobs without
+/// a manual refresh.
+final driverHomeStreamProvider =
+    StreamProvider.autoDispose<_DriverHomeData>((ref) {
+  final user = ref.watch(authControllerProvider).valueOrNull;
+  if (user == null) {
+    return Stream.value(const _DriverHomeData(
+        assigned: [], inProgress: null, recentCompleted: []));
+  }
+  final repo = ref.watch(deliveryRepositoryProvider);
+  final now = DateTime.now();
+  final fromDate =
+      DateTime(now.year, now.month, now.day).subtract(const Duration(days: 6));
+  return repo.watchList(driverId: user.id).map((all) {
+    final assigned =
+        all.where((d) => d.status == DeliveryStatus.assigned).toList();
+    Delivery? active;
+    for (final d in all) {
+      if (d.status == DeliveryStatus.inProgress) {
+        active = d;
+        break;
+      }
+    }
+    final completed = all
+        .where((d) =>
+            (d.status == DeliveryStatus.completed ||
+                d.status == DeliveryStatus.cancelled) &&
+            d.createdAt.isAfter(fromDate))
+        .toList();
+    return _DriverHomeData(
+      assigned: assigned,
+      inProgress: active,
+      recentCompleted: completed,
+    );
+  });
+});
+
 class DriverHomeScreen extends ConsumerStatefulWidget {
   const DriverHomeScreen({super.key});
 
@@ -136,8 +176,8 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
 
     return RoleHomeScaffold(
       appBarTitle: 'Home',
-      body: FutureBuilder<_DriverHomeData>(
-        future: _load(),
+      body: StreamBuilder<_DriverHomeData>(
+        stream: ref.watch(driverHomeStreamProvider.stream),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());

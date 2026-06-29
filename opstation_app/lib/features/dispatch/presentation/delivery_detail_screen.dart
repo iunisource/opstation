@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../audit/data/audit_repository.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../../core/services/notification_service.dart';
 import '../data/delivery_repository.dart';
 import '../models/delivery.dart';
 import '../pdf/delivery_pdf_builder.dart';
@@ -622,6 +623,22 @@ class _DeliveryDetailScreenState
             deliveryId: d.id,
             driverName: d.driverName ?? 'driver',
           );
+      // Notify the driver of the assignment (alarm + auto-load on their device).
+      if (d.driverId != null) {
+        Future.microtask(() async {
+          try {
+            await ref.read(notificationServiceProvider).sendToUser(
+              targetUserId: d.driverId!,
+              title: 'New Delivery Assigned',
+              body: 'You have a new delivery with ${d.stops.length} stops.',
+              data: {
+                'type': 'delivery_assigned',
+                'delivery_id': d.id,
+              },
+            );
+          } catch (_) {}
+        });
+      }
       if (mounted) setState(_reload);
     } catch (e) {
       if (mounted) {

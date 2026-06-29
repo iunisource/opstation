@@ -7,6 +7,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../database/app_database.dart';
 import '../database/app_database_provider.dart';
+import '../supabase/supabase_pull_service.dart';
+import '../audio/alarm_sound.dart';
+import '../../features/auth/providers/auth_controller.dart';
 
 /// Handles FCM token registration and notification permissions.
 class NotificationService {
@@ -29,8 +32,9 @@ class NotificationService {
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final SupabaseClient _supabase;
   final AppDatabase _db;
+  final Ref _ref;
 
-  NotificationService(this._supabase, this._db);
+  NotificationService(this._supabase, this._db, this._ref);
 
   /// Call after login — requests permission and saves FCM token.
   Future<void> initialize(String userId) async {
@@ -90,6 +94,18 @@ class NotificationService {
   }
 
   void _handleForegroundMessage(RemoteMessage message) {
+    // Delivery assignment: sound the alarm and pull the new job into local
+    // Drift so the driver-home stream refreshes automatically. Done before the
+    // banner so the alert is immediate even if the pull is slow.
+    if (message.data['type'] == 'delivery_assigned') {
+      AlarmSound.instance.play();
+      final orgId =
+          _ref.read(authControllerProvider).valueOrNull?.organizationId;
+      if (orgId != null && orgId.isNotEmpty) {
+        // Fire-and-forget; the Drift .watch() in driver_home reacts when rows land.
+        _ref.read(supabasePullServiceProvider).pullOrgData(orgId).catchError((_) {});
+      }
+    }
     final notification = message.notification;
     if (notification == null) return;
     debugPrint(
@@ -143,5 +159,6 @@ final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService(
     Supabase.instance.client,
     ref.watch(appDatabaseProvider),
+    ref,
   );
 });

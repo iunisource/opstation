@@ -181,6 +181,38 @@ class DeliveryRepository {
     return out;
   }
 
+  /// Reactive version of [list]: emits a fresh list whenever the deliveries
+  /// table changes locally (e.g. after a pull writes a newly-assigned row).
+  /// Powers the driver home's auto-load so a new job appears without a manual
+  /// refresh. Note: re-emits on `deliveries` row changes; a stop-only edit
+  /// that doesn't touch the parent row won't retrigger (acceptable — an
+  /// assignment always writes the deliveries row).
+  Stream<List<Delivery>> watchList({
+    Set<DeliveryStatus>? statuses,
+    String? driverId,
+    DateTime? from,
+    DateTime? to,
+  }) {
+    var q = _db.select(_db.deliveries)
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
+    if (statuses != null && statuses.isNotEmpty) {
+      q.where((t) => t.status.isIn(statuses.map((s) => s.wire).toList()));
+    }
+    if (driverId != null) q.where((t) => t.driverId.equals(driverId));
+    if (from != null) q.where((t) => t.createdAt.isBiggerOrEqualValue(from));
+    if (to != null) q.where((t) => t.createdAt.isSmallerThanValue(to));
+    if (_orgId != null) {
+      q.where((t) => t.orgId.isNull() | t.orgId.equals(_orgId!));
+    }
+    return q.watch().asyncMap((rows) async {
+      final out = <Delivery>[];
+      for (final r in rows) {
+        out.add(Delivery.fromRow(r, await _stopsFor(r.id)));
+      }
+      return out;
+    });
+  }
+
   // ---- Edit (drafts and assigned only) ---------------------------------
 
   /// Replaces the driver + notes + stops on an existing delivery.
@@ -538,6 +570,14 @@ class DeliveryRepository {
       driverId: driverId,
     );
     return rows.isEmpty ? null : rows.first;
+  }
+
+  /// Reactive version of [activeForDriver].
+  Stream<Delivery?> watchActiveForDriver(String driverId) {
+    return watchList(
+      statuses: {DeliveryStatus.inProgress},
+      driverId: driverId,
+    ).map((rows) => rows.isEmpty ? null : rows.first);
   }
 }
 
