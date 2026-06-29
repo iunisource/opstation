@@ -84,6 +84,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl = TextEditingController(text: '1');
+  // FOC (free-of-cost) add-row + org toggle
+  String? _focProductId;
+  String? _focUomId;
+  final _focQtyCtrl = TextEditingController(text: '1');
+  bool _focEnabled = false;
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
   bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
@@ -96,6 +101,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   @override
   void dispose() {
     _addQtyCtrl.dispose();
+    _focQtyCtrl.dispose();
     for (final c in _qtyControllers.values) c.dispose();
     super.dispose();
   }
@@ -109,7 +115,13 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final client = Supabase.instance.client;
       final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
-      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); });
+      bool focOn = false;
+      try {
+        final cfg = await client.from('app_config').select('value')
+            .eq('org_id', orgId).eq('key', 'org.foc_enabled').maybeSingle();
+        focOn = (cfg?['value'] as String?) == 'true';
+      } catch (_) {}
+      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _focEnabled = focOn; });
       _ensureCustomers();
     } catch (_) {}
   }
@@ -257,12 +269,14 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   Future<void> _printSO() async {
     final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) => VoucherLine(
+    VoucherLine soLine(Map it) => VoucherLine(
       product: it['products']?['name'] as String? ?? '-',
       sku: it['products']?['sku'] as String?,
       uom: it['uoms']?['abbreviation'] as String?,
       qty: (it['quantity'] as num?)?.toDouble() ?? 0,
-    )).toList();
+    );
+    final lines = _items.where((it) => it['is_foc'] != true).map(soLine).toList();
+    final focLines = _items.where((it) => it['is_foc'] == true).map(soLine).toList();
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final cust = _detail['customers'] as Map?;
@@ -282,6 +296,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
       remarks: _detail['remarks'] as String?,
       lines: lines,
+      focLines: focLines.isEmpty ? null : focLines,
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
       footerNote: _meta.footerNote,
@@ -338,7 +353,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _showSnack('Enter valid qty'); return; }
-    if (_items.any((i) => i['product_id'] == _addProductId)) {
+    if (_items.any((i) => i['product_id'] == _addProductId && i['is_foc'] != true)) {
       _showSnack('Product already added — edit its quantity instead');
       return;
     }
@@ -364,6 +379,176 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           'uoms': {'name': uom['name'], 'abbreviation': uom['abbreviation']},
         });
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
+      });
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Free-of-Cost items section: same shape as the paid items table, but lines
+  // carry no price (zero invoice value) and are consumed at cost downstream.
+  Widget _buildFocSection() {
+    final focItems = _items.where((it) => it['is_foc'] == true).toList();
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.teal.withOpacity(0.45)),
+      ),
+      child: Column(children: [
+        // Header
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.teal.withOpacity(0.07),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.card_giftcard, size: 16, color: Colors.teal),
+            const SizedBox(width: 6),
+            const Text('Free of Cost Items', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Colors.teal)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(color: Colors.teal.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+              child: const Text('No invoice value', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.teal)),
+            ),
+          ]),
+        ),
+        const Divider(height: 1),
+        // Column header
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: const BoxDecoration(color: AppTheme.background),
+          child: Row(children: [
+            const Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+            const Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+            const Expanded(flex: 2, child: Text('Qty (free)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+            SizedBox(width: _canEditLines ? 40 : 0),
+          ]),
+        ),
+        const Divider(height: 1),
+        if (focItems.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Align(alignment: Alignment.centerLeft, child: Text('No free items added.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          ),
+        ...focItems.map((item) {
+          final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
+          return Column(children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(children: [
+                Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(item['products']?['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  if (item['products']?['sku'] != null)
+                    Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                ])),
+                Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
+                Expanded(flex: 2, child: _canEditLines
+                    ? SizedBox(height: 32, child: TextField(
+                        controller: _qtyControllers[item['id'] as String],
+                        decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        onSubmitted: (v) async {
+                          final newQty = double.tryParse(v) ?? qty;
+                          await Supabase.instance.client.from('sales_order_items').update({'quantity': newQty}).eq('id', item['id']);
+                          _loadDetail(_detail['id'] as String);
+                        },
+                      ))
+                    : Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), style: const TextStyle(fontWeight: FontWeight.w600))),
+                if (_canEditLines) SizedBox(width: 40, child: IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
+                  onPressed: () => _deleteItem(item['id'] as String),
+                )),
+              ]),
+            ),
+            const Divider(height: 1),
+          ]);
+        }),
+        // Add row
+        if (_canEditLines) Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(children: [
+            Expanded(flex: 4, child: Builder(builder: (ctx) {
+              final sel = _focProductId == null ? null : _products.firstWhere((x) => x['id'] == _focProductId, orElse: () => <String, dynamic>{});
+              final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
+              return InkWell(
+                onTap: () async {
+                  final p = await pickProduct(ctx, _products, title: 'Select free product');
+                  if (p != null && p.isNotEmpty) setState(() {
+                    _focProductId = p['id'] as String?;
+                    _focUomId = p['base_uom_id'] as String?;
+                  });
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder()),
+                  child: Row(children: [
+                    Expanded(child: Text(name ?? '+ Add free product', maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 13, color: name == null ? Colors.teal : Colors.black87))),
+                    const Icon(Icons.arrow_drop_down, size: 20, color: AppTheme.textSecondary),
+                  ]),
+                ),
+              );
+            })),
+            const SizedBox(width: 8),
+            Expanded(flex: 1, child: DropdownButtonFormField<String>(
+              value: _focUomId,
+              decoration: const InputDecoration(hintText: 'UOM', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
+              items: _uoms.map((u) => DropdownMenuItem(value: u['id'] as String, child: Text(u['abbreviation'] as String? ?? '', style: const TextStyle(fontSize: 13)))).toList(),
+              onChanged: (v) => setState(() => _focUomId = v),
+            )),
+            const SizedBox(width: 8),
+            Expanded(flex: 2, child: TextField(
+              controller: _focQtyCtrl,
+              decoration: const InputDecoration(hintText: 'Qty', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onSubmitted: (_) => _addFocItem(),
+            )),
+            const SizedBox(width: 8),
+            const Expanded(flex: 2, child: SizedBox.shrink()),
+            SizedBox(width: 40, child: IconButton(
+              icon: const Icon(Icons.add_circle, color: Colors.teal, size: 20),
+              onPressed: _addFocItem,
+              tooltip: 'Add free item',
+            )),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _addFocItem() async {
+    if (!_canEditLines) { _showSnack('Cannot add: $_doMsg'); return; }
+    if (_focProductId == null || _focUomId == null) { _showSnack('Select product and UOM'); return; }
+    final qty = double.tryParse(_focQtyCtrl.text.trim()) ?? 0;
+    if (qty <= 0) { _showSnack('Enter valid qty'); return; }
+    if (_items.any((i) => i['product_id'] == _focProductId && i['is_foc'] == true)) {
+      _showSnack('Product already added to FOC — edit its quantity instead');
+      return;
+    }
+    final itemId = 'soi_${DateTime.now().millisecondsSinceEpoch}';
+    final prod = _products.firstWhere((p) => p['id'] == _focProductId, orElse: () => {});
+    final uom = _uoms.firstWhere((u) => u['id'] == _focUomId, orElse: () => {});
+    try {
+      await Supabase.instance.client.from('sales_order_items').insert({
+        'id': itemId,
+        'sales_order_id': _detail['id'],
+        'product_id': _focProductId, 'uom_id': _focUomId,
+        'quantity': qty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
+        'is_foc': true,
+      });
+      _qtyControllers[itemId] = TextEditingController(text: qty.toStringAsFixed(0));
+      setState(() {
+        _items.add({
+          'id': itemId,
+          'sales_order_id': _detail['id'],
+          'product_id': _focProductId,
+          'uom_id': _focUomId,
+          'quantity': qty,
+          'is_foc': true,
+          'products': {'name': prod['name'], 'sku': prod['sku']},
+          'uoms': {'name': uom['name'], 'abbreviation': uom['abbreviation']},
+        });
+        _focProductId = null; _focUomId = null; _focQtyCtrl.text = '1';
       });
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -681,8 +866,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                   ]),
                 ),
                 const Divider(height: 1),
-                // Items
-                ..._items.map((item) {
+                // Items (paid only — FOC lines render in their own section)
+                ..._items.where((it) => it['is_foc'] != true).map((item) {
                   final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
                   return Column(children: [
                     Padding(
@@ -765,6 +950,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 ),
               ]),
             ),
+
+            if (_focEnabled) ...[
+              const SizedBox(height: 16),
+              _buildFocSection(),
+            ],
 
             const SizedBox(height: 16),
             _VoucherInfoStrip(
@@ -1063,12 +1253,14 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   Future<void> _printDO() async {
     final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) => VoucherLine(
+    VoucherLine doLine(Map it) => VoucherLine(
       product: it['products']?['name'] as String? ?? '-',
       sku: it['products']?['sku'] as String?,
       uom: it['uoms']?['abbreviation'] as String?,
       qty: (it['qty_delivered'] as num?)?.toDouble() ?? 0,
-    )).toList();
+    );
+    final lines = _items.where((it) => it['is_foc'] != true).map(doLine).toList();
+    final focLines = _items.where((it) => it['is_foc'] == true).map(doLine).toList();
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final cust = _linkedSo['customers'] as Map?;
@@ -1093,6 +1285,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       salespersonName: _meta.salespersonName,
       status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
       lines: lines,
+      focLines: focLines.isEmpty ? null : focLines,
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
       footerNote: _meta.footerNote,
@@ -1486,6 +1679,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           'qty_ordered': ordered,
           'qty_available': (stock?['quantity'] as num?)?.toDouble() ?? 0,
           'qty_delivered': deliverQty,
+          'is_foc': soItem['is_foc'] == true,
         });
         if (stock != null) {
           await Supabase.instance.client.from('inventory_stock').update({
@@ -1565,11 +1759,13 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       final siItems = _items.asMap().entries.map((e) {
         final i = e.key; final item = e.value;
         final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-        final price = priceMap[item['product_id'] as String] ?? 0;
-        final lineTotal = qty * price;
+        final isFoc = item['is_foc'] == true;
+        final price = isFoc ? 0.0 : (priceMap[item['product_id'] as String] ?? 0);
+        final lineTotal = isFoc ? 0.0 : qty * price;
         subtotal += lineTotal;
         return {'id': 'sii_${DateTime.now().millisecondsSinceEpoch}_$i', 'product_id': item['product_id'],
-            'uom_id': item['uom_id'], 'qty_delivered': qty, 'unit_price': price, 'discount': 0.0, 'line_total': lineTotal};
+            'uom_id': item['uom_id'], 'qty_delivered': qty, 'unit_price': price, 'discount': 0.0, 'line_total': lineTotal,
+            'is_foc': isFoc};
       }).toList();
       await Supabase.instance.client.from('sales_invoices').insert({
         'id': siId, 'org_id': orgId, 'branch_id': branchId,
@@ -2144,7 +2340,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
   Future<void> _printSI() async {
     final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) {
+    final lines = _items.where((it) => it['is_foc'] != true).map((it) {
       final qty = (it['qty_delivered'] as num?)?.toDouble() ?? 0;
       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
       final discPct = (double.tryParse(_discountCtrl[it['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
@@ -2159,6 +2355,12 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         lineTotal: lineTotal,
       );
     }).toList();
+    final focLines = _items.where((it) => it['is_foc'] == true).map((it) => VoucherLine(
+      product: it['products']?['name'] as String? ?? '-',
+      sku: it['products']?['sku'] as String?,
+      uom: it['uoms']?['abbreviation'] as String?,
+      qty: (it['qty_delivered'] as num?)?.toDouble() ?? 0,
+    )).toList();
 
     double subtotal = 0, discountTotal = 0;
     for (final l in lines) {
@@ -2191,6 +2393,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       salespersonName: _meta.salespersonName,
       remarks: _detail['remarks'] as String?,
       lines: lines,
+      focLines: focLines.isEmpty ? null : focLines,
       subtotal: subtotal,
       discountTotal: discountTotal,
       grandTotal: subtotal - discountTotal,
@@ -2484,12 +2687,24 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       child: Row(children: [
                         Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(item['products']?['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                          Row(children: [
+                            Flexible(child: Text(item['products']?['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+                            if (item['is_foc'] == true) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(color: Colors.teal.withOpacity(0.12), borderRadius: BorderRadius.circular(3)),
+                                child: const Text('FOC', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.teal)),
+                              ),
+                            ],
+                          ]),
                           if (item['products']?['sku'] != null) Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                         ])),
                         Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                         Expanded(flex: 2, child: Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
-                        Expanded(flex: 2, child: Text(price.toStringAsFixed(2))),
+                        Expanded(flex: 2, child: item['is_foc'] == true
+                            ? const Text('Free', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.w600))
+                            : Text(price.toStringAsFixed(2))),
                         Expanded(flex: 2, child: _isLocked
                             ? Text('${discPct.toStringAsFixed(2)} %', style: const TextStyle(color: AppTheme.textSecondary))
                             : SizedBox(height: 32, child: TextField(

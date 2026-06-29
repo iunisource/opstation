@@ -25,6 +25,7 @@ class VoucherPdf {
     String? status,
     String? remarks,
     required List<VoucherLine> lines,
+    List<VoucherLine>? focLines, // free-of-cost lines, rendered in their own block
     double? subtotal,
     double? discountTotal,
     double? grandTotal,
@@ -40,7 +41,7 @@ class VoucherPdf {
       customerOrSupplier: customerOrSupplier,
       customerAddress: customerAddress, customerContact: customerContact, customerPhone: customerPhone,
       salespersonName: salespersonName,
-      status: status, remarks: remarks, lines: lines,
+      status: status, remarks: remarks, lines: lines, focLines: focLines,
       subtotal: subtotal, discountTotal: discountTotal, grandTotal: grandTotal,
       preparedBy: preparedBy, createdAt: createdAt,
       footerNote: footerNote, relatedRefs: relatedRefs,
@@ -66,6 +67,7 @@ class VoucherPdf {
     String? status,
     String? remarks,
     required List<VoucherLine> lines,
+    List<VoucherLine>? focLines, // free-of-cost lines, rendered in their own block
     double? subtotal,
     double? discountTotal,
     double? grandTotal,
@@ -81,7 +83,7 @@ class VoucherPdf {
       customerOrSupplier: customerOrSupplier,
       customerAddress: customerAddress, customerContact: customerContact, customerPhone: customerPhone,
       salespersonName: salespersonName,
-      status: status, remarks: remarks, lines: lines,
+      status: status, remarks: remarks, lines: lines, focLines: focLines,
       subtotal: subtotal, discountTotal: discountTotal, grandTotal: grandTotal,
       preparedBy: preparedBy, createdAt: createdAt,
       footerNote: footerNote, relatedRefs: relatedRefs,
@@ -104,6 +106,7 @@ class VoucherPdf {
     String? status,
     String? remarks,
     required List<VoucherLine> lines,
+    List<VoucherLine>? focLines, // free-of-cost lines, rendered in their own block
     double? subtotal,
     double? discountTotal,
     double? grandTotal,
@@ -277,6 +280,18 @@ class VoucherPdf {
 
         // ── Line items ─────────────────────────────────────────────────
         _itemsTable(lines, hasMoney),
+
+        // ── Free of Cost items (qty only, no value) ────────────────────
+        if (focLines != null && focLines.isNotEmpty) ...[
+          pw.SizedBox(height: 14),
+          pw.Row(children: [
+            pw.Text('Free of Cost Items', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: PdfColors.teal800)),
+            pw.SizedBox(width: 6),
+            pw.Text('(no invoice value)', style: pw.TextStyle(fontSize: 9, color: _muted)),
+          ]),
+          pw.SizedBox(height: 4),
+          _itemsTable(focLines, false),
+        ],
 
         // ── Totals ─────────────────────────────────────────────────────
         if (showTotals) ...[

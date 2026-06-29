@@ -162,14 +162,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
-    'org.kiosk_capture_photo',
-    'Capture punch photo at Attendance Kiosk',
-    'When ON, the Attendance Kiosk takes a webcam snapshot at each check-in '
-        'and check-out and stores it with the attendance record (kept for 30 '
-        'days, then overwritten). Helps verify who actually punched and deters '
-        'buddy-punching. Requires the kiosk camera to be active; if a kiosk '
-        'uses only a hardware scanner with no camera, the punch still works '
-        'but no photo is captured. When OFF, no photos are taken.',
+    'org.foc_enabled',
+    'Free-of-Cost (FOC) items on Sales Orders',
+    'When ON, a separate "Free of Cost Items" section appears on the Sales Order '
+        'screen. FOC lines ship to the customer at zero price (they add nothing to '
+        'the invoice value — only item and quantity appear on the SO, DO and '
+        'Invoice) but are still consumed at cost, so COGS is booked normally. The '
+        'same product may appear once in the paid section and once in the FOC '
+        'section. When OFF, the FOC section is hidden; any FOC lines already on '
+        'existing orders are preserved.',
   ),
 ];
 
