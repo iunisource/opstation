@@ -212,6 +212,31 @@ class SupabaseSyncService {
     });
   }
 
+  /// Push a locally-captured field order. Sends ONLY the columns the online
+  /// path sends (DB defaults created_at/totals) so offline orders are
+  /// indistinguishable from online ones in the web field-orders queue.
+  Future<void> pushFieldOrder(FieldOrderRow o) async {
+    await _client.from('field_orders').upsert({
+      'id': o.id,
+      'org_id': o.orgId,
+      'customer_id': o.customerId,
+      'salesperson_id': o.salespersonId,
+      'status': o.status,
+      'notes': o.notes,
+    });
+  }
+
+  Future<void> pushFieldOrderItem(FieldOrderItemRow i) async {
+    await _client.from('field_order_items').upsert({
+      'id': i.id,
+      'field_order_id': i.fieldOrderId,
+      'product_id': i.productId,
+      'uom_id': i.uomId,
+      'quantity': i.quantity,
+      'price_at_submit': i.priceAtSubmit,
+    });
+  }
+
   // ---- PULL methods (Supabase → local) ----------------------------------
 
   Future<List<Map<String, dynamic>>> pullOrgs() async {
@@ -240,11 +265,32 @@ class SupabaseSyncService {
     return out;
   }
 
+  /// Paginated catalog fetch for offline order-taking. Selects only the
+  /// columns the order modal needs (search + save).
+  Future<List<Map<String, dynamic>>> _pullAllProducts(String orgId) async {
+    final out = <Map<String, dynamic>>[];
+    const pageSize = 1000;
+    var offset = 0;
+    while (true) {
+      final page = await _client
+          .from('products')
+          .select(
+              'id, org_id, name, sku, selling_price, base_uom_id, product_sub_group, is_active, updated_at')
+          .eq('org_id', orgId)
+          .range(offset, offset + pageSize - 1);
+      out.addAll(List<Map<String, dynamic>>.from(page));
+      if (page.length < pageSize) break;
+      offset += pageSize;
+    }
+    return out;
+  }
+
   Future<OrgPullData> pullOrgData(String orgId) async {
     final results = await Future.wait([
       _client.from('orgs').select().eq('id', orgId),
       _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'),
       _pullAllCustomers(orgId),
+      _pullAllProducts(orgId),
       _client.from('sales_routes').select().eq('org_id', orgId),
       _client.from('route_stops').select(),
       _client.from('route_assignments').select(),
@@ -258,14 +304,15 @@ class SupabaseSyncService {
       orgs: List<Map<String, dynamic>>.from(results[0]),
       users: List<Map<String, dynamic>>.from(results[1]),
       customers: List<Map<String, dynamic>>.from(results[2]),
-      routes: List<Map<String, dynamic>>.from(results[3]),
-      routeStops: List<Map<String, dynamic>>.from(results[4]),
-      routeAssignments: List<Map<String, dynamic>>.from(results[5]),
-      trips: List<Map<String, dynamic>>.from(results[6]),
-      tripStops: List<Map<String, dynamic>>.from(results[7]),
-      visits: List<Map<String, dynamic>>.from(results[8]),
-      deliveries: List<Map<String, dynamic>>.from(results[9]),
-      deliveryStops: List<Map<String, dynamic>>.from(results[10]),
+      products: List<Map<String, dynamic>>.from(results[3]),
+      routes: List<Map<String, dynamic>>.from(results[4]),
+      routeStops: List<Map<String, dynamic>>.from(results[5]),
+      routeAssignments: List<Map<String, dynamic>>.from(results[6]),
+      trips: List<Map<String, dynamic>>.from(results[7]),
+      tripStops: List<Map<String, dynamic>>.from(results[8]),
+      visits: List<Map<String, dynamic>>.from(results[9]),
+      deliveries: List<Map<String, dynamic>>.from(results[10]),
+      deliveryStops: List<Map<String, dynamic>>.from(results[11]),
     );
   }
 
@@ -291,6 +338,7 @@ class OrgPullData {
   final List<Map<String, dynamic>> orgs;
   final List<Map<String, dynamic>> users;
   final List<Map<String, dynamic>> customers;
+  final List<Map<String, dynamic>> products;
   final List<Map<String, dynamic>> routes;
   final List<Map<String, dynamic>> routeStops;
   final List<Map<String, dynamic>> routeAssignments;
@@ -304,6 +352,7 @@ class OrgPullData {
     required this.orgs,
     required this.users,
     required this.customers,
+    required this.products,
     required this.routes,
     required this.routeStops,
     required this.routeAssignments,

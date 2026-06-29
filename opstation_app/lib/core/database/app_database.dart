@@ -436,16 +436,22 @@ class DeliveryStops extends Table {
   UploadQueue,
   Deliveries,
   DeliveryStops,
-  Orgs, CompetitorCategories, Products, CompetitorSpottings, PlacementAudits])
+  Orgs, CompetitorCategories, Products, CompetitorSpottings, PlacementAudits,
+  CatalogProducts, FieldOrders, FieldOrderItems])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 21;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
+          if (from < 21) {
+            await m.createTable(catalogProducts);
+            await m.createTable(fieldOrders);
+            await m.createTable(fieldOrderItems);
+          }
           if (from < 20) {
             await m.addColumn(deliveryStops, deliveryStops.doId);
           }
@@ -644,5 +650,67 @@ class PlacementAudits extends Table {
   DateTimeColumn get createdAt => dateTime().named('created_at')();
   TextColumn get syncStatus => text().named('sync_status').withDefault(const Constant('synced'))();
   @override Set<Column> get primaryKey => {id};
+}
+
+// ---- Offline order-taking: ERP catalog + field orders ----------------------
+
+/// Sellable ERP product catalog cached for fully-offline order capture.
+/// Maps to Supabase `products`. Separate from `intelligence_products`.
+@DataClassName('CatalogProductRow')
+class CatalogProducts extends Table {
+  TextColumn get id => text()();
+  TextColumn get orgId => text().named('org_id')();
+  TextColumn get name => text()();
+  TextColumn get sku => text().nullable()();
+  RealColumn get sellingPrice =>
+      real().named('selling_price').withDefault(const Constant(0))();
+  TextColumn get baseUomId => text().named('base_uom_id').nullable()();
+  TextColumn get productSubGroup =>
+      text().named('product_sub_group').nullable()();
+  BoolColumn get isActive =>
+      boolean().named('is_active').withDefault(const Constant(true))();
+  DateTimeColumn get updatedAt => dateTime().named('updated_at').nullable()();
+  TextColumn get syncStatus =>
+      text().named('sync_status').withDefault(const Constant('synced'))();
+  @override
+  Set<Column> get primaryKey => {id};
+  @override
+  String get tableName => 'catalog_products';
+}
+
+/// Locally-captured field order (salesperson). Pushes to Supabase `field_orders`.
+@DataClassName('FieldOrderRow')
+class FieldOrders extends Table {
+  TextColumn get id => text()();
+  TextColumn get orgId => text().named('org_id')();
+  TextColumn get customerId => text().named('customer_id')();
+  TextColumn get salespersonId => text().named('salesperson_id')();
+  TextColumn get status => text().withDefault(const Constant('submitted'))();
+  TextColumn get notes => text().nullable()();
+  DateTimeColumn get createdAt => dateTime().named('created_at')();
+  TextColumn get syncStatus =>
+      text().named('sync_status').withDefault(const Constant('pending'))();
+  @override
+  Set<Column> get primaryKey => {id};
+  @override
+  String get tableName => 'field_orders';
+}
+
+/// Line items for a locally-captured field order. Pushes to `field_order_items`.
+@DataClassName('FieldOrderItemRow')
+class FieldOrderItems extends Table {
+  TextColumn get id => text()();
+  TextColumn get fieldOrderId => text().named('field_order_id')();
+  TextColumn get productId => text().named('product_id')();
+  TextColumn get uomId => text().named('uom_id').nullable()();
+  RealColumn get quantity => real().withDefault(const Constant(0))();
+  RealColumn get priceAtSubmit =>
+      real().named('price_at_submit').withDefault(const Constant(0))();
+  TextColumn get syncStatus =>
+      text().named('sync_status').withDefault(const Constant('pending'))();
+  @override
+  Set<Column> get primaryKey => {id};
+  @override
+  String get tableName => 'field_order_items';
 }
 

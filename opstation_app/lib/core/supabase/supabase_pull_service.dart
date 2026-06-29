@@ -34,6 +34,7 @@ class SupabasePullService {
           final data = await _sync.pullOrgData(orgId);
           await _db.transaction(() async {
             await _pullCustomers(data.customers);
+            await _pullCatalogProducts(data.products);
             await _pullRoutes(data.routes);
             await _pullRouteStops(data.routeStops);
             await _pullRouteAssignments(data.routeAssignments);
@@ -71,6 +72,7 @@ class SupabasePullService {
       }
       await _pullUsers(data.users);
       await _pullCustomers(data.customers);
+      await _pullCatalogProducts(data.products);
       await _pullRoutes(data.routes);
       await _pullRouteStops(data.routeStops);
       await _pullRouteAssignments(data.routeAssignments);
@@ -181,6 +183,30 @@ class SupabasePullService {
           // default to sync_status='pending' and queue up for pointless
           // push-back — caused the thousands-of-failed-POSTs storm.
         ));
+      } catch (_) {}
+    }
+  }
+
+  /// Cache the sellable ERP catalog for offline order-taking. Server is
+  /// canonical, so rows land as 'synced' (never queued for push-back).
+  Future<void> _pullCatalogProducts(List<Map<String, dynamic>> rows) async {
+    for (final r in rows) {
+      try {
+        await _db.into(_db.catalogProducts).insertOnConflictUpdate(
+              CatalogProductsCompanion(
+                id: Value(r['id'] as String),
+                orgId: Value(r['org_id'] as String? ?? ''),
+                name: Value(r['name'] as String? ?? ''),
+                sku: Value(r['sku'] as String?),
+                sellingPrice:
+                    Value((r['selling_price'] as num?)?.toDouble() ?? 0),
+                baseUomId: Value(r['base_uom_id'] as String?),
+                productSubGroup: Value(r['product_sub_group'] as String?),
+                isActive: Value(r['is_active'] as bool? ?? true),
+                updatedAt: Value(_parseDateNullable(r['updated_at'])),
+                syncStatus: const Value('synced'),
+              ),
+            );
       } catch (_) {}
     }
   }

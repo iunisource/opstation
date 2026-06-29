@@ -168,6 +168,8 @@ class SyncController extends Notifier<SyncStatus> {
         }
       }
 
+      await _pushPendingFieldOrders();
+
       final routes = orgId == null
           ? await _db.select(_db.salesRoutesTable).get()
           : await (_db.select(_db.salesRoutesTable)..where((r) => r.orgId.equals(orgId))).get();
@@ -345,6 +347,9 @@ class SyncController extends Notifier<SyncStatus> {
       // edits drain automatically on reconnect / timer / kick, not only on the
       // manual sync button.
       await _pushPendingCustomers();
+      if (!_currentlyOnline) return;
+
+      await _pushPendingFieldOrders();
       if (!_currentlyOnline) return;
 
       final pending = await (_db.select(_db.visits)
@@ -537,6 +542,40 @@ class SyncController extends Notifier<SyncStatus> {
         state = state.copyWith(lastSyncedAt: DateTime.now());
       } catch (e, st) {
         print('pushCustomer FAILED for ${c.id}: $e');
+        await Sentry.captureException(e, stackTrace: st);
+      }
+    }
+  }
+
+  /// Push locally-captured field orders (parent first, then its items),
+  /// marking each row synced on success. Mirrors the customer/visit pattern
+  /// so offline-taken orders drain on reconnect / timer / kick.
+  Future<void> _pushPendingFieldOrders() async {
+    final orders = await (_db.select(_db.fieldOrders)
+          ..where((o) => o.syncStatus.equals('pending')))
+        .get();
+    if (orders.isEmpty) return;
+    state = state.copyWith(state: SyncState.syncing);
+    for (final o in orders) {
+      try {
+        await _supabase.pushFieldOrder(o);
+        // Push this order's items (push all its items; they share the parent's
+        // sync lifecycle — mark them synced alongside the parent).
+        final items = await (_db.select(_db.fieldOrderItems)
+              ..where((i) => i.fieldOrderId.equals(o.id)))
+            .get();
+        for (final it in items) {
+          await _supabase.pushFieldOrderItem(it);
+          await (_db.update(_db.fieldOrderItems)
+                ..where((t) => t.id.equals(it.id)))
+              .write(const FieldOrderItemsCompanion(
+                  syncStatus: Value('synced')));
+        }
+        await (_db.update(_db.fieldOrders)..where((t) => t.id.equals(o.id)))
+            .write(const FieldOrdersCompanion(syncStatus: Value('synced')));
+        state = state.copyWith(lastSyncedAt: DateTime.now());
+      } catch (e, st) {
+        print('pushFieldOrder FAILED for ${o.id}: $e');
         await Sentry.captureException(e, stackTrace: st);
       }
     }

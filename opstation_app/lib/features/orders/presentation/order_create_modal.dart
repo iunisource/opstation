@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../../core/sync/sync_controller.dart';
+import '../data/field_order_repository.dart';
 
 /// Salesperson order entry. Opened two ways (both already wired in the app):
 ///  - home FAB:      OrderCreateModal.show(context)                      -> search customer
@@ -67,11 +68,15 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
       builder: (ctx) => _SearchSheet(
         title: 'Select customer', hint: 'Search shop name…',
         onSearch: (q) async {
-          var query = Supabase.instance.client.from('customers')
-              .select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true);
-          if (q.isNotEmpty) query = query.ilike('shop_name', '%$q%');
-          final rows = await query.order('shop_name').limit(30);
-          return List<Map<String, dynamic>>.from(rows);
+          final rows =
+              await ref.read(fieldOrderRepositoryProvider).searchCustomers(q);
+          return rows
+              .map((c) => {
+                    'id': c.id,
+                    'shop_name': c.shopName,
+                    'code': c.code,
+                  })
+              .toList();
         },
         titleOf: (r) => r['shop_name'] as String? ?? '—',
         subtitleOf: (r) => (r['code'] as String?) ?? '',
@@ -89,14 +94,9 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
       builder: (ctx) => _SearchSheet(
         title: 'Select brand', hint: 'Search brand…',
         onSearch: (q) async {
-          var query = Supabase.instance.client.from('products')
-              .select('product_sub_group').eq('org_id', orgId).eq('is_active', true)
-              .not('product_sub_group', 'is', null);
-          if (q.isNotEmpty) query = query.ilike('product_sub_group', '%$q%');
-          final rows = await query.limit(5000);
-          final brands = <String>{for (final r in rows as List) (r['product_sub_group'] as String?) ?? ''}..removeWhere((b) => b.isEmpty);
-          final sorted = brands.toList()..sort();
-          return sorted.map((b) => {'brand': b}).toList();
+          final brands =
+              await ref.read(fieldOrderRepositoryProvider).searchBrands(q);
+          return brands.map((b) => {'brand': b}).toList();
         },
         titleOf: (r) => r['brand'] as String,
         subtitleOf: (_) => '',
@@ -113,12 +113,18 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
       builder: (ctx) => _SearchSheet(
         title: brand, hint: 'Search name or SKU…',
         onSearch: (q) async {
-          var query = Supabase.instance.client.from('products')
-              .select('id, name, sku, selling_price, base_uom_id')
-              .eq('org_id', orgId).eq('is_active', true).eq('product_sub_group', brand);
-          if (q.isNotEmpty) query = query.or('name.ilike.%$q%,sku.ilike.%$q%');
-          final rows = await query.order('name').limit(200);
-          return List<Map<String, dynamic>>.from(rows);
+          final rows = await ref
+              .read(fieldOrderRepositoryProvider)
+              .searchProducts(brand: brand, query: q);
+          return rows
+              .map((p) => {
+                    'id': p.id,
+                    'name': p.name,
+                    'sku': p.sku,
+                    'selling_price': p.sellingPrice,
+                    'base_uom_id': p.baseUomId,
+                  })
+              .toList();
         },
         titleOf: (r) => r['name'] as String? ?? '—',
         subtitleOf: (r) => '${r['sku'] ?? ''}   Rs. ${((r['selling_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
@@ -142,29 +148,30 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
     if (orgId == null || user == null) { _snack('Session error — please sign in again'); return; }
     setState(() => _submitting = true);
     try {
-      final client = Supabase.instance.client;
-      final now = DateTime.now().microsecondsSinceEpoch;
-      final foId = 'fo_$now';
-      await client.from('field_orders').insert({
-        'id': foId, 'org_id': orgId, 'customer_id': _customer!['id'],
-        'salesperson_id': user.id, 'status': 'submitted',
-        'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-      });
-      int i = 0;
-      await client.from('field_order_items').insert(_lines.map((l) => {
-        'id': 'foi_${now}_${i++}', 'field_order_id': foId,
-        'product_id': l['product_id'], 'uom_id': l['uom_id'],
-        'quantity': l['qty'], 'price_at_submit': l['price'],
-      }).toList());
+      await ref.read(fieldOrderRepositoryProvider).createLocal(
+            customerId: _customer!['id'] as String,
+            salespersonId: user.id,
+            notes: _notesCtrl.text.trim().isEmpty
+                ? null
+                : _notesCtrl.text.trim(),
+            lines: _lines
+                .map((l) => OrderLineInput(
+                      productId: l['product_id'] as String,
+                      name: (l['name'] as String?) ?? '',
+                      uomId: l['uom_id'] as String?,
+                      qty: (l['qty'] as num).toDouble(),
+                      price: (l['price'] as num).toDouble(),
+                    ))
+                .toList(),
+          );
+      // Kick the sync: online it pushes within milliseconds; offline it stays
+      // pending and drains on reconnect. The order is saved locally either way.
+      ref.read(syncControllerProvider.notifier).flushPending();
       if (!mounted) return;
       _snack('Order submitted for review');
       Navigator.of(context).pop();
     } catch (e) {
-      final s = e.toString().toLowerCase();
-      final msg = (s.contains('socket') || s.contains('network') || s.contains('connection') || s.contains('failed host'))
-          ? 'No connection — order not submitted. Try again when online.'
-          : 'Could not submit: $e';
-      _snack(msg);
+      _snack('Could not save order: $e');
       setState(() => _submitting = false);
     }
   }
