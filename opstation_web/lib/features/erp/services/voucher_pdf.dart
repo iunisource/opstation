@@ -32,7 +32,6 @@ class VoucherPdf {
     String? createdAt,
     String? footerNote,
     Map<String, String>? relatedRefs, // e.g. {'SO #': 'SO-2026-0001', 'DO #': 'DO-...'}
-    String? watermark, // optional diagonal page watermark, e.g. 'VOIDED'
   }) async {
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
@@ -44,7 +43,6 @@ class VoucherPdf {
       subtotal: subtotal, discountTotal: discountTotal, grandTotal: grandTotal,
       preparedBy: preparedBy, createdAt: createdAt,
       footerNote: footerNote, relatedRefs: relatedRefs,
-      watermark: watermark,
     );
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => doc.save(),
@@ -73,7 +71,6 @@ class VoucherPdf {
     String? createdAt,
     String? footerNote,
     Map<String, String>? relatedRefs,
-    String? watermark, // optional diagonal page watermark, e.g. 'VOIDED'
   }) async {
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
@@ -85,7 +82,6 @@ class VoucherPdf {
       subtotal: subtotal, discountTotal: discountTotal, grandTotal: grandTotal,
       preparedBy: preparedBy, createdAt: createdAt,
       footerNote: footerNote, relatedRefs: relatedRefs,
-      watermark: watermark,
     );
     return doc.save();
   }
@@ -111,52 +107,16 @@ class VoucherPdf {
     String? createdAt,
     String? footerNote,
     Map<String, String>? relatedRefs,
-    String? watermark, // optional diagonal page watermark, e.g. 'VOIDED'
   }) async {
     final doc = pw.Document();
     final showTotals = subtotal != null || discountTotal != null || grandTotal != null;
     final hasMoney = lines.any((l) => l.unitPrice != null || l.lineTotal != null);
-    final isPurchase = voucherTypeLabel.toLowerCase().contains('purchase') || voucherTypeLabel.toLowerCase().contains('grn');
+    final _lbl = voucherTypeLabel.toLowerCase();
+    final isPurchase = _lbl.contains('purchase') || _lbl.contains('grn') || _lbl.contains('goods receipt') || _lbl.contains('receipt note');
 
     doc.addPage(pw.MultiPage(
-      pageTheme: pw.PageTheme(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
-        buildBackground: (watermark == null || watermark.isEmpty)
-            ? null
-            : (ctx) => pw.FullPage(
-                  ignoreMargins: true,
-                  child: pw.Center(
-                    child: pw.Transform.rotate(
-                      angle: 0.6,
-                      child: pw.Opacity(
-                        opacity: 0.12,
-                        child: pw.Column(
-                          mainAxisSize: pw.MainAxisSize.min,
-                          children: [
-                            pw.Text(
-                              watermark,
-                              style: pw.TextStyle(
-                                fontSize: 130,
-                                fontWeight: pw.FontWeight.bold,
-                                color: PdfColors.red,
-                              ),
-                            ),
-                            pw.Text(
-                              'This document is no longer valid',
-                              style: pw.TextStyle(
-                                fontSize: 22,
-                                fontWeight: pw.FontWeight.bold,
-                                color: PdfColors.red,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-      ),
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
       header: (ctx) => ctx.pageNumber == 1
           ? pw.SizedBox.shrink()
           : pw.Padding(

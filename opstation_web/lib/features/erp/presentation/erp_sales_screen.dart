@@ -1,62 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
-import '../services/voucher_pdf.dart';
-import '../services/voucher_meta.dart';
-import '../../../core/widgets/product_picker.dart';
-
-// ─── Shared helpers ──────────────────────────────────────────────────────────
-
-/// Returns null on success OR when there's nothing meaningful to bank (e.g.
-/// legacy numeric-only voucher numbers from before the TYPE-YYYY-NNNN scheme).
-/// Returns a human-readable failure reason only for *actual* DB errors so the
-/// caller can surface it in a snack.
-Future<String?> _bankCancelledVoucherNumber({
-  required String? orgId,
-  required String? branchId,
-  required String voucherNumber,
-}) async {
-  if (orgId == null || orgId.isEmpty) return 'org missing';
-  if (voucherNumber.isEmpty) return null; // nothing to bank
-  final parts = voucherNumber.split('-');
-  if (parts.length != 3) {
-    // Legacy format (e.g. plain "11") — not tracked in voucher_sequences,
-    // nothing to reuse against. Skip silently.
-    // ignore: avoid_print
-    print('[VoucherBank] $voucherNumber is legacy format, skipping');
-    return null;
-  }
-  final year = int.tryParse(parts[1]);
-  final number = int.tryParse(parts[2]);
-  if (year == null || number == null) {
-    // ignore: avoid_print
-    print('[VoucherBank] $voucherNumber not numeric, skipping');
-    return null;
-  }
-  try {
-    await Supabase.instance.client.from('voucher_cancelled_numbers').insert({
-      'id': 'cancel_${DateTime.now().millisecondsSinceEpoch}',
-      'org_id': orgId,
-      'branch_id': branchId,
-      'voucher_type': parts[0],
-      'year': year,
-      'number': number,
-    });
-    // ignore: avoid_print
-    print('[VoucherBank] $voucherNumber banked for reuse');
-    return null;
-  } catch (e) {
-    // ignore: avoid_print
-    print('[VoucherBank] failed to bank $voucherNumber: $e');
-    return e.toString().split('\n').first;
-  }
-}
 
 // ─── Sales Orders (Master-Detail) ────────────────────────────────────────────
 
@@ -74,7 +23,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _uoms = [];
   List<Map<String, dynamic>> _customers = [];
-  VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
@@ -86,9 +34,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   final _addQtyCtrl = TextEditingController(text: '1');
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
-  bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
-  List<String> _doRefs = []; // DO voucher numbers against this SO (for messages)
-  String? _linkedDoId; // most recent active DO id, for the jump-to-DO button
 
   @override
   void initState() { super.initState(); _loadList(); _loadMeta(); }
@@ -107,38 +52,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     final orgId = _orgId; if (orgId == null) return;
     try {
       final client = Supabase.instance.client;
-      final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
+      final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name');
       final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
-      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); });
-      _ensureCustomers();
+      final c = await client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name');
+      setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _customers = List<Map<String,dynamic>>.from(c); });
     } catch (_) {}
-  }
-
-  Future<void>? _customersFuture;
-  // Returns immediately if loaded; otherwise awaits the single in-flight load so
-  // opening the picker early waits for customers instead of showing an empty list.
-  Future<void> _ensureCustomers() {
-    if (_customers.isNotEmpty) return Future.value();
-    return _customersFuture ??= _loadCustomersNow();
-  }
-  Future<void> _loadCustomersNow() async {
-    final orgId = _orgId; if (orgId == null) return;
-    try {
-      final client = Supabase.instance.client;
-      final List<Map<String, dynamic>> c = [];
-      const pageSize = 1000;
-      var offset = 0;
-      while (true) {
-        final page = await client.from('customers').select('id, shop_name, code')
-            .eq('org_id', orgId).eq('is_active', true).order('shop_name')
-            .range(offset, offset + pageSize - 1);
-        c.addAll(List<Map<String, dynamic>>.from(page));
-        if (page.length < pageSize) break;
-        offset += pageSize;
-      }
-      if (mounted) setState(() { _customers = c; });
-    } catch (_) {}
-    _customersFuture = null;
   }
 
   Future<void> _loadList() async {
@@ -156,36 +74,13 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
       final client = Supabase.instance.client;
-      final order = await client.from('sales_orders').select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', id).single();
+      final order = await client.from('sales_orders').select('*, customers(shop_name, code), branches(name)').eq('id', id).single();
       final items = await client.from('sales_order_items').select('*, products(name, sku), uoms(name, abbreviation)').eq('sales_order_id', id);
       _qtyControllers.clear();
       for (final item in items as List) {
         _qtyControllers[item['id'] as String] = TextEditingController(text: (item['quantity'] as num?)?.toStringAsFixed(0) ?? '1');
       }
-      final meta = await VoucherMeta.fetch(
-        orgId: _orgId ?? '',
-        customerId: order['customer_id'] as String?,
-        createdById: order['created_by'] as String?,
-      );
-      bool hasDo = false;
-      List<String> doRefs = [];
-      String? linkedDoId;
-      try {
-        final d = await client.from('delivery_orders').select('id, voucher_number, is_voided, created_at').eq('so_id', id).order('created_at', ascending: false);
-        final active = (d as List).where((x) => x['is_voided'] != true).toList();
-        doRefs = [for (final x in active) (x['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
-        hasDo = active.isNotEmpty;
-        if (active.isNotEmpty) linkedDoId = active.first['id'] as String?;
-      } catch (_) {}
-      setState(() {
-        _detail = Map<String,dynamic>.from(order);
-        _items = List<Map<String,dynamic>>.from(items);
-        _meta = meta;
-        _hasDo = hasDo;
-        _doRefs = doRefs;
-        _linkedDoId = linkedDoId;
-        _detailLoading = false;
-      });
+      setState(() { _detail = Map<String,dynamic>.from(order); _items = List<Map<String,dynamic>>.from(items); _detailLoading = false; });
     } catch (_) { setState(() => _detailLoading = false); }
   }
 
@@ -197,96 +92,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   bool get _isDraft => (_detail['status'] as String? ?? 'draft') == 'draft';
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _canEdit => _isDraft && !_isLocked;
-  // Line items can be added/edited/deleted as long as no Delivery Order exists
-  // against this SO (standalone) — even on a confirmed/locked SO, and even for
-  // admins once a DO exists they are cascade-locked. Header fields stay on
-  // _canEdit (draft only). Whole-SO delete has the same DO guard.
-  bool get _canEditLines => !_hasDo && !_isLocked;
-  // Human-readable DO reference(s) for cascade-lock messages.
-  String get _doMsg => _doRefs.isEmpty
-      ? 'a Delivery Order exists against this SO. Delete it first.'
-      : 'Delivery Order ${_doRefs.join(', ')} exists against this SO. Delete it first.';
-  bool get _canDelete {
-    if (_isLocked) return false; // locked/delivered SOs cannot be deleted
-    final role = ref.read(currentUserProvider)?.role;
-    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
-  }
-
-  Future<void> _deleteSO() async {
-    // Cascade check: no DO should exist for this SO
-    try {
-      final dos = await Supabase.instance.client.from('delivery_orders').select('id, voucher_number, is_voided').eq('so_id', _detail['id']);
-      final active = (dos as List).where((d) => d['is_voided'] != true).toList();
-      if (active.isNotEmpty) {
-        final refs = [for (final d in active) (d['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
-        _showSnack(refs.isEmpty
-            ? 'Cannot delete: ${active.length} Delivery Order(s) exist. Delete them first.'
-            : 'Cannot delete: Delivery Order ${refs.join(', ')} exists. Delete it first.');
-        return;
-      }
-    } catch (e) { _showSnack('Failed to check: $e'); return; }
-
-    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Sales Order?'),
-      content: Text('Permanently delete ${_detail['voucher_number']}? This cannot be undone.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete')),
-      ],
-    ));
-    if (confirm != true) return;
-
-    try {
-      // Bank voucher number for reuse — surface any failure so it's visible.
-      final vNum = _detail['voucher_number'] as String? ?? '';
-      final bankErr = await _bankCancelledVoucherNumber(
-        orgId: _orgId,
-        branchId: _detail['branch_id'] as String?,
-        voucherNumber: vNum,
-      );
-      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
-      await _logAudit(_detail['id'] as String, 'SO', 'deleted', 'Voucher $vNum deleted by admin');
-      await Supabase.instance.client.from('sales_order_items').delete().eq('sales_order_id', _detail['id']);
-      await Supabase.instance.client.from('sales_orders').delete().eq('id', _detail['id']);
-      _showSnack('Deleted');
-      setState(() { _selectedId = null; _detail = {}; _items = []; });
-      await _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
-  }
-
-  Future<void> _printSO() async {
-    final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) => VoucherLine(
-      product: it['products']?['name'] as String? ?? '-',
-      sku: it['products']?['sku'] as String?,
-      uom: it['uoms']?['abbreviation'] as String?,
-      qty: (it['quantity'] as num?)?.toDouble() ?? 0,
-    )).toList();
-    final date = _detail['voucher_date'] != null
-        ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
-    final cust = _detail['customers'] as Map?;
-    final createdAt = _detail['created_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
-    await VoucherPdf.printVoucher(
-      voucherNumber: _detail['voucher_number'] as String? ?? '-',
-      voucherTypeLabel: 'Sales Order',
-      orgName: user?.orgName ?? 'Opstation',
-      branchName: _detail['branches']?['name'] as String?,
-      date: date,
-      customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
-      customerAddress: cust?['address'] as String?,
-      customerContact: cust?['contact_person'] as String?,
-      customerPhone: cust?['phone'] as String?,
-      salespersonName: _meta.salespersonName,
-      status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
-      remarks: _detail['remarks'] as String?,
-      lines: lines,
-      preparedBy: _meta.preparedBy,
-      createdAt: createdAt,
-      footerNote: _meta.footerNote,
-    );
-  }
 
   Future<void> _logAudit(String voucherId, String type, String action, String? details) async {
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
@@ -304,7 +109,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     final year = DateTime.now().year;
     try {
-      final voucherNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SO', 'p_year': year});
+      final voucherNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_type': 'SO', 'p_year': year});
       final id = 'so_${DateTime.now().millisecondsSinceEpoch}';
       await Supabase.instance.client.from('sales_orders').insert({
         'id': id, 'org_id': orgId, 'branch_id': branchId,
@@ -334,48 +139,25 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   }
 
   Future<void> _addItem() async {
-    if (!_canEditLines) { _showSnack('Cannot add: $_doMsg'); return; }
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _showSnack('Enter valid qty'); return; }
-    if (_items.any((i) => i['product_id'] == _addProductId)) {
-      _showSnack('Product already added — edit its quantity instead');
-      return;
-    }
-    final itemId = 'soi_${DateTime.now().millisecondsSinceEpoch}';
-    final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
-    final uom = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
     try {
       await Supabase.instance.client.from('sales_order_items').insert({
-        'id': itemId,
+        'id': 'soi_${DateTime.now().millisecondsSinceEpoch}',
         'sales_order_id': _detail['id'],
         'product_id': _addProductId, 'uom_id': _addUomId,
         'quantity': qty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
       });
-      _qtyControllers[itemId] = TextEditingController(text: qty.toStringAsFixed(0));
-      setState(() {
-        _items.add({
-          'id': itemId,
-          'sales_order_id': _detail['id'],
-          'product_id': _addProductId,
-          'uom_id': _addUomId,
-          'quantity': qty,
-          'products': {'name': prod['name'], 'sku': prod['sku']},
-          'uoms': {'name': uom['name'], 'abbreviation': uom['abbreviation']},
-        });
-        _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
-      });
+      setState(() { _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; });
+      _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void> _deleteItem(String itemId) async {
-    if (!_canEditLines) { _showSnack('Cannot remove: $_doMsg'); return; }
     try {
       await Supabase.instance.client.from('sales_order_items').delete().eq('id', itemId);
-      setState(() {
-        _items.removeWhere((i) => i['id'] == itemId);
-        _qtyControllers.remove(itemId)?.dispose();
-      });
+      _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -387,7 +169,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'SO', 'confirmed', '${_items.length} items confirmed');
       _showSnack('Order confirmed');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -403,7 +184,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'SO', newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -420,16 +200,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     ));
     if (confirm != true) return;
     try {
-      // Bank the cancelled voucher number for reuse — surface failures.
-      final vNum = _detail['voucher_number'] as String? ?? '';
-      final bankErr = await _bankCancelledVoucherNumber(
-        orgId: _orgId,
-        branchId: _detail['branch_id'] as String?,
-        voucherNumber: vNum,
-      );
-      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
       await Supabase.instance.client.from('sales_orders').update({'status': 'cancelled'}).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'SO', 'cancelled', 'Voucher number $vNum freed for reuse');
       _showSnack('Cancelled');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -459,12 +230,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
-      if (prev?['id'] != next?['id']) {
-        setState(() { _selectedId = null; _detail = {}; _items = []; _listLoading = true; });
-        _loadList();
-      }
-    });
     return CollapsibleListPane(
         listChild: Column(children: [
             Padding(
@@ -590,23 +355,6 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               tooltip: isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
             ),
-          if (_linkedDoId != null)
-            IconButton(
-              icon: const Icon(Icons.local_shipping_outlined, color: AppTheme.primary),
-              tooltip: 'Go to Delivery Order',
-              onPressed: () => context.go('/erp/delivery-orders?focus=$_linkedDoId'),
-            ),
-          IconButton(
-            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
-            tooltip: 'Print / PDF',
-            onPressed: _printSO,
-          ),
-          if (_canDelete)
-            IconButton(
-              icon: const Icon(Icons.delete_outline, color: AppTheme.danger),
-              tooltip: 'Delete',
-              onPressed: _deleteSO,
-            ),
         ]),
       ),
 
@@ -630,19 +378,21 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 const SizedBox(height: 12),
                 Row(children: [
                   Expanded(flex: 2, child: _canEdit
-                      ? _CustomerSelect(
-                          customers: _customers,
-                          selectedId: custId,
-                          ensureLoaded: _ensureCustomers,
-                          liveCustomers: () => _customers,
+                      ? DropdownButtonFormField<String>(
+                          value: custId,
+                          decoration: const InputDecoration(labelText: 'Customer', isDense: true),
+                          hint: const Text('Walk-in'),
+                          items: [
+                            const DropdownMenuItem(value: null, child: Text('Walk-in')),
+                            ..._customers.map((c) => DropdownMenuItem(value: c['id'] as String,
+                                child: Text('${c['shop_name']} (${c['code']})'))),
+                          ],
                           onChanged: (v) async {
                             setState(() => _detail['customer_id'] = v);
                             try {
                               await Supabase.instance.client.from('sales_orders').update({
                                 'customer_id': v, 'updated_at': DateTime.now().toUtc().toIso8601String(),
                               }).eq('id', _detail['id']);
-                              await _logAudit(_detail['id'] as String, 'SO', 'customer_changed',
-                                  'Customer set to ${_customers.firstWhere((c) => c['id'] == v, orElse: () => {'shop_name': 'Walk-in'})['shop_name']}');
                             } catch (_) {}
                           },
                         )
@@ -677,7 +427,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                     const Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     const Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     const Expanded(flex: 2, child: Text('Qty Ordered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    SizedBox(width: _canEditLines ? 40 : 0),
+                    SizedBox(width: _canEdit ? 40 : 0),
                   ]),
                 ),
                 const Divider(height: 1),
@@ -694,7 +444,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                             Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                         ])),
                         Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-                        Expanded(flex: 2, child: _canEditLines
+                        Expanded(flex: 2, child: _canEdit
                             ? SizedBox(height: 32, child: TextField(
                                 controller: _qtyControllers[item['id'] as String],
                                 decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
@@ -706,7 +456,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                 },
                               ))
                             : Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), style: const TextStyle(fontWeight: FontWeight.w600))),
-                        if (_canEditLines) SizedBox(width: 40, child: IconButton(
+                        if (_canEdit) SizedBox(width: 40, child: IconButton(
                           icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
                           onPressed: () => _deleteItem(item['id'] as String),
                         )),
@@ -716,30 +466,23 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                   ]);
                 }),
                 // Add row
-                if (_canEditLines) Padding(
+                if (_canEdit) Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(children: [
-                    Expanded(flex: 4, child: Builder(builder: (ctx) {
-                      final sel = _addProductId == null ? null : _products.firstWhere((x) => x['id'] == _addProductId, orElse: () => <String, dynamic>{});
-                      final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
-                      return InkWell(
-                        onTap: () async {
-                          final p = await pickProduct(ctx, _products, title: 'Select product');
-                          if (p != null && p.isNotEmpty) setState(() {
-                            _addProductId = p['id'] as String?;
-                            _addUomId = p['base_uom_id'] as String?;
-                          });
-                        },
-                        child: InputDecorator(
-                          decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder()),
-                          child: Row(children: [
-                            Expanded(child: Text(name ?? '+ Add product', maxLines: 1, overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 13, color: name == null ? AppTheme.primary : Colors.black87))),
-                            const Icon(Icons.arrow_drop_down, size: 20, color: AppTheme.textSecondary),
-                          ]),
-                        ),
-                      );
-                    })),
+                    Expanded(flex: 4, child: DropdownButtonFormField<String>(
+                      value: _addProductId,
+                      decoration: const InputDecoration(hintText: 'Select product', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
+                      hint: const Text('+ Add product', style: TextStyle(color: AppTheme.primary, fontSize: 13)),
+                      items: _products.map((p) => DropdownMenuItem(value: p['id'] as String,
+                          child: Text('${p['name']}${p['sku'] != null ? ' (${p['sku']})' : ''}', style: const TextStyle(fontSize: 13)))).toList(),
+                      onChanged: (v) {
+                        setState(() {
+                          _addProductId = v;
+                          final prod = _products.firstWhere((p) => p['id'] == v, orElse: () => {});
+                          _addUomId = prod['base_uom_id'] as String?;
+                        });
+                      },
+                    )),
                     const SizedBox(width: 8),
                     Expanded(flex: 1, child: DropdownButtonFormField<String>(
                       value: _addUomId,
@@ -767,19 +510,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             ),
 
             const SizedBox(height: 16),
-            _VoucherInfoStrip(
-              salesperson: _meta.salespersonName,
-              salespersonDiagnostic: _meta.diagnostic,
-              customerAddress: _detail['customers']?['address'] as String?,
-              customerContact: _detail['customers']?['contact_person'] as String?,
-              customerPhone: _detail['customers']?['phone'] as String?,
-              preparedBy: _meta.preparedBy,
-              createdAt: _detail['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
-                  : null,
-            ),
-            const SizedBox(height: 16),
-            _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'SO'),
+            _AuditTrailRow(createdBy: _detail['created_by'] as String?, createdAt: _detail['created_at'] as String?),
           ]),
         ),
       ),
@@ -790,8 +521,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 // ─── Delivery Orders (Master-Detail) ─────────────────────────────────────────
 
 class ErpDeliveryOrdersScreen extends ConsumerStatefulWidget {
-  const ErpDeliveryOrdersScreen({super.key, this.focusId});
-  final String? focusId;
+  const ErpDeliveryOrdersScreen({super.key});
   @override
   ConsumerState<ErpDeliveryOrdersScreen> createState() => _ErpDeliveryOrdersScreenState();
 }
@@ -801,28 +531,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   Map<String, dynamic> _linkedSo = {};
-  Map<String, double> _stockByProduct = {};
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _soItems = [];
-  VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
   String _statusFilter = 'all';
   // inline delivery qty
   final Map<String, TextEditingController> _deliverQtyCtrl = {};
-  // collect-amount at DO approval (default off = non-collection delivery)
-  bool _collectEnabled = false;
-  num? _collectAmount;
-  String? _linkedSiId; // most recent live SI id, for the jump-to-SI button
-  bool _deliveryFlow = true; // org.delivery_flow_enabled (default on)
 
   @override
-  void initState() {
-    super.initState();
-    _loadList();
-    if (widget.focusId != null) _loadDetail(widget.focusId!);
-  }
+  void initState() { super.initState(); _loadList(); }
 
   @override
   void dispose() {
@@ -857,25 +576,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           .select('*, products(name, sku), uoms(abbreviation)').eq('sales_order_id', do_['so_id'] as String);
       // Load SO details
       final so = await client.from('sales_orders')
-          .select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', do_['so_id'] as String).single();
-
-      // Fetch current branch stock for all SO products
-      final productIds = (soItems as List).map((i) => i['product_id'] as String).toSet().toList();
-      final stockMap = <String, double>{};
-      if (productIds.isNotEmpty) {
-        final stocks = await client.from('inventory_stock')
-            .select('product_id, quantity')
-            .eq('branch_id', do_['branch_id'] as String)
-            .inFilter('product_id', productIds.cast<Object>());
-        for (final s in stocks as List) {
-          stockMap[s['product_id'] as String] = (s['quantity'] as num?)?.toDouble() ?? 0;
-        }
-      }
+          .select('*, customers(shop_name, code), branches(name)').eq('id', do_['so_id'] as String).single();
 
       // Build delivery qty controllers for available SO items
       final existingSoItemIds = (items as List).map((i) => i['so_item_id'] as String).toSet();
       _deliverQtyCtrl.clear();
-      for (final soItem in soItems) {
+      for (final soItem in soItems as List) {
         final ordered = (soItem['quantity'] as num?)?.toDouble() ?? 0;
         final delivered = (soItem['qty_delivered'] as num?)?.toDouble() ?? 0;
         final pending = ordered - delivered;
@@ -884,39 +590,13 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         }
       }
 
-      final meta = await VoucherMeta.fetch(
-        orgId: _orgId ?? '',
-        customerId: so['customer_id'] as String?,
-        createdById: do_['created_by'] as String?,
-      );
-
-      String? linkedSiId;
-      try {
-        final sis = await client.from('sales_invoices')
-            .select('id, is_voided, created_at').eq('do_id', id).order('created_at', ascending: false);
-        final live = (sis as List).where((s) => s['is_voided'] != true).toList();
-        if (live.isNotEmpty) linkedSiId = live.first['id'] as String?;
-      } catch (_) {}
-
       setState(() {
         _detail = Map<String,dynamic>.from(do_);
         _items = List<Map<String,dynamic>>.from(items);
         _soItems = List<Map<String,dynamic>>.from(soItems);
         _linkedSo = Map<String,dynamic>.from(so);
-        _stockByProduct = stockMap;
-        _meta = meta;
-        _collectAmount = (do_['collect_amount'] as num?);
-        _collectEnabled = _collectAmount != null;
-        _linkedSiId = linkedSiId;
         _detailLoading = false;
       });
-      // Read the delivery-flow org setting (default ON if unset).
-      try {
-        final cfg = await client.from('app_config').select('value')
-            .eq('org_id', _orgId ?? '')
-            .eq('key', 'org.delivery_flow_enabled').maybeSingle();
-        if (mounted) setState(() => _deliveryFlow = (cfg?['value'] as String?) != 'false');
-      } catch (_) {}
     } catch (_) { setState(() => _detailLoading = false); }
   }
 
@@ -927,421 +607,51 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isSaved => (_detail['status'] as String? ?? 'saved') == 'saved';
-  bool get _canDelete {
-    final role = ref.read(currentUserProvider)?.role;
-    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
-  }
-
-  Future<void> _deleteDO() async {
-    // Cascade check: a non-voided SI for this DO blocks deletion
-    try {
-      final sis = await Supabase.instance.client.from('sales_invoices').select('id, voucher_number, is_voided').eq('do_id', _detail['id']);
-      final active = (sis as List).where((s) => s['is_voided'] != true).toList();
-      if (active.isNotEmpty) {
-        _showSnack('Cannot void: Sales Invoice ${active.first['voucher_number']} exists. Void it first.');
-        return;
-      }
-    } catch (e) { _showSnack('Failed to check: $e'); return; }
-
-    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Void Delivery Order?'),
-      content: Text('Void ${_detail['voucher_number']}? Stock will be added back and the delivery\'s accounting reversed. An audit trail is kept; this cannot be undone.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Keep')),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void')),
-      ],
-    ));
-    if (confirm != true) return;
-
-    final orgId = _orgId;
-    final branchId = _detail['branch_id'] as String;
-    final userId = ref.read(currentUserProvider)?.id;
-
-    try {
-      // Void the DO -> DB trigger reverses the transit GL (Cr 1320 / Dr 1330)
-      // and restores the consumed cost layers. Operational restores follow.
-      await Supabase.instance.client.from('delivery_orders').update({
-        'is_voided': true,
-        'voided_at': DateTime.now().toUtc().toIso8601String(),
-        'voided_by': userId,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-
-      // Restore legacy on-hand + SO qty_delivered for each line
-      for (final item in _items) {
-        final pid = item['product_id'] as String;
-        final delivered = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-        if (delivered <= 0) continue;
-
-        // Add stock back
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock != null) {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((stock['quantity'] as num).toDouble()) + delivered,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
-        }
-
-        // Inventory movement reversal — recorded as a positive 'adjustment'
-        // since 'sale_reversal' isn't in the movement_type CHECK constraint.
-        // The semantic context lives on reference_type below.
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': item['uom_id'],
-          'quantity': delivered, 'movement_type': 'adjustment',
-          'reference_id': _detail['id'], 'reference_type': 'delivery_order_voided',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-
-        // Restore SO item qty_delivered
-        final soItemId = item['so_item_id'] as String?;
-        if (soItemId != null) {
-          final soItem = await Supabase.instance.client.from('sales_order_items')
-              .select('qty_delivered').eq('id', soItemId).single();
-          await Supabase.instance.client.from('sales_order_items').update({
-            'qty_delivered': ((soItem['qty_delivered'] as num?)?.toDouble() ?? 0) - delivered,
-          }).eq('id', soItemId);
-        }
-      }
-
-      // Re-evaluate SO status
-      final soId = _detail['so_id'] as String?;
-      if (soId != null) {
-        final soItemsRecheck = await Supabase.instance.client.from('sales_order_items')
-            .select('quantity, qty_delivered').eq('sales_order_id', soId);
-        bool allDel = true; bool anyDel = false;
-        for (final si in soItemsRecheck as List) {
-          if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) > 0) anyDel = true;
-          if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) < ((si['quantity'] as num?)?.toDouble() ?? 0)) allDel = false;
-        }
-        await Supabase.instance.client.from('sales_orders').update({
-          'status': allDel ? 'delivered' : (anyDel ? 'partially_delivered' : 'confirmed'),
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', soId);
-      }
-
-      // Bank voucher number — surface failures.
-      final vNum = _detail['voucher_number'] as String? ?? '';
-      final bankErr = await _bankCancelledVoucherNumber(
-        orgId: orgId,
-        branchId: branchId,
-        voucherNumber: vNum,
-      );
-      if (bankErr != null) _showSnack('Bank # failed: $bankErr');
-
-      await _logAudit(_detail['id'] as String, 'DO', 'voided', 'Voucher $vNum voided -- GL & stock reversed');
-      _showSnack('Voided — stock and accounting reversed');
-      await _loadList();
-      await _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Could not void: $e'); }
-  }
-
-  Future<void> _markDelivered() async {
-    final confirm = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
-      title: const Text('Mark as Delivered?'),
-      content: Text('Mark ${_detail['voucher_number']} as delivered (self-pickup or '
-          'manual fulfillment — no driver needed)?'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Mark Delivered')),
-      ],
-    ));
-    if (confirm != true) return;
-    try {
-      await Supabase.instance.client.from('delivery_orders').update({
-        'delivered_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _loadDetail(_detail['id'] as String);
-      if (mounted) _showSnack('Marked delivered');
-    } catch (e) {
-      if (mounted) _showSnack('Could not mark delivered: $e');
-    }
-  }
-
-  Future<void> _printDO() async {
-    final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) => VoucherLine(
-      product: it['products']?['name'] as String? ?? '-',
-      sku: it['products']?['sku'] as String?,
-      uom: it['uoms']?['abbreviation'] as String?,
-      qty: (it['qty_delivered'] as num?)?.toDouble() ?? 0,
-    )).toList();
-    final date = _detail['voucher_date'] != null
-        ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
-    final cust = _linkedSo['customers'] as Map?;
-    final createdAt = _detail['created_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
-    final soVoucher = _linkedSo['voucher_number'] as String?;
-    final pdfRefs = <String, String>{
-      if (soVoucher != null) 'SO #': soVoucher,
-      if ((_detail['collect_amount'] as num?) != null)
-        'Collect': 'Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
-    };
-    await VoucherPdf.printVoucher(
-      voucherNumber: _detail['voucher_number'] as String? ?? '-',
-      voucherTypeLabel: 'Delivery Order',
-      orgName: user?.orgName ?? 'Opstation',
-      branchName: _detail['branches']?['name'] as String?,
-      date: date,
-      customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
-      customerAddress: cust?['address'] as String?,
-      customerContact: cust?['contact_person'] as String?,
-      customerPhone: cust?['phone'] as String?,
-      salespersonName: _meta.salespersonName,
-      status: (_detail['status'] as String? ?? '').replaceAll('_', ' '),
-      lines: lines,
-      preparedBy: _meta.preparedBy,
-      createdAt: createdAt,
-      footerNote: _meta.footerNote,
-      relatedRefs: pdfRefs.isEmpty ? null : pdfRefs,
-      watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
-    );
-  }
-
-  /// Returns true to proceed with DO creation, false if the user cancels at the
-  /// credit-limit / overdue-aging alert. Reuses the Customer Aging RPCs so the
-  /// figures match the Customer Aging screen exactly. Controlled by the
-  /// org-level toggles in Admin Settings (app_config).
-  Future<bool> _passesCreditAndAgingCheck(
-      BuildContext dctx, String orgId, String? customerId, String customerName) async {
-    if (customerId == null) return true; // walk-in / no customer
-    final client = Supabase.instance.client;
-
-    // 1) Read the org toggles.
-    bool creditOn = false, agingOn = false;
-    int agingDays = 0;
-    try {
-      final cfg = await client
-          .from('app_config')
-          .select('key, value')
-          .eq('org_id', orgId);
-      final map = {
-        for (final r in cfg as List)
-          r['key'] as String: (r['value'] as String? ?? '')
-      };
-      creditOn = map['org.credit_limit_alert'] == 'true';
-      agingOn = map['org.aging_alert'] == 'true';
-      agingDays = int.tryParse(map['org.aging_alert_days'] ?? '') ?? 0;
-    } catch (_) {}
-    if (!creditOn && !agingOn) return true;
-
-    final fmt = NumberFormat('#,##0');
-    final asOf = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final params = {'p_org_id': orgId, 'p_as_of': asOf};
-    final issues = <_CreditIssue>[];
-
-    // 2) Credit limit: outstanding (GL-true 1210 balance) vs customers.credit_limit.
-    if (creditOn) {
-      double creditLimit = 0;
-      try {
-        final c = await client
-            .from('customers')
-            .select('credit_limit')
-            .eq('id', customerId)
-            .maybeSingle();
-        creditLimit = (c?['credit_limit'] as num?)?.toDouble() ?? 0;
-      } catch (_) {}
-      if (creditLimit > 0) {
-        double balance = 0;
-        try {
-          final agg = await client.rpc('rpc_customer_aging', params: params) as List;
-          for (final a in agg) {
-            if ((a as Map)['customer_id'] == customerId) {
-              balance = (a['total'] as num?)?.toDouble() ?? 0;
-              break;
-            }
-          }
-        } catch (_) {}
-        if (balance > creditLimit) {
-          issues.add(_CreditIssue(
-            'Credit limit exceeded',
-            'Limit ${fmt.format(creditLimit)}  •  Outstanding ${fmt.format(balance)}  •  '
-                'Over by ${fmt.format(balance - creditLimit)}',
-          ));
-        }
-      }
-    }
-
-    // 3) Aging: any open invoice aged at/beyond the threshold.
-    if (agingOn && agingDays > 0) {
-      double agedAmt = 0;
-      int agedCount = 0, oldest = 0;
-      try {
-        final det = await client.rpc('rpc_customer_aging_detail', params: params) as List;
-        for (final d in det) {
-          final m = d as Map;
-          if (m['customer_id'] != customerId) continue;
-          final age = (m['age_days'] as num?)?.toInt() ?? 0;
-          final amt = (m['open_amt'] as num?)?.toDouble() ?? 0;
-          if (age >= agingDays && amt > 0) {
-            agedAmt += amt;
-            agedCount++;
-            if (age > oldest) oldest = age;
-          }
-        }
-      } catch (_) {}
-      if (agedCount > 0) {
-        issues.add(_CreditIssue(
-          'Overdue aging',
-          '$agedCount invoice(s) totaling ${fmt.format(agedAmt)} aged $agingDays+ days  •  '
-              'oldest $oldest days',
-        ));
-      }
-    }
-
-    if (issues.isEmpty) return true;
-    if (!dctx.mounted) return false;
-
-    // 4) Overridable alert.
-    final proceed = await showDialog<bool>(
-      context: dctx,
-      barrierDismissible: false,
-      builder: (adCtx) => AlertDialog(
-        title: Row(children: const [
-          Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
-          SizedBox(width: 10),
-          Text('Credit / Aging Alert'),
-        ]),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(customerName,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-            const SizedBox(height: 12),
-            for (final iss in issues) ...[
-              Text(iss.title,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                      color: AppTheme.danger)),
-              const SizedBox(height: 2),
-              Text(iss.detail,
-                  style: const TextStyle(
-                      fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
-              const SizedBox(height: 12),
-            ],
-            const Text('Create this Delivery Order anyway?',
-                style: TextStyle(fontSize: 12.5)),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(adCtx, rootNavigator: true).pop(false),
-              child: const Text('Cancel')),
-          ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-              onPressed: () => Navigator.of(adCtx, rootNavigator: true).pop(true),
-              child: const Text('Proceed anyway')),
-        ],
-      ),
-    );
-    return proceed ?? false;
-  }
 
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     // Load confirmed SOs
     final sos = await Supabase.instance.client.from('sales_orders')
-        .select('id, voucher_number, customer_id, customers(shop_name)').eq('org_id', orgId)
+        .select('id, voucher_number, customers(shop_name)').eq('org_id', orgId)
         .eq('branch_id', branchId).inFilter('status', ['confirmed', 'partially_delivered']);
     if (!mounted) return;
     if ((sos as List).isEmpty) { _showSnack('No confirmed Sales Orders available'); return; }
     String? soId;
-    String soSearch = '';
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) {
-          final filteredSos = (sos as List).where((s) {
-            if (soSearch.isEmpty) return true;
-            final q = soSearch.toLowerCase();
-            return (s['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-                (s['customers']?['shop_name'] as String? ?? '').toLowerCase().contains(q);
-          }).toList();
-          return AlertDialog(
-            title: const Text('New Delivery Order'),
-            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-            content: SizedBox(
-              width: 520,
-              height: 420,
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Sales Order *', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                TextField(
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    hintText: 'Search by SO number or customer...',
-                    prefixIcon: Icon(Icons.search, size: 18),
-                    isDense: true,
-                  ),
-                  onChanged: (v) => setS(() => soSearch = v),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: filteredSos.isEmpty
-                      ? const Center(child: Text('No matching Sales Orders', style: TextStyle(color: AppTheme.textSecondary)))
-                      : ListView.separated(
-                          itemCount: filteredSos.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (_, i) {
-                            final s = filteredSos[i];
-                            final selected = s['id'] == soId;
-                            return InkWell(
-                              onTap: () => setS(() => soId = s['id'] as String),
-                              child: Container(
-                                color: selected ? AppTheme.primary.withOpacity(0.08) : null,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                child: Row(children: [
-                                  Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                                      size: 16, color: selected ? AppTheme.primary : AppTheme.textSecondary),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                      Text(s['voucher_number'] as String? ?? '-',
-                                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: selected ? AppTheme.primary : Colors.black87)),
-                                      Text(s['customers']?['shop_name'] as String? ?? 'Walk-in',
-                                          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
-                                    ]),
-                                  ),
-                                ]),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ]),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
-              ElevatedButton(
-                onPressed: soId == null ? null : () async {
-                  final year = DateTime.now().year;
-                  try {
-                    final so = sos.firstWhere((s) => s['id'] == soId);
-                    final custName = (so['customers']?['shop_name'] as String?) ?? 'this customer';
-                    final ok = await _passesCreditAndAgingCheck(
-                        ctx, orgId, so['customer_id'] as String?, custName);
-                    if (!ok) return; // user cancelled at the credit/aging alert
-                    if (!ctx.mounted) return;
-                    final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
-                        params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'DO', 'p_year': year});
-                    final id = 'do_${DateTime.now().millisecondsSinceEpoch}';
-                    await Supabase.instance.client.from('delivery_orders').insert({
-                      'id': id, 'org_id': orgId, 'branch_id': branchId,
-                      'voucher_number': voucherNum,
-                      'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-                      'so_id': soId, 'customer_id': so['customer_id'],
-                      'remarks': so['remarks'],
-                      'status': 'saved', 'is_locked': false,
-                      'created_by': ref.read(currentUserProvider)?.id,
-                    });
-                    if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
-                    await _loadList();
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('New Delivery Order'),
+          content: SizedBox(width: 400, child: DropdownButtonFormField<String>(
+            value: soId,
+            decoration: const InputDecoration(labelText: 'Sales Order *'),
+            hint: const Text('Select SO'),
+            items: sos.map((s) => DropdownMenuItem(value: s['id'] as String,
+                child: Text('${s['voucher_number']} — ${s['customers']?['shop_name'] ?? 'Walk-in'}'))).toList(),
+            onChanged: (v) => setS(() => soId = v),
+          )),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                if (soId == null) return;
+                final year = DateTime.now().year;
+                try {
+                  final so = sos.firstWhere((s) => s['id'] == soId);
+                  final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
+                      params: {'p_org_id': orgId, 'p_type': 'DO', 'p_year': year});
+                  final id = 'do_${DateTime.now().millisecondsSinceEpoch}';
+                  await Supabase.instance.client.from('delivery_orders').insert({
+                    'id': id, 'org_id': orgId, 'branch_id': branchId,
+                    'voucher_number': voucherNum,
+                    'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+                    'so_id': soId, 'customer_id': _linkedSo['customer_id'],
+                    'status': 'saved', 'is_locked': false,
+                    'created_by': ref.read(currentUserProvider)?.id,
+                  });
+                  if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+                  await _loadList();
                   _loadDetail(id);
                 } catch (e) {
                   if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -1350,8 +660,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               child: const Text('Create'),
             ),
           ],
-        );
-        },
+        ),
       ),
     );
   }
@@ -1367,65 +676,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     } catch (_) {}
   }
 
-  Widget _collectToggle() {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      const Text('Collect', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-      Switch(
-        value: _collectEnabled,
-        onChanged: (v) async {
-          if (v) {
-            final amt = await _promptCollectAmount();
-            if (amt != null && amt > 0) {
-              setState(() { _collectEnabled = true; _collectAmount = amt; });
-            }
-          } else {
-            setState(() { _collectEnabled = false; _collectAmount = null; });
-          }
-        },
-      ),
-      if (_collectEnabled && _collectAmount != null)
-        InkWell(
-          onTap: () async {
-            final amt = await _promptCollectAmount();
-            if (amt != null && amt > 0) setState(() => _collectAmount = amt);
-          },
-          child: Text('Rs. ${_collectAmount!.toStringAsFixed(0)}',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-        ),
-    ]);
-  }
-
-  Future<num?> _promptCollectAmount() async {
-    final ctrl = TextEditingController(text: _collectAmount?.toStringAsFixed(0) ?? '');
-    return showDialog<num>(context: context, builder: (ctx) => AlertDialog(
-      title: const Text('Amount to collect'),
-      content: TextField(
-        controller: ctrl, autofocus: true,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: const InputDecoration(labelText: 'Amount (Rs.)', prefixText: 'Rs. '),
-        onSubmitted: (_) => Navigator.pop(ctx, num.tryParse(ctrl.text.trim())),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, num.tryParse(ctrl.text.trim())), child: const Text('Set')),
-      ],
-    ));
-  }
-
   Future<void> _saveDeliveryOrder() async {
-    // Capture collect state BEFORE _saveDelivery() — it ends by reloading
-    // _detail, which resets these from the DB (still null at that point).
-    final bool collectOn = _collectEnabled;
-    final num? collectAmt = _collectAmount;
     await _saveDelivery();
-    // Persist collect amount while the DO is still unlocked — the lock update
-    // below can't change other columns once is_locked flips (locked-DO rule).
-    try {
-      await Supabase.instance.client.from('delivery_orders').update({
-        'collect_amount': collectOn ? collectAmt : null,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-    } catch (_) {}
     // Lock the DO after saving
     try {
       await Supabase.instance.client.from('delivery_orders').update({
@@ -1436,9 +688,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved');
     } catch (_) {}
-    // Reload so the collect-amount chip and lock state reflect what was saved.
-    // (Invoice is NOT auto-created — use the explicit "Create Invoice" button.)
-    await _loadDetail(_detail['id'] as String);
+    // Auto create invoice
+    await _createInvoice();
   }
 
   Future<void> _saveDelivery() async {
@@ -1521,39 +772,18 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
       _showSnack('Delivery saved — stock deducted');
       await _loadList();
-      await _loadDetail(_detail['id'] as String);
+      _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  Future<void> _createInvoice({bool auto = false}) async {
-    if (_items.isEmpty) { if (!auto) _showSnack('No items to invoice'); return; }
-    // A DO may legitimately carry more than one invoice. But the auto path
-    // (right after a DO save) must never silently create a second one — that
-    // was the accidental-duplicate source. The manual button asks first.
-    try {
-      final existing = await Supabase.instance.client.from('sales_invoices')
-          .select('voucher_number, is_voided').eq('do_id', _detail['id']);
-      final live = (existing as List).where((s) => (s['is_voided'] as bool? ?? false) == false).toList();
-      if (live.isNotEmpty) {
-        if (auto) return; // first invoice already exists — don't auto-duplicate
-        final nums = live.map((s) => s['voucher_number']).join(', ');
-        final again = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
-          title: const Text('Invoice already exists'),
-          content: Text('This delivery order already has: $nums.\n\nCreate another invoice for it?'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Create Another')),
-          ],
-        ));
-        if (again != true) return;
-      }
-    } catch (_) {}
+  Future<void> _createInvoice() async {
+    if (_items.isEmpty) { _showSnack('No items to invoice'); return; }
     final orgId = _orgId; final branchId = _detail['branch_id'] as String;
     final userId = ref.read(currentUserProvider)?.id;
     final year = DateTime.now().year;
     try {
       final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
-          params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SI', 'p_year': year});
+          params: {'p_org_id': orgId, 'p_type': 'SI', 'p_year': year});
       final siId = 'si_${DateTime.now().millisecondsSinceEpoch}';
       double subtotal = 0;
       final Map<String, double> priceMap = {};
@@ -1576,26 +806,22 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'voucher_number': voucherNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'so_id': _detail['so_id'], 'do_id': _detail['id'], 'customer_id': _detail['customer_id'],
         'subtotal': subtotal, 'discount_total': 0, 'grand_total': subtotal,
-        'remarks': _detail['remarks'],
         'is_locked': false, 'created_by': userId,
       });
       for (int i = 0; i < siItems.length; i++) {
         await Supabase.instance.client.from('sales_invoice_items').insert({...siItems[i], 'invoice_id': siId});
       }
       // Update DO status based on SO fulfillment
+      final soItemsCheck = await Supabase.instance.client.from('sales_order_items')
+          .select('quantity, qty_delivered').eq('sales_order_id', _detail['so_id'] as String);
+      bool allDone = true;
+      for (final si in soItemsCheck as List) {
+        if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) < ((si['quantity'] as num?)?.toDouble() ?? 0)) { allDone = false; break; }
+      }
       await Supabase.instance.client.from('delivery_orders').update({
-        'status': 'invoiced',
+        'status': allDone ? 'invoiced' : 'partially_delivered',
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'DO', 'invoiced', 'Invoice $voucherNum created');
-      // Log creation on the SI itself
-      try {
-        await Supabase.instance.client.from('voucher_audit_log').insert({
-          'org_id': orgId, 'voucher_type': 'SI', 'voucher_id': siId,
-          'action': 'created', 'details': 'Created from DO ${_detail['voucher_number']}',
-          'performed_by': userId,
-        });
-      } catch (_) {}
       _showSnack('Invoice $voucherNum created');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -1611,7 +837,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'DO', newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -1634,12 +859,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
-      if (prev?['id'] != next?['id']) {
-        setState(() { _selectedId = null; _detail = {}; _items = []; _soItems = []; _linkedSo = {}; _listLoading = true; });
-        _loadList();
-      }
-    });
     return CollapsibleListPane(
         listChild: Column(children: [
             Padding(
@@ -1693,18 +912,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                                     Text(o['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
-                                    if (o['is_voided'] == true)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                                        child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 10, fontWeight: FontWeight.w700)),
-                                      )
-                                    else
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                                        child: Text(status, style: TextStyle(color: _statusColor(status), fontSize: 10, fontWeight: FontWeight.w600)),
-                                      ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                      child: Text(status, style: TextStyle(color: _statusColor(status), fontSize: 10, fontWeight: FontWeight.w600)),
+                                    ),
                                   ]),
                                   Text('SO: ${o['sales_orders']?['voucher_number'] ?? '-'}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                                   Text(o['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -1731,7 +943,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   Widget _buildDetail() {
     final status = _detail['status'] as String? ?? 'saved';
     final isInvoiced = status == 'invoiced';
-    final isVoided = _detail['is_voided'] == true;
     final pendingSoItems = _soItems.where((i) {
       final ordered = (i['quantity'] as num?)?.toDouble() ?? 0;
       final delivered = (i['qty_delivered'] as num?)?.toDouble() ?? 0;
@@ -1750,78 +961,26 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             const Text('Delivery Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ]),
           const SizedBox(width: 12),
-          if (_deliveryFlow) ...[
-            _StatusChip(
-              status: status == 'invoiced' ? 'Invoiced' : 'Invoice Pending',
-              color: status == 'invoiced' ? AppTheme.success : Colors.orange,
-            ),
-            if (_detail['delivered_at'] != null) ...[
-              const SizedBox(width: 6),
-              const _StatusChip(status: 'Delivered', color: AppTheme.success),
-            ],
-          ] else
-            _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
+          _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
           if (_isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
-          if ((_detail['collect_amount'] as num?) != null) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-              child: Text('Collect: Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
-                  style: const TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w700)),
-            ),
-          ],
-          if (isVoided) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w700)),
-            ),
-          ],
           const Spacer(),
-          if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
-            _collectToggle(),
-            const SizedBox(width: 10),
-            ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
+          if (_isSaved && !_isLocked) ...[
+            if (pendingSoItems.isNotEmpty)
+              ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Save Delivery Order')),
+            const SizedBox(width: 8),
+            if (_items.isNotEmpty)
+              ElevatedButton(
+                onPressed: _createInvoice,
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+                child: const Text('Create Invoice'),
+              ),
             const SizedBox(width: 8),
           ],
-          if (!isVoided && !isInvoiced && _items.isNotEmpty) ...[
-            ElevatedButton(
-              onPressed: _createInvoice,
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-              child: const Text('Create Invoice'),
-            ),
-            const SizedBox(width: 8),
-          ],
-          if (!isVoided && !isInvoiced)
+          if (!isInvoiced)
             IconButton(
               icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
               tooltip: _isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
-            ),
-          if (_linkedSiId != null)
-            IconButton(
-              icon: const Icon(Icons.receipt_long_outlined, color: AppTheme.primary),
-              tooltip: 'Go to Sales Invoice',
-              onPressed: () => context.go('/erp/sales-invoices?focus=$_linkedSiId'),
-            ),
-          if (_deliveryFlow && !isVoided && _detail['delivered_at'] == null)
-            IconButton(
-              icon: const Icon(Icons.check_circle_outline, color: AppTheme.success),
-              tooltip: 'Mark Delivered (self-pickup / manual)',
-              onPressed: _markDelivered,
-            ),
-          IconButton(
-            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
-            tooltip: 'Print / PDF',
-            onPressed: _printDO,
-          ),
-          if (_canDelete && !isVoided)
-            IconButton(
-              icon: const Icon(Icons.block, color: AppTheme.danger),
-              tooltip: 'Void',
-              onPressed: _deleteDO,
             ),
         ]),
       ),
@@ -1940,7 +1099,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                       Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Pending', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Available', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Deliver Qty *', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.primary))),
                     ]),
                   ),
@@ -1949,7 +1107,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                     final ordered = (item['quantity'] as num?)?.toDouble() ?? 0;
                     final delivered = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
                     final pending = ordered - delivered;
-                    final available = _stockByProduct[item['product_id'] as String] ?? 0;
                     final ctrl = _deliverQtyCtrl[item['id'] as String];
                     return Column(children: [
                       Padding(
@@ -1961,8 +1118,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                           ])),
                           Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                           Expanded(flex: 2, child: Text(pending.toStringAsFixed(0), style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600))),
-                          Expanded(flex: 2, child: Text(available.toStringAsFixed(0),
-                              style: TextStyle(color: available >= pending ? AppTheme.success : AppTheme.danger, fontWeight: FontWeight.w600))),
                           Expanded(flex: 2, child: ctrl != null ? SizedBox(height: 32, child: TextField(
                             controller: ctrl,
                             decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
@@ -1978,19 +1133,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             ],
 
             const SizedBox(height: 16),
-            _VoucherInfoStrip(
-              salesperson: _meta.salespersonName,
-              salespersonDiagnostic: _meta.diagnostic,
-              customerAddress: _linkedSo['customers']?['address'] as String?,
-              customerContact: _linkedSo['customers']?['contact_person'] as String?,
-              customerPhone: _linkedSo['customers']?['phone'] as String?,
-              preparedBy: _meta.preparedBy,
-              createdAt: _detail['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
-                  : null,
-            ),
-            const SizedBox(height: 16),
-            _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'DO'),
+            _AuditTrailRow(createdBy: _detail['created_by'] as String?, createdAt: _detail['created_at'] as String?),
           ]),
         ),
       ),
@@ -2001,8 +1144,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 // ─── Sales Invoices (Master-Detail) ──────────────────────────────────────────
 
 class ErpSalesInvoicesScreen extends ConsumerStatefulWidget {
-  const ErpSalesInvoicesScreen({super.key, this.focusId});
-  final String? focusId;
+  const ErpSalesInvoicesScreen({super.key});
   @override
   ConsumerState<ErpSalesInvoicesScreen> createState() => _ErpSalesInvoicesScreenState();
 }
@@ -2012,24 +1154,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
-  VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
   final Map<String, TextEditingController> _discountCtrl = {};
-  final TextEditingController _remarksCtrl = TextEditingController();
 
   @override
-  void initState() {
-    super.initState();
-    _loadList();
-    if (widget.focusId != null) _loadDetail(widget.focusId!);
-  }
+  void initState() { super.initState(); _loadList(); }
 
   @override
   void dispose() {
     for (final c in _discountCtrl.values) c.dispose();
-    _remarksCtrl.dispose();
     super.dispose();
   }
 
@@ -2053,7 +1188,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     try {
       final client = Supabase.instance.client;
       final inv = await client.from('sales_invoices')
-          .select('*, customers(shop_name, code, address, contact_person, phone), sales_orders(voucher_number, remarks, customer_id, customers(shop_name, code, address, contact_person, phone)), delivery_orders(voucher_number), branches(name)')
+          .select('*, customers(shop_name, code), sales_orders(voucher_number, customers(shop_name)), delivery_orders(voucher_number), branches(name)')
           .eq('id', id).single();
       final items = await client.from('sales_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', id);
@@ -2061,22 +1196,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       for (final item in items as List) {
         _discountCtrl[item['id'] as String] = TextEditingController(text: (item['discount'] as num?)?.toStringAsFixed(2) ?? '0');
       }
-      // Resolve customer id (direct on SI or via SO)
-      final custId = (inv['customer_id'] as String?) ?? (inv['sales_orders']?['customer_id'] as String?);
-      final meta = await VoucherMeta.fetch(
-        orgId: _orgId ?? '',
-        customerId: custId,
-        createdById: inv['created_by'] as String?,
-      );
-      setState(() {
-        _detail = Map<String,dynamic>.from(inv);
-        _items = List<Map<String,dynamic>>.from(items);
-        _meta = meta;
-        final siRemarks = (inv['remarks'] as String?)?.trim() ?? '';
-        final soRemarks = (inv['sales_orders']?['remarks'] as String?)?.trim() ?? '';
-        _remarksCtrl.text = siRemarks.isNotEmpty ? siRemarks : soRemarks;
-        _detailLoading = false;
-      });
+      setState(() { _detail = Map<String,dynamic>.from(inv); _items = List<Map<String,dynamic>>.from(items); _detailLoading = false; });
     } catch (_) { setState(() => _detailLoading = false); }
   }
 
@@ -2086,121 +1206,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   }
 
   bool get _isLocked => _detail['is_locked'] as bool? ?? true;
-  bool get _canDelete {
-    final role = ref.read(currentUserProvider)?.role;
-    return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
-  }
-
-  Future<void> _cancelSI() async {
-    final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Cancel / Void Sales Invoice?'),
-      content: Text('Void ${_detail['voucher_number']}? Its accounting entries will be reversed, stock movements undone, and the Delivery Order released for re-invoicing. An audit trail is kept; this cannot be undone.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Keep')),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void')),
-      ],
-    ));
-    if (confirm != true) return;
-
-    try {
-      final vNum = _detail['voucher_number'] as String? ?? '';
-      // 1) void the invoice -> DB trigger reverses GL and restores stock
-      await Supabase.instance.client.from('sales_invoices').update({
-        'is_voided': true,
-        'voided_at': DateTime.now().toUtc().toIso8601String(),
-        'voided_by': ref.read(currentUserProvider)?.id,
-      }).eq('id', _detail['id']);
-
-      // 2) release the DO so it can be invoiced again
-      final doId = _detail['do_id'] as String?;
-      if (doId != null) {
-        await Supabase.instance.client.from('delivery_orders').update({
-          'status': 'saved',
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', doId);
-      }
-
-      await _logAudit(_detail['id'] as String, 'cancelled', 'Voucher $vNum voided -- GL & stock reversed, DO released');
-      _showSnack('Voided -- accounting reversed, DO available again');
-      await _loadList();
-      _loadDetail(_detail['id'] as String);
-    } catch (e) {
-      _showSnack('Could not void: $e');
-    }
-  }
-
-  Future<void> _saveRemarks() async {
-    try {
-      await Supabase.instance.client.from('sales_invoices').update({
-        'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
-      }).eq('id', _detail['id']);
-      _detail['remarks'] = _remarksCtrl.text.trim();
-      if (mounted) _showSnack('Remarks saved');
-    } catch (e) {
-      if (mounted) _showSnack('Could not save remarks: $e');
-    }
-  }
-
-  Future<void> _printSI() async {
-    final user = ref.read(currentUserProvider);
-    final lines = _items.map((it) {
-      final qty = (it['qty_delivered'] as num?)?.toDouble() ?? 0;
-      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
-      final discPct = (double.tryParse(_discountCtrl[it['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
-      final lineTotal = (qty * price) * (1 - discPct / 100);
-      return VoucherLine(
-        product: it['products']?['name'] as String? ?? '-',
-        sku: it['products']?['sku'] as String?,
-        uom: it['uoms']?['abbreviation'] as String?,
-        qty: qty,
-        unitPrice: price,
-        discountPct: discPct,
-        lineTotal: lineTotal,
-      );
-    }).toList();
-
-    double subtotal = 0, discountTotal = 0;
-    for (final l in lines) {
-      subtotal += l.qty * (l.unitPrice ?? 0);
-      discountTotal += l.qty * (l.unitPrice ?? 0) * ((l.discountPct ?? 0) / 100);
-    }
-
-    final date = _detail['voucher_date'] != null
-        ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
-    // Customer details may be direct on the invoice or nested via the SO.
-    final cust = (_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?);
-    final createdAt = _detail['created_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
-    final soVoucher = _detail['sales_orders']?['voucher_number'] as String?;
-    final doVoucher = _detail['delivery_orders']?['voucher_number'] as String?;
-    final refs = <String, String>{};
-    if (soVoucher != null) refs['SO #'] = soVoucher;
-    if (doVoucher != null) refs['DO #'] = doVoucher;
-
-    await VoucherPdf.printVoucher(
-      voucherNumber: _detail['voucher_number'] as String? ?? '-',
-      voucherTypeLabel: 'Sales Invoice',
-      orgName: user?.orgName ?? 'Opstation',
-      branchName: _detail['branches']?['name'] as String?,
-      date: date,
-      customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
-      customerAddress: cust?['address'] as String?,
-      customerContact: cust?['contact_person'] as String?,
-      customerPhone: cust?['phone'] as String?,
-      salespersonName: _meta.salespersonName,
-      remarks: _detail['remarks'] as String?,
-      lines: lines,
-      subtotal: subtotal,
-      discountTotal: discountTotal,
-      grandTotal: subtotal - discountTotal,
-      preparedBy: _meta.preparedBy,
-      createdAt: createdAt,
-      footerNote: _meta.footerNote,
-      relatedRefs: refs.isNotEmpty ? refs : null,
-      watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
-    );
-  }
 
   Future<void> _toggleLock() async {
     final newLocked = !_isLocked;
@@ -2210,20 +1215,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         'locked_by': newLocked ? ref.read(currentUserProvider)?.id : null,
         'locked_at': newLocked ? DateTime.now().toUtc().toIso8601String() : null,
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
-  }
-
-  Future<void> _logAudit(String voucherId, String action, String? details) async {
-    final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
-    if (orgId == null) return;
-    try {
-      await Supabase.instance.client.from('voucher_audit_log').insert({
-        'org_id': orgId, 'voucher_type': 'SI', 'voucher_id': voucherId,
-        'action': action, 'details': details, 'performed_by': userId,
-      });
-    } catch (_) {}
   }
 
   Future<void> _saveDiscounts() async {
@@ -2232,7 +1225,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       for (final item in _items) {
         final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
         final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-        final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
+        final discPct = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
         final discAmt = qty * price * discPct / 100;
         final lineTotal = (qty * price) - discAmt;
         subtotal += qty * price;
@@ -2241,14 +1234,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       }
       await Supabase.instance.client.from('sales_invoices').update({
         'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
-        'is_locked': true,
-        'locked_by': ref.read(currentUserProvider)?.id,
-        'locked_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'saved',
-          'Discount: ${discountTotal.toStringAsFixed(2)} · Total: ${(subtotal - discountTotal).toStringAsFixed(2)}');
-      _showSnack('Saved & locked');
-      await _loadList();
+      _showSnack('Saved');
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -2263,12 +1250,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
-      if (prev?['id'] != next?['id']) {
-        setState(() { _selectedId = null; _detail = {}; _items = []; _listLoading = true; });
-        _loadList();
-      }
-    });
     return CollapsibleListPane(
         listChild: Column(children: [
             Padding(
@@ -2295,7 +1276,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                             final inv = _filteredInvoices[i];
                             final isSelected = inv['id'] == _selectedId;
                             final isLocked = inv['is_locked'] as bool? ?? false;
-                            final isVoided = inv['is_voided'] as bool? ?? false;
                             return InkWell(
                               onTap: () => _loadDetail(inv['id'] as String),
                               child: Container(
@@ -2306,32 +1286,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                     Text(inv['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
-                                    isVoided
-                                        ? Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                                              Icon(Icons.block, size: 10, color: AppTheme.danger),
-                                              SizedBox(width: 3),
-                                              Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 9, fontWeight: FontWeight.w700)),
-                                            ]))
-                                        : isLocked
-                                        ? Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                                              Icon(Icons.check_circle, size: 10, color: AppTheme.success),
-                                              SizedBox(width: 3),
-                                              Text('Processed', style: TextStyle(color: AppTheme.success, fontSize: 9, fontWeight: FontWeight.w700)),
-                                            ]))
-                                        : Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                                              Icon(Icons.pending_outlined, size: 10, color: Colors.orange),
-                                              SizedBox(width: 3),
-                                              Text('Pending', style: TextStyle(color: Colors.orange, fontSize: 9, fontWeight: FontWeight.w700)),
-                                            ])),
+                                    if (isLocked) const Icon(Icons.lock_outline, size: 12, color: Colors.orange),
                                   ]),
                                   Text('SO: ${inv['sales_orders']?['voucher_number'] ?? '-'} · DO: ${inv['delivery_orders']?['voucher_number'] ?? '-'}',
                                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
@@ -2353,15 +1308,9 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   }
 
   Widget _buildDetail() {
-    double subtotal = 0, discountTotal = 0;
-    for (final item in _items) {
-      final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-      final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-      final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
-      subtotal += qty * price;
-      discountTotal += qty * price * discPct / 100;
-    }
-    final grandTotal = subtotal - discountTotal;
+    final subtotal = (_detail['subtotal'] as num?)?.toDouble() ?? 0;
+    final discountTotal = (_detail['discount_total'] as num?)?.toDouble() ?? 0;
+    final grandTotal = (_detail['grand_total'] as num?)?.toDouble() ?? 0;
 
     return Column(children: [
       Container(
@@ -2384,23 +1333,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             tooltip: _isLocked ? 'Unlock' : 'Lock',
             onPressed: _toggleLock,
           ),
-          IconButton(
-            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
-            tooltip: 'Print / PDF',
-            onPressed: _printSI,
-          ),
-          if (_canDelete && !(_detail['is_voided'] as bool? ?? false))
-            TextButton.icon(
-              icon: const Icon(Icons.block, size: 18, color: AppTheme.danger),
-              label: const Text('Cancel / Void', style: TextStyle(color: AppTheme.danger)),
-              onPressed: _cancelSI,
-            ),
-          if (_detail['is_voided'] as bool? ?? false)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w700)),
-            ),
         ]),
       ),
 
@@ -2429,28 +1361,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   const SizedBox(width: 16),
                   Expanded(child: _InfoRow(label: 'DO #', value: _detail['delivery_orders']?['voucher_number'] as String? ?? '-')),
                 ]),
-                const SizedBox(height: 12),
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('REMARKS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.5)),
-                  const SizedBox(height: 4),
-                  if (_isLocked)
-                    Text((_detail['remarks'] as String?)?.trim().isNotEmpty == true ? _detail['remarks'] as String : '—',
-                        style: const TextStyle(fontSize: 13))
-                  else
-                    Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Expanded(child: TextField(
-                        controller: _remarksCtrl,
-                        minLines: 1, maxLines: 3,
-                        decoration: const InputDecoration(
-                          hintText: 'Remarks (carried from the order; editable)',
-                          isDense: true, border: OutlineInputBorder(),
-                        ),
-                        style: const TextStyle(fontSize: 13),
-                      )),
-                      const SizedBox(width: 8),
-                      OutlinedButton(onPressed: _saveRemarks, child: const Text('Save')),
-                    ]),
-                ]),
               ]),
             ),
 
@@ -2468,7 +1378,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                     Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Qty', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Unit Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Discount %', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text('Discount', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Line Total', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                   ]),
                 ),
@@ -2476,9 +1386,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 ..._items.map((item) {
                   final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
                   final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-                  final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
-                  final discAmt = qty * price * discPct / 100;
-                  final lineTotal = (qty * price) - discAmt;
+                  final disc = double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0;
+                  final lineTotal = (qty * price) - disc;
                   return Column(children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -2491,24 +1400,12 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                         Expanded(flex: 2, child: Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
                         Expanded(flex: 2, child: Text(price.toStringAsFixed(2))),
                         Expanded(flex: 2, child: _isLocked
-                            ? Text('${discPct.toStringAsFixed(2)} %', style: const TextStyle(color: AppTheme.textSecondary))
+                            ? Text(disc.toStringAsFixed(2))
                             : SizedBox(height: 32, child: TextField(
                                 controller: _discountCtrl[item['id'] as String],
-                                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder(), suffixText: '%'),
+                                decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
                                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                onChanged: (v) {
-                                  final val = double.tryParse(v) ?? 0;
-                                  if (val > 100) {
-                                    final ctrl = _discountCtrl[item['id'] as String]!;
-                                    ctrl.text = '100';
-                                    ctrl.selection = TextSelection.fromPosition(const TextPosition(offset: 3));
-                                  } else if (val < 0) {
-                                    final ctrl = _discountCtrl[item['id'] as String]!;
-                                    ctrl.text = '0';
-                                    ctrl.selection = TextSelection.fromPosition(const TextPosition(offset: 1));
-                                  }
-                                  setState(() {});
-                                },
+                                onChanged: (_) => setState(() {}),
                               ))),
                         Expanded(flex: 2, child: Text(lineTotal.toStringAsFixed(2), style: const TextStyle(fontWeight: FontWeight.w700))),
                       ]),
@@ -2530,19 +1427,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             ),
 
             const SizedBox(height: 16),
-            _VoucherInfoStrip(
-              salesperson: _meta.salespersonName,
-              salespersonDiagnostic: _meta.diagnostic,
-              customerAddress: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['address'] as String?,
-              customerContact: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['contact_person'] as String?,
-              customerPhone: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['phone'] as String?,
-              preparedBy: _meta.preparedBy,
-              createdAt: _detail['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
-                  : null,
-            ),
-            const SizedBox(height: 16),
-            _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'SI'),
+            _AuditTrailRow(createdBy: _detail['created_by'] as String?, createdAt: _detail['created_at'] as String?),
           ]),
         ),
       ),
@@ -2551,306 +1436,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 }
 
 // ─── Shared Widgets ───────────────────────────────────────────────────────────
-
-/// Compact info strip shown on every voucher detail page with salesperson,
-/// customer contact details, and the user who prepared the voucher.
-class _VoucherInfoStrip extends StatelessWidget {
-  final String? salesperson;
-  final String? salespersonDiagnostic;
-  final String? customerAddress;
-  final String? customerContact;
-  final String? customerPhone;
-  final String? preparedBy;
-  final String? createdAt;
-
-  const _VoucherInfoStrip({
-    this.salesperson,
-    this.salespersonDiagnostic,
-    this.customerAddress,
-    this.customerContact,
-    this.customerPhone,
-    this.preparedBy,
-    this.createdAt,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final tiles = <Widget>[];
-
-    // Always render salesperson — visible failure mode beats invisible bug
-    tiles.add(_tile(
-      Icons.person_pin_outlined,
-      'Salesperson',
-      (salesperson != null && salesperson!.isNotEmpty)
-          ? salesperson!
-          : (salespersonDiagnostic ?? 'Not assigned'),
-      muted: salesperson == null || salesperson!.isEmpty,
-    ));
-
-    final addrLine = customerAddress;
-    if (addrLine != null && addrLine.trim().isNotEmpty) {
-      tiles.add(_tile(Icons.location_on_outlined, 'Address', addrLine));
-    }
-    if (customerContact != null && customerContact!.isNotEmpty) {
-      tiles.add(_tile(Icons.account_circle_outlined, 'Contact Person', customerContact!));
-    }
-    if (customerPhone != null && customerPhone!.isNotEmpty) {
-      tiles.add(_tile(Icons.phone_outlined, 'Phone', customerPhone!));
-    }
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.background,
-        border: Border.all(color: AppTheme.border),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Wrap(spacing: 24, runSpacing: 8, children: tiles),
-        if (preparedBy != null && preparedBy!.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          Row(children: [
-            const Icon(Icons.draw_outlined, size: 14, color: AppTheme.textSecondary),
-            const SizedBox(width: 6),
-            Text(
-              'Prepared by: ${preparedBy!}${createdAt != null ? "  ·  $createdAt" : ""}',
-              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontStyle: FontStyle.italic),
-            ),
-          ]),
-        ],
-      ]),
-    );
-  }
-
-  Widget _tile(IconData icon, String label, String value, {bool muted = false}) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 320),
-      child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Icon(icon, size: 16, color: AppTheme.textSecondary),
-        const SizedBox(width: 6),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, letterSpacing: 0.5)),
-          Text(value,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w500,
-                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
-                color: muted ? AppTheme.textSecondary : null,
-              )),
-        ]),
-      ]),
-    );
-  }
-}
-
-class _CustomerSelect extends StatelessWidget {
-  final List<Map<String, dynamic>> customers;
-  final String? selectedId;
-  final ValueChanged<String?> onChanged;
-  final Future<void> Function()? ensureLoaded;
-  final List<Map<String, dynamic>> Function()? liveCustomers;
-  const _CustomerSelect({required this.customers, required this.selectedId, required this.onChanged, this.ensureLoaded, this.liveCustomers});
-
-  String _displayName() {
-    if (selectedId == null) return 'Walk-in';
-    final c = customers.firstWhere((c) => c['id'] == selectedId, orElse: () => {});
-    if (c.isEmpty) return 'Walk-in';
-    return '${c['shop_name']} (${c['code']})';
-  }
-
-  Future<void> _showPicker(BuildContext context) async {
-    // Wait for customers if they're still loading, then read the fresh list.
-    if ((liveCustomers?.call() ?? customers).isEmpty && ensureLoaded != null) {
-      await ensureLoaded!();
-    }
-    final list = liveCustomers?.call() ?? customers;
-    String search = '';
-    final result = await showDialog<String?>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) {
-          final filtered = list.where((c) =>
-            search.isEmpty ||
-            (c['shop_name'] as String? ?? '').toLowerCase().contains(search.toLowerCase()) ||
-            (c['code'] as String? ?? '').toLowerCase().contains(search.toLowerCase())
-          ).toList();
-          return AlertDialog(
-            title: Text('Select Customer  ·  ${list.length} total'),
-            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-            content: SizedBox(
-              width: 480,
-              height: 460,
-              child: Column(children: [
-                TextField(
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    hintText: 'Search by name or code...',
-                    prefixIcon: Icon(Icons.search, size: 18),
-                    isDense: true,
-                  ),
-                  onChanged: (v) => setS(() => search = v),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: ListView(children: [
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.person_off_outlined, size: 18, color: AppTheme.textSecondary),
-                      title: const Text('Walk-in', style: TextStyle(fontStyle: FontStyle.italic, color: AppTheme.textSecondary)),
-                      selected: selectedId == null,
-                      onTap: () => Navigator.of(ctx, rootNavigator: true).pop('__WALKIN__'),
-                    ),
-                    const Divider(height: 1),
-                    if (filtered.isEmpty)
-                      const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No customers match', style: TextStyle(color: AppTheme.textSecondary))))
-                    else
-                      ...filtered.map((c) => ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.store_outlined, size: 18, color: AppTheme.primary),
-                        title: Text(c['shop_name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: Text(c['code'] as String? ?? '', style: const TextStyle(fontSize: 11)),
-                        selected: c['id'] == selectedId,
-                        onTap: () => Navigator.of(ctx, rootNavigator: true).pop(c['id'] as String),
-                      )),
-                  ]),
-                ),
-              ]),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
-            ],
-          );
-        },
-      ),
-    );
-    if (result != null) onChanged(result == '__WALKIN__' ? null : result);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => _showPicker(context),
-      borderRadius: BorderRadius.circular(8),
-      child: InputDecorator(
-        decoration: const InputDecoration(
-          labelText: 'Customer',
-          isDense: true,
-          suffixIcon: Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
-        ),
-        child: Text(_displayName(), style: const TextStyle(fontSize: 13)),
-      ),
-    );
-  }
-}
-
-class _AuditTrailList extends StatelessWidget {
-  final String voucherId;
-  final String voucherType;
-  const _AuditTrailList({required this.voucherId, required this.voucherType});
-
-  Future<List<Map<String, dynamic>>> _load() async {
-    try {
-      final res = await Supabase.instance.client.from('voucher_audit_log')
-          .select('*')
-          .eq('voucher_id', voucherId)
-          .eq('voucher_type', voucherType)
-          .order('performed_at', ascending: true);
-      // Resolve names
-      final events = List<Map<String, dynamic>>.from(res);
-      final userIds = events.map((e) => e['performed_by'] as String?).where((id) => id != null).toSet().toList();
-      final users = userIds.isEmpty ? <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(
-        await Supabase.instance.client.from('users').select('id, name').inFilter('id', userIds.cast<Object>()),
-      );
-      final nameById = {for (final u in users) u['id'] as String: u['name'] as String? ?? '-'};
-      for (final e in events) {
-        e['_userName'] = nameById[e['performed_by'] as String?] ?? '-';
-      }
-      return events;
-    } catch (_) { return []; }
-  }
-
-  Color _actionColor(String action) {
-    switch (action) {
-      case 'created': return AppTheme.primary;
-      case 'saved': return AppTheme.primary;
-      case 'confirmed': return Colors.blue;
-      case 'invoiced': return AppTheme.success;
-      case 'locked': return Colors.orange;
-      case 'unlocked': return AppTheme.textSecondary;
-      case 'cancelled': return AppTheme.danger;
-      default: return AppTheme.textSecondary;
-    }
-  }
-
-  IconData _actionIcon(String action) {
-    switch (action) {
-      case 'created': return Icons.add_circle_outline;
-      case 'saved': return Icons.save_outlined;
-      case 'confirmed': return Icons.check_circle_outline;
-      case 'invoiced': return Icons.receipt_long_outlined;
-      case 'locked': return Icons.lock_outline;
-      case 'unlocked': return Icons.lock_open_outlined;
-      case 'cancelled': return Icons.cancel_outlined;
-      default: return Icons.circle_outlined;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _load(),
-      builder: (_, snap) {
-        final events = snap.data ?? [];
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const SizedBox(height: 60, child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))));
-        }
-        if (events.isEmpty) return const SizedBox.shrink();
-        return Container(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Row(children: [
-              Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
-              SizedBox(width: 6),
-              Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary)),
-            ]),
-            const SizedBox(height: 8),
-            ...events.map((e) {
-              final action = e['action'] as String? ?? '-';
-              final user = e['_userName'] as String? ?? '-';
-              final at = e['performed_at'] as String?;
-              final dt = at != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(at).toLocal()) : '-';
-              final details = e['details'] as String?;
-              final color = _actionColor(action);
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Icon(_actionIcon(action), size: 14, color: color),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(children: [
-                        Text(action[0].toUpperCase() + action.substring(1),
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
-                        const SizedBox(width: 6),
-                        Flexible(child: Text('by $user',
-                            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-                      ]),
-                      if (details != null && details.isNotEmpty)
-                        Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                    ]),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(dt, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                ]),
-              );
-            }),
-          ]),
-        );
-      },
-    );
-  }
-}
 
 class _StatusChip extends StatelessWidget {
   final String status;
@@ -2906,9 +1491,35 @@ class _TotalsRow extends StatelessWidget {
   );
 }
 
-/// A single credit/aging warning line shown in the DO creation alert.
-class _CreditIssue {
-  final String title;
-  final String detail;
-  const _CreditIssue(this.title, this.detail);
+class _AuditTrailRow extends StatelessWidget {
+  final String? createdBy;
+  final String? createdAt;
+  const _AuditTrailRow({this.createdBy, this.createdAt});
+  @override
+  Widget build(BuildContext context) {
+    if (createdBy == null && createdAt == null) return const SizedBox.shrink();
+    return FutureBuilder<String>(
+      future: _resolveName(createdBy),
+      builder: (_, snap) {
+        final name = snap.data ?? createdBy ?? '-';
+        final date = createdAt != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(createdAt!).toLocal()) : '-';
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Row(children: [
+            const Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 8),
+            Text('Created by $name on $date', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          ]),
+        );
+      },
+    );
+  }
+  static Future<String> _resolveName(String? id) async {
+    if (id == null) return '-';
+    try {
+      final res = await Supabase.instance.client.from('users').select('name').eq('id', id).maybeSingle();
+      return res?['name'] as String? ?? id;
+    } catch (_) { return id; }
+  }
 }
