@@ -19,6 +19,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   List<Map<String, dynamic>> _uoms = [];
   bool _loading = true;
+  bool _consignmentEnabled = false;   // org.consignment_enabled — gates the is_consignment checkbox
   List<Map<String, dynamic>> _branches = [];
   final _searchCtrl = TextEditingController();
   final Set<String> _selected = {};
@@ -57,6 +58,12 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           .eq('org_id', orgId)
           .order('name');
       final branches = await client.from('branches').select('id, name').eq('org_id', orgId!).eq('is_active', true).order('name');
+      bool consignmentOn = false;
+      try {
+        final cfg = await client.from('app_config').select('value')
+            .eq('org_id', orgId).eq('key', 'org.consignment_enabled').maybeSingle();
+        consignmentOn = (cfg?['value'] as String?) == 'true';
+      } catch (_) {}
       final Map<String, List<Map<String, dynamic>>> grouped = {};
       for (final t in taxonomies as List) {
         final type = t['taxonomy_type'] as String;
@@ -68,6 +75,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         _filtered = _products;
         _taxonomies = grouped;
         _uoms = List<Map<String, dynamic>>.from(uoms);
+        _consignmentEnabled = consignmentOn;
         _loading = false;
       });
     } catch (_) {
@@ -236,6 +244,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     String? subGroup = product?['product_sub_group'] as String?;
     String? productClass = product?['product_class'] as String?;
     String? movementCategory = product?['product_movement_category'] as String?;
+    bool isConsignment = product?['is_consignment'] == true;
 
     Widget _taxonomyDropdown(String type, String label, String? value, void Function(String?) onChanged) {
       final items = _taxonomies[type] ?? [];
@@ -354,6 +363,19 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   const SizedBox(width: 12),
                   const Expanded(child: SizedBox()),
                 ]),
+                if (_consignmentEnabled) ...[
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    value: isConsignment,
+                    onChanged: (v) => setS(() => isConsignment = v ?? false),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    dense: true,
+                    title: const Text('Client-owned (consignment) item', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    subtitle: const Text('Tracked in stock by quantity only, at zero book value. Purchases post to Consignment Clearing (not inventory) and add no cost to production. Recover from the client via a manual journal voucher.',
+                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 const Align(alignment: Alignment.centerLeft, child: Text('Branch Allocation', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 4),
@@ -408,8 +430,9 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'product_class': productClass,
                   'product_movement_category': movementCategory,
                   'selling_price': double.tryParse(sellPriceCtrl.text.trim()) ?? 0,
-                  'cost_price': double.tryParse(costPriceCtrl.text.trim()) ?? 0,
+                  'cost_price': isConsignment ? 0 : (double.tryParse(costPriceCtrl.text.trim()) ?? 0),
                   'low_stock_limit': double.tryParse(lowStockCtrl.text.trim()) ?? 0,
+                  'is_consignment': isConsignment,
                   'updated_at': DateTime.now().toUtc().toIso8601String(),
                 };
                 try {

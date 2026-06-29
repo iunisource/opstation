@@ -172,6 +172,17 @@ const List<_AdminToggle> _toggles = [
         'section. When OFF, the FOC section is hidden; any FOC lines already on '
         'existing orders are preserved.',
   ),
+
+  _AdminToggle(
+    'org.consignment_enabled',
+    'Consignment (client-owned) items',
+    'When ON, products can be marked "Client-owned (consignment)" in the product '
+        'master. Such items are tracked in stock by quantity only, at zero book '
+        'value: purchases post the vendor value to a Consignment Clearing account '
+        '(not inventory), they add no cost to production or COGS, and you recover '
+        'from the client via a manual journal voucher. When OFF, the consignment '
+        'checkbox is hidden; products already flagged keep their behaviour.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
