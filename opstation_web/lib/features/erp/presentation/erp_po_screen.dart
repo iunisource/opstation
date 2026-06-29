@@ -26,7 +26,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
   VoucherMeta _meta = VoucherMeta();
-  bool _approvalRequired = false;
+  bool _approvalRequired = false;       // per-open PO (detail)
+  bool _orgApprovalRequired = false;   // org toggle (drives list pending chips)
   bool _showStockConsumption = false;
   Map<String, Map<String, dynamic>> _lineMetrics = {};
   bool _hasGrn = false; // true if any GRN exists against this PO (cascade lock)
@@ -95,11 +96,17 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_orders')
-          .select('id,voucher_number,voucher_date,status,is_locked,voided_at,supplier_id,suppliers(name),branches(name)')
+          .select('id,voucher_number,voucher_date,status,is_locked,voided_at,approved_at,supplier_id,suppliers(name),branches(name)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
-      setState(() { _pos = List<Map<String, dynamic>>.from(r); _listLoading = false; });
+      bool orgApproval = false;
+      try {
+        final cfg = await Supabase.instance.client.from('app_config').select('value')
+            .eq('org_id', orgId).eq('key', 'org.po_approval_required').maybeSingle();
+        orgApproval = (cfg?['value'] as String?) == 'true';
+      } catch (_) {}
+      setState(() { _pos = List<Map<String, dynamic>>.from(r); _orgApprovalRequired = orgApproval; _listLoading = false; });
     } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
   }
 
@@ -214,7 +221,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await Supabase.instance.client.from('purchase_orders').insert({
         'id': poId, 'org_id': orgId, 'branch_id': branchId,
         'voucher_number': vNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-        'supplier_id': picked['id'], 'status': 'ordered', 'is_locked': false,
+        'supplier_id': picked['id'], 'status': 'draft', 'is_locked': false,
         'created_by': ref.read(currentUserProvider)?.id,
       });
       await _logAudit(poId, 'created', 'PO $vNum created');
@@ -265,6 +272,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final userId = ref.read(currentUserProvider)?.id;
     try {
       await Supabase.instance.client.from('purchase_orders').update({
+        'status': 'ordered',
         'is_locked': true,
         'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -429,6 +437,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       final status = r['status'] as String? ?? 'ordered';
       final locked = r['is_locked'] as bool? ?? false;
       final matchFilter = _filter == 'all'
+          || (_filter == 'pending' && _poIsPending(r, _orgApprovalRequired))
           || (_filter == 'open' && !locked && status != 'received' && status != 'invoiced')
           || (_filter == 'received' && (status == 'received' || status == 'partially_received'))
           || (_filter == 'invoiced' && status == 'invoiced');
@@ -449,6 +458,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
             _PoFilterTab(label: 'All',      value: 'all',      current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
+            if (_orgApprovalRequired) ...[
+              _PoFilterTab(label: 'Pending',  value: 'pending',  current: _filter, onTap: (v) => setState(() => _filter = v)),
+              const SizedBox(width: 5),
+            ],
             _PoFilterTab(label: 'Open',     value: 'open',     current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Received', value: 'received', current: _filter, onTap: (v) => setState(() => _filter = v)),
@@ -467,7 +480,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                     title: Row(children: [
                       Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
-                      voided ? const _PoVoidChip() : _PoStatusBadge(status: status),
+                      voided ? const _PoVoidChip() : (_poIsPending(r, _orgApprovalRequired) ? const _PoPendingChip() : _PoStatusBadge(status: status)),
                     ]),
                     subtitle: Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
                     onTap: () => _loadDetail(r['id'] as String));
@@ -717,6 +730,25 @@ class _PoVoidChip extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.danger.withOpacity(0.4))),
     child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.block, size: 12, color: AppTheme.danger), SizedBox(width: 4), Text('Voided', style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w600))]));
+}
+
+bool _poIsPending(Map<String, dynamic> r, bool orgApprovalRequired) {
+  if (!orgApprovalRequired) return false;
+  final status = r['status'] as String? ?? '';
+  final locked = r['is_locked'] as bool? ?? false;
+  return locked && r['approved_at'] == null && r['voided_at'] == null && status != 'received';
+}
+
+class _PoPendingChip extends StatelessWidget {
+  const _PoPendingChip();
+  @override Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    decoration: BoxDecoration(color: Colors.orange.withOpacity(0.14), borderRadius: BorderRadius.circular(4),
+      border: Border.all(color: Colors.orange.withOpacity(0.5))),
+    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(Icons.hourglass_top, size: 10, color: Colors.orange), SizedBox(width: 3),
+      Text('Pending', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.orange)),
+    ]));
 }
 
 class _PoStatusBadge extends StatelessWidget {
