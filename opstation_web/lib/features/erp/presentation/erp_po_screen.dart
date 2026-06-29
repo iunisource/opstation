@@ -37,11 +37,16 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl = TextEditingController(text: '1');
+  final Map<String, TextEditingController> _lineQtyCtrls = {};
 
   @override
   void initState() { super.initState(); _loadList(); _loadLookups(); }
   @override
-  void dispose() { _addQtyCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    for (final c in _lineQtyCtrls.values) { c.dispose(); }
+    _addQtyCtrl.dispose();
+    super.dispose();
+  }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -138,8 +143,52 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       setState(() { _detail = Map<String, dynamic>.from(po); _items = itemList; _meta = meta;
         _approvalRequired = approvalReq; _showStockConsumption = showSC; _lineMetrics = metrics;
         _hasGrn = hasGrn;
+        _syncLineCtrls();
         _detailLoading = false; });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+  }
+
+  void _syncLineCtrls() {
+    final ids = _items.map((i) => i['id'] as String).toSet();
+    for (final k in _lineQtyCtrls.keys.where((k) => !ids.contains(k)).toList()) {
+      _lineQtyCtrls.remove(k)?.dispose();
+    }
+    for (final it in _items) {
+      final id = it['id'] as String;
+      final qty = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
+      final txt = qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2);
+      final c = _lineQtyCtrls[id];
+      if (c == null) {
+        _lineQtyCtrls[id] = TextEditingController(text: txt);
+      } else if (c.text != txt) {
+        c.text = txt;
+      }
+    }
+  }
+
+  // Inline edit of an existing line's ordered qty. Allowed while lines are
+  // editable (no GRN, not voided). Like add/delete, it clears approval.
+  Future<void> _updateLineQty(String itemId) async {
+    if (!_canEditLines) return;
+    final c = _lineQtyCtrls[itemId];
+    final qty = double.tryParse(c?.text.trim() ?? '') ?? -1;
+    final cur = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['quantity_ordered'] as num?)?.toDouble();
+    if (qty <= 0) {
+      _showSnack('Qty must be > 0');
+      if (cur != null) c?.text = cur.toStringAsFixed(cur % 1 == 0 ? 0 : 2);
+      return;
+    }
+    if (cur != null && cur == qty) return; // unchanged — no write, no approval reset
+    try {
+      await Supabase.instance.client.from('purchase_order_items')
+          .update({'quantity_ordered': qty}).eq('id', itemId);
+      setState(() {
+        final idx = _items.indexWhere((i) => i['id'] == itemId);
+        if (idx >= 0) _items[idx]['quantity_ordered'] = qty;
+      });
+      await _logAudit(_detail['id'] as String, 'line_edited', 'Qty changed to ${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2)}');
+      await _resetApprovalIfNeeded();
+    } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void> _logAudit(String id, String action, String? details) async {
@@ -195,6 +244,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           'quantity_ordered': qty, 'quantity_received': 0,
           'products': {'name': prod['name'], 'sku': prod['sku']}, 'uoms': {'abbreviation': uom['abbreviation']}});
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
+        _syncLineCtrls();
       });
       await _resetApprovalIfNeeded();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -205,6 +255,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       await Supabase.instance.client.from('purchase_order_items').delete().eq('id', itemId);
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
+      _syncLineCtrls();
       await _resetApprovalIfNeeded();
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -220,6 +271,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'confirmed', 'PO confirmed and locked');
       _showSnack('Purchase Order confirmed');
+      ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -237,6 +289,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _showSnack(newLocked ? 'Locked' : 'Unlocked');
+      ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -275,6 +328,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'approved', 'Approved by ${u?.name ?? ''}');
       _showSnack('Purchase Order approved');
+      ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -292,6 +346,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await _logAudit(id, 'approval_reset', 'Line items changed — approval cleared, re-approval required');
       setState(() { _detail['approved_by'] = null; _detail['approved_by_name'] = null; _detail['approved_at'] = null; });
       _showSnack('Line changed — approval reset, this PO must be approved again');
+      ref.invalidate(poPendingApprovalCountProvider);
     } catch (e) { _showSnack('Approval reset failed: $e'); }
   }
 
@@ -315,6 +370,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'voided', 'PO ${_detail['voucher_number']} voided by ${u?.name ?? ''}');
       _showSnack('Purchase Order voided');
+      ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -512,7 +568,18 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                     }),
                   ])),
                   Expanded(flex: 2, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                  Expanded(flex: 2, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
+                  Expanded(flex: 2, child: _canEditLines
+                    ? SizedBox(height: 34, child: TextField(
+                        controller: _lineQtyCtrls[it['id'] as String],
+                        textAlign: TextAlign.right,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                        decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _updateLineQty(it['id'] as String),
+                        onTapOutside: (_) => _updateLineQty(it['id'] as String),
+                      ))
+                    : Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
                   SizedBox(width: 44, child: _canEditLines ? IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => _deleteItem(it['id'] as String)) : null),
                 ]));
             }),
@@ -678,7 +745,7 @@ class _PoAuditTrail extends StatelessWidget {
     return FutureBuilder<List<dynamic>>(
       future: Supabase.instance.client.from('voucher_audit_log')
           .select('*, users(name)').eq('voucher_id', voucherId).eq('voucher_type', 'PO')
-          .order('created_at', ascending: false).limit(20),
+          .order('performed_at', ascending: false).limit(20),
       builder: (ctx, snap) {
         if (!snap.hasData || (snap.data as List).isEmpty) return Container(
           margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -693,7 +760,7 @@ class _PoAuditTrail extends StatelessWidget {
             const SizedBox(height: 8),
             ...entries.map((e) {
               final action = e['action'] as String? ?? '-';
-              final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+              final ts = e['performed_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
               final details = e['details'] as String? ?? '';
               Color color;
               switch (action) { case 'created': case 'saved': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': case 'cancelled': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; default: color = AppTheme.textSecondary; }

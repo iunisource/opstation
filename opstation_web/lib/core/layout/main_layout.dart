@@ -160,11 +160,21 @@ final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
   try {
+    final cfg = await client
+        .from('app_config')
+        .select('value')
+        .eq('org_id', user.orgId!)
+        .eq('key', 'org.po_approval_required')
+        .maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
     final res = await client
         .from('purchase_orders')
         .select('id')
         .eq('org_id', user.orgId!)
-        .eq('status', 'pending_approval');
+        .filter('approved_at', 'is', null)
+        .filter('voided_at', 'is', null)
+        .neq('status', 'received')
+        .eq('is_locked', true);
     return (res as List).length;
   } catch (_) {
     return 0;
