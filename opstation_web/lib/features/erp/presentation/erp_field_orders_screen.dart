@@ -88,6 +88,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     if ((row['status'] as String?) != 'submitted') return;
     _playNewOrderTone();
     _maybeWarnAudioBlocked();
+    ref.invalidate(fieldOrderPendingCountProvider); // bump the nav badge live
     if (_filter == 'submitted') {
       // resolve names then prepend silently
       final cid = row['customer_id'] as String?;
@@ -340,6 +341,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       if (!mounted) return;
       setState(() { _saving = false; _selected = null; });
       _snack('Approved — draft ${soNum?['voucher_number'] ?? 'Sales Order'} created');
+      ref.invalidate(fieldOrderPendingCountProvider);
       _loadOrders();
     } catch (e) { _snack('Approve failed: $e'); setState(() => _saving = false); }
   }
@@ -364,6 +366,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       if (!mounted) return;
       setState(() { _saving = false; _selected = null; });
       _snack('Order rejected');
+      ref.invalidate(fieldOrderPendingCountProvider);
       _loadOrders();
     } catch (e) { _snack('Reject failed: $e'); setState(() => _saving = false); }
   }
@@ -491,9 +494,11 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       Row(children: [
         for (final f in const ['submitted', 'approved', 'rejected'])
           Padding(padding: const EdgeInsets.only(right: 8), child: ChoiceChip(
-            label: Text(f == 'submitted' && _newWhileAway > 0 && _filter != 'submitted'
-                ? '${f[0].toUpperCase()}${f.substring(1)} ($_newWhileAway new)'
-                : f[0].toUpperCase() + f.substring(1)),
+            label: Text(() {
+              final base = f == 'submitted' ? 'Received' : '${f[0].toUpperCase()}${f.substring(1)}';
+              return (f == 'submitted' && _newWhileAway > 0 && _filter != 'submitted')
+                  ? '$base ($_newWhileAway new)' : base;
+            }()),
             selected: _filter == f,
             onSelected: (_) { setState(() { _filter = f; _selected = null; if (f == 'submitted') _newWhileAway = 0; }); _loadOrders(); })),
         const Spacer(),
