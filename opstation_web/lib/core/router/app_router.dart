@@ -16,14 +16,11 @@ import '../../features/erp/presentation/erp_overheads_summary_screen.dart';
 import '../../features/erp/presentation/erp_job_card_screen.dart';
 import '../../features/erp/presentation/erp_qc_checkpoints_screen.dart';
 import '../../features/erp/presentation/erp_production_floor_screen.dart';
-import '../../features/erp/presentation/erp_production_plan_screen.dart';
 import '../../features/erp/presentation/erp_report_builder_screen.dart';
 import '../../features/erp/presentation/erp_margin_report_screen.dart';
 import '../../features/erp/presentation/erp_customer_balance_report_screen.dart';
 import '../../features/hr/presentation/hr_employees_screen.dart';
 import '../../features/hr/presentation/hr_attendance_screen.dart';
-import '../../features/hr/presentation/hr_attendance_kiosk_screen.dart';
-import '../../features/hr/presentation/hr_attendance_board_screen.dart';
 import '../../features/hr/presentation/hr_leave_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -101,7 +98,6 @@ import '../../features/erp/presentation/erp_receipt_vouchers_screen.dart';
 import '../../features/erp/presentation/erp_supplier_ledger_screen.dart';
 import '../../features/erp/presentation/erp_customer_ledger_screen.dart';
 import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
-import '../../features/erp/presentation/erp_demand_plan_screen.dart';
 import '../../features/erp/presentation/erp_pos_catalog_screen.dart';
 import '../../features/erp/presentation/erp_pos_config_screen.dart';
 import '../../features/erp/presentation/erp_pos_customer_history_screen.dart';
@@ -187,7 +183,11 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // CRM screens are permission-scoped (registry-gated), not blocked
             // by the ERP path prefix. Let them through to the permission check.
             final permScopedCrm = loc.startsWith('/crm/');
-            if (!inErp && !permScopedCrm) return false;
+            // Customers (the ERP customer master) is now a Sales sub-permission
+            // (registry key doc.customers.*). It lives at /customers (no /erp/
+            // prefix), so let it through to the permission check too.
+            final permScopedCustomers = loc == '/customers';
+            if (!inErp && !permScopedCrm && !permScopedCustomers) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/no-access') return true;
             if (access == null) return true;
@@ -291,7 +291,6 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/job-card', builder: (_, __) => const ErpJobCardScreen()),
       GoRoute(path: '/manufacturing/qc-checkpoints', builder: (_, __) => const ErpQcCheckpointsScreen()),
       GoRoute(path: '/manufacturing/production-floor', builder: (_, __) => const ErpProductionFloorScreen()),
-      GoRoute(path: '/manufacturing/production-plan', builder: (_, __) => const ErpProductionPlanScreen()),
       GoRoute(path: '/intelligence/report-builder', builder: (_, __) => const ErpReportBuilderScreen()),
       GoRoute(path: '/reports/margin', builder: (_, __) => const ErpMarginReportScreen()),
       GoRoute(path: '/reports/customer-balance', builder: (_, __) => const ErpCustomerBalanceReportScreen()),
@@ -302,12 +301,9 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/overheads-summary', builder: (_, __) => const ErpOverheadsSummaryScreen()),
       GoRoute(path: '/hr/employees', builder: (_, __) => const HrEmployeesScreen()),
       GoRoute(path: '/hr/attendance', builder: (_, __) => const HrAttendanceScreen()),
-      GoRoute(path: '/hr/attendance-kiosk', builder: (_, __) => const HrAttendanceKioskScreen()),
-      GoRoute(path: '/hr/attendance-board', builder: (_, __) => const HrAttendanceBoardScreen()),
       GoRoute(path: '/hr/leave', builder: (_, __) => const HrLeaveScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),
-          GoRoute(path: '/erp/demand-plan', builder: (_, __) => const ErpDemandPlanScreen()),
           GoRoute(path: '/erp/pos-config', builder: (_, __) => const ErpPosConfigScreen()),
           GoRoute(path: '/erp/pos-catalog', builder: (_, __) => const ErpPosCatalogScreen()),
           GoRoute(path: '/erp/pos-customer-history', builder: (_, __) => const ErpPosCustomerHistoryScreen()),
