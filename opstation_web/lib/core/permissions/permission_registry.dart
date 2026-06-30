@@ -84,7 +84,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('pos_held_bills', 'Bills on Hold', PermKind.report, '/erp/pos-held-bills'),
     PermItem('pos_expense', 'Expense Management', PermKind.doc, '/erp/pos-expense-management'),
   ]),
-  PermModule('reports', 'Ledgers & Aging', Icons.analytics_outlined, [
+  PermModule('reports', 'Reports & Ledgers', Icons.analytics_outlined, [
     PermItem('supplier_ledger', 'Supplier Ledger', PermKind.report, '/erp/supplier-ledger'),
     PermItem('customer_ledger', 'Customer Ledger', PermKind.report, '/erp/customer-ledger'),
     PermItem('inventory_ledger', 'Inventory Ledger', PermKind.report, '/erp/inventory-ledger'),
