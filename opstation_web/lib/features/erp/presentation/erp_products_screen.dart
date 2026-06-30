@@ -294,7 +294,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     );
   }
 
-  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds, String? openingBranchId, bool updateMode) async {
+  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds, String? openingBranchId, bool updateMode, DateTime openingDate) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
     final userId = ref.read(currentUserProvider)?.id ?? '';
@@ -359,10 +359,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       try {
         final client = Supabase.instance.client;
         final now = DateTime.now();
-        final dateStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        // voucher/GL date comes from the user-chosen opening date, NOT now().
+        final dateStr = '${openingDate.year.toString().padLeft(4, '0')}-${openingDate.month.toString().padLeft(2, '0')}-${openingDate.day.toString().padLeft(2, '0')}';
         final total = openingLines.fold(0.0, (s, l) => s + (l['quantity'] as double) * (l['unit_cost'] as double));
         final cnt = await client.from('opening_stock_vouchers').select('id').eq('org_id', orgId);
-        final vnum = 'OPEN-${now.year}-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+        final vnum = 'OPEN-${openingDate.year}-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
         final vId = 'osv_' + now.millisecondsSinceEpoch.toString();
         await client.from('opening_stock_vouchers').insert({
           'id': vId, 'org_id': orgId, 'branch_id': openingBranchId, 'voucher_number': vnum,
@@ -940,7 +941,7 @@ class _CsvImportDialog extends StatefulWidget {
   final List<Map<String, dynamic>> branches;
   final Set<String> existingSkus;
   final List<Map<String, dynamic>> existingProducts;
-  final Future<void> Function(List<Map<String, dynamic>>, List<String>, String?, bool) onImport;
+  final Future<void> Function(List<Map<String, dynamic>>, List<String>, String?, bool, DateTime) onImport;
   const _CsvImportDialog({required this.uoms, required this.branches, required this.existingSkus, required this.existingProducts, required this.onImport});
   @override
   State<_CsvImportDialog> createState() => _CsvImportDialogState();
@@ -951,6 +952,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
   List<String> _rowErrors = [];
   final Set<String> _importBranches = {};
   String? _openingBranchId;   // single branch that receives opening stock qty + GL
+  DateTime _openingDate = DateTime.now();   // date used for the opening-stock voucher + its GL
   bool _updateMode = false;   // false = Create new products; true = Update existing (by SKU, then exact name)
   String? _lastText;          // last uploaded file text, re-validated when mode flips
   int _totalParsed = 0;
@@ -1156,8 +1158,24 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
                 items: widget.branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '-'))).toList(),
                 onChanged: (v) => setState(() => _openingBranchId = v),
               ),
+            const SizedBox(height: 10),
+            const Text('Opening stock date:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.calendar_today, size: 16),
+              label: Text('${_openingDate.year.toString().padLeft(4, '0')}-${_openingDate.month.toString().padLeft(2, '0')}-${_openingDate.day.toString().padLeft(2, '0')}'),
+              onPressed: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: _openingDate,
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) setState(() => _openingDate = picked);
+              },
+            ),
             const SizedBox(height: 4),
-            const Text('Your file has opening quantities. They will be posted as ONE opening-stock voucher to this branch (Dr Inventory / Cr Opening Balance Equity), valued at the cost_price column.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            const Text('The voucher and its GL entry will be dated as above. Set this BEFORE importing — once posted, the date cannot be changed.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ],
           const Divider(height: 22),
           ],
@@ -1215,7 +1233,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
               return;
             }
             setState(() => _importing = true);
-            await widget.onImport(_validRows, _importBranches.toList(), _openingBranchId, _updateMode);
+            await widget.onImport(_validRows, _importBranches.toList(), _openingBranchId, _updateMode, _openingDate);
             if (mounted) Navigator.pop(context);
           },
           child: Text(_importing ? (_updateMode ? 'Updating...' : 'Importing...') : (_updateMode ? 'Update ${_validRows.length} products' : 'Import ${_validRows.length} rows')),
