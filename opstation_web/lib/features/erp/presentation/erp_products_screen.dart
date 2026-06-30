@@ -260,23 +260,37 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     );
   }
 
-  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds) async {
+  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds, String? openingBranchId) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
+    final userId = ref.read(currentUserProvider)?.id ?? '';
     int success = 0; int failed = 0; int allocFailed = 0;
+    // Opening-stock lines collected across the batch, posted as ONE voucher.
+    final openingLines = <Map<String, dynamic>>[];
     for (var i = 0; i < rows.length; i++) {
       try {
         final id = 'prod_${DateTime.now().millisecondsSinceEpoch}_$i';
+        // Strip transient fields that aren't columns on `products`.
+        final productData = Map<String, dynamic>.from(rows[i])..remove('_opening_qty');
+        final openQty = ((rows[i]['_opening_qty'] as num?) ?? 0).toDouble();
+        final uomId = rows[i]['base_uom_id'] as String?;
+        final unitCost = ((rows[i]['cost_price'] as num?) ?? 0).toDouble();
         await Supabase.instance.client.from('products').insert({
-          ...rows[i],
+          ...productData,
           'id': id,
           'org_id': orgId,
           'is_active': true,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
         success++;
+        // Collect opening stock for this product (posted later as one voucher).
+        if (openQty > 0 && openingBranchId != null && uomId != null) {
+          openingLines.add({'product_id': id, 'uom_id': uomId, 'quantity': openQty, 'unit_cost': unitCost});
+        }
         // Allocate imported product to the chosen branches at zero stock.
+        // Skip the opening-stock branch — the opening-stock voucher creates that row.
         for (var b = 0; b < branchIds.length; b++) {
+          if (branchIds[b] == openingBranchId && openQty > 0) continue;
           try {
             await Supabase.instance.client.from('inventory_stock').insert({
               'id': 'invs_${DateTime.now().millisecondsSinceEpoch}_${i}_$b',
@@ -286,10 +300,50 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         }
       } catch (_) { failed++; }
     }
+
+    // Post ONE opening-stock voucher for the whole batch, reusing the exact
+    // same flow as the manual Opening Stock screen: build voucher + lines, then
+    // call the RPC that handles all GL (Dr Inventory / Cr Opening Balance Equity).
+    String? openingMsg;
+    if (openingLines.isNotEmpty && openingBranchId != null) {
+      try {
+        final client = Supabase.instance.client;
+        final now = DateTime.now();
+        final dateStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        final total = openingLines.fold(0.0, (s, l) => s + (l['quantity'] as double) * (l['unit_cost'] as double));
+        final cnt = await client.from('opening_stock_vouchers').select('id').eq('org_id', orgId);
+        final vnum = 'OPEN-${now.year}-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+        final vId = 'osv_' + now.millisecondsSinceEpoch.toString();
+        await client.from('opening_stock_vouchers').insert({
+          'id': vId, 'org_id': orgId, 'branch_id': openingBranchId, 'voucher_number': vnum,
+          'voucher_date': dateStr, 'status': 'draft', 'is_locked': false, 'is_voided': false,
+          'notes': 'Imported with products bulk import',
+          'total_value': total, 'created_by': userId,
+          'created_at': now.toIso8601String(), 'updated_at': now.toIso8601String(),
+        });
+        for (var i = 0; i < openingLines.length; i++) {
+          final l = openingLines[i];
+          await client.from('opening_stock').insert({
+            'id': 'os_${now.microsecondsSinceEpoch}_$i',
+            'org_id': orgId, 'branch_id': openingBranchId, 'voucher_id': vId,
+            'product_id': l['product_id'], 'uom_id': l['uom_id'],
+            'quantity': l['quantity'], 'unit_cost': l['unit_cost'],
+            'entry_date': dateStr, 'created_by': userId,
+          });
+        }
+        // Post: this RPC books the GL exactly like the manual Opening Stock screen.
+        await client.rpc('post_opening_stock_voucher', params: {'p_id': vId});
+        openingMsg = ' — opening stock $vnum posted (${openingLines.length} item${openingLines.length == 1 ? "" : "s"}, value ${total.toStringAsFixed(2)})';
+      } catch (e) {
+        openingMsg = ' — opening stock FAILED: ${e.toString().split("\n").first}';
+      }
+    }
+
     _showSnack('Imported $success product${success == 1 ? "" : "s"}'
         '${branchIds.isNotEmpty ? " into ${branchIds.length} branch${branchIds.length == 1 ? "" : "es"}" : ""}'
         '${failed > 0 ? " — $failed failed" : ""}'
-        '${allocFailed > 0 ? " — $allocFailed stock rows failed" : ""}');
+        '${allocFailed > 0 ? " — $allocFailed stock rows failed" : ""}'
+        '${openingMsg ?? ""}');
     _load();
   }
 
@@ -824,7 +878,7 @@ class _CsvImportDialog extends StatefulWidget {
   final List<Map<String, dynamic>> uoms;
   final List<Map<String, dynamic>> branches;
   final Set<String> existingSkus;
-  final Future<void> Function(List<Map<String, dynamic>>, List<String>) onImport;
+  final Future<void> Function(List<Map<String, dynamic>>, List<String>, String?) onImport;
   const _CsvImportDialog({required this.uoms, required this.branches, required this.existingSkus, required this.onImport});
   @override
   State<_CsvImportDialog> createState() => _CsvImportDialogState();
@@ -834,15 +888,16 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
   List<Map<String, dynamic>> _validRows = [];
   List<String> _rowErrors = [];
   final Set<String> _importBranches = {};
+  String? _openingBranchId;   // single branch that receives opening stock qty + GL
   int _totalParsed = 0;
   bool _importing = false;
   String? _fileName;
   String? _fatalError;
 
   void _downloadTemplate() {
-    const csv = 'name,sku,barcode,uom,product_type,main_group,group,sub_group,class,movement_category,selling_price,cost_price,low_stock_limit\n'
-        'Example Product A,SKU001,8901234567890,pcs,Stock Item,Lighting,Downlights,LED,A,Fast,210,150,10\n'
-        'Example Product B,SKU002,,box,Stock Item,Electricals,,,,Slow,1000,800,0\n';
+    const csv = 'name,sku,barcode,uom,product_type,main_group,group,sub_group,class,movement_category,selling_price,cost_price,low_stock_limit,opening_qty\n'
+        'Example Product A,SKU001,8901234567890,pcs,Stock Item,Lighting,Downlights,LED,A,Fast,210,150,10,25\n'
+        'Example Product B,SKU002,,box,Stock Item,Electricals,,,,Slow,1000,800,0,0\n';
     final blob = html.Blob([csv], 'text/csv;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.AnchorElement(href: url)..setAttribute('download', 'products_template.csv')..click();
@@ -911,6 +966,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
     final iGroup = idx('group'); final iSub = idx('sub_group'); final iClass = idx('class');
     final iMov = idx('movement_category'); final iSell = idx('selling_price'); final iCost = idx('cost_price');
     final iLow = idx('low_stock_limit');
+    final iQty = idx('opening_qty');
 
     final uomByAbbr = {for (final u in widget.uoms) (u['abbreviation'] as String? ?? '').toLowerCase(): u['id'] as String};
     final uomByName = {for (final u in widget.uoms) (u['name'] as String? ?? '').toLowerCase(): u['id'] as String};
@@ -933,6 +989,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       if (sku.isNotEmpty) seenSkus.add(sku);
       final sell = iSell >= 0 ? double.tryParse(get(iSell)) ?? 0 : 0;
       final cost = iCost >= 0 ? double.tryParse(get(iCost)) ?? 0 : 0;
+      final openQty = iQty >= 0 ? (double.tryParse(get(iQty)) ?? 0) : 0;
       valid.add({
         'name': name,
         'sku': sku.isEmpty ? null : sku,
@@ -947,6 +1004,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         'selling_price': sell,
         'cost_price': cost,
         'low_stock_limit': iLow >= 0 ? (double.tryParse(get(iLow)) ?? 0) : 0,
+        '_opening_qty': openQty,   // transient: stripped before products insert, used for opening stock
       });
     }
     setState(() { _totalParsed = rows.length - 1; _validRows = valid; _rowErrors = errors; });
@@ -979,6 +1037,23 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
             }).toList()),
           const SizedBox(height: 4),
           const Text('Imported products start at zero stock in the selected branches. Leave blank to import without allocating to any branch.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          if (_validRows.any((r) => ((r['_opening_qty'] as num?) ?? 0) > 0)) ...[
+            const Divider(height: 22),
+            const Text('Opening stock branch:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            if (widget.branches.isEmpty)
+              const Text('No branches found.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+            else
+              DropdownButtonFormField<String>(
+                value: _openingBranchId,
+                isExpanded: true,
+                decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), hintText: 'Select branch for opening stock'),
+                items: widget.branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '-'))).toList(),
+                onChanged: (v) => setState(() => _openingBranchId = v),
+              ),
+            const SizedBox(height: 4),
+            const Text('Your file has opening quantities. They will be posted as ONE opening-stock voucher to this branch (Dr Inventory / Cr Opening Balance Equity), valued at the cost_price column.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ],
           const Divider(height: 22),
           if (_fileName == null) ...[
             const Text('Upload a CSV with your products. The "name" and "uom" columns are required; everything else is optional.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
@@ -1028,8 +1103,13 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         TextButton(onPressed: _importing ? null : () => Navigator.pop(context), child: const Text('Cancel')),
         if (_validRows.isNotEmpty) ElevatedButton(
           onPressed: _importing ? null : () async {
+            final hasQty = _validRows.any((r) => ((r['_opening_qty'] as num?) ?? 0) > 0);
+            if (hasQty && _openingBranchId == null) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select an opening stock branch (your file has opening quantities).')));
+              return;
+            }
             setState(() => _importing = true);
-            await widget.onImport(_validRows, _importBranches.toList());
+            await widget.onImport(_validRows, _importBranches.toList(), _openingBranchId);
             if (mounted) Navigator.pop(context);
           },
           child: Text(_importing ? 'Importing...' : 'Import ${_validRows.length} rows'),
