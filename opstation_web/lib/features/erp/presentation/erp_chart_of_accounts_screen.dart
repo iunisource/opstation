@@ -72,6 +72,31 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     return '$prefix$seq';
   }
 
+  /// Resolve the account_group + level (+ next sort_order) a NEW child should
+  /// take from its REAL parent account, so it slots into the seeded COA tree.
+  /// This prevents the "shows in the account picker but not in Chart of
+  /// Accounts" orphan bug: the COA screen navigates by the parent chain, so a
+  /// child must inherit the parent's group and be exactly one level deeper.
+  /// Falls back to the form values only for a true top-level root (no parent).
+  Map<String, dynamic> _inheritFromParent(String? parentId, String fallbackGroup, int fallbackLevel) {
+    if (parentId != null) {
+      final p = _accounts.firstWhere((a) => a['id'] == parentId, orElse: () => <String, dynamic>{});
+      if (p.isNotEmpty) {
+        int maxSort = 0;
+        for (final sib in _accounts.where((a) => a['parent_id'] == parentId)) {
+          final v = (sib['sort_order'] as int?) ?? 0;
+          if (v > maxSort) maxSort = v;
+        }
+        return {
+          'group': (p['account_group'] as String?) ?? fallbackGroup,
+          'level': ((p['level'] as int?) ?? (fallbackLevel - 1)) + 1,
+          'sort_order': maxSort + 1,
+        };
+      }
+    }
+    return {'group': fallbackGroup, 'level': fallbackLevel, 'sort_order': 0};
+  }
+
   // Show dialog to add a level account (1, 2, or 3)
   Future<void> _showAddLevelDialog({required int level, required String group, String? parentId, String? parentCode}) async {
     final ctrl = TextEditingController();
@@ -89,13 +114,15 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     ));
     if (ok != true || !mounted) return;
     final orgId = _orgId; if (orgId == null) return;
-    final code = _genCode(parentCode: parentCode, group: group, level: level);
+    final inh = _inheritFromParent(parentId, group, level);
+    final code = _genCode(parentCode: parentCode, group: inh['group'] as String, level: inh['level'] as int);
     try {
       await Supabase.instance.client.from('chart_of_accounts').insert({
         'id': 'coa_${DateTime.now().millisecondsSinceEpoch}',
         'org_id': orgId, 'parent_id': parentId,
         'code': code, 'name': ctrl.text.trim(),
-        'account_group': group, 'level': level,
+        'account_group': inh['group'], 'level': inh['level'],
+        'sort_order': inh['sort_order'],
         'account_type': null, 'is_active': true,
       });
       await _load();
@@ -115,13 +142,15 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     if (!_canSubmit) { _snack('Fill all required fields'); return; }
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _saving = true);
-    final code = _genCode(parentCode: _parentCode, group: _selectedGroup, level: _newLevel);
+    final inh = _inheritFromParent(_parentId, _selectedGroup ?? 'Assets', _newLevel);
+    final code = _genCode(parentCode: _parentCode, group: inh['group'] as String, level: inh['level'] as int);
     try {
       await Supabase.instance.client.from('chart_of_accounts').insert({
         'id': 'coa_${DateTime.now().millisecondsSinceEpoch}',
         'org_id': orgId, 'parent_id': _parentId,
         'code': code, 'name': _nameCtrl.text.trim(),
-        'account_group': _selectedGroup, 'level': _newLevel,
+        'account_group': inh['group'], 'level': inh['level'],
+        'sort_order': inh['sort_order'],
         'account_type': _accountType, 'is_active': true,
       });
       _snack('Account $code created');
