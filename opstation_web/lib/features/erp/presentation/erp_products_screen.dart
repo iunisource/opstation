@@ -248,6 +248,39 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     _showSnack('Pushed $success product${success == 1 ? "" : "s"} to ${picked['name']} POS${failed > 0 ? " — $failed failed" : ""}');
   }
 
+  // Export current products to CSV using the SAME columns as the import
+  // template, so the file round-trips: export -> edit prices in Excel ->
+  // re-import in "Update existing" mode. opening_qty is intentionally left
+  // blank on export so a re-import can never post opening stock / GL.
+  void _exportCsv() {
+    String esc(Object? v) {
+      final s = (v ?? '').toString();
+      if (s.contains(',') || s.contains('"') || s.contains('\n')) {
+        return '"' + s.replaceAll('"', '""') + '"';
+      }
+      return s;
+    }
+    final buf = StringBuffer();
+    buf.writeln('name,sku,barcode,uom,product_type,main_group,group,sub_group,class,movement_category,selling_price,cost_price,low_stock_limit,opening_qty');
+    for (final p in _products) {
+      final uomAbbr = (p['uoms']?['abbreviation'] as String?) ?? (p['uoms']?['name'] as String?) ?? '';
+      final cells = [
+        p['name'], p['sku'], p['barcode'], uomAbbr, p['product_type'],
+        p['product_main_group'], p['product_group'], p['product_sub_group'],
+        p['product_class'], p['product_movement_category'],
+        p['selling_price'], p['cost_price'], p['low_stock_limit'],
+        '', // opening_qty intentionally blank
+      ];
+      buf.writeln(cells.map(esc).join(','));
+    }
+    final blob = html.Blob([buf.toString()], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final stamp = DateTime.now().toIso8601String().split('T').first;
+    html.AnchorElement(href: url)..setAttribute('download', 'products_export_$stamp.csv')..click();
+    Future.delayed(const Duration(seconds: 2), () => html.Url.revokeObjectUrl(url));
+    _showSnack('Exported ${_products.length} products');
+  }
+
   void _showCsvImport(BuildContext context) {
     showDialog(
       context: context,
@@ -255,12 +288,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         uoms: _uoms,
         branches: _branches,
         existingSkus: _products.map((p) => (p['sku'] as String?) ?? '').where((s) => s.isNotEmpty).toSet(),
+        existingProducts: _products,
         onImport: _doCsvImport,
       ),
     );
   }
 
-  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds, String? openingBranchId) async {
+  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds, String? openingBranchId, bool updateMode) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
     final userId = ref.read(currentUserProvider)?.id ?? '';
@@ -269,9 +303,25 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     final openingLines = <Map<String, dynamic>>[];
     for (var i = 0; i < rows.length; i++) {
       try {
-        final id = 'prod_${DateTime.now().millisecondsSinceEpoch}_$i';
         // Strip transient fields that aren't columns on `products`.
-        final productData = Map<String, dynamic>.from(rows[i])..remove('_opening_qty');
+        final productData = Map<String, dynamic>.from(rows[i])
+          ..remove('_opening_qty')
+          ..remove('_match_id');
+
+        if (updateMode) {
+          // UPDATE path: overwrite an existing product's fields. Never creates
+          // products, never touches stock or the GL.
+          final matchId = rows[i]['_match_id'] as String?;
+          if (matchId == null) { failed++; continue; }
+          await Supabase.instance.client.from('products').update({
+            ...productData,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }).eq('id', matchId).eq('org_id', orgId);
+          success++;
+          continue;
+        }
+
+        final id = 'prod_${DateTime.now().millisecondsSinceEpoch}_$i';
         final openQty = ((rows[i]['_opening_qty'] as num?) ?? 0).toDouble();
         final uomId = rows[i]['base_uom_id'] as String?;
         final unitCost = ((rows[i]['cost_price'] as num?) ?? 0).toDouble();
@@ -339,11 +389,16 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }
     }
 
-    _showSnack('Imported $success product${success == 1 ? "" : "s"}'
-        '${branchIds.isNotEmpty ? " into ${branchIds.length} branch${branchIds.length == 1 ? "" : "es"}" : ""}'
-        '${failed > 0 ? " — $failed failed" : ""}'
-        '${allocFailed > 0 ? " — $allocFailed stock rows failed" : ""}'
-        '${openingMsg ?? ""}');
+    if (updateMode) {
+      _showSnack('Updated $success product${success == 1 ? "" : "s"}'
+          '${failed > 0 ? " — $failed failed" : ""}');
+    } else {
+      _showSnack('Imported $success product${success == 1 ? "" : "s"}'
+          '${branchIds.isNotEmpty ? " into ${branchIds.length} branch${branchIds.length == 1 ? "" : "es"}" : ""}'
+          '${failed > 0 ? " — $failed failed" : ""}'
+          '${allocFailed > 0 ? " — $allocFailed stock rows failed" : ""}'
+          '${openingMsg ?? ""}');
+    }
     _load();
   }
 
@@ -635,6 +690,12 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const Spacer(),
             OutlinedButton.icon(
+              onPressed: _exportCsv,
+              icon: const Icon(Icons.download, size: 18),
+              label: const Text('Export CSV'),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
               onPressed: () => _showCsvImport(context),
               icon: const Icon(Icons.upload_file, size: 18),
               label: const Text('Import CSV'),
@@ -878,8 +939,9 @@ class _CsvImportDialog extends StatefulWidget {
   final List<Map<String, dynamic>> uoms;
   final List<Map<String, dynamic>> branches;
   final Set<String> existingSkus;
-  final Future<void> Function(List<Map<String, dynamic>>, List<String>, String?) onImport;
-  const _CsvImportDialog({required this.uoms, required this.branches, required this.existingSkus, required this.onImport});
+  final List<Map<String, dynamic>> existingProducts;
+  final Future<void> Function(List<Map<String, dynamic>>, List<String>, String?, bool) onImport;
+  const _CsvImportDialog({required this.uoms, required this.branches, required this.existingSkus, required this.existingProducts, required this.onImport});
   @override
   State<_CsvImportDialog> createState() => _CsvImportDialogState();
 }
@@ -889,6 +951,8 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
   List<String> _rowErrors = [];
   final Set<String> _importBranches = {};
   String? _openingBranchId;   // single branch that receives opening stock qty + GL
+  bool _updateMode = false;   // false = Create new products; true = Update existing (by SKU, then exact name)
+  String? _lastText;          // last uploaded file text, re-validated when mode flips
   int _totalParsed = 0;
   bool _importing = false;
   String? _fileName;
@@ -914,6 +978,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
     reader.readAsText(file);
     await reader.onLoad.first;
     final text = reader.result as String;
+    _lastText = text;
     setState(() {
       _fileName = file.name; _fatalError = null; _validRows = []; _rowErrors = [];
     });
@@ -984,7 +1049,24 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       final uomId = uomByAbbr[uomRaw] ?? uomByName[uomRaw];
       if (uomId == null) { errors.add('Row ${r + 1}: unknown uom "$uomRaw"'); continue; }
       final sku = iSku >= 0 ? get(iSku) : '';
-      if (sku.isNotEmpty && widget.existingSkus.contains(sku)) { errors.add('Row ${r + 1}: SKU "$sku" already exists, skipped'); continue; }
+      // Resolve the target product id for UPDATE mode (by SKU, then exact unique name).
+      String? matchId;
+      if (_updateMode) {
+        if (sku.isNotEmpty) {
+          final hits = widget.existingProducts.where((p) => (p['sku'] as String? ?? '') == sku).toList();
+          if (hits.isEmpty) { errors.add('Row ${r + 1}: SKU "$sku" not found — skipped'); continue; }
+          matchId = hits.first['id'] as String?;
+        } else {
+          // No SKU: fall back to EXACT, UNIQUE name match only (never guess).
+          final hits = widget.existingProducts.where((p) => (p['name'] as String? ?? '') == name).toList();
+          if (hits.isEmpty) { errors.add('Row ${r + 1}: no SKU and name "$name" not found — skipped'); continue; }
+          if (hits.length > 1) { errors.add('Row ${r + 1}: no SKU and name "$name" matches ${hits.length} products (ambiguous) — skipped'); continue; }
+          matchId = hits.first['id'] as String?;
+        }
+      } else {
+        // CREATE mode: an existing SKU is a conflict; skip it.
+        if (sku.isNotEmpty && widget.existingSkus.contains(sku)) { errors.add('Row ${r + 1}: SKU "$sku" already exists, skipped'); continue; }
+      }
       if (sku.isNotEmpty && seenSkus.contains(sku)) { errors.add('Row ${r + 1}: duplicate SKU "$sku" within file'); continue; }
       if (sku.isNotEmpty) seenSkus.add(sku);
       final sell = iSell >= 0 ? double.tryParse(get(iSell)) ?? 0 : 0;
@@ -1005,6 +1087,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         'cost_price': cost,
         'low_stock_limit': iLow >= 0 ? (double.tryParse(get(iLow)) ?? 0) : 0,
         '_opening_qty': openQty,   // transient: stripped before products insert, used for opening stock
+        '_match_id': matchId,      // transient: in update mode, the product id this row updates
       });
     }
     setState(() { _totalParsed = rows.length - 1; _validRows = valid; _rowErrors = errors; });
@@ -1017,6 +1100,28 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       content: SizedBox(
         width: 640,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Mode selector — Create new vs Update existing. Update mode never
+          // touches opening stock or the GL; it only overwrites product fields.
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: false, label: Text('Create new'), icon: Icon(Icons.add, size: 16)),
+              ButtonSegment(value: true, label: Text('Update existing'), icon: Icon(Icons.edit, size: 16)),
+            ],
+            selected: {_updateMode},
+            onSelectionChanged: (s) {
+              setState(() => _updateMode = s.first);
+              if (_lastText != null) _parseAndValidate(_lastText!);  // re-validate under new mode
+            },
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _updateMode
+              ? 'Matches each row to an existing product by SKU (or exact unique name if no SKU) and overwrites its fields. No products are created. opening_qty is ignored — no stock or GL is posted.'
+              : 'Creates new products. Rows whose SKU already exists are skipped. opening_qty (if set) posts one opening-stock voucher.',
+            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+          ),
+          const Divider(height: 22),
+          if (!_updateMode) ...[
           Row(children: [
             const Icon(Icons.storefront_outlined, size: 16, color: AppTheme.textSecondary),
             const SizedBox(width: 6),
@@ -1055,6 +1160,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
             const Text('Your file has opening quantities. They will be posted as ONE opening-stock voucher to this branch (Dr Inventory / Cr Opening Balance Equity), valued at the cost_price column.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ],
           const Divider(height: 22),
+          ],
           if (_fileName == null) ...[
             const Text('Upload a CSV with your products. The "name" and "uom" columns are required; everything else is optional.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
             const SizedBox(height: 16),
@@ -1103,16 +1209,16 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         TextButton(onPressed: _importing ? null : () => Navigator.pop(context), child: const Text('Cancel')),
         if (_validRows.isNotEmpty) ElevatedButton(
           onPressed: _importing ? null : () async {
-            final hasQty = _validRows.any((r) => ((r['_opening_qty'] as num?) ?? 0) > 0);
+            final hasQty = !_updateMode && _validRows.any((r) => ((r['_opening_qty'] as num?) ?? 0) > 0);
             if (hasQty && _openingBranchId == null) {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select an opening stock branch (your file has opening quantities).')));
               return;
             }
             setState(() => _importing = true);
-            await widget.onImport(_validRows, _importBranches.toList(), _openingBranchId);
+            await widget.onImport(_validRows, _importBranches.toList(), _openingBranchId, _updateMode);
             if (mounted) Navigator.pop(context);
           },
-          child: Text(_importing ? 'Importing...' : 'Import ${_validRows.length} rows'),
+          child: Text(_importing ? (_updateMode ? 'Updating...' : 'Importing...') : (_updateMode ? 'Update ${_validRows.length} products' : 'Import ${_validRows.length} rows')),
         ),
       ],
     );
