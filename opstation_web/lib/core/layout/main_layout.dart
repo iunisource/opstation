@@ -181,6 +181,25 @@ final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+/// Count of field orders awaiting review (status 'submitted') for the org.
+/// Drives the live nav badge on the Field Orders menu item. Invalidated by
+/// erp_field_orders_screen on approve/reject and realtime arrival.
+final fieldOrderPendingCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final res = await client
+        .from('field_orders')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'submitted');
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 
 // ─── Nav layout mode (top bar ↔ sidebar) ───────────────────────
@@ -373,6 +392,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
+  final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -422,7 +442,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/sales-dashboard')) _menuItem(context, 'Sales Dashboard',         Icons.dashboard_outlined,         '/erp/sales-dashboard',          location),
         if (show('/customers')) _menuItem(context, 'Customers',             Icons.store_outlined,             '/customers',                 location),
         if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
-        if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location),
+        if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
         if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
         if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location),
         _menuDivider(),
@@ -529,7 +549,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/customers', '/erp/sales', '/erp/field-orders', '/erp/delivery-orders', '/erp/sales-invoices',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
-          _trimDividers(salesItems)),
+          _trimDividers(salesItems), badge: fieldOrdersPending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
