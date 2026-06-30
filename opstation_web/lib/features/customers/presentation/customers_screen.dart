@@ -564,6 +564,47 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     _load();
   }
 
+  /// Generate the next available zero-padded numeric customer code for this org.
+  /// Strategy (per requirements): take the largest existing PURELY NUMERIC code,
+  /// add 1, and skip any value already taken (manual or auto share one space).
+  /// Width is padded to the longest existing numeric code (min 6), so codes sort
+  /// and read consistently. Re-checks the DB live so two near-simultaneous
+  /// creates are unlikely to collide; the insert's uniqueness is the final guard.
+  Future<String?> _generateCustomerCode() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) { _showSnack('No org — please re-login'); return null; }
+    try {
+      // Pull all existing codes fresh (don't rely only on the in-memory list).
+      final rows = await Supabase.instance.client
+          .from('customers').select('code').eq('org_id', orgId);
+      final taken = <String>{};
+      int maxNum = 0;
+      int width = 6;
+      for (final r in (rows as List)) {
+        final code = (r['code'] ?? '').toString().trim();
+        if (code.isEmpty) continue;
+        taken.add(code);
+        // Only purely-numeric codes participate in the max/width computation.
+        if (RegExp(r'^\d+$').hasMatch(code)) {
+          final n = int.tryParse(code) ?? 0;
+          if (n > maxNum) maxNum = n;
+          if (code.length > width) width = code.length;
+        }
+      }
+      // Advance past any already-taken value (covers manual codes in the range).
+      int candidate = maxNum + 1;
+      String code = candidate.toString().padLeft(width, '0');
+      while (taken.contains(code) || taken.contains(candidate.toString())) {
+        candidate++;
+        code = candidate.toString().padLeft(width, '0');
+      }
+      return code;
+    } catch (e) {
+      _showSnack('Could not generate code: $e');
+      return null;
+    }
+  }
+
   String _norm(dynamic v) {
     if (v == null) return '';
     if (v is num) return v.toString();
@@ -639,9 +680,15 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           .from('customer_branches').select('branch_id').eq('customer_id', customer['id']);
       selectedBranches = (existing as List).map((b) => b['branch_id'] as String).toSet();
     }
+    // New customers get an auto-generated code (highest + 1) up front; the
+    // field is read-only. Existing customers keep their code (also read-only).
+    String initialCode = customer?['code'] as String? ?? '';
+    if (customer == null) {
+      initialCode = await _generateCustomerCode() ?? '';
+    }
     if (!mounted) return;
     final shopCtrl = TextEditingController(text: customer?['shop_name'] ?? '');
-    final codeCtrl = TextEditingController(text: customer?['code'] ?? '');
+    final codeCtrl = TextEditingController(text: initialCode);
     final contactCtrl = TextEditingController(text: customer?['contact_person'] ?? '');
     final phoneCtrl = TextEditingController(text: customer?['phone'] ?? '');
     final addressCtrl = TextEditingController(text: customer?['address'] ?? '');
@@ -685,7 +732,14 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                 Row(children: [
                   Expanded(child: TextField(controller: shopCtrl, decoration: const InputDecoration(labelText: 'Shop Name *'))),
                   const SizedBox(width: 12),
-                  Expanded(child: TextField(controller: codeCtrl, decoration: const InputDecoration(labelText: 'Customer Code *'))),
+                  Expanded(child: TextField(
+                    controller: codeCtrl,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Customer Code',
+                      helperText: 'Generated automatically',
+                    ),
+                  )),
                 ]),
                 const SizedBox(height: 12),
                 Row(children: [
@@ -845,8 +899,27 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                 final isNew = customer == null;
                 try {
                   if (isNew) {
-                    final id = 'cust_${DateTime.now().millisecondsSinceEpoch}';
-                    await Supabase.instance.client.from('customers').insert({...data, 'id': id, 'updated_at': DateTime.now().toIso8601String()});
+                    // Insert; if the auto code lost a race (unique violation),
+                    // regenerate the next code and retry a few times.
+                    var attempt = 0;
+                    while (true) {
+                      final id = 'cust_${DateTime.now().millisecondsSinceEpoch}';
+                      try {
+                        await Supabase.instance.client.from('customers')
+                            .insert({...data, 'id': id, 'updated_at': DateTime.now().toIso8601String()});
+                        break;
+                      } catch (e) {
+                        final msg = e.toString().toLowerCase();
+                        final isDup = msg.contains('duplicate') || msg.contains('unique') || msg.contains('23505');
+                        if (isDup && attempt < 4) {
+                          attempt++;
+                          final regen = await _generateCustomerCode();
+                          if (regen != null) data['code'] = regen;
+                          continue;
+                        }
+                        rethrow;
+                      }
+                    }
                   } else {
                     await Supabase.instance.client.from('customers').update(data).eq('id', customer['id']);
                     await _logCustomerEdit(customer, data);
