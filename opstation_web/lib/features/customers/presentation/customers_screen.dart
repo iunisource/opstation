@@ -32,6 +32,11 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   String _missingFilter = 'all'; // all | contact | phone | either
   String _routeFilter = 'all'; // all | assigned | unassigned
   Set<String> _assignedCustomerIds = {}; // customers present in any route stop
+  final Set<String> _selectedIds = {}; // for bulk delete (filtered rows)
+
+  bool get _canBulk => !widget.crmMode && _canDeleteCustomer(ref.read(currentUserProvider)?.role);
+  bool get _allFilteredSelected =>
+      _filtered.isNotEmpty && _filtered.every((c) => _selectedIds.contains(c['id'] as String));
 
   @override
   void initState() {
@@ -250,7 +255,24 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
             ],
           ]),
           const SizedBox(height: 8),
-          Text('${_filtered.length} customers', style: const TextStyle(color: AppTheme.textSecondary)),
+          Row(children: [
+            Text('${_filtered.length} customers', style: const TextStyle(color: AppTheme.textSecondary)),
+            if (_canBulk && _selectedIds.isNotEmpty) ...[
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => setState(() => _selectedIds.clear()),
+                icon: const Icon(Icons.clear, size: 16),
+                label: Text('Clear (${_selectedIds.length})'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+                onPressed: _bulkDelete,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: Text('Delete selected (${_selectedIds.length})'),
+              ),
+            ],
+          ]),
           const SizedBox(height: 16),
           Row(children: [
             Expanded(
@@ -344,6 +366,18 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                         borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
                       ),
                       child: Row(children: [
+                        if (_canBulk)
+                          SizedBox(width: 40, child: Checkbox(
+                            value: _allFilteredSelected,
+                            tristate: true,
+                            onChanged: (v) => setState(() {
+                              if (_allFilteredSelected) {
+                                for (final c in _filtered) { _selectedIds.remove(c['id'] as String); }
+                              } else {
+                                for (final c in _filtered) { _selectedIds.add(c['id'] as String); }
+                              }
+                            }),
+                          )),
                         const Expanded(flex: 1, child: Text('Code', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         const Expanded(flex: 3, child: Text('Shop Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         const Expanded(flex: 2, child: Text('Contact', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
@@ -362,6 +396,17 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                           return Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                             child: Row(children: [
+                              if (_canBulk)
+                                SizedBox(width: 40, child: Checkbox(
+                                  value: _selectedIds.contains(c['id'] as String),
+                                  onChanged: (v) => setState(() {
+                                    if (v == true) {
+                                      _selectedIds.add(c['id'] as String);
+                                    } else {
+                                      _selectedIds.remove(c['id'] as String);
+                                    }
+                                  }),
+                                )),
                               Expanded(flex: 1, child: Text(c['code'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary))),
                               Expanded(flex: 3, child: Row(children: [
                                 Flexible(child: Text(c['shop_name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
@@ -478,6 +523,45 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       _showSnack('Customer deleted');
       _load();
     }
+  }
+
+  /// Bulk-delete the currently selected customers. Deletes per-id so one row
+  /// that can't be removed (e.g. it has transactions / FK references) doesn't
+  /// block the rest; reports how many succeeded and how many were blocked.
+  Future<void> _bulkDelete() async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Customers'),
+        content: Text('Delete ${ids.length} selected customer(s)? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+            child: Text('Delete ${ids.length}'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    int ok = 0, blocked = 0;
+    for (final id in ids) {
+      try {
+        await Supabase.instance.client.from('customers').delete().eq('id', id);
+        ok++;
+      } catch (_) {
+        blocked++; // usually an FK: customer has linked transactions
+      }
+    }
+    if (!mounted) return;
+    setState(() => _selectedIds.clear());
+    _showSnack(blocked == 0
+        ? '$ok customer(s) deleted'
+        : '$ok deleted · $blocked could not be deleted (have linked records)');
+    _load();
   }
 
   String _norm(dynamic v) {

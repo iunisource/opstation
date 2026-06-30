@@ -16,10 +16,11 @@ import '../../auth/auth_controller.dart';
 ///   Optional: contact_person, phone, address, latitude, longitude, ntn_gst
 ///   Optional: latitude, longitude, ntn_gst
 ///
-/// Rows are validated, then inserted in batches of 500 to avoid
-/// hitting Supabase's request size limit. Existing customers (by
-/// matching code within the same org) are skipped — re-runs of the
-/// import are safe.
+/// Rows are validated, then upserted: a row whose (code + shop_name + phone)
+/// exactly matches an existing customer in the same org UPDATES that customer
+/// with the new data; otherwise it is INSERTED as a new customer (in batches of
+/// 500). The summary reports how many were inserted vs. updated, so re-runs of
+/// the import are safe and never create duplicates on that triple.
 class BulkImportCustomersScreen extends ConsumerStatefulWidget {
   const BulkImportCustomersScreen({super.key});
 
@@ -52,6 +53,7 @@ class _BulkImportCustomersScreenState
   bool _parsing = false;
   bool _importing = false;
   int _imported = 0;
+  int _updated = 0;
   int _failed = 0;
   List<_ImportError> _importErrors = [];
 
@@ -62,6 +64,7 @@ class _BulkImportCustomersScreenState
       _parseErrors = [];
       _fileName = null;
       _imported = 0;
+      _updated = 0;
       _failed = 0;
       _importErrors = [];
     });
@@ -205,6 +208,12 @@ class _BulkImportCustomersScreenState
     _parseErrors = errors;
   }
 
+  /// Stable key for duplicate detection on the exact triple. Trimmed only
+  /// (exact match per spec: Code AND Name AND Phone). The delimiter \u0001 is a
+  /// control char that won't occur in customer data, so fields can't bleed.
+  String _dupeKey(String code, String name, String phone) =>
+      '${code.trim()}\u0001${name.trim()}\u0001${phone.trim()}';
+
   Future<void> _runImport() async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) {
@@ -217,6 +226,7 @@ class _BulkImportCustomersScreenState
     setState(() {
       _importing = true;
       _imported = 0;
+      _updated = 0;
       _failed = 0;
       _importErrors = [];
     });
@@ -225,43 +235,82 @@ class _BulkImportCustomersScreenState
     final now = DateTime.now();
     final baseTs = now.millisecondsSinceEpoch;
 
-    final payloads = <Map<String, dynamic>>[];
+    // Pre-fetch existing customers in this org to detect duplicates by the
+    // exact triple (code + shop_name + phone). Key uses a delimiter that can't
+    // appear inside the trimmed values colliding across fields.
+    final Map<String, String> existingIdByKey = {}; // key -> existing customer id
+    try {
+      final existing = await client
+          .from('customers')
+          .select('id,code,shop_name,phone')
+          .eq('org_id', orgId);
+      for (final e in (existing as List)) {
+        final k = _dupeKey(
+          (e['code'] ?? '').toString(),
+          (e['shop_name'] ?? '').toString(),
+          (e['phone'] ?? '').toString(),
+        );
+        existingIdByKey[k] = e['id'] as String;
+      }
+    } catch (e) {
+      // If the pre-fetch fails we fall back to treating everything as new.
+    }
+
+    // Split rows into updates (exact code+name+phone match) and inserts.
+    final inserts = <Map<String, dynamic>>[];
+    final updates = <Map<String, dynamic>>[]; // each carries its existing 'id'
     for (int i = 0; i < _validRows.length; i++) {
       final r = _validRows[i];
       final lat = (r['latitude'] ?? '').isEmpty ? null : double.tryParse(r['latitude']!);
       final lng = (r['longitude'] ?? '').isEmpty ? null : double.tryParse(r['longitude']!);
       final ntn = (r['ntn_gst'] ?? '').isEmpty ? null : r['ntn_gst'];
-      payloads.add({
-        'id': 'cust_${baseTs}_$i',
+      final fields = <String, dynamic>{
         'code': r['code'],
         'shop_name': r['shop_name'],
         'contact_person': r['contact_person'] ?? '',
         'phone': r['phone'] ?? '',
         'address': r['address'] ?? '',
-        'category': null,
         'latitude': lat,
         'longitude': lng,
         'ntn_gst': ntn,
         'org_id': orgId,
         'is_active': true,
         'updated_at': now.toIso8601String(),
-      });
+      };
+      final key = _dupeKey(r['code'] ?? '', r['shop_name'] ?? '', r['phone'] ?? '');
+      final existingId = existingIdByKey[key];
+      if (existingId != null) {
+        updates.add({...fields, 'id': existingId});
+      } else {
+        inserts.add({...fields, 'id': 'cust_${baseTs}_$i'});
+      }
     }
 
-    for (int i = 0; i < payloads.length; i += _batchSize) {
-      final end = (i + _batchSize < payloads.length) ? i + _batchSize : payloads.length;
-      final batch = payloads.sublist(i, end);
+    // INSERT new customers in batches.
+    for (int i = 0; i < inserts.length; i += _batchSize) {
+      final end = (i + _batchSize < inserts.length) ? i + _batchSize : inserts.length;
+      final batch = inserts.sublist(i, end);
       try {
         await client.from('customers').insert(batch);
         setState(() => _imported += batch.length);
       } catch (e) {
         for (int j = i; j < end; j++) {
-          _importErrors.add(_ImportError(
-            row: j + 2,
-            reason: e.toString().split('\n').first,
-          ));
+          _importErrors.add(_ImportError(row: j + 2, reason: e.toString().split('\n').first));
         }
         setState(() => _failed += batch.length);
+      }
+    }
+
+    // UPDATE existing matches one-by-one (different id per row).
+    for (final u in updates) {
+      final id = u['id'] as String;
+      final patch = {...u}..remove('id');
+      try {
+        await client.from('customers').update(patch).eq('id', id);
+        setState(() => _updated += 1);
+      } catch (e) {
+        _importErrors.add(_ImportError(row: 0, reason: 'Update failed for ${u['code']}: ${e.toString().split('\n').first}'));
+        setState(() => _failed += 1);
       }
     }
 
@@ -384,10 +433,13 @@ class _BulkImportCustomersScreenState
                 value: _validRows.isEmpty ? 0 : (_imported + _failed) / _validRows.length,
               ),
               const SizedBox(height: 8),
-              Text('Importing… $_imported / ${_validRows.length}'),
-            ] else if (_imported > 0 || _failed > 0) ...[
-              Text('Imported: $_imported',
+              Text('Importing… ${_imported + _updated} / ${_validRows.length}'),
+            ] else if (_imported > 0 || _updated > 0 || _failed > 0) ...[
+              Text('Imported (new): $_imported',
                   style: const TextStyle(fontWeight: FontWeight.w700)),
+              if (_updated > 0)
+                Text('Updated (existing — matched code + name + phone): $_updated',
+                    style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.w700)),
               if (_failed > 0)
                 Text('Failed: $_failed',
                     style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w700)),
