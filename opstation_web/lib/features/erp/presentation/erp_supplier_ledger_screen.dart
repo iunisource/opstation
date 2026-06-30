@@ -98,6 +98,17 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
 
   void _restoreState() {
     try {
+      // Global-search deep link: /erp/supplier-ledger?focus=<supplier_id>
+      // takes priority over the saved (localStorage) selection.
+      final href = html.window.location.href;
+      final qIdx = href.indexOf('?');
+      if (qIdx != -1) {
+        final focusId = Uri.splitQueryString(href.substring(qIdx + 1))['focus'];
+        if (focusId != null && focusId.isNotEmpty) {
+          final fm = _suppliers.where((c) => c['id'] == focusId).toList();
+          if (fm.isNotEmpty) { _selectSupplier(fm.first); return; }
+        }
+      }
       final s = html.window.localStorage;
       final cid = s['ledger_supplier_id'];
       if (cid == null || cid.isEmpty) return;

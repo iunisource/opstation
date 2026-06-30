@@ -100,6 +100,17 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
   void _restoreState() {
     try {
+      // Global-search deep link: /erp/customer-ledger?focus=<customer_id>
+      // takes priority over the saved (localStorage) selection.
+      final href = html.window.location.href;
+      final qIdx = href.indexOf('?');
+      if (qIdx != -1) {
+        final focusId = Uri.splitQueryString(href.substring(qIdx + 1))['focus'];
+        if (focusId != null && focusId.isNotEmpty) {
+          final fm = _customers.where((c) => c['id'] == focusId).toList();
+          if (fm.isNotEmpty) { _selectCustomer(fm.first); return; }
+        }
+      }
       final s = html.window.localStorage;
       final cid = s['ledger_customer_id'];
       if (cid == null || cid.isEmpty) return;

@@ -71,7 +71,7 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
         (e['code'] ?? '').toString().isEmpty ? null : (e['code']).toString(),
         '$nav?focus=${e['id']}', Icons.store_outlined)).toList();
     }),
-    _Cat('Suppliers', Icons.local_shipping_outlined, const ['/erp/suppliers'], (q, nav) async {
+    _Cat('Suppliers', Icons.local_shipping_outlined, const ['/erp/supplier-ledger', '/erp/suppliers'], (q, nav) async {
       final r = await _c.from('suppliers').select('id,name').eq('org_id', widget.orgId)
           .ilike('name', '%$q%').limit(6);
       return (r as List).map((e) => _Hit((e['name'] ?? '').toString(), null, '$nav?focus=${e['id']}', Icons.local_shipping_outlined)).toList();
