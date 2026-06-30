@@ -25,6 +25,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   final _searchCtrl = TextEditingController();
   final Set<String> _selected = {};
 
+  bool get _canDelete {
+    final r = ref.read(currentUserProvider)?.role.name;
+    return r == 'masterAdmin' || r == 'admin';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -148,6 +153,68 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }, onConflict: 'org_id,branch_id,product_id');
       _showSnack('"${product['name']}" pushed to POS catalog for ${picked['name']}');
     } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _delete(String id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Product'),
+        content: const Text('Delete this product? If it has stock or transaction history this will be blocked.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await Supabase.instance.client.from('products').delete().eq('id', id);
+      _showSnack('Product deleted');
+      _load();
+    } catch (_) {
+      _showSnack('Could not delete: this product has linked records (stock or transactions).');
+    }
+  }
+
+  /// Bulk-delete selected products, per-id so one blocked by linked records
+  /// (FK / stock / transactions) does not stop the rest. Reports the outcome.
+  Future<void> _bulkDelete() async {
+    final ids = _selected.toList();
+    if (ids.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Products'),
+        content: Text('Delete ${ids.length} selected product(s)? Products with stock or transaction history will be skipped.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+            child: Text('Delete ${ids.length}'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    int ok = 0, blocked = 0;
+    for (final id in ids) {
+      try {
+        await Supabase.instance.client.from('products').delete().eq('id', id);
+        ok++;
+      } catch (_) { blocked++; }
+    }
+    if (!mounted) return;
+    setState(() => _selected.clear());
+    _showSnack(blocked == 0
+        ? '$ok product(s) deleted'
+        : '$ok deleted · $blocked skipped (have stock or transactions)');
+    _load();
   }
 
   Future<void> _bulkPushToPOS(BuildContext context) async {
@@ -562,6 +629,15 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   label: const Text('Push selected to POS'),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white),
                 ),
+                if (_canDelete) ...[
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: _bulkDelete,
+                    icon: const Icon(Icons.delete_outline, size: 16),
+                    label: Text('Delete selected (${_selected.length})'),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white),
+                  ),
+                ],
               ]),
             ),
           ],
@@ -606,7 +682,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                         Expanded(flex: 2, child: Text('Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Sell Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        SizedBox(width: 120),
+                        const SizedBox(width: 160),
                       ]),
                     ),
                     const Divider(height: 1),
@@ -674,7 +750,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                         p['selling_price']?.toString() ?? '0',
                                         style: const TextStyle(fontSize: 13))),
                                 SizedBox(
-                                  width: 120,
+                                  width: 160,
                                   child: Row(children: [
                                     IconButton(
                                       icon: const Icon(Icons.point_of_sale,
@@ -703,6 +779,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                           ? 'Deactivate'
                                           : 'Activate',
                                     ),
+                                    if (_canDelete)
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline,
+                                            size: 18, color: AppTheme.danger),
+                                        tooltip: 'Delete',
+                                        onPressed: () => _delete(p['id'] as String),
+                                      ),
                                   ]),
                                 ),
                               ]),

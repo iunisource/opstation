@@ -17,6 +17,12 @@ class ErpSuppliersScreen extends ConsumerStatefulWidget {
 class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
   List<Map<String, dynamic>> _suppliers = [];
   List<Map<String, dynamic>> _filtered = [];
+  final Set<String> _selectedIds = {}; // bulk delete
+
+  bool get _canDelete =>
+      ref.read(currentUserProvider)?.role.name == 'masterAdmin';
+  bool get _allFilteredSelected =>
+      _filtered.isNotEmpty && _filtered.every((s) => _selectedIds.contains(s['id'] as String));
   Map<String, String> _catNames = {}; // category_id -> name, for list display
   bool _loading = true;
   final _searchCtrl = TextEditingController();
@@ -96,6 +102,68 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _delete(String id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Supplier'),
+        content: const Text('Delete this supplier? If it has purchase history this will be blocked.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await Supabase.instance.client.from('suppliers').delete().eq('id', id);
+      _showSnack('Supplier deleted');
+      _load();
+    } catch (_) {
+      _showSnack('Could not delete: this supplier has linked records (e.g. purchases).');
+    }
+  }
+
+  /// Bulk-delete selected suppliers, per-id so one blocked by linked records
+  /// (FK / purchase history) does not stop the rest. Reports the outcome.
+  Future<void> _bulkDelete() async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Suppliers'),
+        content: Text('Delete ${ids.length} selected supplier(s)? Suppliers with linked records will be skipped.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+            child: Text('Delete ${ids.length}'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    int ok = 0, blocked = 0;
+    for (final id in ids) {
+      try {
+        await Supabase.instance.client.from('suppliers').delete().eq('id', id);
+        ok++;
+      } catch (_) { blocked++; }
+    }
+    if (!mounted) return;
+    setState(() => _selectedIds.clear());
+    _showSnack(blocked == 0
+        ? '$ok supplier(s) deleted'
+        : '$ok deleted · $blocked skipped (have linked records)');
+    _load();
   }
 
   Future<void> _toggleActive(Map<String, dynamic> s) async {
@@ -888,8 +956,25 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
             ),
           ]),
           const SizedBox(height: 8),
-          Text('${_filtered.length} suppliers',
-              style: const TextStyle(color: AppTheme.textSecondary)),
+          Row(children: [
+            Text('${_filtered.length} suppliers',
+                style: const TextStyle(color: AppTheme.textSecondary)),
+            if (_canDelete && _selectedIds.isNotEmpty) ...[
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => setState(() => _selectedIds.clear()),
+                icon: const Icon(Icons.clear, size: 16),
+                label: Text('Clear (${_selectedIds.length})'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+                onPressed: _bulkDelete,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: Text('Delete selected (${_selectedIds.length})'),
+              ),
+            ],
+          ]),
           const SizedBox(height: 16),
           TextField(
             controller: _searchCtrl,
@@ -916,13 +1001,25 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                       color: AppTheme.background,
                       borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
                     ),
-                    child: const Row(children: [
-                      Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Phone', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Email', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 1, child: Text('Terms', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Credit Limit', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      SizedBox(width: 80),
+                    child: Row(children: [
+                      if (_canDelete)
+                        SizedBox(width: 40, child: Checkbox(
+                          value: _allFilteredSelected,
+                          tristate: true,
+                          onChanged: (v) => setState(() {
+                            if (_allFilteredSelected) {
+                              for (final s in _filtered) { _selectedIds.remove(s['id'] as String); }
+                            } else {
+                              for (final s in _filtered) { _selectedIds.add(s['id'] as String); }
+                            }
+                          }),
+                        )),
+                      const Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      const Expanded(flex: 2, child: Text('Phone', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      const Expanded(flex: 2, child: Text('Email', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      const Expanded(flex: 1, child: Text('Terms', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      const Expanded(flex: 2, child: Text('Credit Limit', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      const SizedBox(width: 120),
                     ]),
                   ),
                   const Divider(height: 1),
@@ -941,6 +1038,14 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                                   child: Row(children: [
+                                    if (_canDelete)
+                                      SizedBox(width: 40, child: Checkbox(
+                                        value: _selectedIds.contains(s['id'] as String),
+                                        onChanged: (v) => setState(() {
+                                          if (v == true) { _selectedIds.add(s['id'] as String); }
+                                          else { _selectedIds.remove(s['id'] as String); }
+                                        }),
+                                      )),
                                     Expanded(flex: 3, child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       mainAxisSize: MainAxisSize.min,
@@ -961,7 +1066,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                                     Expanded(flex: 2, child: Text(
                                         s['credit_limit'] != null ? s['credit_limit'].toString() : 'No limit',
                                         style: const TextStyle(fontSize: 13))),
-                                    SizedBox(width: 80, child: Row(children: [
+                                    SizedBox(width: 120, child: Row(children: [
                                       IconButton(
                                           icon: const Icon(Icons.edit_outlined, size: 18),
                                           onPressed: () => _showDialog(context, s)),
@@ -972,6 +1077,12 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                                             color: isActive ? AppTheme.danger : AppTheme.success),
                                         onPressed: () => _toggleActive(s),
                                       ),
+                                      if (_canDelete)
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                                          tooltip: 'Delete',
+                                          onPressed: () => _delete(s['id'] as String),
+                                        ),
                                     ])),
                                   ]),
                                 ),
