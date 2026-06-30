@@ -8,7 +8,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpSuppliersScreen extends ConsumerStatefulWidget {
-  const ErpSuppliersScreen({super.key});
+  const ErpSuppliersScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpSuppliersScreen> createState() => _ErpSuppliersScreenState();
 }
@@ -23,8 +24,19 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) => _maybeFocus());
     _searchCtrl.addListener(_filter);
+  }
+
+  /// Open the focused supplier's edit dialog when arriving from global search.
+  void _maybeFocus() {
+    final id = widget.focusId;
+    if (id == null || !mounted) return;
+    Map<String, dynamic>? row;
+    for (final s in _suppliers) {
+      if (s['id']?.toString() == id) { row = s; break; }
+    }
+    if (row != null) _showDialog(context, row);
   }
 
   @override

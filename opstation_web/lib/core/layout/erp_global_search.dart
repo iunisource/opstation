@@ -61,7 +61,7 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
       return (r as List).map((e) => _Hit(
         (e['name'] ?? '').toString(),
         (e['sku'] ?? '').toString().isEmpty ? null : 'SKU ${e['sku']}',
-        nav, Icons.inventory_2_outlined)).toList();
+        '$nav?focus=${e['id']}', Icons.inventory_2_outlined)).toList();
     }),
     _Cat('Customers', Icons.store_outlined, const ['/erp/customer-ledger', '/customers', '/erp/sales-invoices'], (q, nav) async {
       final r = await _c.from('customers').select('id,shop_name,code').eq('org_id', widget.orgId)
@@ -69,12 +69,12 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
       return (r as List).map((e) => _Hit(
         (e['shop_name'] ?? '').toString(),
         (e['code'] ?? '').toString().isEmpty ? null : (e['code']).toString(),
-        nav, Icons.store_outlined)).toList();
+        '$nav?focus=${e['id']}', Icons.store_outlined)).toList();
     }),
     _Cat('Suppliers', Icons.local_shipping_outlined, const ['/erp/suppliers'], (q, nav) async {
       final r = await _c.from('suppliers').select('id,name').eq('org_id', widget.orgId)
           .ilike('name', '%$q%').limit(6);
-      return (r as List).map((e) => _Hit((e['name'] ?? '').toString(), null, nav, Icons.local_shipping_outlined)).toList();
+      return (r as List).map((e) => _Hit((e['name'] ?? '').toString(), null, '$nav?focus=${e['id']}', Icons.local_shipping_outlined)).toList();
     }),
     _Cat('Sales Invoices', Icons.receipt_outlined, const ['/erp/sales-invoices'], (q, nav) async {
       final r = await _c.from('sales_invoices').select('id,voucher_number,voucher_date,grand_total')
@@ -84,7 +84,7 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
         (e['voucher_number'] ?? '').toString(),
         [if (e['voucher_date'] != null) e['voucher_date'].toString(),
          if (e['grand_total'] != null) 'Rs ${e['grand_total']}'].join('  •  '),
-        nav, Icons.receipt_outlined)).toList();
+        '$nav?focus=${e['id']}', Icons.receipt_outlined)).toList();
     }),
     _Cat('Purchase Invoices', Icons.receipt_long_outlined, const ['/erp/purchase-invoices'], (q, nav) async {
       final r = await _c.from('purchase_invoices').select('id,voucher_number,voucher_date')
@@ -92,20 +92,41 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
           .order('voucher_date', ascending: false).limit(6);
       return (r as List).map((e) => _Hit(
         (e['voucher_number'] ?? '').toString(),
-        e['voucher_date']?.toString(), nav, Icons.receipt_long_outlined)).toList();
+        e['voucher_date']?.toString(), '$nav?focus=${e['id']}', Icons.receipt_long_outlined)).toList();
     }),
     _Cat('GL Entries', Icons.account_balance_outlined,
         const ['/financials/account-activity', '/financials/journal-vouchers', '/financials/trial-balance'], (q, nav) async {
-      final r = await _c.from('journal_entries').select('id,entry_number,reference_number,description,entry_date')
+      final r = await _c.from('journal_entries').select('id,entry_number,reference_number,reference_type,reference_id,description,entry_date')
           .eq('org_id', widget.orgId).eq('status', 'posted')
           .or('entry_number.ilike.%$q%,reference_number.ilike.%$q%,description.ilike.%$q%')
           .order('entry_date', ascending: false).limit(6);
       return (r as List).map((e) => _Hit(
         (e['entry_number'] ?? e['reference_number'] ?? '').toString(),
         (e['description'] ?? '').toString().isEmpty ? null : (e['description']).toString(),
-        nav, Icons.account_balance_outlined)).toList();
+        _glRoute(e, nav), Icons.account_balance_outlined)).toList();
     }),
   ];
+
+  /// Route a GL entry to its SOURCE voucher when identifiable, else fall back
+  /// to the GL nav (account-activity). Uses reference_type + reference_id that
+  /// every posting writes onto journal_entries.
+  String _glRoute(Map e, String fallbackNav) {
+    final t = (e['reference_type'] ?? '').toString().toLowerCase();
+    final id = (e['reference_id'] ?? '').toString();
+    if (id.isEmpty) return fallbackNav;
+    switch (t) {
+      case 'si':
+        return '/erp/sales-invoices?focus=$id';
+      case 'pi':
+        return '/erp/purchase-invoices?focus=$id';
+      case 'grn':
+        return '/erp/grn?focus=$id';
+      case 'jv':
+        return '/financials/journal-vouchers?focus=$id';
+      default:
+        return fallbackNav; // account-activity / trial-balance (permitted)
+    }
+  }
 
   String _navFor(_Cat cat) => cat.permRoutes.firstWhere(widget.can, orElse: () => cat.permRoutes.first);
 

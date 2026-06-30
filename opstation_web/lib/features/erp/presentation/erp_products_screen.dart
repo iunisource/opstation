@@ -8,7 +8,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpProductsScreen extends ConsumerStatefulWidget {
-  const ErpProductsScreen({super.key});
+  const ErpProductsScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpProductsScreen> createState() => _ErpProductsScreenState();
 }
@@ -27,8 +28,20 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) => _maybeFocus());
     _searchCtrl.addListener(_filter);
+  }
+
+  /// If opened from global search with ?focus=<id>, open that product's
+  /// edit dialog once the list has loaded.
+  void _maybeFocus() {
+    final id = widget.focusId;
+    if (id == null || !mounted) return;
+    Map<String, dynamic>? row;
+    for (final p in _products) {
+      if (p['id']?.toString() == id) { row = p; break; }
+    }
+    if (row != null) _showDialog(context, row);
   }
 
   @override

@@ -15,7 +15,8 @@ import 'erp_customer_360_screen.dart';
 
 class CustomersScreen extends ConsumerStatefulWidget {
   final bool crmMode;
-  const CustomersScreen({super.key, this.crmMode = false});
+  const CustomersScreen({super.key, this.crmMode = false, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<CustomersScreen> createState() => _CustomersScreenState();
 }
@@ -35,8 +36,19 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) => _maybeFocus());
     _searchCtrl.addListener(_filter);
+  }
+
+  /// Open the focused customer's edit dialog when arriving from global search.
+  void _maybeFocus() {
+    final id = widget.focusId;
+    if (id == null || !mounted) return;
+    Map<String, dynamic>? row;
+    for (final c in _customers) {
+      if (c['id']?.toString() == id) { row = c; break; }
+    }
+    if (row != null) _showDialog(context, row);
   }
 
   @override

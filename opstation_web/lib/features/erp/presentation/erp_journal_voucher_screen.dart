@@ -140,6 +140,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     final href = html.window.location.href; final qIdx = href.indexOf('?'); if (qIdx == -1) return;
     final params = Uri.splitQueryString(href.substring(qIdx + 1)); final targetId = params['id'];
     if (targetId != null) { final m = _vouchers.where((v) => v['entry_number'] == targetId).toList(); if (m.isNotEmpty) _loadVoucher(m.first); }
+    // Global search deep-link: ?focus=<journal_entries.id>
+    final focusId = params['focus'];
+    if (focusId != null) { final m = _vouchers.where((v) => v['id'] == focusId).toList(); if (m.isNotEmpty) _loadVoucher(m.first); }
   }
 
   void _showCtxMenu(Offset pos, Map<String,dynamic> v) {

@@ -14,7 +14,8 @@ import '../services/voucher_meta.dart';
 /// Items: Product | UOM | Ordered Qty (from PO) | Received Qty (editable in draft)
 /// On "Confirm Receipt": stock added (+), PO qty_received updated, GRN auto-locked.
 class ErpGrnScreen extends ConsumerStatefulWidget {
-  const ErpGrnScreen({super.key});
+  const ErpGrnScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpGrnScreen> createState() => _ErpGrnScreenState();
 }
@@ -32,7 +33,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   String _statusFilter = 'all';
 
   @override
-  void initState() { super.initState(); _loadList(); }
+  void initState() { super.initState(); _loadList(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
 
   // Pretty label for a GRN status string (handles legacy 'saved').
   String _prettyStatus(String? s) {

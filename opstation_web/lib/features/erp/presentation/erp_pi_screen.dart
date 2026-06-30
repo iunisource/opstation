@@ -14,7 +14,8 @@ import '../services/voucher_meta.dart';
 /// Auto-locks on "Save Invoice". Only admins can unlock.
 /// Marks source GRN as 'invoiced' on save.
 class ErpPurchaseInvoicesScreen extends ConsumerStatefulWidget {
-  const ErpPurchaseInvoicesScreen({super.key});
+  const ErpPurchaseInvoicesScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpPurchaseInvoicesScreen> createState() => _ErpPurchaseInvoicesScreenState();
 }
@@ -33,7 +34,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   String _filter = 'all';
 
   @override
-  void initState() { super.initState(); _loadList(); }
+  void initState() { super.initState(); _loadList(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
   @override
   void dispose() { for (final c in _costCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); super.dispose(); }
 
