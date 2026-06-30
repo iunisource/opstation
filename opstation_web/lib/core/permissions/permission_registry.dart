@@ -90,6 +90,9 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('inventory_ledger', 'Inventory Ledger', PermKind.report, '/erp/inventory-ledger'),
     PermItem('customer_aging', 'Customer Aging', PermKind.report, '/erp/customer-aging'),
     PermItem('supplier_aging', 'Supplier Aging', PermKind.report, '/erp/supplier-aging'),
+    PermItem('margin_report', 'Margin Report', PermKind.report, '/reports/margin'),
+    PermItem('customer_balance_report', 'Customer Balance Report', PermKind.report, '/reports/customer-balance'),
+    PermItem('report_builder', 'Report Builder', PermKind.report, '/intelligence/report-builder'),
   ], moduleGated: false),
   PermModule('production', 'Manufacturing', Icons.precision_manufacturing_outlined, [
     PermItem('production_floor', 'Production Floor', PermKind.report, '/manufacturing/production-floor'),

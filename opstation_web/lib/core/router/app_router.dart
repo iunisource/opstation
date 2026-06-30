@@ -179,6 +179,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             final inErp = loc.startsWith('/erp/') ||
                 loc.startsWith('/financials/') ||
                 loc.startsWith('/manufacturing/') ||
+                loc.startsWith('/reports/') ||
                 loc.startsWith('/hr/');
             // CRM screens are permission-scoped (registry-gated), not blocked
             // by the ERP path prefix. Let them through to the permission check.
@@ -187,7 +188,11 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // (registry key doc.customers.*). It lives at /customers (no /erp/
             // prefix), so let it through to the permission check too.
             final permScopedCustomers = loc == '/customers';
-            if (!inErp && !permScopedCrm && !permScopedCustomers) return false;
+            // Report Builder lives under /intelligence/ (the surveyor area) but
+            // is a granted report; allow just this exact route, not the whole
+            // /intelligence/ prefix.
+            final permScopedReportBuilder = loc == '/intelligence/report-builder';
+            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/no-access') return true;
             if (access == null) return true;
