@@ -233,9 +233,16 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       final wasNew  = _current == null;
       String eId, eNum;
       if (wasNew) {
-        final cnt = await client.from('journal_entries').select('id').eq('org_id', orgId).eq('reference_type', 'jv');
-        final seq  = ((cnt as List).length + 1).toString().padLeft(4, '0');
-        eNum = 'JV-' + DateTime.now().year.toString() + '-' + seq;
+        final yr = DateTime.now().year.toString();
+        final ex = await client.from('journal_entries').select('entry_number')
+            .eq('org_id', orgId).eq('reference_type', 'jv').like('entry_number', 'JV-$yr-%');
+        int mx = 0;
+        for (final r in (ex as List)) {
+          final n = int.tryParse((r['entry_number'] as String? ?? '').split('-').last) ?? 0;
+          if (n > mx) mx = n;
+        }
+        final seq  = (mx + 1).toString().padLeft(4, '0');
+        eNum = 'JV-$yr-$seq';
         eId  = 'jv_' + DateTime.now().millisecondsSinceEpoch.toString();
         await client.from('journal_entries').insert({
           'id': eId, 'org_id': orgId, 'branch_id': bid,

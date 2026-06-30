@@ -447,9 +447,12 @@ class _ErpBankReceiptVoucherScreenState
       final brvNum = _currentVoucher!['voucher_number'] as String? ?? '';
 
       // 1) Spawn the CRV header (posted) + one customer line.
-      final cnt = await client.from('crv_vouchers').select('id').eq('org_id', orgId);
+      final yr = DateTime.now().year.toString();
+      final ex = await client.from('crv_vouchers').select('voucher_number').eq('org_id', orgId).like('voucher_number', 'CRV-$yr-%');
+      int mx = 0;
+      for (final r in (ex as List)) { final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0; if (n > mx) mx = n; }
       final vNum =
-          'CRV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+          'CRV-$yr-${(mx + 1).toString().padLeft(4, '0')}';
       final crvId = 'crv_${DateTime.now().millisecondsSinceEpoch}';
       await client.from('crv_vouchers').insert({
         'id': crvId,

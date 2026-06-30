@@ -189,8 +189,11 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       final newStatus = post ? 'posted' : 'draft';
       final dateStr = DateFormat('yyyy-MM-dd').format(_voucherDate);
       if (_currentVoucher == null) {
-        final cnt = await client.from('crv_vouchers').select('id').eq('org_id', orgId!);
-        final vNum = 'CRV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+        final yr = DateTime.now().year.toString();
+        final ex = await client.from('crv_vouchers').select('voucher_number').eq('org_id', orgId!).like('voucher_number', 'CRV-$yr-%');
+        int mx = 0;
+        for (final r in (ex as List)) { final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0; if (n > mx) mx = n; }
+        final vNum = 'CRV-$yr-${(mx + 1).toString().padLeft(4, '0')}';
         final vid = 'crv_${DateTime.now().millisecondsSinceEpoch}';
         await client.from('crv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null});
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('crv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
