@@ -504,7 +504,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   double _orderDiscount = 0;
   String _orderDiscountType = 'fixed'; // 'fixed' | 'percent'
   bool _loading = true;
-  bool _sessionPanelOpen = true;
+  bool _sessionPanelOpen = false;
+  bool _customerExpanded = false; // bill-column customer picker starts collapsed (walk-ins are the norm)
   List<Map<String, dynamic>> _heldBills = [];
   bool _holdsPanelExpanded = false;
   List<Map<String, dynamic>> _expenses = [];
@@ -742,9 +743,15 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     if (_stagedProduct == null || !_isOpen) return;
     final qty = double.tryParse(_stagedQtyCtrl.text.trim()) ?? 1;
     if (qty <= 0) return;
-    final disc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
     final basePrice = (_stagedProduct!['price'] as num?)?.toDouble() ?? (_stagedProduct!['unit_price'] as num?)?.toDouble() ?? 0;
     final price = _allowPriceEdit ? (double.tryParse(_stagedPriceCtrl.text.trim()) ?? basePrice) : basePrice;
+    // Clamp discount so a line can never go negative or free: percent to 0-100,
+    // fixed to 0-(line gross). Prevents corrupt sales from a mistyped discount
+    // (e.g. -1000% or 99% that zeroed the total).
+    final rawDisc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
+    final disc = _stagedDiscType == 'percent'
+        ? rawDisc.clamp(0, 100).toDouble()
+        : rawDisc.clamp(0, price * qty).toDouble();
     setState(() {
       if (_stagedCartIndex != null && _stagedCartIndex! < _cart.length) {
         _cart[_stagedCartIndex!]['quantity'] = qty;
@@ -783,7 +790,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final price = _allowPriceEdit ? (double.tryParse(_stagedPriceCtrl.text.trim()) ?? basePrice) : basePrice;
     final stock = (p['stock_qty'] as num?)?.toDouble() ?? 0;
     final qty = double.tryParse(_stagedQtyCtrl.text.trim()) ?? 1;
-    final disc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
+    final rawDisc = double.tryParse(_stagedDiscCtrl.text.trim()) ?? 0;
+    final disc = _stagedDiscType == 'percent' ? rawDisc.clamp(0, 100).toDouble() : rawDisc.clamp(0, price * qty).toDouble();
     final da = _stagedDiscType == 'percent' ? price * qty * disc / 100 : disc;
     final total = price * qty - da;
     final isEdit = _stagedCartIndex != null;
@@ -838,7 +846,15 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
               Expanded(child: TextField(controller: _stagedDiscCtrl, focusNode: _stagedDiscFocus,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(filled: true, fillColor: const Color(0xFFF8F9FA), border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
-                onChanged: (_) => setState(() {}),
+                onChanged: (v) => setState(() {
+                  if (_stagedDiscType == 'percent') {
+                    final n = double.tryParse(v);
+                    if (n != null && n > 100) {
+                      _stagedDiscCtrl.text = '100';
+                      _stagedDiscCtrl.selection = TextSelection.collapsed(offset: _stagedDiscCtrl.text.length);
+                    }
+                  }
+                }),
                 onSubmitted: (_) => _confirmStaged())),
               const SizedBox(width: 8),
               DropdownButton<String>(value: _stagedDiscType, isDense: true, underline: const SizedBox(),
@@ -933,10 +949,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   double get _cartSubtotal => _cart.fold(0, (s, i) => s + (i['unit_price'] as double) * (i['quantity'] as double));
   double get _cartItemDiscounts => _cart.fold(0, (s, i) {
-    final d = i['discount'] as double; final qty = i['quantity'] as double; final price = i['unit_price'] as double;
-    return s + (i['discount_type'] == 'percent' ? price * qty * (d / 100) : d);
+    final d = (i['discount'] as num?)?.toDouble() ?? 0; final qty = (i['quantity'] as num?)?.toDouble() ?? 0; final price = (i['unit_price'] as num?)?.toDouble() ?? 0;
+    final gross = price * qty;
+    // Safety net: clamp even if a bad discount was somehow stored, so a total
+    // can never be driven negative. % -> 0-100, fixed -> 0-(line gross).
+    final da = i['discount_type'] == 'percent' ? gross * (d.clamp(0, 100) / 100) : d.clamp(0, gross).toDouble();
+    return s + da;
   });
-  double get _orderDiscountAmt => _orderDiscountType == 'percent' ? _cartSubtotal * (_orderDiscount / 100) : _orderDiscount;
+  double get _orderDiscountAmt => _orderDiscountType == 'percent'
+      ? _cartSubtotal * (_orderDiscount.clamp(0, 100) / 100)
+      : _orderDiscount.clamp(0, _cartSubtotal).toDouble();
   double get _cartTotal => (_cartSubtotal - _cartItemDiscounts - _orderDiscountAmt).clamp(0, double.infinity);
   double get _totalDiscount => _cartItemDiscounts + _orderDiscountAmt;
 
@@ -1655,18 +1677,62 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
           child: Column(children: [
             // Customer search filter
           if (_cart.length > 4) Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 0), child: TextField(decoration: const InputDecoration(hintText: "Filter cart items...", prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 8)), onChanged: (v) => setState(() => _cartSearch = v))),
-          // Customer
-            Padding(padding: const EdgeInsets.fromLTRB(12, 12, 12, 0), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Customer', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary, letterSpacing: 0.5)),
+          // Customer — collapsed to a compact chip by default (walk-ins are
+          // the norm); tap to expand the search. Frees vertical space above
+          // the bill list.
+            Padding(padding: const EdgeInsets.fromLTRB(12, 12, 12, 0), child: Builder(builder: (_) {
+              final selected = _selectedPosCustomer ?? _selectedCustomer;
+              final selName = _selectedPosCustomer != null
+                  ? _selectedPosCustomer!['name'] as String
+                  : (_selectedCustomer != null ? _selectedCustomer!['shop_name'] as String : null);
+              if (!_customerExpanded) {
+                return InkWell(
+                  onTap: _isOpen ? () => setState(() => _customerExpanded = true) : null,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppTheme.border),
+                    ),
+                    child: Row(children: [
+                      Icon(selected != null ? Icons.person_pin : Icons.person_outline,
+                          size: 18,
+                          color: selected != null ? AppTheme.primary : AppTheme.textSecondary),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(selName ?? 'Walk-in',
+                          style: TextStyle(fontSize: 13,
+                              color: selected != null ? AppTheme.primary : AppTheme.textSecondary,
+                              fontWeight: selected != null ? FontWeight.w600 : FontWeight.normal),
+                          overflow: TextOverflow.ellipsis)),
+                      if (selected != null)
+                        InkWell(
+                          onTap: () => setState(() { _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); }),
+                          child: const Icon(Icons.clear, size: 16, color: AppTheme.textSecondary))
+                      else
+                        const Icon(Icons.add, size: 16, color: AppTheme.textSecondary),
+                    ]),
+                  ),
+                );
+              }
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Text('Customer', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary, letterSpacing: 0.5)),
+                const Spacer(),
+                InkWell(
+                    onTap: () => setState(() { _customerExpanded = false; _showCustomerDropdown = false; }),
+                    child: const Icon(Icons.expand_less, size: 18, color: AppTheme.textSecondary)),
+              ]),
               const SizedBox(height: 4),
               TextField(
                 controller: _customerSearchCtrl,
                 enabled: _isOpen,
+                autofocus: true,
                 decoration: InputDecoration(
-                  hintText: _selectedPosCustomer != null ? _selectedPosCustomer!['name'] as String : (_selectedCustomer != null ? _selectedCustomer!['shop_name'] as String : 'Walk-in (optional)'),
-                  hintStyle: TextStyle(color: (_selectedPosCustomer ?? _selectedCustomer) != null ? AppTheme.primary : AppTheme.textSecondary, fontWeight: (_selectedPosCustomer ?? _selectedCustomer) != null ? FontWeight.w600 : FontWeight.normal),
-                  prefixIcon: Icon(_selectedPosCustomer != null ? Icons.person_pin : Icons.person_outline, size: 18, color: (_selectedPosCustomer ?? _selectedCustomer) != null ? AppTheme.primary : AppTheme.textSecondary),
-                  suffixIcon: (_selectedPosCustomer ?? _selectedCustomer) != null ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); })) : null,
+                  hintText: selName ?? 'Walk-in (optional)',
+                  hintStyle: TextStyle(color: selected != null ? AppTheme.primary : AppTheme.textSecondary, fontWeight: selected != null ? FontWeight.w600 : FontWeight.normal),
+                  prefixIcon: Icon(_selectedPosCustomer != null ? Icons.person_pin : Icons.person_outline, size: 18, color: selected != null ? AppTheme.primary : AppTheme.textSecondary),
+                  suffixIcon: selected != null ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); })) : null,
                   isDense: true, contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.border)),
                 ),
@@ -1693,11 +1759,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                         trailing: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: isPos ? Colors.purple.withOpacity(0.1) : AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text(isPos ? 'POS' : 'ERP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: isPos ? Colors.purple : AppTheme.primary))),
                         onTap: () => setState(() {
                           if (isPos) { _selectedPosCustomer = cx; _selectedCustomer = null; } else { _selectedCustomer = cx; _selectedPosCustomer = null; }
-                          _customerSearchCtrl.clear(); _showCustomerDropdown = false;
+                          _customerSearchCtrl.clear(); _showCustomerDropdown = false; _customerExpanded = false;
                         }));
                     }),
                   ])),
-            ])),
+              ]);
+            })),
             // Bill search
             if (_cart.length > 3) Padding(padding: const EdgeInsets.fromLTRB(10, 6, 10, 0), child: TextField(
               decoration: const InputDecoration(hintText: 'Filter bill items...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 8)),
@@ -1776,7 +1843,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     enabled: _isOpen,
                     decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
                     keyboardType: const TextInputType.numberWithOptions(decimal: true), textAlign: TextAlign.right,
-                    onChanged: (v) => setState(() => _orderDiscount = double.tryParse(v) ?? 0),
+                    onChanged: (v) => setState(() {
+                      final raw = double.tryParse(v) ?? 0;
+                      _orderDiscount = _orderDiscountType == 'percent'
+                          ? raw.clamp(0, 100).toDouble()
+                          : (raw < 0 ? 0 : raw);
+                    }),
                   )),
                   const SizedBox(width: 6),
                   DropdownButton<String>(value: _orderDiscountType, isDense: true, underline: const SizedBox(),
@@ -2179,7 +2251,8 @@ class _ReceiptDialog extends StatelessWidget {
     final tenderSplit = _tenderSummary(transaction);
     final splitHtml = tenderSplit.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#444;margin:2px 0">$tenderSplit</p>' : '';
     final ts = transaction['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(transaction['transacted_at'] as String).toLocal()) : DateFormat('d MMM yyyy  HH:mm').format(DateTime.now());
-    final company = posConfig['pos.company_name']?.isNotEmpty == true ? posConfig['pos.company_name']! : orgName;
+    final hasCustomCompany = posConfig['pos.company_name']?.isNotEmpty == true;
+    final company = hasCustomCompany ? posConfig['pos.company_name']! : orgName;
     final ntn = posConfig['pos.ntn'] ?? '';
     final contact = posConfig['pos.contact'] ?? '';
     final terms = posConfig['pos.terms'] ?? '';
@@ -2199,7 +2272,7 @@ class _ReceiptDialog extends StatelessWidget {
     return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
       if (logoWidget != null) ...[Padding(padding: const EdgeInsets.only(bottom: 8), child: logoWidget)],
       Text(company, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-      Text(branchName, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      if (!hasCustomCompany && branchName.isNotEmpty) Text(branchName, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       if (ntn.isNotEmpty) Text(ntn, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
       if (contact.isNotEmpty) Text(contact, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
       const SizedBox(height: 4),
@@ -2267,7 +2340,9 @@ class _ReceiptDialog extends StatelessWidget {
       const SizedBox(height: 20),
       Row(children: [
         Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print'), onPressed: () {
-          final posCompany = posConfig['pos.company_name']?.isNotEmpty == true ? posConfig['pos.company_name']! : orgName;
+          final posHasCustomCompany = posConfig['pos.company_name']?.isNotEmpty == true;
+          final posCompany = posHasCustomCompany ? posConfig['pos.company_name']! : orgName;
+          final posBranchLine = posHasCustomCompany ? '' : '<h3 style="font-weight:normal;color:#666">$branchName</h3>';
           final posNtn = posConfig['pos.ntn'] ?? '';
           final posContact = posConfig['pos.contact'] ?? '';
           final posFooter = posConfig['pos.footer_note']?.isNotEmpty == true ? posConfig['pos.footer_note']! : (footerNote ?? '');
@@ -2278,7 +2353,7 @@ class _ReceiptDialog extends StatelessWidget {
           final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? (dt == 'percent' ? "-Rs.${da.toStringAsFixed(2)} <small style='color:#aaa'>(${d.toStringAsFixed(0)}%)</small>" : "-Rs.${da.toStringAsFixed(2)}") : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
           final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
-          final content = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2><h3 style="font-weight:normal;color:#666">$branchName</h3>${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>$splitHtml${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + (-bc).toStringAsFixed(2) : 'Credit Added: Rs. ' + bc.toStringAsFixed(2)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
+          final content = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2>$posBranchLine${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>$splitHtml${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + (-bc).toStringAsFixed(2) : 'Credit Added: Rs. ' + bc.toStringAsFixed(2)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
           final blob = html.Blob([content], 'text/html;charset=utf-8'); final url = html.Url.createObjectUrlFromBlob(blob); html.window.open(url, '_blank');
         })),
         const SizedBox(width: 12),
