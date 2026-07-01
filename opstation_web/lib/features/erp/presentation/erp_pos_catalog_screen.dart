@@ -20,6 +20,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
   bool _allowPriceEdit = false;
   bool _savingSetting = false;
   Map<String, double> _stockMap = {};
+  final Set<String> _selected = {};   // pos_catalog row ids selected for bulk delete
   final _searchCtrl = TextEditingController();
 
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin; }
@@ -105,8 +106,43 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
     } catch (_) { setState(() => _loading = false); }
   }
 
-  void _showSnack(String msg) {
-    if (!mounted) return;
+  Future<void> _bulkDelete() async {
+    if (!_isAdmin) return;
+    final ids = _selected.toList();
+    if (ids.isEmpty) return;
+    final branch = ref.read(selectedBranchProvider);
+    final branchName = branch?['name'] as String? ?? 'this branch';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Remove from POS catalog?'),
+        content: Text('Remove ${ids.length} product${ids.length == 1 ? "" : "s"} from $branchName\'s POS catalog?\n\n'
+            'The products themselves are NOT deleted — they just stop being sellable at this branch\'s POS. '
+            'Items with linked POS sales will be skipped.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text('Remove ${ids.length}'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    int removed = 0; int skipped = 0;
+    for (final id in ids) {
+      try {
+        await Supabase.instance.client.from('pos_catalog').delete().eq('id', id);
+        removed++;
+      } catch (_) { skipped++; }
+    }
+    setState(() => _selected.clear());
+    _showSnack('Removed $removed from POS catalog${skipped > 0 ? " — $skipped skipped (have linked records)" : ""}');
+    _load();
+  }
+
+  void _showSnack(String msg) {    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
@@ -263,6 +299,15 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
           const Text('POS Catalog', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const Spacer(),
           if (branch != null) ...[
+            if (_isAdmin && _selected.isNotEmpty) ...[
+              OutlinedButton.icon(
+                onPressed: _bulkDelete,
+                icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
+                label: Text('Delete selected (${_selected.length})', style: const TextStyle(color: AppTheme.danger)),
+                style: OutlinedButton.styleFrom(side: const BorderSide(color: AppTheme.danger)),
+              ),
+              const SizedBox(width: 12),
+            ],
             OutlinedButton.icon(
               onPressed: _showSyncDialog,
               icon: const Icon(Icons.copy_outlined, size: 16),
@@ -339,14 +384,26 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-              child: const Row(children: [
-                Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                Expanded(flex: 2, child: Text('Category', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                Expanded(flex: 2, child: Text('Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                Expanded(flex: 1, child: Text('Stock', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                Expanded(flex: 1, child: Text('Active', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                SizedBox(width: 80),
+              child: Row(children: [
+                if (_isAdmin) SizedBox(width: 40, child: Checkbox(
+                  value: _filtered.isNotEmpty && _filtered.every((i) => _selected.contains(i['id'])),
+                  tristate: true,
+                  onChanged: (v) => setState(() {
+                    final filteredIds = _filtered.map((i) => i['id'] as String).toSet();
+                    if (_filtered.every((i) => _selected.contains(i['id']))) {
+                      _selected.removeAll(filteredIds);   // all selected -> clear
+                    } else {
+                      _selected.addAll(filteredIds);      // select all filtered
+                    }
+                  }),
+                )),
+                const Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                const Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                const Expanded(flex: 2, child: Text('Category', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                const Expanded(flex: 2, child: Text('Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                const Expanded(flex: 1, child: Text('Stock', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                const Expanded(flex: 1, child: Text('Active', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                const SizedBox(width: 80),
               ]),
             ),
             const Divider(height: 1),
@@ -364,6 +421,13 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                             child: Row(children: [
+                              if (_isAdmin) SizedBox(width: 40, child: Checkbox(
+                                value: _selected.contains(item['id']),
+                                onChanged: (v) => setState(() {
+                                  if (v == true) { _selected.add(item['id'] as String); }
+                                  else { _selected.remove(item['id']); }
+                                }),
+                              )),
                               Expanded(flex: 3, child: Text(item['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600))),
                               Expanded(flex: 2, child: Text(item['sku'] as String? ?? '-',
                                   style: const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
@@ -381,11 +445,11 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                                   color: isActive ? AppTheme.success : AppTheme.textSecondary, size: 18)),
                               SizedBox(width: 80, child: Row(children: [
                                 IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, item)),
-                                IconButton(
+                                if (_isAdmin) IconButton(
                                   icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
                                   onPressed: () async {
                                     await Supabase.instance.client.from('pos_catalog').delete().eq('id', item['id']);
-                                    _showSnack('Item deleted');
+                                    _showSnack('Removed from POS catalog');
                                     _load();
                                   },
                                 ),
