@@ -25,6 +25,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   final _searchCtrl = TextEditingController();
   final Set<String> _selected = {};
   Set<String> _posProductIds = {};   // product_ids in ANY branch's pos_catalog (drives the POS icon + filter)
+  Map<String, Set<String>> _posByBranch = {};   // branch_id -> product_ids in that branch (drives the duplicate check)
   String _posFilter = 'all';         // all | in | out
 
   bool get _canDelete {
@@ -78,14 +79,22 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           .eq('org_id', orgId)
           .order('name');
       final branches = await client.from('branches').select('id, name').eq('org_id', orgId!).eq('is_active', true).order('name');
-      // Which products already sit in SOME branch's POS catalog. Paginated
-      // past the 5000 max-rows cap so the icon/filter stay correct at scale.
+      // Which products already sit in each branch's POS catalog. Paginated past
+      // the 5000 max-rows cap. posIds = any-branch (drives icon/filter);
+      // posByBranch = per-branch (drives the duplicate check on push).
       final posIds = <String>{};
+      final posByBranch = <String, Set<String>>{};
       for (var from = 0; ; from += 1000) {
-        final rows = await client.from('pos_catalog').select('product_id')
-            .eq('org_id', orgId).order('product_id').range(from, from + 999);
+        final rows = await client.from('pos_catalog').select('product_id, branch_id')
+            .eq('org_id', orgId).order('id').range(from, from + 999);
         final batch = List<Map<String, dynamic>>.from(rows as List);
-        for (final r in batch) { final pid = r['product_id'] as String?; if (pid != null) posIds.add(pid); }
+        for (final r in batch) {
+          final pid = r['product_id'] as String?;
+          final bid = r['branch_id'] as String?;
+          if (pid == null) continue;
+          posIds.add(pid);
+          if (bid != null) (posByBranch[bid] ??= <String>{}).add(pid);
+        }
         if (batch.length < 1000) break;
       }
       bool consignmentOn = false;
@@ -102,6 +111,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       setState(() {
         _branches = List<Map<String, dynamic>>.from(branches);
         _posProductIds = posIds;
+        _posByBranch = posByBranch;
         _products = List<Map<String, dynamic>>.from(products);
         _filtered = _filterList(List<Map<String, dynamic>>.from(products),
             _searchCtrl.text.toLowerCase(), _posFilter, posIds);
@@ -159,6 +169,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     final picked = await showDialog<Map<String, dynamic>?>(context: context, builder: (_) => _BranchPickerDialog(branches: _branches, productName: product['name'] as String? ?? '-'));
     if (picked == null) return;
     final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
+    final branchId = picked['id'] as String;
+    final productId = product['id'] as String;
+    // Duplicate guard: the pos_catalog is per-branch, so block only if it's
+    // already in the branch that was picked (still allows adding to others).
+    if ((_posByBranch[branchId] ?? const <String>{}).contains(productId)) {
+      _showSnack('"${product['name']}" is already in ${picked['name']}\'s POS catalog');
+      return;
+    }
     try {
       final catalogId = 'posc_${DateTime.now().millisecondsSinceEpoch}';
       await Supabase.instance.client.from('pos_catalog').upsert({
@@ -173,7 +191,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         'is_active': true,
       }, onConflict: 'org_id,branch_id,product_id');
       if (mounted) setState(() {
-        _posProductIds.add(product['id'] as String);
+        _posProductIds.add(productId);
+        (_posByBranch[branchId] ??= <String>{}).add(productId);
         _filtered = _filterList(
             _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
       });
@@ -251,11 +270,16 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     );
     if (picked == null) return;
     final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
+    final branchId = picked['id'] as String;
     final selected = _filtered.where((p) => _selected.contains(p['id'])).toList();
-    int success = 0; int failed = 0;
+    final already = _posByBranch[branchId] ?? const <String>{};
+    int success = 0; int failed = 0; int dup = 0;
     final pushedIds = <String>[];
     for (var i = 0; i < selected.length; i++) {
       final product = selected[i];
+      final productId = product['id'] as String;
+      // Skip anything already in this branch's catalog (duplicate guard).
+      if (already.contains(productId) || pushedIds.contains(productId)) { dup++; continue; }
       try {
         await Supabase.instance.client.from('pos_catalog').upsert({
           'id': 'posc_${DateTime.now().millisecondsSinceEpoch}_$i',
@@ -268,17 +292,20 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           'uom_id': product['base_uom_id'],
           'is_active': true,
         }, onConflict: 'org_id,branch_id,product_id');
-        pushedIds.add(product['id'] as String);
+        pushedIds.add(productId);
         success++;
       } catch (_) { failed++; }
     }
     if (mounted) setState(() {
       _selected.clear();
       _posProductIds.addAll(pushedIds);
+      (_posByBranch[branchId] ??= <String>{}).addAll(pushedIds);
       _filtered = _filterList(
           _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
     });
-    _showSnack('Pushed $success product${success == 1 ? "" : "s"} to ${picked['name']} POS${failed > 0 ? " — $failed failed" : ""}');
+    _showSnack('Pushed $success product${success == 1 ? "" : "s"} to ${picked['name']} POS'
+        '${dup > 0 ? " — $dup already there" : ""}'
+        '${failed > 0 ? " — $failed failed" : ""}');
   }
 
   // Export current products to CSV using the SAME columns as the import
