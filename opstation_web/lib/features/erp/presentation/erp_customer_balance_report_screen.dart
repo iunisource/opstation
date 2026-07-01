@@ -44,6 +44,11 @@ class _ErpCustomerBalanceReportScreenState
   bool _loaded = false;
   List<String> _periodLabels = [];
   List<Map<String, dynamic>> _items = [];
+  // Retained grouped rows so sort + zero-balance toggle re-render without refetch.
+  List<Map<String, dynamic>> _rawGroups = []; // [{name, rows:[...]}]
+  String _sortKey = 'default'; // default | name | credit | bal1 | bal2 | bal3
+  bool _sortAsc = true;
+  bool _showZero = true; // master filter: include customers whose current balance is 0
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
@@ -238,22 +243,10 @@ class _ErpCustomerBalanceReportScreenState
         for (final r in _routes) r['id'] as String: r['name'] as String? ?? '(route)'
       };
 
-      final items = <Map<String, dynamic>>[];
-      int dataRow = 0;
+      final rawGroups = <Map<String, dynamic>>[];
       void addGroup(String name, List<Map<String, dynamic>> rows) {
         if (rows.isEmpty) return;
-        double t1 = 0, t2 = 0, t3 = 0;
-        for (final r in rows) {
-          t1 += (r['bal1'] as num).toDouble();
-          t2 += (r['bal2'] as num).toDouble();
-          t3 += (r['bal3'] as num).toDouble();
-        }
-        items.add({'type': 'header', 'name': name, 'count': rows.length});
-        for (final r in rows) {
-          items.add({'type': 'row', 'stripe': dataRow % 2 == 1, ...r});
-          dataRow++;
-        }
-        items.add({'type': 'footer', 'name': name, 't1': t1, 't2': t2, 't3': t3});
+        rawGroups.add({'name': name, 'rows': rows});
       }
 
       bool custOk(Map<String, dynamic> row) => _passesStatus(row) && _passesGroup(row);
@@ -291,12 +284,11 @@ class _ErpCustomerBalanceReportScreenState
       }
 
       if (mounted) {
-        setState(() {
-          _items = items;
-          _periodLabels = _labelsFor(ends);
-          _loaded = true;
-          _loading = false;
-        });
+        _rawGroups = rawGroups;
+        _periodLabels = _labelsFor(ends);
+        _loaded = true;
+        _loading = false;
+        _rebuildItems(); // builds _items applying current sort + zero-balance toggle
       }
     } catch (e) {
       if (mounted) {
@@ -305,6 +297,75 @@ class _ErpCustomerBalanceReportScreenState
             .showSnackBar(SnackBar(content: Text('Report error: $e')));
       }
     }
+  }
+
+  /// Rebuilds the flat _items list from _rawGroups, applying the zero-balance
+  /// toggle and the active column sort. No refetch — sorting and the toggle are
+  /// instant once a report is loaded.
+  void _rebuildItems() {
+    final items = <Map<String, dynamic>>[];
+    int dataRow = 0;
+    for (final g in _rawGroups) {
+      final name = g['name'] as String;
+      final rows = <Map<String, dynamic>>[];
+      for (final r in (g['rows'] as List).cast<Map<String, dynamic>>()) {
+        if (!_showZero && ((r['bal3'] as num?)?.toDouble() ?? 0) == 0) continue;
+        rows.add(r);
+      }
+      if (rows.isEmpty) continue; // group emptied by the zero filter
+      _sortRows(rows);
+      double t1 = 0, t2 = 0, t3 = 0;
+      for (final r in rows) {
+        t1 += (r['bal1'] as num).toDouble();
+        t2 += (r['bal2'] as num).toDouble();
+        t3 += (r['bal3'] as num).toDouble();
+      }
+      items.add({'type': 'header', 'name': name, 'count': rows.length});
+      for (final r in rows) {
+        items.add({'type': 'row', 'stripe': dataRow % 2 == 1, ...r});
+        dataRow++;
+      }
+      items.add({'type': 'footer', 'name': name, 't1': t1, 't2': t2, 't3': t3});
+    }
+    setState(() => _items = items);
+  }
+
+  void _sortRows(List<Map<String, dynamic>> rows) {
+    if (_sortKey == 'default') return; // keep route-stop / name order
+    final dir = _sortAsc ? 1 : -1;
+    double n(Map<String, dynamic> r, String k) => (r[k] as num?)?.toDouble() ?? 0;
+    rows.sort((a, b) {
+      switch (_sortKey) {
+        case 'name':
+          return dir *
+              (a['shop_name'] as String? ?? '')
+                  .toLowerCase()
+                  .compareTo((b['shop_name'] as String? ?? '').toLowerCase());
+        case 'credit':
+          return dir * n(a, 'credit_limit').compareTo(n(b, 'credit_limit'));
+        case 'bal1':
+          return dir * n(a, 'bal1').compareTo(n(b, 'bal1'));
+        case 'bal2':
+          return dir * n(a, 'bal2').compareTo(n(b, 'bal2'));
+        case 'bal3':
+          return dir * n(a, 'bal3').compareTo(n(b, 'bal3'));
+      }
+      return 0;
+    });
+  }
+
+  /// Header tap: cycle unsorted -> ascending -> descending -> back to route order.
+  void _onSort(String key) {
+    if (_sortKey != key) {
+      _sortKey = key;
+      _sortAsc = true;
+    } else if (_sortAsc) {
+      _sortAsc = false;
+    } else {
+      _sortKey = 'default';
+      _sortAsc = true;
+    }
+    _rebuildItems();
   }
 
   String _money(num v) {
@@ -521,6 +582,18 @@ class _ErpCustomerBalanceReportScreenState
                       ],
                       onChanged: (v) => setState(() => _statusFilter = v ?? 'active'),
                     )),
+                    _field('Zero Balances', Row(mainAxisSize: MainAxisSize.min, children: [
+                      Switch(
+                        value: _showZero,
+                        onChanged: (v) {
+                          setState(() => _showZero = v);
+                          if (_loaded) _rebuildItems();
+                        },
+                      ),
+                      Text(_showZero ? 'Shown' : 'Hidden',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppTheme.textSecondary)),
+                    ])),
                     ElevatedButton.icon(
                       icon: _loading
                           ? const SizedBox(
@@ -605,30 +678,63 @@ class _ErpCustomerBalanceReportScreenState
   }
 
   Widget _tableHeader() {
-    const st = TextStyle(
-        fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: const BoxDecoration(
           color: AppTheme.background,
           borderRadius: BorderRadius.vertical(top: Radius.circular(10))),
       child: Row(children: [
-        const Expanded(flex: 3, child: Text('Customer', style: st)),
-        const SizedBox(
-            width: 110, child: Text('Credit Limit', style: st, textAlign: TextAlign.right)),
+        Expanded(
+            flex: 3, child: _sortCell('Customer', 'name', alignRight: false)),
+        SizedBox(
+            width: 110, child: _sortCell('Credit Limit', 'credit', alignRight: true)),
         SizedBox(
             width: 110,
-            child: Text(_periodLabels.isNotEmpty ? _periodLabels[0] : '',
-                style: st, textAlign: TextAlign.right)),
+            child: _sortCell(_periodLabels.isNotEmpty ? _periodLabels[0] : '',
+                'bal1',
+                alignRight: true)),
         SizedBox(
             width: 110,
-            child: Text(_periodLabels.length > 1 ? _periodLabels[1] : '',
-                style: st, textAlign: TextAlign.right)),
+            child: _sortCell(_periodLabels.length > 1 ? _periodLabels[1] : '',
+                'bal2',
+                alignRight: true)),
         SizedBox(
             width: 120,
-            child: Text(_periodLabels.length > 2 ? _periodLabels[2] : '',
-                style: st, textAlign: TextAlign.right)),
+            child: _sortCell(_periodLabels.length > 2 ? _periodLabels[2] : '',
+                'bal3',
+                alignRight: true)),
       ]),
+    );
+  }
+
+  /// A tappable column header. Tapping cycles asc -> desc -> route order.
+  Widget _sortCell(String label, String key, {required bool alignRight}) {
+    const st = TextStyle(
+        fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary);
+    final active = _sortKey == key;
+    final labelWidget = Flexible(
+      child: Text(label,
+          style: active ? st.copyWith(color: AppTheme.primary) : st,
+          textAlign: alignRight ? TextAlign.right : TextAlign.left,
+          overflow: TextOverflow.ellipsis),
+    );
+    final arrow = active
+        ? Icon(_sortAsc ? Icons.arrow_upward : Icons.arrow_downward,
+            size: 12, color: AppTheme.primary)
+        : const SizedBox(width: 12);
+    return InkWell(
+      onTap: () => _onSort(key),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          mainAxisAlignment:
+              alignRight ? MainAxisAlignment.end : MainAxisAlignment.start,
+          children: alignRight
+              ? [arrow, const SizedBox(width: 2), labelWidget]
+              : [labelWidget, const SizedBox(width: 2), arrow],
+        ),
+      ),
     );
   }
 
