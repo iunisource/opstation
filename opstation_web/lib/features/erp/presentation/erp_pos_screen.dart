@@ -482,6 +482,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   final _stagedPriceCtrl = TextEditingController();
   final _stagedQtyFocus = FocusNode();
   final _stagedDiscFocus = FocusNode();
+  final _stagedPriceFocus = FocusNode();
   final _searchFocus = FocusNode();
   String _cartSearch = '';
   Map<String, dynamic>? _selectedCustomer;
@@ -523,7 +524,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); WidgetsBinding.instance.addPostFrameCallback((_) => _syncSelectorToSession()); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedPriceCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedPriceCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); _stagedPriceFocus.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -734,8 +735,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _stagedQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _stagedQtyCtrl.text.length);
-      _stagedQtyFocus.requestFocus();
+      if (_allowPriceEdit) {
+        _stagedPriceCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _stagedPriceCtrl.text.length);
+        _stagedPriceFocus.requestFocus();
+      } else {
+        _stagedQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _stagedQtyCtrl.text.length);
+        _stagedQtyFocus.requestFocus();
+      }
     });
   }
 
@@ -784,6 +790,119 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     _searchFocus.requestFocus();
   }
 
+  // Full-screen review of the current bill for long carts: search + scroll,
+  // tap an item to edit it (routes through the existing staging editor),
+  // or remove it inline. Read-only mirror of _cart; edits reuse _stageProduct.
+  void _openBillReview() {
+    String q = '';
+    showDialog(
+      context: context,
+      builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) {
+        final ql = q.trim().toLowerCase();
+        // Preserve real cart indices while filtering.
+        final rows = <MapEntry<int, Map<String, dynamic>>>[];
+        for (var i = 0; i < _cart.length; i++) {
+          final it = _cart[i];
+          final name = (it['name'] as String? ?? '').toLowerCase();
+          final sku = (it['sku'] as String? ?? '').toLowerCase();
+          if (ql.isEmpty || name.contains(ql) || sku.contains(ql)) rows.add(MapEntry(i, it));
+        }
+        double billTotal = 0;
+        for (final it in _cart) {
+          final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+          final d = (it['discount'] as num?)?.toDouble() ?? 0;
+          final dt = it['discount_type'] as String? ?? 'fixed';
+          final da = dt == 'percent' ? price * qty * d / 100 : d;
+          billTotal += price * qty - da;
+        }
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560, maxHeight: 660),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              // Header
+              Padding(padding: const EdgeInsets.fromLTRB(18, 16, 12, 8), child: Row(children: [
+                const Icon(Icons.receipt_long, size: 20, color: AppTheme.primary),
+                const SizedBox(width: 8),
+                Text('Review Bill  (${_cart.length} item${_cart.length == 1 ? '' : 's'})',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                const Spacer(),
+                IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(dctx).pop()),
+              ])),
+              // Search
+              Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 8), child: TextField(
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Search this bill by name or SKU...',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  isDense: true, filled: true, fillColor: const Color(0xFFF8F9FA),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                ),
+                onChanged: (v) => setModal(() => q = v),
+              )),
+              const Divider(height: 1),
+              // Items
+              Flexible(child: rows.isEmpty
+                ? const Padding(padding: EdgeInsets.all(28), child: Text('No matching items', style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView.separated(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: rows.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, r) {
+                      final idx = rows[r].key;
+                      final it = rows[r].value;
+                      final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
+                      final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
+                      final d = (it['discount'] as num?)?.toDouble() ?? 0;
+                      final dt = it['discount_type'] as String? ?? 'fixed';
+                      final da = dt == 'percent' ? price * qty * d / 100 : d;
+                      final lineTotal = price * qty - da;
+                      final discLabel = d > 0 ? (dt == 'percent' ? '  (-${d.toStringAsFixed(0)}%)' : '  (-${d.toStringAsFixed(2)})') : '';
+                      return InkWell(
+                        onTap: _isOpen ? () { Navigator.of(dctx).pop(); _stageProduct(it, cartIndex: idx); } : null,
+                        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Row(children: [
+                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(it['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                            const SizedBox(height: 2),
+                            Text('${qty.toStringAsFixed(qty == qty.roundToDouble() ? 0 : 2)} x Rs. ${price.toStringAsFixed(2)}$discLabel',
+                                style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                          ])),
+                          const SizedBox(width: 10),
+                          Text('Rs. ${lineTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                          const SizedBox(width: 4),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
+                            visualDensity: VisualDensity.compact,
+                            tooltip: 'Remove',
+                            onPressed: _isOpen ? () {
+                              setState(() {
+                                if (_stagedCartIndex == idx) { _stagedProduct = null; _stagedCartIndex = null; }
+                                else if (_stagedCartIndex != null && _stagedCartIndex! > idx) _stagedCartIndex = _stagedCartIndex! - 1;
+                                _cart.removeAt(idx);
+                              });
+                              setModal(() {});
+                            } : null,
+                          ),
+                        ])),
+                      );
+                    })),
+              const Divider(height: 1),
+              // Footer total
+              Padding(padding: const EdgeInsets.fromLTRB(18, 12, 18, 16), child: Row(children: [
+                const Text('Total', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                const Spacer(),
+                Text('Rs. ${billTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+              ])),
+            ]),
+          ),
+        );
+      }),
+    );
+  }
+
   Widget _buildStagingCard() {
     final p = _stagedProduct!;
     final basePrice = (p['price'] as num?)?.toDouble() ?? (p['unit_price'] as num?)?.toDouble() ?? 0;
@@ -811,14 +930,15 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         const SizedBox(height: 3),
         if (_allowPriceEdit)
           Row(children: [
-            SizedBox(width: 160, child: TextField(controller: _stagedPriceCtrl,
+            SizedBox(width: 160, child: TextField(controller: _stagedPriceCtrl, focusNode: _stagedPriceFocus,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
               decoration: InputDecoration(prefixText: 'Rs. ', labelText: 'Unit price', isDense: true,
                 filled: true, fillColor: const Color(0xFFF8F9FA),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-              onChanged: (_) => setState(() {}))),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) { _stagedQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _stagedQtyCtrl.text.length); _stagedQtyFocus.requestFocus(); })),
             const SizedBox(width: 12),
             Expanded(child: Text(stock >= 0 ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock'),
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
@@ -1773,7 +1893,20 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   ])),
               ]);
             })),
-            // Bill search
+            // Bill header + review-in-modal action (for long bills)
+            if (_cart.isNotEmpty)
+              Padding(padding: const EdgeInsets.fromLTRB(14, 6, 4, 0), child: Row(children: [
+                const Text('Bill', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+                const SizedBox(width: 6),
+                Text('${_cart.length} item${_cart.length == 1 ? '' : 's'}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.zoom_out_map, size: 18, color: AppTheme.primary),
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Review bill',
+                  onPressed: _openBillReview,
+                ),
+              ])),
             // Bill — read-only, tap to edit
             Expanded(child: _cart.isEmpty
                 ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
