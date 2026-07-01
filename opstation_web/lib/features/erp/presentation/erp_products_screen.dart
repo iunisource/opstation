@@ -24,6 +24,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   List<Map<String, dynamic>> _branches = [];
   final _searchCtrl = TextEditingController();
   final Set<String> _selected = {};
+  Set<String> _posProductIds = {};   // product_ids in ANY branch's pos_catalog (drives the POS icon + filter)
+  String _posFilter = 'all';         // all | in | out
 
   bool get _canDelete {
     final r = ref.read(currentUserProvider)?.role.name;
@@ -34,7 +36,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   void initState() {
     super.initState();
     _load().then((_) => _maybeFocus());
-    _searchCtrl.addListener(_filter);
+    _searchCtrl.addListener(_runFilter);
   }
 
   /// If opened from global search with ?focus=<id>, open that product's
@@ -76,6 +78,16 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           .eq('org_id', orgId)
           .order('name');
       final branches = await client.from('branches').select('id, name').eq('org_id', orgId!).eq('is_active', true).order('name');
+      // Which products already sit in SOME branch's POS catalog. Paginated
+      // past the 5000 max-rows cap so the icon/filter stay correct at scale.
+      final posIds = <String>{};
+      for (var from = 0; ; from += 1000) {
+        final rows = await client.from('pos_catalog').select('product_id')
+            .eq('org_id', orgId).order('product_id').range(from, from + 999);
+        final batch = List<Map<String, dynamic>>.from(rows as List);
+        for (final r in batch) { final pid = r['product_id'] as String?; if (pid != null) posIds.add(pid); }
+        if (batch.length < 1000) break;
+      }
       bool consignmentOn = false;
       try {
         final cfg = await client.from('app_config').select('value')
@@ -89,8 +101,10 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }
       setState(() {
         _branches = List<Map<String, dynamic>>.from(branches);
+        _posProductIds = posIds;
         _products = List<Map<String, dynamic>>.from(products);
-        _filtered = _products;
+        _filtered = _filterList(List<Map<String, dynamic>>.from(products),
+            _searchCtrl.text.toLowerCase(), _posFilter, posIds);
         _taxonomies = grouped;
         _uoms = List<Map<String, dynamic>>.from(uoms);
         _consignmentEnabled = consignmentOn;
@@ -101,15 +115,22 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     }
   }
 
-  void _filter() {
-    final q = _searchCtrl.text.toLowerCase();
+  List<Map<String, dynamic>> _filterList(
+      List<Map<String, dynamic>> src, String q, String posFilter, Set<String> posIds) {
+    return src.where((p) {
+      if (posFilter == 'in' && !posIds.contains(p['id'])) return false;
+      if (posFilter == 'out' && posIds.contains(p['id'])) return false;
+      if (q.isEmpty) return true;
+      return (p['name'] as String? ?? '').toLowerCase().contains(q) ||
+          (p['sku'] as String? ?? '').toLowerCase().contains(q) ||
+          (p['barcode'] as String? ?? '').toLowerCase().contains(q);
+    }).toList();
+  }
+
+  void _runFilter() {
     setState(() {
-      _filtered = _products.where((p) {
-        if (q.isEmpty) return true;
-        return (p['name'] as String? ?? '').toLowerCase().contains(q) ||
-            (p['sku'] as String? ?? '').toLowerCase().contains(q) ||
-            (p['barcode'] as String? ?? '').toLowerCase().contains(q);
-      }).toList();
+      _filtered = _filterList(
+          _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
     });
   }
 
@@ -151,6 +172,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         'uom_id': product['base_uom_id'],
         'is_active': true,
       }, onConflict: 'org_id,branch_id,product_id');
+      if (mounted) setState(() {
+        _posProductIds.add(product['id'] as String);
+        _filtered = _filterList(
+            _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
+      });
       _showSnack('"${product['name']}" pushed to POS catalog for ${picked['name']}');
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -227,6 +253,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
     final selected = _filtered.where((p) => _selected.contains(p['id'])).toList();
     int success = 0; int failed = 0;
+    final pushedIds = <String>[];
     for (var i = 0; i < selected.length; i++) {
       final product = selected[i];
       try {
@@ -241,10 +268,16 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           'uom_id': product['base_uom_id'],
           'is_active': true,
         }, onConflict: 'org_id,branch_id,product_id');
+        pushedIds.add(product['id'] as String);
         success++;
       } catch (_) { failed++; }
     }
-    if (mounted) setState(() => _selected.clear());
+    if (mounted) setState(() {
+      _selected.clear();
+      _posProductIds.addAll(pushedIds);
+      _filtered = _filterList(
+          _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
+    });
     _showSnack('Pushed $success product${success == 1 ? "" : "s"} to ${picked['name']} POS${failed > 0 ? " — $failed failed" : ""}');
   }
 
@@ -719,6 +752,40 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
               prefixIcon: Icon(Icons.search),
             ),
           ),
+          const SizedBox(height: 12),
+          Row(children: [
+            const Text('POS:',
+                style: TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textSecondary,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 10),
+            for (final opt in const [
+              ['all', 'All'],
+              ['in', 'In POS'],
+              ['out', 'Not in POS']
+            ]) ...[
+              ChoiceChip(
+                label: Text(opt[1]),
+                selected: _posFilter == opt[0],
+                onSelected: (_) {
+                  _posFilter = opt[0];
+                  _runFilter();
+                },
+                selectedColor: Colors.purple.withOpacity(0.15),
+                labelStyle: TextStyle(
+                  fontSize: 12,
+                  color: _posFilter == opt[0]
+                      ? Colors.purple
+                      : AppTheme.textSecondary,
+                  fontWeight: _posFilter == opt[0]
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
+          ]),
           if (_selected.isNotEmpty) ...[
             const SizedBox(height: 12),
             Container(
@@ -868,12 +935,26 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                 SizedBox(
                                   width: 160,
                                   child: Row(children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.point_of_sale,
-                                          size: 18, color: Colors.purple),
-                                      tooltip: 'Push to POS Catalog',
-                                      onPressed: () => _pushToPOS(context, p),
-                                    ),
+                                    Builder(builder: (_) {
+                                      final inPos =
+                                          _posProductIds.contains(p['id']);
+                                      return IconButton(
+                                        icon: Icon(Icons.point_of_sale,
+                                            size: 18,
+                                            color: inPos
+                                                ? Colors.purple
+                                                : Colors.grey.shade400),
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: inPos
+                                              ? Colors.purple.withOpacity(0.12)
+                                              : null,
+                                        ),
+                                        tooltip: inPos
+                                            ? 'In POS catalog — tap to add to another branch'
+                                            : 'Not in POS — tap to push to a branch',
+                                        onPressed: () => _pushToPOS(context, p),
+                                      );
+                                    }),
                                     IconButton(
                                       icon: const Icon(Icons.edit_outlined,
                                           size: 18),
