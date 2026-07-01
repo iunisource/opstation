@@ -1191,6 +1191,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
             'quantity': (existing['quantity'] as num).toDouble() - qty,
             'updated_at': now,
           }).eq('id', existing['id']);
+        } else {
+          // No stock row yet (never-stocked product): create it going negative,
+          // carrying uom_id so the not-null constraint is satisfied.
+          await client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}',
+            'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
+            'quantity': -qty, 'uom_id': item['uom_id'], 'updated_at': now,
+          });
         }
         await client.from('inventory_movements').insert({
           'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
@@ -1258,7 +1266,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         if (stock != null) {
           await client.from('inventory_stock').update({'quantity': (stock['quantity'] as num).toDouble() + qty, 'updated_at': now}).eq('id', stock['id']);
         } else {
-          await client.from('inventory_stock').insert({'id': 'is_${DateTime.now().microsecondsSinceEpoch}', 'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': qty});
+          await client.from('inventory_stock').insert({'id': 'is_${DateTime.now().microsecondsSinceEpoch}', 'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': qty, 'uom_id': item['uom_id'], 'updated_at': now});
         }
         await client.from('inventory_movements').insert({
           'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
@@ -1766,10 +1774,6 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
               ]);
             })),
             // Bill search
-            if (_cart.length > 3) Padding(padding: const EdgeInsets.fromLTRB(10, 6, 10, 0), child: TextField(
-              decoration: const InputDecoration(hintText: 'Filter bill items...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 8)),
-              onChanged: (v) => setState(() => _cartSearch = v),
-            )),
             // Bill — read-only, tap to edit
             Expanded(child: _cart.isEmpty
                 ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1833,7 +1837,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       );
                     })),
                         // Order discount + payment + total
-            Container(padding: const EdgeInsets.all(12), decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppTheme.border))),
+            Container(padding: const EdgeInsets.fromLTRB(12, 8, 12, 8), decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppTheme.border))),
               child: Column(children: [
                 // Order-level discount
                 Row(children: [
@@ -1942,7 +1946,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       ]));
                   }),
                 ],
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 // Totals
                 if (_totalDiscount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   const Text('Discount', style: TextStyle(fontSize: 12, color: Colors.orange)),
@@ -1953,7 +1957,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   const Text('Total', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   Text('Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primary)),
                 ]),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 if (_isOpen && _cart.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: SizedBox(width: double.infinity, height: 36, child: OutlinedButton.icon(
                   icon: const Icon(Icons.pause_circle_outline, size: 16),
                   label: const Text('Hold Bill', style: TextStyle(fontSize: 13)),
