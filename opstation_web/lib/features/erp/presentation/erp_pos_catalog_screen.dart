@@ -91,15 +91,27 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
     if (orgId == null || branchId == null) { setState(() => _loading = false); return; }
     try {
       final client = Supabase.instance.client;
-      final items = await client.from('pos_catalog')
-          .select().eq('org_id', orgId).eq('branch_id', branchId).order('name');
       final branches = await client.from('branches')
           .select().eq('org_id', orgId).eq('is_active', true).order('name');
+      final branchList = List<Map<String, dynamic>>.from(branches);
+      // If the selected branch doesn't belong to this org (e.g. left over from a
+      // previous org after switching), don't query pos_catalog with a foreign
+      // branch_id — show an empty catalog until a valid branch is selected.
+      final branchInOrg = branchList.any((b) => b['id'] == branchId);
+      if (!branchInOrg) {
+        setState(() {
+          _items = []; _filtered = []; _allBranches = branchList;
+          _stockMap = {}; _loading = false;
+        });
+        return;
+      }
+      final items = await client.from('pos_catalog')
+          .select().eq('org_id', orgId).eq('branch_id', branchId).order('name');
       final stockRows = await client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId);
       setState(() {
         _items = List<Map<String, dynamic>>.from(items);
         _filtered = _items;
-        _allBranches = List<Map<String, dynamic>>.from(branches);
+        _allBranches = branchList;
         _stockMap = {for (final s in stockRows as List) s['product_id'] as String: (s['quantity'] as num?)?.toDouble() ?? 0.0};
         _loading = false;
       });
@@ -137,9 +149,10 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
         removed++;
       } catch (_) { skipped++; }
     }
+    if (!mounted) return;
     setState(() => _selected.clear());
     _showSnack('Removed $removed from POS catalog${skipped > 0 ? " — $skipped skipped (have linked records)" : ""}');
-    _load();
+    await _load();
   }
 
   void _showSnack(String msg) {    if (!mounted) return;
@@ -290,6 +303,18 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Reload whenever the selected branch changes (org switch, or the provider
+    // populating after first paint). This fixes: (a) items not appearing until
+    // several refreshes — the branch wasn't ready on first load; and (b) a stale
+    // branch from a previous org showing after an org switch.
+    ref.listen(selectedBranchProvider, (prev, next) {
+      final prevId = (prev as Map<String, dynamic>?)?['id'];
+      final nextId = (next as Map<String, dynamic>?)?['id'];
+      if (prevId != nextId) {
+        _selected.clear();
+        _load();
+      }
+    });
     final branch = ref.watch(selectedBranchProvider);
     return Container(
       color: AppTheme.background,
