@@ -105,17 +105,42 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
         });
         return;
       }
-      final items = await client.from('pos_catalog')
-          .select().eq('org_id', orgId).eq('branch_id', branchId).order('name');
-      final stockRows = await client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId);
+      // PostgREST caps a single response at this project's "Max Rows" setting
+      // (currently 5000). A bare .select() silently truncates at that cap with
+      // NO error, so >5000-item catalogs were losing rows -- and inventory_stock
+      // was truncated the same way, making items past row 5000 wrongly read as
+      // 0 stock. Page through in 1000-row batches to load ALL rows. Page size
+      // 1000 is <= any Supabase Max Rows value, so a short page reliably means
+      // "end reached". The secondary .order('id') gives a stable tiebreaker so
+      // pagination doesn't drop/duplicate rows when names repeat.
+      const pageSz = 1000;
+      final items = <Map<String, dynamic>>[];
+      for (var from = 0; ; from += pageSz) {
+        final batch = await client.from('pos_catalog')
+            .select().eq('org_id', orgId).eq('branch_id', branchId)
+            .order('name').order('id').range(from, from + pageSz - 1);
+        final rows = List<Map<String, dynamic>>.from(batch as List);
+        items.addAll(rows);
+        if (rows.length < pageSz) break;
+      }
+      final stockRows = <Map<String, dynamic>>[];
+      for (var from = 0; ; from += pageSz) {
+        final batch = await client.from('inventory_stock')
+            .select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId)
+            .order('product_id').range(from, from + pageSz - 1);
+        final rows = List<Map<String, dynamic>>.from(batch as List);
+        stockRows.addAll(rows);
+        if (rows.length < pageSz) break;
+      }
+      if (!mounted) return;
       setState(() {
-        _items = List<Map<String, dynamic>>.from(items);
+        _items = items;
         _filtered = _items;
         _allBranches = branchList;
-        _stockMap = {for (final s in stockRows as List) s['product_id'] as String: (s['quantity'] as num?)?.toDouble() ?? 0.0};
+        _stockMap = {for (final s in stockRows) s['product_id'] as String: (s['quantity'] as num?)?.toDouble() ?? 0.0};
         _loading = false;
       });
-    } catch (_) { setState(() => _loading = false); }
+    } catch (_) { if (mounted) setState(() => _loading = false); }
   }
 
   Future<void> _bulkDelete() async {
@@ -473,9 +498,20 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                                 if (_isAdmin) IconButton(
                                   icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
                                   onPressed: () async {
-                                    await Supabase.instance.client.from('pos_catalog').delete().eq('id', item['id']);
+                                    final id = item['id'] as String;
+                                    try {
+                                      await Supabase.instance.client.from('pos_catalog').delete().eq('id', id);
+                                    } catch (_) {
+                                      // Item has linked POS sales (FK) or is RLS-blocked. Never let
+                                      // this escape the async callback -- an uncaught error here blanks
+                                      // the CanvasKit canvas (white screen) in release web. Bulk delete
+                                      // already guards this; per-row must too.
+                                      _showSnack('Could not remove -- item has linked POS sales.');
+                                      return;
+                                    }
+                                    _selected.remove(id);
                                     _showSnack('Removed from POS catalog');
-                                    _load();
+                                    await _load();
                                   },
                                 ),
                               ])),

@@ -580,18 +580,36 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
+  // Pages past PostgREST's server-side max-rows cap (this project = 5000).
+  // A bare .select() silently truncates at that cap with NO error, so the POS
+  // terminal was loading at most 5000 products / stock rows. Page in 1000-row
+  // batches (1000 is <= any max-rows value, so a short page reliably means
+  // "end reached"). Returns a Future<List> so it drops into Future.wait.
+  Future<List<Map<String, dynamic>>> _fetchAllPaged(
+      dynamic Function(int from, int to) buildPage) async {
+    const pageSz = 1000;
+    final out = <Map<String, dynamic>>[];
+    for (var from = 0; ; from += pageSz) {
+      final rows = List<Map<String, dynamic>>.from(
+          await buildPage(from, from + pageSz - 1) as List);
+      out.addAll(rows);
+      if (rows.length < pageSz) break;
+    }
+    return out;
+  }
+
   Future<void> _loadData() async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() { _loading = true; _stagedProduct = null; _stagedCartIndex = null; _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear(); _showDropdown = false; });
     try {
       final client = Supabase.instance.client;
       final branchId = _session['branch_id'] as String? ?? '';
-      final results = await Future.wait([
+      final results = await Future.wait<dynamic>([
         client.from('pos_transactions').select('*, customers(shop_name), pos_customers(name, phone), transaction_number, amount_paid, balance_change').eq('session_id', _session['id']).order('transacted_at', ascending: false),
-        client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name'),
+        _fetchAllPaged((from, to) => client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name').order('id').range(from, to)),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name'),
         client.from('pos_sessions').select('*, branches(name)').eq('id', _session['id']).single(),
-        client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId),
+        _fetchAllPaged((from, to) => client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId).order('product_id').range(from, to)),
         client.from('pos_customers').select('id, name, phone, cnic').eq('org_id', orgId).eq('branch_id', branchId).order('name'),
         client.from('pos_held_bills').select('*').eq('session_id', _session['id']).eq('status', 'held').order('held_at', ascending: false),
       ]);
