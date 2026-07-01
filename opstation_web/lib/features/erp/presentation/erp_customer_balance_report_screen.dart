@@ -526,37 +526,36 @@ class _ErpCustomerBalanceReportScreenState
                           const BoxConstraints(minHeight: 38, minWidth: 84),
                       children: const [Text('3 Months'), Text('3 Weeks')],
                     )),
-                    _field('Route', _dropdown<String?>(
+                    _field('Route', _searchableDropdown<String?>(
                       width: 190,
                       value: _routeFilter,
-                      items: [
-                        const DropdownMenuItem(value: null, child: Text('All routes')),
-                        ..._routes.map((r) => DropdownMenuItem(
-                            value: r['id'] as String,
-                            child: Text(r['name'] as String? ?? '(route)',
-                                overflow: TextOverflow.ellipsis))),
+                      options: <(String?, String)>[
+                        (null, 'All routes'),
+                        ..._routes.map((r) => (
+                              r['id'] as String?,
+                              r['name'] as String? ?? '(route)'
+                            )),
                       ],
                       onChanged: (v) => setState(() => _routeFilter = v),
                     )),
-                    _field('Customer Group', _dropdown<String?>(
+                    _field('Customer Group', _searchableDropdown<String?>(
                       width: 170,
                       value: _groupFilter,
-                      items: [
-                        const DropdownMenuItem(value: null, child: Text('All groups')),
-                        ..._groups.map((g) => DropdownMenuItem(
-                            value: g, child: Text(g, overflow: TextOverflow.ellipsis))),
+                      options: <(String?, String)>[
+                        (null, 'All groups'),
+                        ..._groups.map((g) => (g as String?, g)),
                       ],
                       onChanged: (v) => setState(() => _groupFilter = v),
                     )),
-                    _field('Salesperson', _dropdown<String?>(
+                    _field('Salesperson', _searchableDropdown<String?>(
                       width: 180,
                       value: _salespersonFilter,
-                      items: [
-                        const DropdownMenuItem(value: null, child: Text('All salespersons')),
-                        ..._salespeople.map((s) => DropdownMenuItem(
-                            value: s['id'] as String,
-                            child: Text(s['name'] as String,
-                                overflow: TextOverflow.ellipsis))),
+                      options: <(String?, String)>[
+                        (null, 'All salespersons'),
+                        ..._salespeople.map((s) => (
+                              s['id'] as String?,
+                              s['name'] as String
+                            )),
                       ],
                       onChanged: (v) => setState(() => _salespersonFilter = v),
                     )),
@@ -661,6 +660,46 @@ class _ErpCustomerBalanceReportScreenState
             border: OutlineInputBorder()),
         items: items,
         onChanged: onChanged,
+      ),
+    );
+  }
+
+  /// Dropdown with a type-ahead search box (opens a searchable list dialog).
+  /// options: (value, label) pairs; the first is typically the "All …" entry.
+  Widget _searchableDropdown<T>({
+    required double width,
+    required T value,
+    required List<(T, String)> options,
+    required ValueChanged<T> onChanged,
+  }) {
+    final current = options.firstWhere((o) => o.$1 == value,
+        orElse: () => options.isNotEmpty ? options.first : (value, ''));
+    return SizedBox(
+      width: width,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: () async {
+          final picked = await showDialog<_Picked<T>>(
+            context: context,
+            builder: (_) =>
+                _SearchableDropdownDialog<T>(options: options, current: value),
+          );
+          if (picked != null) onChanged(picked.value);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+          decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFBDBDBD)),
+              borderRadius: BorderRadius.circular(6)),
+          child: Row(children: [
+            Expanded(
+                child: Text(current.$2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13))),
+            const Icon(Icons.arrow_drop_down,
+                size: 20, color: AppTheme.textSecondary),
+          ]),
+        ),
       ),
     );
   }
@@ -805,6 +844,98 @@ class _ErpCustomerBalanceReportScreenState
                   : neg
                       ? Colors.green
                       : AppTheme.textPrimary)),
+    );
+  }
+}
+
+/// Wrapper so a searchable dropdown can return a chosen value of any type —
+/// including a legitimate null (e.g. the "All …" option) — distinct from the
+/// dialog being dismissed (which returns null from showDialog).
+class _Picked<T> {
+  final T value;
+  const _Picked(this.value);
+}
+
+class _SearchableDropdownDialog<T> extends StatefulWidget {
+  final List<(T, String)> options;
+  final T current;
+  const _SearchableDropdownDialog(
+      {required this.options, required this.current});
+  @override
+  State<_SearchableDropdownDialog<T>> createState() =>
+      _SearchableDropdownDialogState<T>();
+}
+
+class _SearchableDropdownDialogState<T>
+    extends State<_SearchableDropdownDialog<T>> {
+  final _ctrl = TextEditingController();
+  String _q = '';
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _q.toLowerCase().trim();
+    final filtered = q.isEmpty
+        ? widget.options
+        : widget.options
+            .where((o) => o.$2.toLowerCase().contains(q))
+            .toList();
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 480),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              controller: _ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                  hintText: 'Search…',
+                  prefixIcon: Icon(Icons.search, size: 18),
+                  isDense: true,
+                  border: OutlineInputBorder()),
+              onChanged: (v) => setState(() => _q = v),
+            ),
+          ),
+          const Divider(height: 1),
+          Flexible(
+            child: filtered.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text('No matches',
+                        style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: filtered.length,
+                    itemBuilder: (_, i) {
+                      final o = filtered[i];
+                      final selected = o.$1 == widget.current;
+                      return ListTile(
+                        dense: true,
+                        title: Text(o.$2,
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: selected
+                                    ? FontWeight.w700
+                                    : FontWeight.w400,
+                                color: selected ? AppTheme.primary : null)),
+                        trailing: selected
+                            ? const Icon(Icons.check,
+                                size: 16, color: AppTheme.primary)
+                            : null,
+                        onTap: () =>
+                            Navigator.pop(context, _Picked<T>(o.$1)),
+                      );
+                    },
+                  ),
+          ),
+        ]),
+      ),
     );
   }
 }
