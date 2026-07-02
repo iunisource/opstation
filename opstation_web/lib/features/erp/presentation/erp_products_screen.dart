@@ -354,61 +354,106 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     );
   }
 
-  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds, String? openingBranchId, bool updateMode, DateTime openingDate) async {
+  Future<void> _doCsvImport(List<Map<String, dynamic>> rows, List<String> branchIds, String? openingBranchId, bool updateMode, DateTime openingDate, {void Function(int done, int total)? onProgress}) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
     final userId = ref.read(currentUserProvider)?.id ?? '';
+    final client = Supabase.instance.client;
     int success = 0; int failed = 0; int allocFailed = 0;
+    final totalRows = rows.length;
+    onProgress?.call(0, totalRows);
+
     // Opening-stock lines collected across the batch, posted as ONE voucher.
     final openingLines = <Map<String, dynamic>>[];
-    for (var i = 0; i < rows.length; i++) {
-      try {
-        // Strip transient fields that aren't columns on `products`.
-        final productData = Map<String, dynamic>.from(rows[i])
-          ..remove('_opening_qty')
-          ..remove('_match_id');
 
-        if (updateMode) {
-          // UPDATE path: overwrite an existing product's fields. Never creates
-          // products, never touches stock or the GL.
-          final matchId = rows[i]['_match_id'] as String?;
-          if (matchId == null) { failed++; continue; }
-          await Supabase.instance.client.from('products').update({
-            ...productData,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', matchId).eq('org_id', orgId);
-          success++;
-          continue;
+    if (updateMode) {
+      // ── UPDATE path ──────────────────────────────────────────────────────
+      // Overwrite existing products' fields. Never creates products, never
+      // touches stock or the GL. Batched: one upsert per chunk instead of one
+      // update per row (1345 round-trips → a handful).
+      const chunk = 200;
+      // Build full row objects (id + org_id + fields) for upsert-on-id.
+      final payloads = <Map<String, dynamic>>[];
+      for (final r in rows) {
+        final matchId = r['_match_id'] as String?;
+        if (matchId == null) { failed++; continue; }
+        final data = Map<String, dynamic>.from(r)..remove('_opening_qty')..remove('_match_id');
+        payloads.add({
+          ...data,
+          'id': matchId,
+          'org_id': orgId,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      }
+      for (var start = 0; start < payloads.length; start += chunk) {
+        final end = (start + chunk < payloads.length) ? start + chunk : payloads.length;
+        final slice = payloads.sublist(start, end);
+        try {
+          // upsert on primary key id: updates existing rows in one call.
+          await client.from('products').upsert(slice, onConflict: 'id');
+          success += slice.length;
+        } catch (_) {
+          // Fall back to per-row so one bad row doesn't fail the whole chunk.
+          for (final p in slice) {
+            try {
+              await client.from('products').update(p).eq('id', p['id']).eq('org_id', orgId);
+              success++;
+            } catch (_) { failed++; }
+          }
         }
-
+        onProgress?.call(end, totalRows);
+      }
+    } else {
+      // ── INSERT path ──────────────────────────────────────────────────────
+      // Batch product inserts; collect stock rows and opening-stock lines, then
+      // batch the stock inserts too.
+      const chunk = 200;
+      final productRows = <Map<String, dynamic>>[];
+      final stockRows = <Map<String, dynamic>>[];
+      for (var i = 0; i < rows.length; i++) {
+        final productData = Map<String, dynamic>.from(rows[i])..remove('_opening_qty')..remove('_match_id');
         final id = 'prod_${DateTime.now().millisecondsSinceEpoch}_$i';
         final openQty = ((rows[i]['_opening_qty'] as num?) ?? 0).toDouble();
         final uomId = rows[i]['base_uom_id'] as String?;
         final unitCost = ((rows[i]['cost_price'] as num?) ?? 0).toDouble();
-        await Supabase.instance.client.from('products').insert({
+        productRows.add({
           ...productData,
           'id': id,
           'org_id': orgId,
           'is_active': true,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
-        success++;
-        // Collect opening stock for this product (posted later as one voucher).
         if (openQty > 0 && openingBranchId != null && uomId != null) {
           openingLines.add({'product_id': id, 'uom_id': uomId, 'quantity': openQty, 'unit_cost': unitCost});
         }
-        // Allocate imported product to the chosen branches at zero stock.
-        // Skip the opening-stock branch — the opening-stock voucher creates that row.
         for (var b = 0; b < branchIds.length; b++) {
           if (branchIds[b] == openingBranchId && openQty > 0) continue;
-          try {
-            await Supabase.instance.client.from('inventory_stock').insert({
-              'id': 'invs_${DateTime.now().millisecondsSinceEpoch}_${i}_$b',
-              'org_id': orgId, 'product_id': id, 'branch_id': branchIds[b], 'quantity': 0,
-            });
-          } catch (_) { allocFailed++; }
+          stockRows.add({
+            'id': 'invs_${DateTime.now().millisecondsSinceEpoch}_${i}_$b',
+            'org_id': orgId, 'product_id': id, 'branch_id': branchIds[b], 'quantity': 0,
+          });
         }
-      } catch (_) { failed++; }
+      }
+      // Insert products in chunks (progress tracks this, the main cost).
+      for (var start = 0; start < productRows.length; start += chunk) {
+        final end = (start + chunk < productRows.length) ? start + chunk : productRows.length;
+        final slice = productRows.sublist(start, end);
+        try {
+          await client.from('products').insert(slice);
+          success += slice.length;
+        } catch (_) {
+          for (final p in slice) {
+            try { await client.from('products').insert(p); success++; } catch (_) { failed++; }
+          }
+        }
+        onProgress?.call(end, totalRows);
+      }
+      // Insert branch stock allocations in chunks (best-effort).
+      for (var start = 0; start < stockRows.length; start += 500) {
+        final end = (start + 500 < stockRows.length) ? start + 500 : stockRows.length;
+        try { await client.from('inventory_stock').insert(stockRows.sublist(start, end)); }
+        catch (_) { allocFailed += (end - start); }
+      }
     }
 
     // Post ONE opening-stock voucher for the whole batch, reusing the exact
@@ -417,7 +462,6 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     String? openingMsg;
     if (openingLines.isNotEmpty && openingBranchId != null) {
       try {
-        final client = Supabase.instance.client;
         final now = DateTime.now();
         // voucher/GL date comes from the user-chosen opening date, NOT now().
         final dateStr = '${openingDate.year.toString().padLeft(4, '0')}-${openingDate.month.toString().padLeft(2, '0')}-${openingDate.day.toString().padLeft(2, '0')}';
@@ -1055,7 +1099,7 @@ class _CsvImportDialog extends StatefulWidget {
   final List<Map<String, dynamic>> branches;
   final Set<String> existingSkus;
   final List<Map<String, dynamic>> existingProducts;
-  final Future<void> Function(List<Map<String, dynamic>>, List<String>, String?, bool, DateTime) onImport;
+  final Future<void> Function(List<Map<String, dynamic>>, List<String>, String?, bool, DateTime, {void Function(int, int)? onProgress}) onImport;
   const _CsvImportDialog({required this.uoms, required this.branches, required this.existingSkus, required this.existingProducts, required this.onImport});
   @override
   State<_CsvImportDialog> createState() => _CsvImportDialogState();
@@ -1071,6 +1115,8 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
   String? _lastText;          // last uploaded file text, re-validated when mode flips
   int _totalParsed = 0;
   bool _importing = false;
+  int _progressDone = 0;
+  int _progressTotal = 0;
   String? _fileName;
   String? _fatalError;
 
@@ -1326,6 +1372,19 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
                 const SizedBox(width: 12),
                 _stat('Skipped', _rowErrors.length.toString(), AppTheme.warning),
               ]),
+              if (_importing) ...[
+                const SizedBox(height: 14),
+                LinearProgressIndicator(
+                  value: _progressTotal > 0 ? _progressDone / _progressTotal : null,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _progressTotal > 0
+                      ? '${_updateMode ? "Updating" : "Importing"} $_progressDone / $_progressTotal...'
+                      : 'Working...',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                ),
+              ],
               const SizedBox(height: 12),
               if (_rowErrors.isNotEmpty) Container(
                 constraints: const BoxConstraints(maxHeight: 180),
@@ -1346,8 +1405,11 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select an opening stock branch (your file has opening quantities).')));
               return;
             }
-            setState(() => _importing = true);
-            await widget.onImport(_validRows, _importBranches.toList(), _openingBranchId, _updateMode, _openingDate);
+            setState(() { _importing = true; _progressDone = 0; _progressTotal = _validRows.length; });
+            await widget.onImport(_validRows, _importBranches.toList(), _openingBranchId, _updateMode, _openingDate,
+              onProgress: (done, total) {
+                if (mounted) setState(() { _progressDone = done; _progressTotal = total; });
+              });
             if (mounted) Navigator.pop(context);
           },
           child: Text(_importing ? (_updateMode ? 'Updating...' : 'Importing...') : (_updateMode ? 'Update ${_validRows.length} products' : 'Import ${_validRows.length} rows')),
