@@ -608,7 +608,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final branchId = _session['branch_id'] as String? ?? '';
       final results = await Future.wait<dynamic>([
         client.from('pos_transactions').select('*, customers(shop_name), pos_customers(name, phone), transaction_number, amount_paid, balance_change').eq('session_id', _session['id']).order('transacted_at', ascending: false),
-        _fetchAllPaged((from, to) => client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id, products(selling_price)').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name').order('id').range(from, to)),
+        _fetchAllPaged((from, to) => client.from('pos_catalog').select('id, name, sku, price, is_active, product_id, uom_id').eq('org_id', orgId).eq('branch_id', branchId).eq('is_active', true).order('name').order('id').range(from, to)),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).order('shop_name'),
         client.from('pos_sessions').select('*, branches(name)').eq('id', _session['id']).single(),
         _fetchAllPaged((from, to) => client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId).order('product_id').range(from, to)),
@@ -621,12 +621,29 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       // Embed stock qty into each catalog product
       for (final p in prods) { final pid = p['product_id'] as String?; p['stock_qty'] = pid != null && pid.isNotEmpty ? (stockMap[pid] ?? -1.0) : -1.0; }
       // Live pricing: the sell price always comes from products.selling_price,
-      // not the frozen pos_catalog.price snapshot. A CSV/manual price update to
-      // the product is therefore reflected at the till immediately. Falls back
-      // to the stored catalog price only if the product link is missing.
-      for (final p in prods) {
-        final live = (p['products']?['selling_price'] as num?)?.toDouble();
-        if (live != null) p['price'] = live;
+      // not the frozen pos_catalog.price snapshot — so a CSV/manual price update
+      // reflects at the till immediately. There is no FK from pos_catalog to
+      // products, so we fetch prices separately and merge by product_id rather
+      // than relying on a PostgREST embedded join.
+      try {
+        final priceRows = await _fetchAllPaged((from, to) => client
+            .from('products')
+            .select('id, selling_price')
+            .eq('org_id', orgId)
+            .order('id')
+            .range(from, to));
+        final priceMap = <String, double>{
+          for (final r in List<Map<String, dynamic>>.from(priceRows))
+            if (r['id'] != null && r['selling_price'] != null)
+              r['id'] as String: (r['selling_price'] as num).toDouble()
+        };
+        for (final p in prods) {
+          final pid = p['product_id'] as String?;
+          if (pid != null && priceMap.containsKey(pid)) p['price'] = priceMap[pid];
+        }
+      } catch (_) {
+        // If the price fetch fails for any reason, fall back to the stored
+        // pos_catalog.price already present on each row (no crash).
       }
       List<Map<String, dynamic>> expenseList = [];
       try {
