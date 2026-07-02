@@ -1542,6 +1542,21 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Future<void> _exportSummary() async {
     final orgId = _orgId; if (orgId == null) return;
     final client = Supabase.instance.client;
+    // The printed summary reads closing_cash / closed_at from _session. If the
+    // session was closed just now or in another tab, the in-memory copy can be
+    // stale (closing cash shows 0). Re-fetch the authoritative values from the
+    // DB so the printout always reflects the saved close.
+    try {
+      final fresh = await client
+          .from('pos_sessions')
+          .select('opening_cash, closing_cash, closed_at, status')
+          .eq('id', _session['id'])
+          .single();
+      _session['opening_cash'] = fresh['opening_cash'];
+      _session['closing_cash'] = fresh['closing_cash'];
+      _session['closed_at'] = fresh['closed_at'];
+      _session['status'] = fresh['status'];
+    } catch (_) {}
     final txnIds = _transactions.map((t) => t['id'] as String).toList();
     Map<String, List<Map<String, dynamic>>> itemsByTxn = {};
     if (txnIds.isNotEmpty) {
