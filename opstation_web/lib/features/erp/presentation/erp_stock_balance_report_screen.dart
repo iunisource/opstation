@@ -22,7 +22,10 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
   DateTime _asOf = DateTime.now();
   bool _hideZero = false;
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
-  String? _fMain, _fGroup, _fClass, _fMov;
+  String? _fMain, _fGroup, _fClass, _fMov, _fSub;
+  String _search = '';
+  String _sortKey = '';
+  bool _sortAsc = true;
 
   @override
   void initState() {
@@ -71,14 +74,58 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
   String _fmtDisplay(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
-  List<Map<String, dynamic>> get _list => _rows.where((r) {
-        if (_hideZero && _qty(r) == 0) return false;
-        if (_fMain != null && r['product_main_group'] != _fMain) return false;
-        if (_fGroup != null && r['product_group'] != _fGroup) return false;
-        if (_fClass != null && r['product_class'] != _fClass) return false;
-        if (_fMov != null && r['product_movement_category'] != _fMov) return false;
-        return true;
-      }).toList();
+  List<Map<String, dynamic>> get _list {
+    var out = _rows.where((r) {
+      if (_hideZero && _qty(r) == 0) return false;
+      if (_fMain != null && r['product_main_group'] != _fMain) return false;
+      if (_fGroup != null && r['product_group'] != _fGroup) return false;
+      if (_fSub != null && r['product_sub_group'] != _fSub) return false;
+      if (_fClass != null && r['product_class'] != _fClass) return false;
+      if (_fMov != null && r['product_movement_category'] != _fMov) return false;
+      if (_search.trim().isNotEmpty) {
+        final q = _search.trim().toLowerCase();
+        final name = (r['product_name'] as String? ?? '').toLowerCase();
+        final sku = (r['sku'] as String? ?? '').toLowerCase();
+        if (!name.contains(q) && !sku.contains(q)) return false;
+      }
+      return true;
+    }).toList();
+    if (_sortKey.isNotEmpty) {
+      final dir = _sortAsc ? 1 : -1;
+      out.sort((a, b) {
+        final av = a[_sortKey]; final bv = b[_sortKey];
+        int c;
+        if (av is num && bv is num) { c = av.compareTo(bv); }
+        else { c = (av?.toString() ?? '').toLowerCase().compareTo((bv?.toString() ?? '').toLowerCase()); }
+        return c * dir;
+      });
+    }
+    return out;
+  }
+
+  void _toggleSort(String key) {
+    setState(() {
+      if (_sortKey != key) { _sortKey = key; _sortAsc = true; }
+      else if (_sortAsc) { _sortAsc = false; }
+      else { _sortKey = ''; _sortAsc = true; }
+    });
+  }
+
+  Widget _sortHeader(String label, String key, {bool right = false}) {
+    final active = _sortKey == key;
+    return InkWell(
+      onTap: () => _toggleSort(key),
+      child: Row(
+        mainAxisAlignment: right ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          Flexible(child: Text(label, textAlign: right ? TextAlign.right : TextAlign.left,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+          if (active) Icon(_sortAsc ? Icons.arrow_upward : Icons.arrow_downward, size: 13, color: AppTheme.textSecondary),
+        ],
+      ),
+    );
+  }
 
   Widget _filterDropdown(String label, String type, String? value, void Function(String?) onChanged) {
     final items = _taxonomies[type] ?? [];
@@ -175,12 +222,20 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
             icon: const Icon(Icons.calendar_today_outlined, size: 16),
             label: Text('As of ${_fmtDisplay(_asOf)}'),
           ),
+          SizedBox(width: 240, child: TextField(
+            decoration: const InputDecoration(
+              labelText: 'Search product (name or SKU)', isDense: true,
+              prefixIcon: Icon(Icons.search, size: 18),
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
+            onChanged: (v) => setState(() => _search = v),
+          )),
           _filterDropdown('Main Group', 'main_group', _fMain, (v) => setState(() => _fMain = v)),
           _filterDropdown('Group', 'group', _fGroup, (v) => setState(() => _fGroup = v)),
+          _filterDropdown('Sub Group', 'sub_group', _fSub, (v) => setState(() => _fSub = v)),
           _filterDropdown('Class', 'class', _fClass, (v) => setState(() => _fClass = v)),
           _filterDropdown('Movement Category', 'movement_category', _fMov, (v) => setState(() => _fMov = v)),
-          if (_fMain != null || _fGroup != null || _fClass != null || _fMov != null)
-            TextButton.icon(onPressed: () => setState(() { _fMain = null; _fGroup = null; _fClass = null; _fMov = null; }),
+          if (_fMain != null || _fGroup != null || _fSub != null || _fClass != null || _fMov != null)
+            TextButton.icon(onPressed: () => setState(() { _fMain = null; _fGroup = null; _fSub = null; _fClass = null; _fMov = null; }),
                 icon: const Icon(Icons.clear, size: 16), label: const Text('Clear filters')),
           FilterChip(
             label: const Text('Hide zero-stock'),
@@ -200,11 +255,11 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-                    child: const Row(children: [
-                      Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('On Hand', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    child: Row(children: [
+                      Expanded(flex: 4, child: _sortHeader('Product', 'product_name')),
+                      Expanded(flex: 2, child: _sortHeader('SKU', 'sku')),
+                      Expanded(flex: 1, child: _sortHeader('UOM', 'uom')),
+                      Expanded(flex: 2, child: _sortHeader('On Hand', 'on_hand', right: true)),
                     ]),
                   ),
                   Expanded(child: list.isEmpty

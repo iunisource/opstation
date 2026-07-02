@@ -21,6 +21,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   String? _productId; String _productLabel = '';
   String? _group;
   String? _mainGroup;
+  String? _subGroup;
 
   // option lists
   List<Map<String, dynamic>> _branches = [];
@@ -28,6 +29,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   List<Map<String, dynamic>> _products = [];
   List<String> _groups = [];
   List<String> _mainGroups = [];
+  List<String> _subGroups = [];
   String _userName = '';
 
   // results
@@ -35,6 +37,8 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   bool _running = false;
   bool _hasRun = false;
   String _search = '';
+  String _sortKey = '';
+  bool _sortAsc = true;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
@@ -79,15 +83,17 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     try {
       final rows = await Supabase.instance.client.from('product_taxonomies')
           .select('taxonomy_type, name').eq('org_id', orgId)
-          .inFilter('taxonomy_type', ['group', 'main_group']).order('name');
-      final g = <String>[]; final mg = <String>[];
+          .inFilter('taxonomy_type', ['group', 'main_group', 'sub_group']).order('name');
+      final g = <String>[]; final mg = <String>[]; final sg = <String>[];
       for (final r in List<Map<String, dynamic>>.from(rows)) {
         final n = (r['name'] as String?)?.trim() ?? '';
         if (n.isEmpty) continue;
-        if (r['taxonomy_type'] == 'group') { if (!g.contains(n)) g.add(n); }
+        final t = r['taxonomy_type'];
+        if (t == 'group') { if (!g.contains(n)) g.add(n); }
+        else if (t == 'sub_group') { if (!sg.contains(n)) sg.add(n); }
         else { if (!mg.contains(n)) mg.add(n); }
       }
-      if (mounted) setState(() { _groups = g; _mainGroups = mg; });
+      if (mounted) setState(() { _groups = g; _mainGroups = mg; _subGroups = sg; });
     } catch (_) {}
   }
 
@@ -148,7 +154,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       _from = DateTime(DateTime.now().year, DateTime.now().month, 1);
       _to = DateTime.now();
       _branchId = null; _customerId = null; _customerLabel = '';
-      _productId = null; _productLabel = ''; _group = null; _mainGroup = null;
+      _productId = null; _productLabel = ''; _group = null; _mainGroup = null; _subGroup = null;
       _rows = []; _hasRun = false; _search = '';
     });
   }
@@ -167,6 +173,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         'p_product': _productId,
         'p_group': _group,
         'p_main_group': _mainGroup,
+        'p_sub_group': _subGroup,
       });
       final list = List<Map<String, dynamic>>.from((res as List?) ?? const []);
       if (mounted) setState(() { _rows = list; _hasRun = true; _running = false; });
@@ -176,14 +183,47 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   }
 
   List<Map<String, dynamic>> get _visible {
-    if (_search.isEmpty) return _rows;
-    final q = _search.toLowerCase();
-    return _rows.where((r) =>
-      (r['product']?.toString().toLowerCase().contains(q) ?? false) ||
-      (r['sku']?.toString().toLowerCase().contains(q) ?? false) ||
-      (r['party']?.toString().toLowerCase().contains(q) ?? false) ||
-      (r['sale_number']?.toString().toLowerCase().contains(q) ?? false)
+    var out = _search.isEmpty ? List<Map<String, dynamic>>.from(_rows) : _rows.where((r) =>
+      (r['product']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false) ||
+      (r['sku']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false) ||
+      (r['party']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false) ||
+      (r['sale_number']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false)
     ).toList();
+    if (_sortKey.isNotEmpty) {
+      final dir = _sortAsc ? 1 : -1;
+      out.sort((a, b) {
+        final av = a[_sortKey]; final bv = b[_sortKey];
+        int c;
+        if (av is num && bv is num) { c = av.compareTo(bv); }
+        else { c = (av?.toString() ?? '').toLowerCase().compareTo((bv?.toString() ?? '').toLowerCase()); }
+        return c * dir;
+      });
+    }
+    return out;
+  }
+
+  void _toggleSort(String key) {
+    setState(() {
+      if (_sortKey != key) { _sortKey = key; _sortAsc = true; }
+      else if (_sortAsc) { _sortAsc = false; }
+      else { _sortKey = ''; _sortAsc = true; }
+    });
+  }
+
+  Widget _sortHeader(String label, String key, {bool right = false}) {
+    final active = _sortKey == key;
+    return InkWell(
+      onTap: () => _toggleSort(key),
+      child: Row(
+        mainAxisAlignment: right ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          Flexible(child: Text(label, textAlign: right ? TextAlign.right : TextAlign.left,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+          if (active) Icon(_sortAsc ? Icons.arrow_upward : Icons.arrow_downward, size: 12, color: AppTheme.textSecondary),
+        ],
+      ),
+    );
   }
 
   // ---------- totals ----------
@@ -200,6 +240,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     if (_customerLabel.isNotEmpty) parts.add('Customer: $_customerLabel');
     if (_productLabel.isNotEmpty) parts.add('Product: $_productLabel');
     if (_group != null) parts.add('Group: $_group');
+    if (_subGroup != null) parts.add('Sub Group: $_subGroup');
     if (_mainGroup != null) parts.add('Main Group: $_mainGroup');
     return parts.join('  •  ');
   }
@@ -348,6 +389,12 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
             items: [const DropdownMenuItem<String?>(value: null, child: Text('All')),
               ..._groups.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g, overflow: TextOverflow.ellipsis)))],
             onChanged: (v) => setState(() => _group = v))),
+          _field('Product Sub Group', 200, DropdownButtonFormField<String?>(
+            value: _subGroup, isExpanded: true,
+            decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
+            items: [const DropdownMenuItem<String?>(value: null, child: Text('All')),
+              ..._subGroups.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g, overflow: TextOverflow.ellipsis)))],
+            onChanged: (v) => setState(() => _subGroup = v))),
           _field('Product Main Group', 200, DropdownButtonFormField<String?>(
             value: _mainGroup, isExpanded: true,
             decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
@@ -402,22 +449,22 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         else SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(
           headingRowHeight: 40, dataRowMinHeight: 34, dataRowMaxHeight: 56, columnSpacing: 18,
           headingRowColor: MaterialStateProperty.all(AppTheme.background),
-          columns: const [
+          columns: [
             DataColumn(label: Text('Sr', style: _h)),
             DataColumn(label: Text('Date', style: _h)),
             DataColumn(label: Text('Sale Type', style: _h)),
-            DataColumn(label: Text('Sale #', style: _h)),
+            DataColumn(label: _sortHeader('Sale #', 'sale_number')),
             DataColumn(label: Text('Pur. Type', style: _h)),
             DataColumn(label: Text('Pur. #', style: _h)),
-            DataColumn(label: Text('Party', style: _h)),
-            DataColumn(label: Text('Product', style: _h)),
-            DataColumn(label: Text('Qty', style: _h), numeric: true),
-            DataColumn(label: Text('Rate', style: _h), numeric: true),
-            DataColumn(label: Text('Amount', style: _h), numeric: true),
+            DataColumn(label: _sortHeader('Party', 'party')),
+            DataColumn(label: _sortHeader('Product', 'product')),
+            DataColumn(label: _sortHeader('Qty', 'qty', right: true), numeric: true),
+            DataColumn(label: _sortHeader('Rate', 'rate', right: true), numeric: true),
+            DataColumn(label: _sortHeader('Amount', 'amount', right: true), numeric: true),
             DataColumn(label: Text('Unit', style: _h)),
-            DataColumn(label: Text('Unit Cost', style: _h), numeric: true),
-            DataColumn(label: Text('Cost Amount', style: _h), numeric: true),
-            DataColumn(label: Text('Margin', style: _h), numeric: true),
+            DataColumn(label: _sortHeader('Unit Cost', 'unit_cost', right: true), numeric: true),
+            DataColumn(label: _sortHeader('Cost Amount', 'cost_amount', right: true), numeric: true),
+            DataColumn(label: _sortHeader('Margin', 'margin', right: true), numeric: true),
             DataColumn(label: Text('Branch', style: _h)),
           ],
           rows: [
