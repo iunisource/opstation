@@ -371,37 +371,37 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       // Overwrite existing products' fields. Never creates products, never
       // touches stock or the GL. Batched: one upsert per chunk instead of one
       // update per row (1345 round-trips → a handful).
-      const chunk = 200;
-      // Build full row objects (id + org_id + fields) for upsert-on-id.
-      final payloads = <Map<String, dynamic>>[];
+      // Per-row UPDATE with only the fields present in the CSV (Interpretation
+      // B): null/blank cells are stripped so existing values are preserved.
+      // upsert can't express "update only these columns" reliably across a
+      // heterogeneous batch, so we update per row — but run them concurrently
+      // in chunks so it stays fast (well under the old sequential cost).
+      const chunk = 40; // concurrent updates per wave
+      final tasks = <Map<String, dynamic>>[];
       for (final r in rows) {
         final matchId = r['_match_id'] as String?;
         if (matchId == null) { failed++; continue; }
         final data = Map<String, dynamic>.from(r)..remove('_opening_qty')..remove('_match_id');
-        payloads.add({
-          ...data,
-          'id': matchId,
-          'org_id': orgId,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        });
+        // Strip null fields → don't overwrite existing values with blanks.
+        data.removeWhere((k, v) => v == null);
+        data['updated_at'] = DateTime.now().toUtc().toIso8601String();
+        tasks.add({'id': matchId, 'data': data});
       }
-      for (var start = 0; start < payloads.length; start += chunk) {
-        final end = (start + chunk < payloads.length) ? start + chunk : payloads.length;
-        final slice = payloads.sublist(start, end);
-        try {
-          // upsert on primary key id: updates existing rows in one call.
-          await client.from('products').upsert(slice, onConflict: 'id');
-          success += slice.length;
-        } catch (_) {
-          // Fall back to per-row so one bad row doesn't fail the whole chunk.
-          for (final p in slice) {
-            try {
-              await client.from('products').update(p).eq('id', p['id']).eq('org_id', orgId);
-              success++;
-            } catch (_) { failed++; }
-          }
-        }
-        onProgress?.call(end, totalRows);
+      var done = 0;
+      for (var start = 0; start < tasks.length; start += chunk) {
+        final end = (start + chunk < tasks.length) ? start + chunk : tasks.length;
+        final wave = tasks.sublist(start, end);
+        final results = await Future.wait(wave.map((t) async {
+          try {
+            await client.from('products').update(t['data'] as Map<String, dynamic>)
+                .eq('id', t['id'] as String).eq('org_id', orgId);
+            return true;
+          } catch (_) { return false; }
+        }));
+        success += results.where((ok) => ok).length;
+        failed += results.where((ok) => !ok).length;
+        done = end;
+        onProgress?.call(done, totalRows);
       }
     } else {
       // ── INSERT path ──────────────────────────────────────────────────────
@@ -412,6 +412,9 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       final stockRows = <Map<String, dynamic>>[];
       for (var i = 0; i < rows.length; i++) {
         final productData = Map<String, dynamic>.from(rows[i])..remove('_opening_qty')..remove('_match_id');
+        // Blank cells parsed as null → drop them so the column default applies
+        // on insert (rather than forcing an explicit null into a NOT-NULL col).
+        productData.removeWhere((k, v) => v == null);
         final id = 'prod_${DateTime.now().millisecondsSinceEpoch}_$i';
         final openQty = ((rows[i]['_opening_qty'] as num?) ?? 0).toDouble();
         final uomId = rows[i]['base_uom_id'] as String?;
@@ -1231,8 +1234,15 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       }
       if (sku.isNotEmpty && seenSkus.contains(sku)) { errors.add('Row ${r + 1}: duplicate SKU "$sku" within file'); continue; }
       if (sku.isNotEmpty) seenSkus.add(sku);
-      final sell = iSell >= 0 ? double.tryParse(get(iSell)) ?? 0 : 0;
-      final cost = iCost >= 0 ? double.tryParse(get(iCost)) ?? 0 : 0;
+      // Interpretation B: a blank/missing cell → null (skip on update, empty on
+      // insert). A typed number (including 0) → that number. This lets update
+      // mode preserve existing values for blank cells instead of zeroing them.
+      final sellStr = iSell >= 0 ? get(iSell).trim() : '';
+      final costStr = iCost >= 0 ? get(iCost).trim() : '';
+      final lowStr  = iLow  >= 0 ? get(iLow).trim()  : '';
+      final sell = sellStr.isEmpty ? null : double.tryParse(sellStr);
+      final cost = costStr.isEmpty ? null : double.tryParse(costStr);
+      final low  = lowStr.isEmpty  ? null : double.tryParse(lowStr);
       final openQty = iQty >= 0 ? (double.tryParse(get(iQty)) ?? 0) : 0;
       valid.add({
         'name': name,
@@ -1247,7 +1257,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         'product_movement_category': iMov >= 0 && get(iMov).isNotEmpty ? get(iMov) : null,
         'selling_price': sell,
         'cost_price': cost,
-        'low_stock_limit': iLow >= 0 ? (double.tryParse(get(iLow)) ?? 0) : 0,
+        'low_stock_limit': low,
         '_opening_qty': openQty,   // transient: stripped before products insert, used for opening stock
         '_match_id': matchId,      // transient: in update mode, the product id this row updates
       });
