@@ -44,6 +44,45 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   final _globalDiscCtrl = TextEditingController(text: '0');
   String _globalDiscType = 'fixed'; // fixed | percent
 
+  // Per-line field controllers + focus nodes, keyed by the line map identity.
+  // Enables the Qty→Price→Discount→(reopen picker) Enter chain on each row.
+  final Map<Map<String, dynamic>, Map<String, dynamic>> _lineCtl = {};
+
+  Map<String, dynamic> _ctl(Map<String, dynamic> l) {
+    return _lineCtl.putIfAbsent(l, () => {
+          'qtyCtrl': TextEditingController(text: (l['quantity'] as num?)?.toString() ?? '1'),
+          'priceCtrl': TextEditingController(text: (l['unit_price'] as num?)?.toStringAsFixed(2) ?? '0'),
+          'discCtrl': TextEditingController(text: (l['discount'] as num?)?.toString() ?? '0'),
+          'qtyFocus': FocusNode(),
+          'priceFocus': FocusNode(),
+          'discFocus': FocusNode(),
+        });
+  }
+
+  void _clearAllLineCtl() {
+    for (final c in _lineCtl.values) {
+      (c['qtyCtrl'] as TextEditingController).dispose();
+      (c['priceCtrl'] as TextEditingController).dispose();
+      (c['discCtrl'] as TextEditingController).dispose();
+      (c['qtyFocus'] as FocusNode).dispose();
+      (c['priceFocus'] as FocusNode).dispose();
+      (c['discFocus'] as FocusNode).dispose();
+    }
+    _lineCtl.clear();
+  }
+
+  void _disposeLineCtl(Map<String, dynamic> l) {
+    final c = _lineCtl.remove(l);
+    if (c != null) {
+      (c['qtyCtrl'] as TextEditingController).dispose();
+      (c['priceCtrl'] as TextEditingController).dispose();
+      (c['discCtrl'] as TextEditingController).dispose();
+      (c['qtyFocus'] as FocusNode).dispose();
+      (c['priceFocus'] as FocusNode).dispose();
+      (c['discFocus'] as FocusNode).dispose();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +93,14 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   void dispose() {
     _notesCtrl.dispose();
     _globalDiscCtrl.dispose();
+    for (final c in _lineCtl.values) {
+      (c['qtyCtrl'] as TextEditingController).dispose();
+      (c['priceCtrl'] as TextEditingController).dispose();
+      (c['discCtrl'] as TextEditingController).dispose();
+      (c['qtyFocus'] as FocusNode).dispose();
+      (c['priceFocus'] as FocusNode).dispose();
+      (c['discFocus'] as FocusNode).dispose();
+    }
     super.dispose();
   }
 
@@ -145,6 +192,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'valid_until': null,
         'status': 'draft',
       };
+      _clearAllLineCtl();
       _lines = [];
       _notesCtrl.clear();
       _globalDiscCtrl.text = '0';
@@ -160,6 +208,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           .eq('quotation_id', row['id'] as String)
           .order('sr_no');
       if (!mounted) return;
+      _clearAllLineCtl();
       setState(() {
         _doc = {
           'id': row['id'],
@@ -186,14 +235,18 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     } catch (_) {}
   }
 
-  void _closeDoc() => setState(() { _doc = null; _lines = []; });
+  void _closeDoc() => setState(() { _clearAllLineCtl(); _doc = null; _lines = []; });
 
   void _pickProduct(int idx, Map<String, dynamic> p) {
     setState(() {
-      _lines[idx]['product_id'] = p['id'];
-      _lines[idx]['item_name'] = p['name'];
-      _lines[idx]['uom_id'] = p['base_uom_id'];
-      _lines[idx]['unit_price'] = (p['selling_price'] as num?)?.toDouble() ?? 0.0;
+      final l = _lines[idx];
+      l['product_id'] = p['id'];
+      l['item_name'] = p['name'];
+      l['uom_id'] = p['base_uom_id'];
+      final newPrice = (p['selling_price'] as num?)?.toDouble() ?? 0.0;
+      l['unit_price'] = newPrice;
+      // keep the price field's controller in sync with the new product
+      (_ctl(l)['priceCtrl'] as TextEditingController).text = newPrice.toStringAsFixed(2);
     });
   }
 
@@ -718,6 +771,9 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         const Divider(height: 1),
         Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Row(children: [
           TextButton.icon(onPressed: _addLineAndPick, icon: const Icon(Icons.add, size: 18), label: const Text('Add Line')),
+          const SizedBox(width: 8),
+          if (_lines.isNotEmpty)
+            TextButton.icon(onPressed: _bulkDiscountDialog, icon: const Icon(Icons.percent, size: 16), label: const Text('Discount All Lines')),
           const Spacer(),
         ])),
         // Totals block: Subtotal → Global Discount (fixed/%) → Grand Total
@@ -772,6 +828,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
 
   Widget _lineRow(int i) {
     final l = _lines[i];
+    final c = _ctl(l);
     final prod = _products.firstWhere((p) => p['id'] == l['product_id'], orElse: () => {});
     final uomAbbr = prod.isEmpty ? '-' : ((prod['uoms']?['abbreviation'] as String?) ?? (prod['uoms']?['name'] as String?) ?? '-');
     return Padding(
@@ -788,27 +845,46 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           ),
         )),
         Expanded(flex: 1, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Text(uomAbbr, style: const TextStyle(fontSize: 13)))),
-        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextFormField(
-          initialValue: (l['quantity'] as num?)?.toString() ?? '1',
+        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextField(
+          controller: c['qtyCtrl'] as TextEditingController,
+          focusNode: c['qtyFocus'] as FocusNode,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          textInputAction: TextInputAction.next,
           decoration: _dec(),
           style: const TextStyle(fontSize: 13),
           onChanged: (v) => setState(() => l['quantity'] = double.tryParse(v) ?? 0),
+          onSubmitted: (_) {
+            final f = c['priceFocus'] as FocusNode;
+            final pc = c['priceCtrl'] as TextEditingController;
+            pc.selection = TextSelection(baseOffset: 0, extentOffset: pc.text.length);
+            f.requestFocus();
+          },
         ))),
-        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextFormField(
-          initialValue: (l['unit_price'] as num?)?.toStringAsFixed(2) ?? '0',
+        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextField(
+          controller: c['priceCtrl'] as TextEditingController,
+          focusNode: c['priceFocus'] as FocusNode,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          textInputAction: TextInputAction.next,
           decoration: _dec(),
           style: const TextStyle(fontSize: 13),
           onChanged: (v) => setState(() => l['unit_price'] = double.tryParse(v) ?? 0),
+          onSubmitted: (_) {
+            final f = c['discFocus'] as FocusNode;
+            final dc = c['discCtrl'] as TextEditingController;
+            dc.selection = TextSelection(baseOffset: 0, extentOffset: dc.text.length);
+            f.requestFocus();
+          },
         ))),
         Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Row(children: [
-          Expanded(child: TextFormField(
-            initialValue: (l['discount'] as num?)?.toString() ?? '0',
+          Expanded(child: TextField(
+            controller: c['discCtrl'] as TextEditingController,
+            focusNode: c['discFocus'] as FocusNode,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textInputAction: TextInputAction.done,
             decoration: _dec(),
             style: const TextStyle(fontSize: 13),
             onChanged: (v) => setState(() => l['discount'] = double.tryParse(v) ?? 0),
+            onSubmitted: (_) => _addLineAndPick(), // reopen picker for next line
           )),
           const SizedBox(width: 4),
           DropdownButton<String>(
@@ -823,7 +899,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         SizedBox(width: 40, child: IconButton(
           icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
           visualDensity: VisualDensity.compact,
-          onPressed: () => setState(() => _lines.removeAt(i)),
+          onPressed: () => setState(() { _disposeLineCtl(l); _lines.removeAt(i); }),
         )),
       ]),
     );
@@ -835,27 +911,88 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     if (picked != null && picked.isNotEmpty) _pickProduct(idx, picked);
   }
 
-  // "Add Line" flow: create a line, open the picker for it, and when a product
-  // is chosen, auto-reopen the picker for the next line so items can be added
-  // rapidly. Cancelling the picker (no selection) removes the empty line and
-  // stops the loop.
+  // Add-product loop with per-line Enter chain:
+  //   pick product → line added → focus its Qty → Enter → Price → Enter →
+  //   Discount → Enter → reopen picker → repeat. Ends when the picker is
+  //   dismissed (× or Esc).
   Future<void> _addLineAndPick() async {
-    while (true) {
-      final picked = await pickProduct(context, _products, title: 'Add product to quotation');
-      if (picked == null || picked.isEmpty) break;
-      setState(() {
-        _lines.add({
-          'product_id': picked['id'],
-          'item_name': picked['name'],
-          'uom_id': picked['base_uom_id'],
-          'quantity': 1.0,
-          'unit_price': (picked['selling_price'] as num?)?.toDouble() ?? 0.0,
-          'discount': 0.0,
-          'discount_type': 'fixed',
-        });
-      });
-      // loop reopens the picker for the next item
-    }
+    final picked = await pickProduct(context, _products, title: 'Add product to quotation');
+    if (picked == null || picked.isEmpty) return; // × / Esc ends the loop
+    final line = {
+      'product_id': picked['id'],
+      'item_name': picked['name'],
+      'uom_id': picked['base_uom_id'],
+      'quantity': 1.0,
+      'unit_price': (picked['selling_price'] as num?)?.toDouble() ?? 0.0,
+      'discount': 0.0,
+      'discount_type': 'fixed',
+    };
+    setState(() => _lines.add(line));
+    // After the row builds, focus its Qty field and select the text so typing
+    // replaces the default. The Enter chain (wired in _lineRow) carries through
+    // Price → Discount → back into this method to reopen the picker.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _ctl(line);
+      final qc = c['qtyCtrl'] as TextEditingController;
+      qc.selection = TextSelection(baseOffset: 0, extentOffset: qc.text.length);
+      (c['qtyFocus'] as FocusNode).requestFocus();
+    });
+  }
+
+  // Bulk discount: choose a type (Rs/%) applied to ALL lines, and optionally a
+  // value. If a value is entered it's pushed to every line (overwriting); if
+  // left blank only the type is applied and each line keeps its own value.
+  Future<void> _bulkDiscountDialog() async {
+    String type = _globalDiscType == 'percent' ? 'percent' : 'fixed';
+    final valCtrl = TextEditingController();
+    final applied = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Discount All Lines', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Discount type', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Row(children: [
+            ChoiceChip(label: const Text('Rs (Fixed)'), selected: type == 'fixed', onSelected: (_) => setModal(() => type = 'fixed')),
+            const SizedBox(width: 8),
+            ChoiceChip(label: const Text('% (Percent)'), selected: type == 'percent', onSelected: (_) => setModal(() => type = 'percent')),
+          ]),
+          const SizedBox(height: 16),
+          const Text('Value (optional)', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: valCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              hintText: type == 'percent' ? 'e.g. 10 (applies 10% to all lines)' : 'e.g. 50 (applies Rs. 50 to all lines)',
+              isDense: true,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text('Leave value blank to change only the type on every line (each line keeps its own amount). Entering a value overwrites every line\u2019s discount.',
+              style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(dctx, true), child: const Text('Apply to all')),
+        ],
+      )),
+    );
+    if (applied != true) return;
+    final raw = valCtrl.text.trim();
+    final hasValue = raw.isNotEmpty;
+    final value = double.tryParse(raw) ?? 0;
+    setState(() {
+      for (final l in _lines) {
+        l['discount_type'] = type;
+        if (hasValue) l['discount'] = value;
+        // sync the row's controllers so the grid reflects the change
+        final c = _ctl(l);
+        if (hasValue) (c['discCtrl'] as TextEditingController).text = value.toString();
+      }
+    });
   }
 
   Widget _field(String label, Widget child) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
