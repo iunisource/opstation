@@ -888,10 +888,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                         )),
                         const Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        Expanded(flex: 2, child: Text('Sub Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Sell Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        Expanded(flex: 2, child: Text('Purchase/Cost Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         const SizedBox(width: 160),
                       ]),
                     ),
@@ -940,13 +941,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                             fontWeight: FontWeight.w600))),
                                 Expanded(
                                     flex: 2,
-                                    child: Text(p['product_type'] as String? ?? '-',
+                                    child: Text(p['product_group'] as String? ?? '-',
                                         style: const TextStyle(
                                             color: AppTheme.textSecondary,
                                             fontSize: 13))),
                                 Expanded(
                                     flex: 2,
-                                    child: Text(p['product_group'] as String? ?? '-',
+                                    child: Text(p['product_sub_group'] as String? ?? '-',
                                         style: const TextStyle(
                                             color: AppTheme.textSecondary,
                                             fontSize: 13))),
@@ -958,6 +959,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                     flex: 2,
                                     child: Text(
                                         p['selling_price']?.toString() ?? '0',
+                                        style: const TextStyle(fontSize: 13))),
+                                Expanded(
+                                    flex: 2,
+                                    child: Text(
+                                        p['cost_price']?.toString() ?? '0',
                                         style: const TextStyle(fontSize: 13))),
                                 SizedBox(
                                   width: 160,
