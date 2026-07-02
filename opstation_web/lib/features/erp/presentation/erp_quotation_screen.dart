@@ -4,7 +4,9 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../services/voucher_pdf.dart';
 
 // ============================================================================
 // QUOTATION VOUCHER  (Sales module)
@@ -413,6 +415,69 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     }
   }
 
+  // ── Print / PDF ──────────────────────────────────────────────────────────
+  Future<void> _printQuotation() async {
+    if (_doc == null || _doc!['id'] == null) { _toast('Save the quotation first'); return; }
+    try {
+      final custName = _doc!['customer_id'] != null
+          ? (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'shop_name': 'Walk-in'})['shop_name'] as String?)
+          : 'Walk-in';
+      final custPhone = _doc!['customer_id'] != null
+          ? (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'phone': null})['phone'] as String?)
+          : null;
+      final branchName = _branches.firstWhere((b) => b['id'] == _doc!['branch_id'], orElse: () => {'name': null})['name'] as String?;
+
+      double subtotal = 0;
+      double discTotal = 0;
+      final lines = _lines.map((l) {
+        final qty = (l['quantity'] as num?)?.toDouble() ?? 0;
+        final price = (l['unit_price'] as num?)?.toDouble() ?? 0;
+        final d = (l['discount'] as num?)?.toDouble() ?? 0;
+        final dt = l['discount_type'] as String? ?? 'fixed';
+        final gross = qty * price;
+        final da = dt == 'percent' ? gross * d.clamp(0, 100) / 100 : d.clamp(0, gross);
+        final pct = gross > 0 ? (da / gross * 100) : 0.0; // effective % for the PDF column
+        subtotal += gross;
+        discTotal += da;
+        final prod = _products.firstWhere((p) => p['id'] == l['product_id'], orElse: () => {});
+        final uomAbbr = prod.isEmpty ? null : ((prod['uoms']?['abbreviation'] as String?) ?? (prod['uoms']?['name'] as String?));
+        return VoucherLine(
+          product: l['item_name'] as String? ?? '-',
+          sku: prod['sku'] as String?,
+          uom: uomAbbr,
+          qty: qty,
+          unitPrice: price,
+          discountPct: pct,
+          lineTotal: gross - da,
+        );
+      }).toList();
+
+      final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+      final validUntil = _doc!['valid_until'] != null
+          ? DateFormat('dd MMM yyyy').format(_doc!['valid_until'] as DateTime)
+          : null;
+
+      await VoucherPdf.printVoucher(
+        voucherNumber: _doc!['voucher_number'] as String? ?? 'QUOTATION',
+        voucherTypeLabel: 'Quotation',
+        orgName: orgName,
+        branchName: branchName,
+        date: DateFormat('dd MMM yyyy').format(_doc!['voucher_date'] as DateTime),
+        customerOrSupplier: custName,
+        customerPhone: custPhone,
+        status: (_doc!['status'] as String? ?? 'draft').toUpperCase(),
+        remarks: validUntil != null ? 'Valid until: $validUntil' : null,
+        lines: lines,
+        subtotal: subtotal,
+        discountTotal: discTotal,
+        grandTotal: subtotal - discTotal,
+        footerNote: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+      );
+    } catch (e) {
+      _toast('Print failed: $e');
+    }
+  }
+
   void _toast(String m) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
@@ -543,6 +608,12 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           Text(isNew ? 'New Quotation' : (_doc!['voucher_number'] as String? ?? 'Quotation'),
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
           const Spacer(),
+          if (!isNew) OutlinedButton.icon(
+            onPressed: _saving ? null : _printQuotation,
+            icon: const Icon(Icons.print_outlined, size: 18),
+            label: const Text('Print'),
+          ),
+          if (!isNew) const SizedBox(width: 10),
           if (!isNew) OutlinedButton.icon(
             onPressed: _saving ? null : _exportDialog,
             icon: const Icon(Icons.ios_share, size: 18),

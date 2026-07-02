@@ -68,6 +68,7 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('sales', 'Sales', Icons.receipt_long_outlined, [
     PermItem('sales_dashboard', 'Sales Dashboard', PermKind.report, '/erp/sales-dashboard'),
     PermItem('customers', 'Customers', PermKind.doc, '/customers'),
+    PermItem('quotation', 'Quotation', PermKind.doc, '/erp/quotation'),
     PermItem('so', 'Sales Orders', PermKind.doc, '/erp/sales'),
     PermItem('field_orders', 'Field Orders', PermKind.doc, '/erp/field-orders'),
     PermItem('do', 'Delivery Orders', PermKind.doc, '/erp/delivery-orders'),
