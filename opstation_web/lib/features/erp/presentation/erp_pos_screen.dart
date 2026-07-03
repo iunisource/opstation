@@ -628,18 +628,23 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       try {
         final priceRows = await _fetchAllPaged((from, to) => client
             .from('products')
-            .select('id, selling_price')
+            .select('id, selling_price, cost_price, is_consignment')
             .eq('org_id', orgId)
             .order('id')
             .range(from, to));
-        final priceMap = <String, double>{
-          for (final r in List<Map<String, dynamic>>.from(priceRows))
-            if (r['id'] != null && r['selling_price'] != null)
-              r['id'] as String: (r['selling_price'] as num).toDouble()
-        };
+        final priceMap = <String, double>{};
+        final costOk = <String, bool>{};   // product has a valid cost basis (or is consignment)
+        for (final r in List<Map<String, dynamic>>.from(priceRows)) {
+          final id = r['id'] as String?;
+          if (id == null) continue;
+          if (r['selling_price'] != null) priceMap[id] = (r['selling_price'] as num).toDouble();
+          final isConsign = r['is_consignment'] == true;
+          costOk[id] = isConsign || ((r['cost_price'] as num?)?.toDouble() ?? 0) > 0;
+        }
         for (final p in prods) {
           final pid = p['product_id'] as String?;
           if (pid != null && priceMap.containsKey(pid)) p['price'] = priceMap[pid];
+          p['cost_ok'] = pid != null ? (costOk[pid] ?? false) : false;
         }
       } catch (_) {
         // If the price fetch fails for any reason, fall back to the stored
@@ -731,6 +736,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   // ── Stage a product for editing before adding to bill ─────
   void _stageProduct(Map<String, dynamic> product, {int? cartIndex}) {
+    // Cost-price hard block: a product with no cost basis can't be sold (would
+    // book zero/estimated COGS). Applies even when overselling is allowed.
+    // cost_ok is false only when we positively know the product lacks cost; if
+    // the cost lookup was unavailable it defaults true (fail-open, won't block
+    // the till on a network hiccup — costless products are already barred from POS).
+    if (cartIndex == null && product['cost_ok'] == false) {
+      _playBadgeSound();
+      _showSnack('"${product['name']}" has no cost price set — cannot sell until cost is set');
+      return;
+    }
     // Block unless org allows no-stock selling, or the item has tracked stock > 0
     final pStock = (product['stock_qty'] as num?)?.toDouble() ?? 0;
     if (cartIndex == null && !_allowNoStock && pStock <= 0) { _playBadgeSound(); return; }

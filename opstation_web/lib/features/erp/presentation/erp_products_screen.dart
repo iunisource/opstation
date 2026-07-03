@@ -168,6 +168,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
 
   Future<void> _pushToPOS(BuildContext context, Map<String, dynamic> product) async {
     if (_branches.isEmpty) { _showSnack('No branches found'); return; }
+    // Cost-price guard: a product with no cost basis must not enter POS, or its
+    // sales would book zero/estimated COGS. Consignment items are exempt.
+    final _isConsign = product['is_consignment'] == true;
+    if (!_isConsign && ((product['cost_price'] as num?)?.toDouble() ?? 0) <= 0) {
+      _showSnack('"${product['name']}" has no cost price — set a cost price before adding to POS');
+      return;
+    }
     final picked = await showDialog<Map<String, dynamic>?>(context: context, builder: (_) => _BranchPickerDialog(branches: _branches, productName: product['name'] as String? ?? '-'));
     if (picked == null) return;
     final orgId = ref.read(currentUserProvider)?.orgId; if (orgId == null) return;
@@ -275,13 +282,16 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     final branchId = picked['id'] as String;
     final selected = _filtered.where((p) => _selected.contains(p['id'])).toList();
     final already = _posByBranch[branchId] ?? const <String>{};
-    int success = 0; int failed = 0; int dup = 0;
+    int success = 0; int failed = 0; int dup = 0; int noCost = 0;
     final pushedIds = <String>[];
     for (var i = 0; i < selected.length; i++) {
       final product = selected[i];
       final productId = product['id'] as String;
       // Skip anything already in this branch's catalog (duplicate guard).
       if (already.contains(productId) || pushedIds.contains(productId)) { dup++; continue; }
+      // Cost-price guard: don't push costless products (except consignment).
+      final isConsign = product['is_consignment'] == true;
+      if (!isConsign && ((product['cost_price'] as num?)?.toDouble() ?? 0) <= 0) { noCost++; continue; }
       try {
         await Supabase.instance.client.from('pos_catalog').upsert({
           'id': 'posc_${DateTime.now().millisecondsSinceEpoch}_$i',
@@ -307,6 +317,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     });
     _showSnack('Pushed $success product${success == 1 ? "" : "s"} to ${picked['name']} POS'
         '${dup > 0 ? " — $dup already there" : ""}'
+        '${noCost > 0 ? " — $noCost skipped (no cost price)" : ""}'
         '${failed > 0 ? " — $failed failed" : ""}');
   }
 
@@ -713,6 +724,15 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 if (uomId == null) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
                       const SnackBar(content: Text('Base UOM is required')));
+                  return;
+                }
+                // Cost price is required (except consignment items, which are
+                // not owned so 0 cost is valid). Prevents costless products from
+                // being sold and booking zero/estimated COGS.
+                final _costVal = double.tryParse(costPriceCtrl.text.trim()) ?? 0;
+                if (!isConsignment && _costVal <= 0) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text('Cost price is required (must be greater than 0)')));
                   return;
                 }
                 final orgId = ref.read(currentUserProvider)?.orgId;
