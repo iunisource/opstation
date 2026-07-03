@@ -79,6 +79,9 @@ class _ErpStockAdjustmentScreenState
   final TextEditingController _pickOut = TextEditingController();
   final TextEditingController _pickNewCost = TextEditingController();
   String _pickType = 'quantity';   // 'quantity' | 'revaluation'
+  double? _pickCurCost;            // current unit cost of picked product (revalue mode)
+  double? _pickOnHand;            // current on-hand qty of picked product
+  bool _pickCostLoading = false;
 
   // saved-voucher list (side drawer)
   List<Map<String, dynamic>> _vouchers = [];
@@ -217,6 +220,33 @@ class _ErpStockAdjustmentScreenState
       _toast('Load failed: $e');
     }
   }
+
+  // Fetch current unit cost + on-hand for the picked product (revalue preview).
+  Future<void> _loadPickCost(String productId) async {
+    setState(() { _pickCostLoading = true; _pickCurCost = null; _pickOnHand = null; });
+    try {
+      // on-hand from positive cost layers
+      final layers = await _supa
+          .from('inventory_cost_layers')
+          .select('qty_remaining, unit_cost')
+          .eq('org_id', _orgId)
+          .eq('product_id', productId)
+          .gt('qty_remaining', 0);
+      double onHand = 0, valSum = 0;
+      for (final l in (layers as List)) {
+        final q = (l['qty_remaining'] as num?)?.toDouble() ?? 0;
+        final c = (l['unit_cost'] as num?)?.toDouble() ?? 0;
+        onHand += q; valSum += q * c;
+      }
+      final curCost = onHand > 0 ? valSum / onHand : null;
+      if (!mounted) return;
+      setState(() { _pickOnHand = onHand; _pickCurCost = curCost; _pickCostLoading = false; });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _pickCostLoading = false; });
+    }
+  }
+
 
   void _addLine() {
     if (_pickProductId == null) {
@@ -722,7 +752,10 @@ class _ErpStockAdjustmentScreenState
                           ((p['name'] ?? '') as String).toLowerCase().contains(q) ||
                           ((p['sku'] ?? '') as String).toLowerCase().contains(q));
                     },
-                    onSelected: (p) => setState(() => _pickProductId = p['id'] as String),
+                    onSelected: (p) {
+                      setState(() => _pickProductId = p['id'] as String);
+                      if (_pickType == 'revaluation') _loadPickCost(p['id'] as String);
+                    },
                     fieldViewBuilder: (context, ctrl, focus, onSubmit) {
                       _pickProductCtrl = ctrl;
                       return TextField(
@@ -777,6 +810,10 @@ class _ErpStockAdjustmentScreenState
                     onChanged: (v) => setState(() {
                       _pickType = v ?? 'quantity';
                       _pickIn.clear(); _pickOut.clear(); _pickNewCost.clear();
+                      _pickCurCost = null; _pickOnHand = null;
+                      if (_pickType == 'revaluation' && _pickProductId != null) {
+                        _loadPickCost(_pickProductId!);
+                      }
                     }),
                   ),
                 ),
@@ -787,6 +824,7 @@ class _ErpStockAdjustmentScreenState
                       controller: _pickNewCost,
                       keyboardType: TextInputType.number,
                       inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                      onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
                         labelText: 'New Unit Cost', isDense: true,
                         hintText: 'Correct cost/unit'),
@@ -814,6 +852,40 @@ class _ErpStockAdjustmentScreenState
                 const SizedBox(width: 12),
                 FilledButton(onPressed: _addLine, child: const Text('Add')),
               ],
+            ),
+          // Revaluation preview: current cost/on-hand + resulting value delta.
+          if (!_isLocked && _pickType == 'revaluation' && _pickProductId != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Builder(builder: (_) {
+                if (_pickCostLoading) {
+                  return const Text('Loading current cost…', style: TextStyle(fontSize: 12, color: Colors.black54));
+                }
+                final onHand = _pickOnHand ?? 0;
+                if (onHand <= 0) {
+                  return const Text('No on-hand stock for this product — nothing to revalue. Use a recount/quantity adjustment instead.',
+                      style: TextStyle(fontSize: 12, color: Colors.orange));
+                }
+                final cur = _pickCurCost ?? 0;
+                final nc = double.tryParse(_pickNewCost.text.trim()) ?? 0;
+                final delta = (nc - cur) * onHand;
+                final deltaStr = (delta >= 0 ? '+' : '') + delta.toStringAsFixed(2);
+                final onHandStr = onHand.toStringAsFixed(onHand % 1 == 0 ? 0 : 2);
+                final curValStr = (cur * onHand).toStringAsFixed(2);
+                final newValStr = (nc * onHand).toStringAsFixed(2);
+                final tail = nc > 0
+                    ? '   \u2192   New value: $newValStr   (GL impact $deltaStr)'
+                    : '';
+                final line1 = 'On hand: $onHandStr   \u2022   Current cost: ${cur.toStringAsFixed(2)}   \u2022   Current value: $curValStr';
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(color: const Color(0xFFF2F6FF), borderRadius: BorderRadius.circular(8)),
+                  child: Text(
+                    line1 + tail,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1A3D7C)),
+                  ),
+                );
+              }),
             ),
           const SizedBox(height: 16),
 
