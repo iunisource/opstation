@@ -26,6 +26,18 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   @override void initState() { super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
 
+  Future<void> _refreshWithSweep() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId != null) {
+      // Post any pending POS COGS immediately (same work the cron does) so the
+      // P&L reflects up-to-the-second cost, instead of waiting for the sweep.
+      try {
+        await Supabase.instance.client.rpc('sweep_pos_cogs', params: {'p_org': orgId});
+      } catch (_) { /* sweep is best-effort; fall through to load */ }
+    }
+    await _load();
+  }
+
   Future<void> _load() async {
     String? orgId = ref.read(currentUserProvider)?.orgId;
     orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
@@ -168,7 +180,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
         Row(children: [
           const Expanded(child: Text('Profit & Loss', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800))),
           IconButton(onPressed: (_loading || _rows.isEmpty) ? null : _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+          IconButton(onPressed: _refreshWithSweep, icon: const Icon(Icons.refresh), tooltip: 'Refresh (posts pending POS cost)'),
         ]),
         const SizedBox(height: 4),
         Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary)),

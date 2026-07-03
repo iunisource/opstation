@@ -29,6 +29,18 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   // to credit-positive so the statement reads conventionally (and balances).
   static double _disp(String? type, double bal) => (type == 'asset') ? bal : -bal;
 
+  Future<void> _refreshWithSweep() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId != null) {
+      // Post pending POS COGS now so inventory/COGS on the balance sheet is
+      // current, rather than waiting for the periodic cron sweep.
+      try {
+        await Supabase.instance.client.rpc('sweep_pos_cogs', params: {'p_org': orgId});
+      } catch (_) { /* best-effort */ }
+    }
+    await _load();
+  }
+
   Future<void> _load() async {
     String? orgId = ref.read(currentUserProvider)?.orgId;
     orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
@@ -149,7 +161,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         Row(children: [
           const Expanded(child: Text('Balance Sheet', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800))),
           IconButton(onPressed: (_loading || _bsRows.isEmpty) ? null : _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+          IconButton(onPressed: _refreshWithSweep, icon: const Icon(Icons.refresh), tooltip: 'Refresh (posts pending POS cost)'),
         ]),
         const SizedBox(height: 4),
         Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary)),

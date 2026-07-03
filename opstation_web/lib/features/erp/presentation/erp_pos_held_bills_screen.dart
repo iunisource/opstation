@@ -96,6 +96,12 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
     return Container(color: AppTheme.background, child: Column(children: [
       // Header
       Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(24, 20, 24, 16), child: Row(children: [
+        IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back to POS',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        const SizedBox(width: 4),
         const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('Bills on Hold', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
           SizedBox(height: 2),

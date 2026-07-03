@@ -2372,12 +2372,32 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     // (order discount type) and SegmentedButton (payment) will assert → white screen.
     final odt = bill['order_discount_type'] as String?;
     final pm = bill['payment_method'] as String?;
+    // Carry the customer forward from the held bill (quotation export sets these).
+    final billCustId = bill['customer_id'] as String?;
+    final billCustName = bill['customer_name'] as String?;
+    Map<String, dynamic>? restoredCustomer;
+    Map<String, dynamic>? restoredPosCustomer;
+    if (billCustId != null) {
+      // Regular customer: match the loaded list, else synthesize from stored name.
+      restoredCustomer = _customers.firstWhere(
+        (c) => c['id'] == billCustId,
+        orElse: () => {'id': billCustId, 'shop_name': billCustName ?? 'Customer'},
+      );
+    } else if (billCustName != null && billCustName.isNotEmpty && billCustName != 'Walk-in') {
+      // POS quick-customer stored by name only.
+      restoredPosCustomer = _posCustomers.firstWhere(
+        (c) => (c['name'] as String?) == billCustName,
+        orElse: () => {'id': null, 'name': billCustName},
+      );
+    }
     setState(() {
       _cart = items;
       _orderDiscount = (bill['order_discount'] as num?)?.toDouble() ?? 0;
       _orderDiscountType = (odt == 'percent') ? 'percent' : 'fixed';
       _paymentMethod = const {'cash', 'card', 'other'}.contains(pm) ? pm! : 'cash';
       _stagedProduct = null; _stagedCartIndex = null;
+      _selectedCustomer = restoredCustomer;
+      _selectedPosCustomer = restoredPosCustomer;
     });
     try {
       await Supabase.instance.client.from('pos_held_bills')

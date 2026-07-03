@@ -27,6 +27,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   Set<String> _posProductIds = {};   // product_ids in ANY branch's pos_catalog (drives the POS icon + filter)
   Map<String, Set<String>> _posByBranch = {};   // branch_id -> product_ids in that branch (drives the duplicate check)
   String _posFilter = 'all';         // all | in | out
+  String? _fSub;                     // product_sub_group filter (null = all)
 
   bool get _canDelete {
     final r = ref.read(currentUserProvider)?.role.name;
@@ -130,6 +131,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     return src.where((p) {
       if (posFilter == 'in' && !posIds.contains(p['id'])) return false;
       if (posFilter == 'out' && posIds.contains(p['id'])) return false;
+      if (_fSub != null && p['product_sub_group'] != _fSub) return false;
       if (q.isEmpty) return true;
       return (p['name'] as String? ?? '').toLowerCase().contains(q) ||
           (p['sku'] as String? ?? '').toLowerCase().contains(q) ||
@@ -858,6 +860,25 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 ),
               ),
               const SizedBox(width: 6),
+            ],
+            const SizedBox(width: 16),
+            const Text('Sub Group:',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 8),
+            SizedBox(width: 200, child: DropdownButtonFormField<String?>(
+              value: _fSub,
+              isExpanded: true,
+              decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('All')),
+                ...(_taxonomies['sub_group'] ?? []).map((t) => DropdownMenuItem<String?>(
+                    value: t['name'] as String, child: Text(t['name'] as String, overflow: TextOverflow.ellipsis))),
+              ],
+              onChanged: (v) { _fSub = v; _runFilter(); },
+            )),
+            if (_fSub != null) ...[
+              const SizedBox(width: 4),
+              TextButton(onPressed: () { _fSub = null; _runFilter(); }, child: const Text('Clear')),
             ],
           ]),
           if (_selected.isNotEmpty) ...[

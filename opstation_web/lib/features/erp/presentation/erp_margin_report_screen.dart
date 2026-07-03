@@ -352,8 +352,75 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         _filterCard(),
         const SizedBox(height: 16),
         _resultsCard(),
+        if (_hasRun && _rows.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _summaryCard('Group-wise Summary', 'group'),
+          const SizedBox(height: 16),
+          _summaryCard('Sub Group-wise Summary', 'sub_group'),
+        ],
       ]))),
     ]));
+  }
+
+  // Aggregates the currently-visible rows by the given key (group / sub_group)
+  // into qty / amount / cost / margin subtotals, sorted by margin desc.
+  List<Map<String, dynamic>> _summaryBy(String key) {
+    final map = <String, Map<String, double>>{};
+    for (final r in _visible) {
+      final k = (r[key] as String?)?.trim();
+      final label = (k == null || k.isEmpty) ? '(Unspecified)' : k;
+      final m = map.putIfAbsent(label, () => {'qty': 0, 'amount': 0, 'cost': 0, 'margin': 0});
+      m['qty'] = m['qty']! + ((r['qty'] as num?)?.toDouble() ?? 0);
+      m['amount'] = m['amount']! + ((r['amount'] as num?)?.toDouble() ?? 0);
+      m['cost'] = m['cost']! + ((r['cost_amount'] as num?)?.toDouble() ?? 0);
+      m['margin'] = m['margin']! + ((r['margin'] as num?)?.toDouble() ?? 0);
+    }
+    final out = map.entries.map((e) => {
+      'label': e.key,
+      'qty': e.value['qty'], 'amount': e.value['amount'],
+      'cost': e.value['cost'], 'margin': e.value['margin'],
+    }).toList();
+    out.sort((a, b) => (b['margin'] as double).compareTo(a['margin'] as double));
+    return out;
+  }
+
+  Widget _summaryCard(String title, String key) {
+    final rows = _summaryBy(key);
+    if (rows.isEmpty) return const SizedBox.shrink();
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800))),
+        const Divider(height: 1),
+        SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(
+          headingRowHeight: 40, dataRowMinHeight: 36, dataRowMaxHeight: 44,
+          columns: [
+            DataColumn(label: Text(key == 'group' ? 'Group' : 'Sub Group', style: _h)),
+            DataColumn(label: Text('Qty', style: _h), numeric: true),
+            DataColumn(label: Text('Amount', style: _h), numeric: true),
+            DataColumn(label: Text('Cost', style: _h), numeric: true),
+            DataColumn(label: Text('Margin', style: _h), numeric: true),
+            DataColumn(label: Text('Margin %', style: _h), numeric: true),
+          ],
+          rows: [
+            for (final r in rows)
+              DataRow(cells: [
+                DataCell(Text(r['label'] as String, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                DataCell(Text(_fmtQty(r['qty'] as double), style: const TextStyle(fontSize: 12))),
+                DataCell(Text(_fmtMoney(r['amount'] as double), style: const TextStyle(fontSize: 12))),
+                DataCell(Text(_fmtMoney(r['cost'] as double), style: const TextStyle(fontSize: 12))),
+                DataCell(Text(_fmtMoney(r['margin'] as double),
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                        color: (r['margin'] as double) < 0 ? AppTheme.danger : AppTheme.textPrimary))),
+                DataCell(Text(
+                    (r['amount'] as double) == 0 ? '-' : '${(((r['margin'] as double) / (r['amount'] as double)) * 100).toStringAsFixed(1)}%',
+                    style: const TextStyle(fontSize: 12))),
+              ]),
+          ],
+        )),
+      ]),
+    );
   }
 
   Widget _filterCard() {
