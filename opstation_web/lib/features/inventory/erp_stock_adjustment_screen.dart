@@ -35,6 +35,8 @@ class _AdjLine {
   double inQty;
   double outQty;
   String? note;
+  String lineType;      // 'quantity' | 'revaluation'
+  double? newUnitCost;  // for revaluation lines
   _AdjLine({
     required this.productId,
     required this.productName,
@@ -43,10 +45,13 @@ class _AdjLine {
     this.inQty = 0,
     this.outQty = 0,
     this.note,
+    this.lineType = 'quantity',
+    this.newUnitCost,
   });
 
-  // Signed quantity persisted to stock_adjustment_voucher_items.quantity
-  double get signedQty => inQty - outQty;
+  // Signed quantity persisted to stock_adjustment_voucher_items.quantity.
+  // Revaluation lines carry 0 (quantity is not meaningful for them).
+  double get signedQty => lineType == 'revaluation' ? 0 : (inQty - outQty);
 }
 
 class _ErpStockAdjustmentScreenState
@@ -72,6 +77,8 @@ class _ErpStockAdjustmentScreenState
   TextEditingController? _pickProductCtrl; // bound by the Autocomplete field
   final TextEditingController _pickIn = TextEditingController();
   final TextEditingController _pickOut = TextEditingController();
+  final TextEditingController _pickNewCost = TextEditingController();
+  String _pickType = 'quantity';   // 'quantity' | 'revaluation'
 
   // saved-voucher list (side drawer)
   List<Map<String, dynamic>> _vouchers = [];
@@ -97,6 +104,7 @@ class _ErpStockAdjustmentScreenState
     _remarks.dispose();
     _pickIn.dispose();
     _pickOut.dispose();
+    _pickNewCost.dispose();
     super.dispose();
   }
 
@@ -173,6 +181,7 @@ class _ErpStockAdjustmentScreenState
         if (pid == null) continue;
         final prod = _prodById[pid];
         final qty = (r['quantity'] as num? ?? 0).toDouble();
+        final lt = (r['line_type'] as String?) ?? 'quantity';
         newLines.add(_AdjLine(
           productId: pid,
           productName: (prod?['name'] ?? pid) as String,
@@ -181,6 +190,8 @@ class _ErpStockAdjustmentScreenState
           inQty: qty > 0 ? qty : 0,
           outQty: qty < 0 ? -qty : 0,
           note: r['notes'] as String?,
+          lineType: lt,
+          newUnitCost: (r['new_unit_cost'] as num?)?.toDouble(),
         ));
       }
       final ds = v['voucher_date'] as String?;
@@ -212,6 +223,30 @@ class _ErpStockAdjustmentScreenState
       _toast('Pick a product first');
       return;
     }
+    final p = _products.firstWhere((e) => e['id'] == _pickProductId);
+    if (_pickType == 'revaluation') {
+      final nc = double.tryParse(_pickNewCost.text.trim()) ?? 0;
+      if (nc <= 0) {
+        _toast('Enter the new unit cost (greater than 0)');
+        return;
+      }
+      setState(() {
+        _lines.add(_AdjLine(
+          productId: p['id'] as String,
+          productName: (p['name'] ?? '') as String,
+          uomId: p['base_uom_id'] as String?,
+          uomName: (p['base_uom_id'] ?? '') as String,
+          lineType: 'revaluation',
+          newUnitCost: nc,
+        ));
+        _pickProductId = null;
+        _pickProductCtrl?.clear();
+        _pickIn.clear();
+        _pickOut.clear();
+        _pickNewCost.clear();
+      });
+      return;
+    }
     final inQ = double.tryParse(_pickIn.text.trim()) ?? 0;
     final outQ = double.tryParse(_pickOut.text.trim()) ?? 0;
     if (inQ == 0 && outQ == 0) {
@@ -222,7 +257,6 @@ class _ErpStockAdjustmentScreenState
       _toast('A line is either In or Out, not both');
       return;
     }
-    final p = _products.firstWhere((e) => e['id'] == _pickProductId);
     setState(() {
       _lines.add(_AdjLine(
         productId: p['id'] as String,
@@ -236,6 +270,7 @@ class _ErpStockAdjustmentScreenState
       _pickProductCtrl?.clear();
       _pickIn.clear();
       _pickOut.clear();
+      _pickNewCost.clear();
     });
   }
 
@@ -284,7 +319,9 @@ class _ErpStockAdjustmentScreenState
             'org_id': _orgId,
             'product_id': l.productId,
             'uom_id': l.uomId,
-            'quantity': l.signedQty, // In => +, Out => -
+            'quantity': l.signedQty, // In => +, Out => -; revaluation => 0
+            'line_type': l.lineType,
+            'new_unit_cost': l.lineType == 'revaluation' ? l.newUnitCost : null,
             'notes': l.note,
           }
       ]);
@@ -727,23 +764,53 @@ class _ErpStockAdjustmentScreenState
                   ),
                 ),
                 const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _pickIn,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(labelText: 'In Qty', isDense: true),
+                SizedBox(
+                  width: 130,
+                  child: DropdownButtonFormField<String>(
+                    value: _pickType,
+                    isDense: true,
+                    decoration: const InputDecoration(labelText: 'Type', isDense: true),
+                    items: const [
+                      DropdownMenuItem(value: 'quantity', child: Text('Adjust Qty')),
+                      DropdownMenuItem(value: 'revaluation', child: Text('Revalue')),
+                    ],
+                    onChanged: (v) => setState(() {
+                      _pickType = v ?? 'quantity';
+                      _pickIn.clear(); _pickOut.clear(); _pickNewCost.clear();
+                    }),
                   ),
                 ),
                 const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _pickOut,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                    decoration: const InputDecoration(labelText: 'Out Qty', isDense: true),
+                if (_pickType == 'revaluation')
+                  Expanded(
+                    child: TextField(
+                      controller: _pickNewCost,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                      decoration: const InputDecoration(
+                        labelText: 'New Unit Cost', isDense: true,
+                        hintText: 'Correct cost/unit'),
+                    ),
+                  )
+                else ...[
+                  Expanded(
+                    child: TextField(
+                      controller: _pickIn,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                      decoration: const InputDecoration(labelText: 'In Qty', isDense: true),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _pickOut,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                      decoration: const InputDecoration(labelText: 'Out Qty', isDense: true),
+                    ),
+                  ),
+                ],
                 const SizedBox(width: 12),
                 FilledButton(onPressed: _addLine, child: const Text('Add')),
               ],
@@ -755,9 +822,10 @@ class _ErpStockAdjustmentScreenState
             border: TableBorder.all(color: Colors.black12),
             columnWidths: const {
               0: FixedColumnWidth(40),
-              3: FixedColumnWidth(100),
+              3: FixedColumnWidth(90),
               4: FixedColumnWidth(100),
-              5: FixedColumnWidth(48),
+              5: FixedColumnWidth(100),
+              6: FixedColumnWidth(48),
             },
             children: [
               const TableRow(
@@ -766,8 +834,9 @@ class _ErpStockAdjustmentScreenState
                   _Th('#'),
                   _Th('Product'),
                   _Th('Unit'),
+                  _Th('Type'),
                   _Th('In Qty'),
-                  _Th('Out Qty'),
+                  _Th('Out Qty / New Cost'),
                   _Th(''),
                 ],
               ),
@@ -776,8 +845,13 @@ class _ErpStockAdjustmentScreenState
                   _Td('${i + 1}'),
                   _Td(_lines[i].productName),
                   _Td(_lines[i].uomName),
-                  _Td(_lines[i].inQty == 0 ? '' : '${_lines[i].inQty}'),
-                  _Td(_lines[i].outQty == 0 ? '' : '${_lines[i].outQty}'),
+                  _Td(_lines[i].lineType == 'revaluation' ? 'Revalue' : 'Qty'),
+                  _Td(_lines[i].lineType == 'revaluation'
+                      ? '—'
+                      : (_lines[i].inQty == 0 ? '' : '${_lines[i].inQty}')),
+                  _Td(_lines[i].lineType == 'revaluation'
+                      ? '@ ${_lines[i].newUnitCost?.toStringAsFixed(2) ?? '-'}'
+                      : (_lines[i].outQty == 0 ? '' : '${_lines[i].outQty}')),
                   _isLocked
                       ? const _Td('')
                       : IconButton(
@@ -790,6 +864,7 @@ class _ErpStockAdjustmentScreenState
                 children: [
                   const _Td(''),
                   const _Td('Total'),
+                  const _Td(''),
                   const _Td(''),
                   _Td('$totalIn'),
                   _Td('$totalOut'),
