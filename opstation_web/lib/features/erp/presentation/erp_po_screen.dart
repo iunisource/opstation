@@ -38,6 +38,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl = TextEditingController(text: '1');
+  final _addQtyFocus = FocusNode();
   final Map<String, TextEditingController> _lineQtyCtrls = {};
 
   @override
@@ -46,6 +47,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   void dispose() {
     for (final c in _lineQtyCtrls.values) { c.dispose(); }
     _addQtyCtrl.dispose();
+    _addQtyFocus.dispose();
     super.dispose();
   }
 
@@ -231,12 +233,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
   }
 
-  Future<void> _addItem() async {
-    if (!_canEditLines) { _showSnack('Cannot add: a GRN exists against this PO. Delete the GRN first.'); return; }
-    if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
-    if (_items.any((i) => i['product_id'] == _addProductId)) { _showSnack('Already added'); return; }
+  Future<bool> _addItem() async {
+    if (!_canEditLines) { _showSnack('Cannot add: a GRN exists against this PO. Delete the GRN first.'); return false; }
+    if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return false; }
+    if (_items.any((i) => i['product_id'] == _addProductId)) { _showSnack('Already added'); return false; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
-    if (qty <= 0) { _showSnack('Qty must be > 0'); return; }
+    if (qty <= 0) { _showSnack('Qty must be > 0'); return false; }
     final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
     final uom  = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
     final itemId = 'poi_${DateTime.now().microsecondsSinceEpoch}';
@@ -254,7 +256,35 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         _syncLineCtrls();
       });
       await _resetApprovalIfNeeded();
-    } catch (e) { _showSnack('Failed: $e'); }
+      return true;
+    } catch (e) { _showSnack('Failed: $e'); return false; }
+  }
+
+  // Open the product picker (keyboard nav), set product + default UOM, then
+  // focus Qty. Shared by the "+ Add product" tap and the Enter loop.
+  Future<bool> _pickAddProduct() async {
+    if (!_canEditLines) { _showSnack('Cannot add: a GRN exists against this PO. Delete the GRN first.'); return false; }
+    final p = await pickProduct(context, _products, title: 'Add product');
+    if (p == null || p.isEmpty) return false;
+    setState(() {
+      _addProductId = p['id'] as String?;
+      _addUomId = p['base_uom_id'] as String?;
+      _addQtyCtrl.text = '1';
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _addQtyCtrl.text.length);
+      _addQtyFocus.requestFocus();
+    });
+    return true;
+  }
+
+  // Enter on Qty: add the line, then reopen the picker for the next product.
+  Future<void> _addItemAndPickNext() async {
+    final ok = await _addItem();
+    if (!ok) return;
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+    await _pickAddProduct();
   }
 
   Future<void> _deleteItem(String itemId) async {
@@ -604,13 +634,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                     final sel = _addProductId == null ? null : _products.firstWhere((x) => x['id'] == _addProductId, orElse: () => <String, dynamic>{});
                     final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
                     return InkWell(
-                      onTap: () async {
-                        final p = await pickProduct(ctx, _products, title: 'Select product');
-                        if (p != null && p.isNotEmpty) setState(() {
-                          _addProductId = p['id'] as String?;
-                          _addUomId = p['base_uom_id'] as String?;
-                        });
-                      },
+                      onTap: () => _pickAddProduct(),
                       child: InputDecorator(
                         decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder()),
                         child: Row(children: [
@@ -627,9 +651,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                       items: _uoms.map((u) => DropdownMenuItem<String>(value: u['id'] as String, child: Text(u['abbreviation'] as String? ?? '', style: const TextStyle(fontSize: 12)))).toList(),
                       onChanged: (v) => setState(() => _addUomId = v)))),
                   Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: TextField(controller: _addQtyCtrl, decoration: const InputDecoration(hintText: 'Qty', isDense: true), textAlign: TextAlign.right,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true), textInputAction: TextInputAction.done, onSubmitted: (_) => _addItem()))),
-                  SizedBox(width: 44, child: IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary), tooltip: 'Add', onPressed: _addItem)),
+                    child: TextField(controller: _addQtyCtrl, focusNode: _addQtyFocus, decoration: const InputDecoration(hintText: 'Qty', isDense: true), textAlign: TextAlign.right,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true), textInputAction: TextInputAction.done, onSubmitted: (_) => _addItemAndPickNext()))),
+                  SizedBox(width: 44, child: IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary), tooltip: 'Add', onPressed: () => _addItem())),
                 ])),
             ],
           ])),

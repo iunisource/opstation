@@ -84,6 +84,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl = TextEditingController(text: '1');
+  final _addQtyFocus = FocusNode();
   // FOC (free-of-cost) add-row + org toggle
   String? _focProductId;
   String? _focUomId;
@@ -101,6 +102,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   @override
   void dispose() {
     _addQtyCtrl.dispose();
+    _addQtyFocus.dispose();
     _focQtyCtrl.dispose();
     for (final c in _qtyControllers.values) c.dispose();
     super.dispose();
@@ -348,14 +350,14 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  Future<void> _addItem() async {
-    if (!_canEditLines) { _showSnack('Cannot add: $_doMsg'); return; }
-    if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
+  Future<bool> _addItem() async {
+    if (!_canEditLines) { _showSnack('Cannot add: $_doMsg'); return false; }
+    if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return false; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
-    if (qty <= 0) { _showSnack('Enter valid qty'); return; }
+    if (qty <= 0) { _showSnack('Enter valid qty'); return false; }
     if (_items.any((i) => i['product_id'] == _addProductId && i['is_foc'] != true)) {
       _showSnack('Product already added — edit its quantity instead');
-      return;
+      return false;
     }
     final itemId = 'soi_${DateTime.now().millisecondsSinceEpoch}';
     final prod = _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
@@ -380,7 +382,39 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         });
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
       });
-    } catch (e) { _showSnack('Failed: $e'); }
+      return true;
+    } catch (e) { _showSnack('Failed: $e'); return false; }
+  }
+
+  // Open the product picker (keyboard nav), set product + default UOM, then
+  // focus the Qty field. Shared by the "+ Add product" tap and the Enter loop.
+  Future<bool> _pickAddProduct() async {
+    if (!_canEditLines) { _showSnack('Cannot add: $_doMsg'); return false; }
+    final p = await pickProduct(context, _products, title: 'Add product');
+    if (p == null || p.isEmpty) return false; // × / Esc ends the loop
+    setState(() {
+      _addProductId = p['id'] as String?;
+      _addUomId = p['base_uom_id'] as String?;   // default UOM
+      _addQtyCtrl.text = '1';
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _addQtyCtrl.text.length);
+      _addQtyFocus.requestFocus();
+    });
+    return true;
+  }
+
+  // Enter on Qty: add the line, then immediately reopen the picker for the next
+  // product. Loop ends when the picker is dismissed (× / Esc).
+  Future<void> _addItemAndPickNext() async {
+    final ok = await _addItem();
+    if (!ok) return;
+    // small delay so the list rebuild settles before reopening the modal
+    await Future.delayed(const Duration(milliseconds: 50));
+    // ignore: use_build_context_synchronously
+    if (!mounted) return;
+    final more = await _pickAddProduct();
+    if (!more) return; // dismissed → loop ends
   }
 
   // Free-of-Cost items section: same shape as the paid items table, but lines
@@ -908,13 +942,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                       final sel = _addProductId == null ? null : _products.firstWhere((x) => x['id'] == _addProductId, orElse: () => <String, dynamic>{});
                       final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
                       return InkWell(
-                        onTap: () async {
-                          final p = await pickProduct(ctx, _products, title: 'Select product');
-                          if (p != null && p.isNotEmpty) setState(() {
-                            _addProductId = p['id'] as String?;
-                            _addUomId = p['base_uom_id'] as String?;
-                          });
-                        },
+                        onTap: () => _pickAddProduct(),
                         child: InputDecorator(
                           decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder()),
                           child: Row(children: [
@@ -935,15 +963,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                     const SizedBox(width: 8),
                     Expanded(flex: 2, child: TextField(
                       controller: _addQtyCtrl,
+                      focusNode: _addQtyFocus,
                       decoration: const InputDecoration(hintText: 'Qty', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      onSubmitted: (_) => _addItem(),
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _addItemAndPickNext(),
                     )),
                     const SizedBox(width: 8),
                     Expanded(flex: 2, child: const SizedBox.shrink()),
                     SizedBox(width: 40, child: IconButton(
                       icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 20),
-                      onPressed: _addItem,
+                      onPressed: () => _addItem(),
                       tooltip: 'Add item',
                     )),
                   ]),
