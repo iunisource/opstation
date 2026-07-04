@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -57,6 +59,49 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen> {
 
   int _count(String issue) => _rows.where((r) => r['issue'] == issue).length;
 
+  void _print() {
+    final list = _visible;
+    final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final gen = '${two(now.day)}/${two(now.month)}/${now.year} ${two(now.hour)}:${two(now.minute)}';
+    String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final body = list.map((r) {
+      return '<tr>'
+          '<td>${esc(r['name'])}</td>'
+          '<td>${esc(r['sku'])}</td>'
+          '<td>${esc(r['issue'])}</td>'
+          '<td style="text-align:right">${_fmt(r['cost_price'] as num?)}</td>'
+          '<td style="text-align:right">${_fmt(r['stock_qty'] as num?)}</td>'
+          '<td style="text-align:right">${_fmt(r['layer_qty'] as num?)}</td>'
+          '</tr>';
+    }).join();
+    final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Inventory Integrity</title>'
+        '<style>'
+        'body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px}'
+        'h1{font-size:18px;margin:0 0 2px}'
+        '.muted{color:#666;font-size:12px;margin:2px 0}'
+        'table{border-collapse:collapse;width:100%;margin-top:14px;font-size:12px}'
+        'th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}'
+        'th{background:#f4f5f7}'
+        '</style></head><body>'
+        '<h1>$orgName &mdash; Inventory Integrity Check</h1>'
+        '<div class="muted">Generated: $gen &middot; ${list.length} product(s) flagged</div>'
+        '<table><thead><tr>'
+        '<th>Product</th><th>SKU</th><th>Issue</th>'
+        '<th style="text-align:right">Cost</th>'
+        '<th style="text-align:right">Stock</th>'
+        '<th style="text-align:right">Layers</th>'
+        '</tr></thead><tbody>$body</tbody></table>'
+        '<script>window.onload=function(){window.print();}</script>'
+        '</body></html>';
+    final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+    Future.delayed(const Duration(seconds: 4), () => html.Url.revokeObjectUrl(url));
+  }
+
+
   Color _issueColor(String? issue) {
     switch (issue) {
       case 'NO COST PRICE': return Colors.red;
@@ -84,6 +129,8 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen> {
             Text('Products at risk: missing cost, stock/layer mismatch, negative or zero-cost layers',
                 style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           ])),
+          IconButton(icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF',
+              onPressed: _rows.isEmpty ? null : _print),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
         ])),
       if (_loading)

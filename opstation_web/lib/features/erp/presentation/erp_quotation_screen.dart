@@ -45,6 +45,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   String _globalDiscType = 'fixed'; // fixed | percent
   bool _printCompany = true; // include company name on printed quotation
   bool _printBranch = true;  // include branch on printed quotation
+  bool _printPreparedBy = true; // include prepared-by (username) on printed quotation
 
   // Per-line field controllers + focus nodes, keyed by the line map identity.
   // Enables the Qty→Price→Discount→(reopen picker) Enter chain on each row.
@@ -656,7 +657,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         status: null, // no voucher status on quotation print
         remarks: null, // remarks now rendered in the shared row below
         relatedRefs: refs.isEmpty ? null : refs,
-        preparedBy: preparedBy,
+        preparedBy: _printPreparedBy ? preparedBy : null,
         lines: lines,
         subtotal: subtotal,
         discountTotal: discTotal + globalDisc,
@@ -834,6 +835,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             itemBuilder: (_) => [
               CheckedPopupMenuItem(value: 'company', checked: _printCompany, child: const Text('Show company name')),
               CheckedPopupMenuItem(value: 'branch', checked: _printBranch, child: const Text('Show branch')),
+              CheckedPopupMenuItem(value: 'preparedBy', checked: _printPreparedBy, child: const Text('Show prepared by')),
               const PopupMenuDivider(),
               if ((_doc!['status'] as String? ?? 'saved') != 'draft')
                 const PopupMenuItem(value: 'mark_draft', child: Text('Mark as Draft')),
@@ -843,6 +845,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             onSelected: (v) {
               if (v == 'company') setState(() => _printCompany = !_printCompany);
               if (v == 'branch') setState(() => _printBranch = !_printBranch);
+              if (v == 'preparedBy') setState(() => _printPreparedBy = !_printPreparedBy);
               if (v == 'mark_draft') _setStatus('draft');
               if (v == 'mark_saved') _setStatus('saved');
             },
