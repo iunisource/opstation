@@ -518,6 +518,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _filteredCustomers = [];
   List<Map<String, dynamic>> _posCustomers = [];
   Map<String, dynamic>? _selectedPosCustomer;  // quick POS customer
+  List<Map<String, dynamic>> _promoters = [];        // active sales promoters
+  Map<String, dynamic>? _selectedPromoter;           // one promoter per bill (optional)
   Map<String, double> _stockMap = {};  // product_id → qty in stock
   bool _allowNoStock = false;           // org setting: allow selling without stock
   bool _allowPriceEdit = false;         // org setting: allow editing price at POS
@@ -614,6 +616,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _fetchAllPaged((from, to) => client.from('inventory_stock').select('product_id, quantity').eq('org_id', orgId).eq('branch_id', branchId).order('product_id').range(from, to)),
         client.from('pos_customers').select('id, name, phone, cnic').eq('org_id', orgId).eq('branch_id', branchId).order('name'),
         client.from('pos_held_bills').select('*').eq('session_id', _session['id']).eq('status', 'held').order('held_at', ascending: false),
+        client.from('sales_promoters').select('id, name, phone').eq('org_id', orgId).eq('is_active', true).order('name'),
       ]);
       final prods = List<Map<String, dynamic>>.from(results[1] as List);
       final stockRows = List<Map<String, dynamic>>.from(results[4] as List);
@@ -728,6 +731,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _allowPriceEdit = allowPriceEdit;
         _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
         _heldBills = List<Map<String, dynamic>>.from(results[6] as List);
+        _promoters = List<Map<String, dynamic>>.from(results[7] as List);
         _posConfig = posCfg;
         _loading = false;
       });
@@ -1273,6 +1277,64 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     return '';
   }
 
+  // Searchable promoter picker (optional, one per bill).
+  Future<void> _pickPromoter() async {
+    final searchCtrl = TextEditingController();
+    final picked = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) {
+        String q = '';
+        return StatefulBuilder(builder: (ctx, setD) {
+          final ql = q.trim().toLowerCase();
+          final list = ql.isEmpty
+              ? _promoters
+              : _promoters.where((p) =>
+                  ((p['name'] as String? ?? '').toLowerCase().contains(ql)) ||
+                  ((p['phone'] as String? ?? '').toLowerCase().contains(ql))).toList();
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460, maxHeight: 520),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Padding(padding: const EdgeInsets.fromLTRB(16, 14, 8, 6), child: Row(children: [
+                  const Expanded(child: Text('Select promoter', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+                  IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(ctx)),
+                ])),
+                Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 8), child: TextField(
+                  controller: searchCtrl, autofocus: true,
+                  decoration: InputDecoration(hintText: 'Search name or phone…', prefixIcon: const Icon(Icons.search, size: 20), isDense: true, border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
+                  onChanged: (v) => setD(() => q = v),
+                )),
+                const Divider(height: 1),
+                Expanded(child: list.isEmpty
+                  ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('No promoters found', style: TextStyle(color: AppTheme.textSecondary))))
+                  : ListView.separated(
+                      itemCount: list.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final p = list[i];
+                        final phone = p['phone'] as String?;
+                        return ListTile(dense: true,
+                          title: Text(p['name'] as String? ?? '-', style: const TextStyle(fontSize: 13.5)),
+                          subtitle: (phone != null && phone.isNotEmpty) ? Text(phone, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)) : null,
+                          onTap: () => Navigator.pop(ctx, p));
+                      },
+                    )),
+              ]),
+            ),
+          );
+        });
+      },
+    );
+    if (picked != null) setState(() => _selectedPromoter = picked);
+  }
+
+  // Complete the sale if the same guards as the button pass. Used by the
+  // Cmd/Ctrl+Enter global hotkey so a sale can be finished without the mouse.
+  void _tryCheckout() {
+    if (_cart.isNotEmpty && _isOpen && _paymentValid()) _checkout();
+  }
+
   Future<void> _checkout() async {
     if (_checkingOut) return;
     _checkingOut = true;
@@ -1327,6 +1389,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'id': txnId, 'transaction_number': txnNumber, 'org_id': orgId, 'session_id': _session['id'],
         'customer_id': _selectedCustomer?['id'],
         'pos_customer_id': _selectedPosCustomer?['id'],
+        'promoter_id': _selectedPromoter?['id'],
         'total': totalAmt, 'discount': discountAmt,
         'payment_method': primaryMethod,
         'payment_details': tenders,
@@ -1378,7 +1441,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           await client.from('pos_customers').update({'balance': curBal + balanceChange}).eq('id', custId);
         } catch (_) {}
       }
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes(); }); _playSuccessSound();
+      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _selectedPromoter = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes(); }); _playSuccessSound();
       await _loadData();
       // Show receipt
       if (mounted) {
@@ -1724,7 +1787,16 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       if (nextId == null || nextId == sessId || prev?['id'] == nextId) return;
       WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _handleBranchSwitch(next!); });
     });
-    return Scaffold(
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.enter, meta: true): _tryCheckout,   // Cmd+Enter (Mac)
+        const SingleActivator(LogicalKeyboardKey.enter, control: true): _tryCheckout, // Ctrl+Enter (Win/Linux)
+        const SingleActivator(LogicalKeyboardKey.numpadEnter, meta: true): _tryCheckout,
+        const SingleActivator(LogicalKeyboardKey.numpadEnter, control: true): _tryCheckout,
+      },
+      child: Focus(
+        autofocus: false,
+        child: Scaffold(
       backgroundColor: const Color(0xFFF0F2F5),
       appBar: AppBar(
         backgroundColor: Colors.white,
@@ -2048,6 +2120,32 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     onChanged: _isOpen ? (v) => setState(() => _orderDiscountType = v!) : null),
                 ]),
                 const SizedBox(height: 6),
+                // Promoter (optional, one per bill) — compact selector
+                Row(children: [
+                  const Icon(Icons.badge_outlined, size: 15, color: AppTheme.textSecondary),
+                  const SizedBox(width: 6),
+                  const Text('Promoter', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  const Spacer(),
+                  if (_selectedPromoter != null)
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(8, 3, 4, 3),
+                      decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(6)),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(_selectedPromoter!['name'] as String? ?? '-', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary)),
+                        const SizedBox(width: 2),
+                        InkWell(onTap: () => setState(() => _selectedPromoter = null),
+                          child: const Icon(Icons.close, size: 14, color: AppTheme.primary)),
+                      ]),
+                    )
+                  else
+                    TextButton.icon(
+                      icon: const Icon(Icons.add, size: 14),
+                      label: const Text('Add', style: TextStyle(fontSize: 11)),
+                      style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0), minimumSize: const Size(0, 28)),
+                      onPressed: _isOpen ? _pickPromoter : null,
+                    ),
+                ]),
+                const SizedBox(height: 6),
                 // Payment
                 Row(children: [
                   const Text('Payment', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -2282,6 +2380,8 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
           ]),
         ),
       ]),
+        ),
+      ),
     );
   }
 
@@ -2344,7 +2444,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         'status': 'held',
       });
       setState(() {
-        _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null;
+        _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _selectedPromoter = null;
         _customerSearchCtrl.clear(); _paymentMethod = 'cash';
         _stagedProduct = null; _stagedCartIndex = null;
         _holdsPanelExpanded = true;
