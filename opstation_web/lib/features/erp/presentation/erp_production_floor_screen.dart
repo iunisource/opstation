@@ -314,6 +314,9 @@ class _JobTimelineDialog extends StatefulWidget {
 class _JobTimelineDialogState extends State<_JobTimelineDialog> {
   bool _loading = true;
   List<Map<String, dynamic>> _runs = [];
+  List<Map<String, dynamic>> _audit = [];   // job_card_audit_trail (start/pause/etc)
+  List<Map<String, dynamic>> _qc = [];       // qc_inspections for this job
+  Map<String, String> _userNames = {};       // user_id -> name
   Timer? _ticker;
   DateTime _now = DateTime.now();
 
@@ -328,13 +331,79 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
   void dispose() { _ticker?.cancel(); super.dispose(); }
 
   Future<void> _load() async {
+    final jobId = widget.job['id'] as String;
     try {
-      final runs = await Supabase.instance.client.from('job_card_runs')
-          .select().eq('job_card_id', widget.job['id'] as String).order('run_no');
-      if (mounted) setState(() { _runs = List<Map<String, dynamic>>.from(runs as List); _loading = false; });
+      final client = Supabase.instance.client;
+      final runs = await client.from('job_card_runs').select().eq('job_card_id', jobId).order('run_no');
+      List auditRows = const [];
+      List qcRows = const [];
+      try {
+        auditRows = await client.from('job_card_audit_trail').select().eq('job_card_id', jobId).order('created_at');
+      } catch (_) {}
+      try {
+        qcRows = await client.from('qc_inspections').select().eq('job_card_id', jobId);
+      } catch (_) {}
+      // resolve operator/inspector names
+      final ids = <String>{};
+      for (final r in (runs as List)) { final o = r['operator_id'] as String?; if (o != null) ids.add(o); }
+      for (final q in qcRows) { final o = q['inspector_id'] as String?; if (o != null) ids.add(o); }
+      final names = <String, String>{};
+      if (ids.isNotEmpty) {
+        try {
+          final us = await client.from('users').select('id, name').inFilter('id', ids.toList());
+          for (final u in (us as List)) { names[u['id'] as String] = (u['name'] as String?) ?? ''; }
+        } catch (_) {}
+      }
+      if (mounted) setState(() {
+        _runs = List<Map<String, dynamic>>.from(runs);
+        _audit = List<Map<String, dynamic>>.from(auditRows);
+        _qc = List<Map<String, dynamic>>.from(qcRows);
+        _userNames = names;
+        _loading = false;
+      });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  // Active time = sum of (started -> paused) intervals from the audit trail.
+  // Excludes paused gaps. If currently running, counts up to now.
+  Duration _activeTime() {
+    DateTime? runningSince;
+    Duration total = Duration.zero;
+    for (final a in _audit) {
+      final action = a['action'] as String?;
+      final t = _ts(a['created_at']);
+      if (t == null) continue;
+      if (action == 'started') {
+        runningSince ??= t;
+      } else if (action == 'paused' || action == 'completed' || action == 'cancelled') {
+        if (runningSince != null) { total += t.difference(runningSince); runningSince = null; }
+      }
+    }
+    if (runningSince != null) total += _now.difference(runningSince);
+    return total;
+  }
+
+  String? _runOperator(Map<String, dynamic> r) {
+    final id = r['operator_id'] as String?;
+    if (id == null) return null;
+    final n = _userNames[id];
+    return (n != null && n.isNotEmpty) ? n : null;
+  }
+
+  // QC summary for a run: "QC: Finishing Quality PASS (by Ali)" per checkpoint.
+  List<String> _runQc(String runId) {
+    final out = <String>[];
+    for (final q in _qc) {
+      if (q['run_id'] != runId) continue;
+      final name = q['checkpoint_name'] as String? ?? 'QC';
+      final res = (q['result'] as String? ?? '').toUpperCase();
+      final insId = q['inspector_id'] as String?;
+      final ins = insId != null ? (_userNames[insId] ?? '') : '';
+      out.add('$name: $res${ins.isNotEmpty ? ' (by $ins)' : ''}');
+    }
+    return out;
   }
 
   DateTime? _ts(dynamic v) { if (v == null) return null; try { return DateTime.parse(v as String).toLocal(); } catch (_) { return null; } }
@@ -382,8 +451,13 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
       final rt = _ts(r['created_at']) ?? _ts(r['run_date']);
       final prod = _num(r['produced_qty']); final acc = _num(r['accepted_qty']); final rej = _num(r['rejected_qty']);
       final rstatus = r['status'] as String? ?? 'draft';
+      final op = _runOperator(r);
+      final qcLines = _runQc(r['id'] as String? ?? '');
+      final detail = StringBuffer('Produced $prod  ·  Accepted $acc  ·  Rejected $rej');
+      if (op != null) detail.write('\nBy $op');
+      for (final q in qcLines) { detail.write('\n$q'); }
       events.add(_event(Icons.inventory_2, Colors.teal, 'Batch #${r['run_no'] ?? ''}${rstatus == 'posted' ? '' : ' (draft)'}', rt,
-        'Produced $prod  ·  Accepted $acc  ·  Rejected $rej'));
+        detail.toString()));
     }
     if (isDone) events.add(_event(Icons.check_circle, Colors.green.shade700, 'Completed', completed, null, last: true));
     else if (isCancelled) events.add(_event(Icons.cancel, Colors.grey, 'Cancelled', _ts(j['updated_at']), null, last: true));
@@ -402,10 +476,20 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
           ])),
           Container(width: double.infinity, margin: const EdgeInsets.fromLTRB(20, 0, 20, 8), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(color: timerColor.withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
-            child: Row(children: [
-              Text(timerLabel, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-              const Spacer(),
-              Text(timerValue, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: timerColor)),
+            child: Column(children: [
+              Row(children: [
+                Text(timerLabel, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                const Spacer(),
+                Text(timerValue, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: timerColor)),
+              ]),
+              if (_audit.any((a) => a['action'] == 'started')) ...[
+                const SizedBox(height: 8),
+                Row(children: [
+                  const Text('Active time (excludes pauses)', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  const Spacer(),
+                  Text(_fmtDur(_activeTime()), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.deepPurple)),
+                ]),
+              ],
             ])),
           const Divider(height: 1),
           Flexible(child: _loading

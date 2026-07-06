@@ -91,6 +91,13 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   double get _plannedQty => double.tryParse(_plannedQtyCtrl.text) ?? 0;
   double get _producedQty => (_current?['produced_qty'] as num? ?? 0).toDouble();
   double get _remainingQty => (_plannedQty - _producedQty);
+  // Display helpers: never show negative "left"; overproduction shows as "over".
+  double get _leftQty => _remainingQty > 0 ? _remainingQty : 0;
+  String _leftLabel(double planned, double produced) {
+    final rem = planned - produced;
+    if (rem >= 0) return '${_trim(rem)} left';
+    return '+${_trim(-rem)} over';
+  }
   double get _componentsCost => _materials.fold(0.0, (s, l) => s + l.qty * (_prodCost[l.productId] ?? 0));
   double get _laborOhCost => _overheads.fold(0.0, (s, l) => s + l.amount);
   double get _totalCost => _componentsCost + _laborOhCost;
@@ -502,7 +509,15 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final jobId = _current!['id'] as String;
     final producedCtrl = TextEditingController();
     final rejectedCtrl = TextEditingController(text: '0');
-    final ohCtrl = TextEditingController(text: _trim(_overheads.fold(0.0, (s, l) => s + l.amount)));
+    final totalJobOh = _overheads.fold(0.0, (s, l) => s + l.amount);
+    final planned = _plannedQty;
+    // Overhead defaults to the PRO-RATA share of the job's total overhead for
+    // the batch quantity (e.g. 10 of 100 planned => 10% of overhead). The user
+    // can still override it; once they do, we stop auto-updating.
+    final ohCtrl = TextEditingController();
+    bool ohManual = false;
+    double proRataOh(double producedQty) =>
+        (planned > 0) ? totalJobOh * (producedQty / planned) : 0;
     final checks = _jobCheckpoints;
     final Map<String, bool> results = {for (final c in checks) c['id'] as String: false};
     bool saving = false;
@@ -516,12 +531,19 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       return AlertDialog(
         title: const Text('Produce a batch'),
         content: SizedBox(width: 480, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Remaining on job: ${_trim(_remainingQty)}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          Text('Remaining on job: ${_trim(_leftQty)}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           const SizedBox(height: 12),
           Row(children: [
             Expanded(child: TextField(controller: producedCtrl, keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-              decoration: const InputDecoration(labelText: 'Produced qty *', isDense: true), onChanged: (_) => setS(() {}))),
+              decoration: const InputDecoration(labelText: 'Produced qty *', isDense: true),
+              onChanged: (v) {
+                if (!ohManual) {
+                  final pq = double.tryParse(v) ?? 0;
+                  ohCtrl.text = _trim(proRataOh(pq));
+                }
+                setS(() {});
+              })),
             const SizedBox(width: 10),
             Expanded(child: TextField(controller: rejectedCtrl, keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
@@ -532,7 +554,11 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           const SizedBox(height: 12),
           TextField(controller: ohCtrl, keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-            decoration: const InputDecoration(labelText: 'Labor & overhead for this batch', isDense: true)),
+            onChanged: (_) => ohManual = true,
+            decoration: InputDecoration(
+              labelText: 'Labor & overhead for this batch', isDense: true,
+              helperText: 'Defaults to pro-rata share of job overhead (${_trim(totalJobOh)} total). Editable.',
+              helperStyle: const TextStyle(fontSize: 10))),
           const SizedBox(height: 16),
           Row(children: [
             const Text('QC Checkpoints', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
@@ -1122,7 +1148,7 @@ $runSection
                     ]),
                     const SizedBox(height: 2),
                     Text(_prodLabel[j['product_id']] ?? '', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
-                    Text('${_trim(produced)} / ${_trim(planned)} done  ·  ${_trim(planned - produced)} left', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                    Text('${_trim(produced)} / ${_trim(planned)} done  ·  ${_leftLabel(planned, produced)}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                     if (j['customer_id'] != null && (_custLabel[j['customer_id']] ?? '').isNotEmpty)
                       Padding(padding: const EdgeInsets.only(top: 1), child: Row(children: [
                         const Icon(Icons.storefront_outlined, size: 11, color: AppTheme.textSecondary),
@@ -1142,7 +1168,7 @@ $runSection
             const SizedBox(width: 8),
             Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
             if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
-            if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_trim(_remainingQty)} left',
+            if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_leftLabel(_plannedQty, _producedQty)}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
             if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail'),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)'),

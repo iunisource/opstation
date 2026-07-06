@@ -447,11 +447,17 @@ class _StockTransferVoucherScreenState
   }
 
   // ── Items ─────────────────────────────────────────────────────────────────
-  void _showAddItemDialog() {
+  void _showAddItemDialog() async {
+    // On a brand-new transfer, auto-save the draft first so items have a
+    // transfer to attach to (instead of blocking with "Save first").
     if (_transfer == null) {
-      _snack('Save the transfer first');
-      return;
+      await _saveDraft();
+      if (_transfer == null) return; // save failed (e.g. branches missing)
     }
+    _openAddItemDialog();
+  }
+
+  void _openAddItemDialog() {
     String? productId;
     String? uomId;
     final qtyCtrl = TextEditingController(text: '1');
@@ -921,7 +927,7 @@ class _StockTransferVoucherScreenState
                           style: TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w700)),
                       const Spacer(),
-                      if (editable && !_isNew)
+                      if (editable)
                         ElevatedButton.icon(
                             onPressed: _showAddItemDialog,
                             icon: const Icon(Icons.add, size: 16),
