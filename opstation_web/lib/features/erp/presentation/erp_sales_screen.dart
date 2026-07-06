@@ -2242,6 +2242,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
+  String _siStatusFilter = 'all'; // all | draft | posted | voided
   final Map<String, TextEditingController> _discountCtrl = {};
   final TextEditingController _remarksCtrl = TextEditingController();
 
@@ -2486,7 +2487,43 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  int _siStatusCount(String st) {
+    if (st == 'all') return _invoices.length;
+    return _invoices.where((i) {
+      final voided = i['is_voided'] as bool? ?? false;
+      final locked = i['is_locked'] as bool? ?? false;
+      final s = voided ? 'voided' : (locked ? 'posted' : 'draft');
+      return s == st;
+    }).length;
+  }
+
+  Widget _siFilterChip(String value, String label) {
+    final active = _siStatusFilter == value;
+    final count = _siStatusCount(value);
+    return GestureDetector(
+      onTap: () => setState(() => _siStatusFilter = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primary : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: active ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
+          const SizedBox(width: 5),
+          Text('$count', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: active ? Colors.white70 : AppTheme.textSecondary)),
+        ]),
+      ),
+    );
+  }
+
   List<Map<String, dynamic>> get _filteredInvoices => _invoices.where((i) {
+    // Status filter (derived from is_voided / is_locked booleans)
+    final voided = i['is_voided'] as bool? ?? false;
+    final locked = i['is_locked'] as bool? ?? false;
+    final st = voided ? 'voided' : (locked ? 'posted' : 'draft');
+    if (_siStatusFilter != 'all' && st != _siStatusFilter) return false;
     final q = _search.toLowerCase();
     return q.isEmpty ||
         (i['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
@@ -2512,6 +2549,20 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 TextField(
                   decoration: const InputDecoration(hintText: 'Search SI/SO/customer...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)),
                   onChanged: (v) => setState(() => _search = v),
+                ),
+                const SizedBox(height: 8),
+                // Status filter chips
+                SizedBox(
+                  height: 30,
+                  child: ListView(scrollDirection: Axis.horizontal, children: [
+                    _siFilterChip('all', 'All'),
+                    const SizedBox(width: 6),
+                    _siFilterChip('draft', 'Draft'),
+                    const SizedBox(width: 6),
+                    _siFilterChip('posted', 'Posted'),
+                    const SizedBox(width: 6),
+                    _siFilterChip('voided', 'Voided'),
+                  ]),
                 ),
               ]),
             ),
