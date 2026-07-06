@@ -17,7 +17,7 @@ class ErpProductionFloorScreen extends ConsumerStatefulWidget {
 
 class _State extends ConsumerState<ErpProductionFloorScreen> {
   bool _loading = true;
-  bool _kanban = true;
+  int _viewMode = 0; // 0 = Board (kanban), 1 = Table, 2 = History
   bool _allBranches = false;
   List<Map<String, dynamic>> _jobs = [];
   Map<String, String> _prodLabel = {};
@@ -25,6 +25,18 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
   Map<String, String> _custLabel = {};
   RealtimeChannel? _channel;
   Timer? _debounce;
+
+  // ── Job History state ──
+  bool _histLoading = false;
+  bool _histInit = false;
+  List<Map<String, dynamic>> _histJobs = [];
+  final _histSearchCtrl = TextEditingController();
+  String _histSearch = '';
+  DateTime _histFrom = DateTime.now().subtract(const Duration(days: 30));
+  DateTime _histTo = DateTime.now();
+  String _histStatus = 'all';
+  String? _histWorker; // user id or null = all
+  Timer? _histDebounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -89,9 +101,51 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _histDebounce?.cancel();
+    _histSearchCtrl.dispose();
     final ch = _channel;
     if (ch != null) Supabase.instance.client.removeChannel(ch);
     super.dispose();
+  }
+
+  // ── Job History: query job_cards directly (reaches beyond the board's cap) ──
+  Future<void> _loadHistory() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    setState(() => _histLoading = true);
+    try {
+      final client = Supabase.instance.client;
+      final fromStr = DateFormat('yyyy-MM-dd').format(_histFrom);
+      final toStr = DateFormat('yyyy-MM-dd').format(_histTo);
+      var q = client.from('job_cards').select().eq('org_id', orgId)
+          .gte('voucher_date', fromStr).lte('voucher_date', toStr);
+      if (_histStatus != 'all') q = q.eq('status', _histStatus);
+      if (_histWorker != null) q = q.eq('assigned_to', _histWorker as Object);
+      final rows = await q.order('voucher_date', ascending: false).limit(2000);
+      if (mounted) setState(() {
+        _histJobs = List<Map<String, dynamic>>.from(rows as List);
+        _histLoading = false;
+        _histInit = true;
+      });
+    } catch (e) {
+      if (mounted) setState(() { _histLoading = false; _histInit = true; });
+    }
+  }
+
+  void _histQueryDebounced() {
+    _histDebounce?.cancel();
+    _histDebounce = Timer(const Duration(milliseconds: 350), _loadHistory);
+  }
+
+  List<Map<String, dynamic>> get _histFiltered {
+    final q = _histSearch.trim().toLowerCase();
+    if (q.isEmpty) return _histJobs;
+    return _histJobs.where((j) {
+      final num = (j['job_number'] as String? ?? '').toLowerCase();
+      final prod = (_prodLabel[j['product_id']] ?? '').toLowerCase();
+      final cust = (_custLabel[j['customer_id']] ?? '').toLowerCase();
+      return num.contains(q) || prod.contains(q) || cust.contains(q);
+    }).toList();
   }
 
   List<Map<String, dynamic>> get _visible {
@@ -130,19 +184,28 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
         ]),
         const SizedBox(width: 8),
         ToggleButtons(
-          isSelected: [_kanban, !_kanban],
-          onPressed: (i) => setState(() => _kanban = i == 0),
+          isSelected: [_viewMode == 0, _viewMode == 1, _viewMode == 2],
+          onPressed: (i) {
+            setState(() => _viewMode = i);
+            if (i == 2 && !_histInit) _loadHistory(); // first open → last 30 days
+          },
           borderRadius: BorderRadius.circular(8),
           constraints: const BoxConstraints(minHeight: 34, minWidth: 44),
-          children: const [Icon(Icons.view_column_outlined, size: 18), Icon(Icons.table_rows_outlined, size: 18)],
+          children: const [
+            Icon(Icons.view_column_outlined, size: 18),
+            Icon(Icons.table_rows_outlined, size: 18),
+            Icon(Icons.history, size: 18),
+          ],
         ),
         const SizedBox(width: 8),
         IconButton(icon: const Icon(Icons.refresh), onPressed: _load, tooltip: 'Refresh'),
       ]),
       const SizedBox(height: 16),
-      Expanded(child: _loading ? const Center(child: CircularProgressIndicator())
-        : jobs.isEmpty ? const Center(child: Text('No jobs to show. Create one in Job Card.', style: TextStyle(color: AppTheme.textSecondary)))
-        : _kanban ? _kanbanView(queued, inProg, done) : _gridView([...queued, ...inProg, ...done, ...voided])),
+      Expanded(child: _viewMode == 2
+        ? _historyView()
+        : _loading ? const Center(child: CircularProgressIndicator())
+          : jobs.isEmpty ? const Center(child: Text('No jobs to show. Create one in Job Card.', style: TextStyle(color: AppTheme.textSecondary)))
+          : _viewMode == 0 ? _kanbanView(queued, inProg, done) : _gridView([...queued, ...inProg, ...done, ...voided])),
     ]));
   }
 
@@ -154,6 +217,105 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       const SizedBox(width: 6),
       Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
     ]));
+
+  // ── Job History view: filters + results table (full history via DB) ──
+  Future<void> _pickHistDate(bool isFrom) async {
+    final init = isFrom ? _histFrom : _histTo;
+    final d = await showDatePicker(
+      context: context, initialDate: init,
+      firstDate: DateTime(2020), lastDate: DateTime(2100),
+    );
+    if (d != null) {
+      setState(() { if (isFrom) _histFrom = d; else _histTo = d; });
+      _loadHistory();
+    }
+  }
+
+  String _histStatusLabel(String st) => st == 'completed' ? 'Completed'
+      : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : 'Queued';
+
+  String _num(dynamic v) { final d = (v as num? ?? 0).toDouble(); return d == d.roundToDouble() ? d.toStringAsFixed(0) : d.toString(); }
+
+  Widget _historyView() {
+    final workers = _userLabel.entries.toList()..sort((a, b) => a.value.compareTo(b.value));
+    final results = _histFiltered;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        SizedBox(width: 240, child: TextField(
+          controller: _histSearchCtrl,
+          decoration: const InputDecoration(
+            labelText: 'Search job / product / customer', isDense: true,
+            prefixIcon: Icon(Icons.search, size: 18), border: OutlineInputBorder()),
+          onChanged: (v) => setState(() => _histSearch = v),
+        )),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.calendar_today, size: 15),
+          label: Text('From: ${DateFormat('dd MMM yyyy').format(_histFrom)}'),
+          onPressed: () => _pickHistDate(true),
+        ),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.calendar_today, size: 15),
+          label: Text('To: ${DateFormat('dd MMM yyyy').format(_histTo)}'),
+          onPressed: () => _pickHistDate(false),
+        ),
+        SizedBox(width: 160, child: DropdownButtonFormField<String>(
+          value: _histStatus, isDense: true,
+          decoration: const InputDecoration(labelText: 'Status', isDense: true, border: OutlineInputBorder()),
+          items: const [
+            DropdownMenuItem(value: 'all', child: Text('All statuses')),
+            DropdownMenuItem(value: 'queued', child: Text('Queued')),
+            DropdownMenuItem(value: 'in_progress', child: Text('In progress')),
+            DropdownMenuItem(value: 'completed', child: Text('Completed')),
+            DropdownMenuItem(value: 'cancelled', child: Text('Voided')),
+          ],
+          onChanged: (v) { setState(() => _histStatus = v ?? 'all'); _loadHistory(); },
+        )),
+        SizedBox(width: 180, child: DropdownButtonFormField<String?>(
+          value: _histWorker, isDense: true,
+          decoration: const InputDecoration(labelText: 'Worker', isDense: true, border: OutlineInputBorder()),
+          items: [
+            const DropdownMenuItem<String?>(value: null, child: Text('All workers')),
+            for (final w in workers) DropdownMenuItem<String?>(value: w.key, child: Text(w.value, overflow: TextOverflow.ellipsis)),
+          ],
+          onChanged: (v) { setState(() => _histWorker = v); _loadHistory(); },
+        )),
+        IconButton(icon: const Icon(Icons.refresh), tooltip: 'Reload', onPressed: _loadHistory),
+      ]),
+      const SizedBox(height: 12),
+      Text('${results.length} job(s)', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      const SizedBox(height: 8),
+      Expanded(child: _histLoading
+        ? const Center(child: CircularProgressIndicator())
+        : results.isEmpty
+          ? const Center(child: Text('No jobs match these filters.', style: TextStyle(color: AppTheme.textSecondary)))
+          : SingleChildScrollView(child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(
+              headingRowHeight: 40, dataRowMinHeight: 40, dataRowMaxHeight: 52,
+              columns: const [
+                DataColumn(label: Text('Job #', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                DataColumn(label: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                DataColumn(label: Text('Customer', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                DataColumn(label: Text('Planned', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)), numeric: true),
+                DataColumn(label: Text('Produced', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)), numeric: true),
+                DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                DataColumn(label: Text('Worker', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+              ],
+              rows: [for (final j in results) DataRow(
+                onSelectChanged: (_) => _showTimeline(j),
+                cells: [
+                  DataCell(Text(j['job_number'] as String? ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                  DataCell(Text(_prodLabel[j['product_id']] ?? '—', style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(j['customer_id'] != null ? (_custLabel[j['customer_id']] ?? '—') : '—', style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(_histStatusLabel(j['status'] as String? ?? ''), style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(_num(j['planned_qty']), style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(_num(j['produced_qty']), style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(j['voucher_date'] as String? ?? '', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                  DataCell(Text(j['assigned_to'] != null ? (_userLabel[j['assigned_to']] ?? '—') : '—', style: const TextStyle(fontSize: 12))),
+                ],
+              )],
+            )))),
+    ]);
+  }
 
   Widget _kanbanView(List<Map<String, dynamic>> queued, List<Map<String, dynamic>> inProg, List<Map<String, dynamic>> done) {
     return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
