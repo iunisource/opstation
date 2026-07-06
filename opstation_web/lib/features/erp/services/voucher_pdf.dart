@@ -195,8 +195,12 @@ class VoucherPdf {
               ]),
             ),
             pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+              // When the company name is hidden (orgName empty), the left header
+              // block is blank — enlarge the doc-type title so it anchors the header.
               pw.Text(voucherTypeLabel.toUpperCase(),
-                  style: pw.TextStyle(fontSize: 11, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 1.2)),
+                  style: pw.TextStyle(
+                      fontSize: orgName.trim().isEmpty ? 28 : 11,
+                      color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 1.2)),
               pw.SizedBox(height: 4),
               pw.Text(voucherNumber, style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold, color: _accent)),
               if (status != null) ...[
