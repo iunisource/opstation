@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
 
 String _stStatusLabel(String s) {
@@ -298,6 +300,13 @@ class _StockTransferVoucherScreenState
   DateTime _date = DateTime.now();
   final _notesCtrl = TextEditingController();
 
+  // Inline add-row state (quotation-style picker loop)
+  String? _addProductId;
+  String? _addUomId;
+  final _addQtyCtrl = TextEditingController(text: '1');
+  final _addCostCtrl = TextEditingController(text: '0');
+  final _addQtyFocus = FocusNode();
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
 
@@ -326,6 +335,9 @@ class _StockTransferVoucherScreenState
   @override
   void dispose() {
     _notesCtrl.dispose();
+    _addQtyCtrl.dispose();
+    _addCostCtrl.dispose();
+    _addQtyFocus.dispose();
     super.dispose();
   }
 
@@ -447,128 +459,64 @@ class _StockTransferVoucherScreenState
   }
 
   // ── Items ─────────────────────────────────────────────────────────────────
-  void _showAddItemDialog() async {
-    // On a brand-new transfer, auto-save the draft first so items have a
-    // transfer to attach to (instead of blocking with "Save first").
+  // ── Items: inline add-row with quotation-style picker loop ────────────────
+  Future<void> _ensureSaved() async {
     if (_transfer == null) {
       await _saveDraft();
-      if (_transfer == null) return; // save failed (e.g. branches missing)
     }
-    _openAddItemDialog();
   }
 
-  void _openAddItemDialog() {
-    String? productId;
-    String? uomId;
-    final qtyCtrl = TextEditingController(text: '1');
-    final costCtrl = TextEditingController(text: '0');
-    showDialog(
-      context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('Add Item'),
-          content: SizedBox(
-            width: 420,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              DropdownButtonFormField<String>(
-                value: productId,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Product *'),
-                hint: const Text('Select product'),
-                items: _products
-                    .map((p) => DropdownMenuItem(
-                        value: p['id'] as String,
-                        child: Text(
-                            '${p['name']}${p['sku'] != null ? ' (${p['sku']})' : ''}',
-                            overflow: TextOverflow.ellipsis)))
-                    .toList(),
-                onChanged: (v) {
-                  setS(() {
-                    productId = v;
-                    final prod = _products
-                        .firstWhere((p) => p['id'] == v, orElse: () => {});
-                    uomId = prod['base_uom_id'] as String?;
-                  });
-                },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: uomId,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'UOM *'),
-                hint: const Text('Select UOM'),
-                items: _uoms
-                    .map((u) => DropdownMenuItem(
-                        value: u['id'] as String,
-                        child: Text('${u['name']} (${u['abbreviation']})')))
-                    .toList(),
-                onChanged: (v) => setS(() => uomId = v),
-              ),
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(
-                    child: TextField(
-                        controller: qtyCtrl,
-                        decoration:
-                            const InputDecoration(labelText: 'Quantity *'),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true))),
-                const SizedBox(width: 12),
-                Expanded(
-                    child: TextField(
-                        controller: costCtrl,
-                        decoration: const InputDecoration(labelText: 'Unit Cost'),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true))),
-              ]),
-            ]),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () =>
-                    Navigator.of(ctx, rootNavigator: true).pop(),
-                child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                if (productId == null || uomId == null) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
-                      content: Text('Product and UOM required')));
-                  return;
-                }
-                final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
-                if (qty <= 0) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
-                      content: Text('Quantity must be > 0')));
-                  return;
-                }
-                try {
-                  await Supabase.instance.client
-                      .from('stock_transfer_items')
-                      .insert({
-                    'id': 'sti_${DateTime.now().millisecondsSinceEpoch}',
-                    'transfer_id': _transfer!['id'],
-                    'product_id': productId,
-                    'uom_id': uomId,
-                    'quantity': qty,
-                    'unit_cost': double.tryParse(costCtrl.text.trim()) ?? 0,
-                  });
-                  if (ctx.mounted) {
-                    Navigator.of(ctx, rootNavigator: true).pop();
-                  }
-                  _load();
-                } catch (e) {
-                  if (ctx.mounted) {
-                    ScaffoldMessenger.of(ctx)
-                        .showSnackBar(SnackBar(content: Text('Failed: $e')));
-                  }
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        ),
-      ),
-    );
+  // Open the product picker (search + up/down/enter), set product + default
+  // UOM, then focus Qty. Shared by the "+ Add product" tap and the Enter loop.
+  Future<bool> _pickAddProduct() async {
+    if (!_isDraft) return false;
+    await _ensureSaved();
+    if (_transfer == null) return false; // save failed (branches missing)
+    final p = await pickProduct(context, _products, title: 'Add product');
+    if (p == null || p.isEmpty) return false; // dismissed → loop ends
+    setState(() {
+      _addProductId = p['id'] as String?;
+      _addUomId = p['base_uom_id'] as String?;
+      _addQtyCtrl.text = '1';
+      _addCostCtrl.text = '0';
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _addQtyCtrl.text.length);
+      _addQtyFocus.requestFocus();
+    });
+    return true;
+  }
+
+  Future<bool> _addItem() async {
+    if (_transfer == null) { _snack('Save the transfer first'); return false; }
+    if (_addProductId == null || _addUomId == null) { _snack('Pick a product first'); return false; }
+    final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
+    if (qty <= 0) { _snack('Quantity must be > 0'); return false; }
+    try {
+      await Supabase.instance.client.from('stock_transfer_items').insert({
+        'id': 'sti_${DateTime.now().millisecondsSinceEpoch}',
+        'transfer_id': _transfer!['id'],
+        'product_id': _addProductId,
+        'uom_id': _addUomId,
+        'quantity': qty,
+        'unit_cost': double.tryParse(_addCostCtrl.text.trim()) ?? 0,
+      });
+      setState(() { _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; _addCostCtrl.text = '0'; });
+      await _load();
+      return true;
+    } catch (e) {
+      _snack('Failed: $e');
+      return false;
+    }
+  }
+
+  // Enter on Qty: add the line, then reopen the picker for the next product.
+  Future<void> _addItemAndPickNext() async {
+    final ok = await _addItem();
+    if (!ok) return;
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+    await _pickAddProduct();
   }
 
   Future<void> _removeItem(Map<String, dynamic> item) async {
@@ -929,11 +877,12 @@ class _StockTransferVoucherScreenState
                       const Spacer(),
                       if (editable)
                         ElevatedButton.icon(
-                            onPressed: _showAddItemDialog,
+                            onPressed: () => _pickAddProduct(),
                             icon: const Icon(Icons.add, size: 16),
-                            label: const Text('Add Item')),
+                            label: const Text('Add product')),
                     ]),
                     const SizedBox(height: 12),
+                    if (editable) _addRow(),
                     Expanded(child: _itemsCard(editable)),
                     const SizedBox(height: 16),
                     _actionBar(canApprove),
@@ -1055,6 +1004,70 @@ class _StockTransferVoucherScreenState
             border: Border.all(color: AppTheme.border)),
         child: Text(v, overflow: TextOverflow.ellipsis),
       );
+
+  Widget _addRow() {
+    final prod = _addProductId == null
+        ? null
+        : _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
+    final prodName = prod == null ? null : (prod['name'] as String?);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(children: [
+        Expanded(
+          flex: 4,
+          child: InkWell(
+            onTap: () => _pickAddProduct(),
+            borderRadius: BorderRadius.circular(6),
+            child: InputDecorator(
+              decoration: const InputDecoration(
+                  labelText: 'Product', isDense: true, border: OutlineInputBorder()),
+              child: Text(prodName ?? 'Tap to pick a product',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: prodName == null ? AppTheme.textSecondary : null)),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 2,
+          child: TextField(
+            controller: _addQtyCtrl,
+            focusNode: _addQtyFocus,
+            decoration: const InputDecoration(
+                labelText: 'Qty', isDense: true, border: OutlineInputBorder()),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _addItemAndPickNext(),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 2,
+          child: TextField(
+            controller: _addCostCtrl,
+            decoration: const InputDecoration(
+                labelText: 'Unit Cost', isDense: true, border: OutlineInputBorder()),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: const Icon(Icons.add_circle, color: AppTheme.primary),
+          tooltip: 'Add',
+          onPressed: _addProductId == null ? null : () => _addItem(),
+        ),
+      ]),
+    );
+  }
 
   Widget _itemsCard(bool editable) {
     return Container(
