@@ -54,18 +54,10 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   double _costOf(Map<String, dynamic> it) =>
       (it['products']?['cost_price'] as num?)?.toDouble() ?? 0;
 
-  // Admin-tier users can always edit the price, even when the org setting
-  // freezes it for everyone else.
-  bool get _isPriceAdmin {
-    final role = ref.read(currentUserProvider)?.role;
-    return role == WebUserRole.admin ||
-        role == WebUserRole.masterAdmin ||
-        role == WebUserRole.superAdmin;
-  }
-
-  // Whether the price field is actually editable for the current user:
-  // the org toggle OR admin-tier override.
-  bool get _priceFieldEditable => _priceEditable || _isPriceAdmin;
+  // Whether the price field is actually editable: governed solely by the org
+  // toggle (org.pri_price_editable). When OFF, the price is frozen for everyone
+  // — including admin-tier users — and can only be adjusted via Discount.
+  bool get _priceFieldEditable => _priceEditable;
 
   // Effective unit price: the product's cost price when frozen, otherwise the
   // edited/stored unit price.
