@@ -182,6 +182,34 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
 
   // Clean human label for movements that don't resolve to a voucher number
   // (deleted/voided source rows, or types with no document like opening stock).
+  // Description shown in the ledger's Description column: the movement's own
+  // notes/remarks if present, otherwise a generated sentence from the movement
+  // type + quantity + unit cost. (The counterparty name isn't loaded for the
+  // list — it appears in the voucher popup on click.)
+  String _movementDescription(Map<String, dynamic> m) {
+    final notes = (m['notes'] as String?)?.trim() ?? '';
+    if (notes.isNotEmpty) return notes;
+    final type = ((m['movement_type'] as String?) ?? '').toLowerCase();
+    final ref = ((m['reference_type'] as String?) ?? '').toLowerCase();
+    final qty = (m['quantity'] as num?)?.toDouble() ?? 0;
+    final qtyAbs = qty.abs();
+    final qtyStr = qtyAbs == qtyAbs.roundToDouble() ? qtyAbs.toStringAsFixed(0) : qtyAbs.toStringAsFixed(2);
+    final cost = (m['unit_cost'] as num?)?.toDouble() ?? 0;
+    final at = cost > 0 ? ' @ ${cost.toStringAsFixed(2)}' : '';
+    final t = type.isNotEmpty ? type : ref;
+    if (t.contains('sale') && t.contains('return')) return 'Sale return $qtyStr pcs$at';
+    if (t.contains('pos')) return 'Sold $qtyStr pcs$at';
+    if (t.contains('sale')) return 'Sold $qtyStr pcs$at';
+    if (t.contains('purchase') && t.contains('return')) return 'Purchase return $qtyStr pcs$at';
+    if (t.contains('purchase') || t.contains('grn') || t.contains('goods_received')) return 'Received $qtyStr pcs$at';
+    if (t.contains('damage')) return 'Damaged $qtyStr pcs$at';
+    if (t.contains('transfer')) return 'Transferred $qtyStr pcs';
+    if (t.contains('adjust')) return 'Adjusted $qtyStr pcs$at';
+    if (t.contains('opening')) return 'Opening stock $qtyStr pcs$at';
+    if (t.contains('production') || t.contains('manufactur') || t.contains('job')) return 'Produced $qtyStr pcs$at';
+    return _friendlyRefLabel(m['reference_type'] as String?);
+  }
+
   String _friendlyRefLabel(String? refType) {
     final r = (refType ?? '').toLowerCase();
     if (r.isEmpty) return '-';
@@ -500,6 +528,19 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                 child: Text((v['status'] as String).toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.primary)),
               ),
             ]),
+            if ((v['reason'] as String?)?.trim().isNotEmpty == true) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(color: const Color(0xFFFFF4E5), borderRadius: BorderRadius.circular(8)),
+                child: Row(children: [
+                  const Icon(Icons.info_outline, size: 15, color: Color(0xFFB26A00)),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text('Reason: ${(v['reason'] as String).trim()}', style: const TextStyle(fontSize: 12, color: Color(0xFF8A5200)))),
+                ]),
+              ),
+            ],
             const SizedBox(height: 14),
             const Divider(height: 1),
             const SizedBox(height: 8),
@@ -573,7 +614,9 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         final inStr = qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
         final outStr = qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
         final balStr = runQty.toStringAsFixed(runQty % 1 == 0 ? 0 : 2) + ' ' + entryUom;
-        rowsBuf.write('<tr><td>' + date + '</td><td><span class="badge">' + type + '</span></td><td>' + vno + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
+        final descRaw = _movementDescription(m);
+        final desc = descRaw.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+        rowsBuf.write('<tr><td>' + date + '</td><td><span class="badge">' + type + '</span></td><td>' + vno + '</td><td>' + desc + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
       }
       final productName = (p['name'] as String?) ?? '';
       final sku = (p['sku'] as String?) ?? '';
@@ -610,7 +653,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         '<div class="stat"><div class="stat-label">Total Out</div><div class="stat-value red">-' + totalOut.toStringAsFixed(totalOut % 1 == 0 ? 0 : 2) + ' ' + uomAbbr + '</div></div>'
         '<div class="stat"><div class="stat-label">Entries</div><div class="stat-value">' + _filteredMovements.length.toString() + '</div></div>'
         '</div><table>'
-        '<thead><tr><th>Date</th><th>Type</th><th>Voucher / Notes</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th></tr></thead>'
+        '<thead><tr><th>Date</th><th>Type</th><th>Voucher / Notes</th><th>Description</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th></tr></thead>'
         '<tbody>' + rowsBuf.toString() + '</tbody>'
         '</table>'
         '<div class="footer">Generated by ' + genBy + ' &middot; ' + genTime + '</div>'
@@ -869,6 +912,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                     Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 3, child: Text('Voucher / Notes', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    Expanded(flex: 3, child: Text('Description', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('In', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Balance', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
@@ -915,6 +959,9 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                                         ),
                                       )
                                     : Text(displayRef, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                                Expanded(flex: 3, child: Text(_movementDescription(m),
+                                    maxLines: 2, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                                 Expanded(flex: 2, child: Text(qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-',
                                     style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.success))),
                                 Expanded(flex: 2, child: Text(qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-',
