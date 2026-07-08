@@ -356,6 +356,26 @@ class DispatchOrderService {
       }
     } catch (_) {}
 
+    // 2b) Fulfilment map by DO voucher number. Stops don't always carry a
+    // do_id (e.g. mobile-created or older stops link only via
+    // so_invoice_number), so the assign map above misses them and the order
+    // wrongly shows "Approved" even after delivery. Here we aggregate every
+    // stop's status per DO voucher: any 'delivered' stop => the DO is
+    // delivered. (Failed-only stays Approved — no Failed status exists.)
+    final deliveredByVoucher = <String>{};
+    try {
+      final allStops = await _client
+          .from('delivery_stops')
+          .select('so_invoice_number, status')
+          .not('so_invoice_number', 'is', null);
+      for (final s in allStops as List) {
+        if ((s['status'] as String?) == 'delivered') {
+          final vn = (s['so_invoice_number'] as String?)?.trim();
+          if (vn != null && vn.isNotEmpty) deliveredByVoucher.add(vn);
+        }
+      }
+    } catch (_) {}
+
     // 3) Map DOs into the Order model with the right lifecycle status.
     final result = <Order>[];
     for (final d in dos as List) {
@@ -369,8 +389,14 @@ class DispatchOrderService {
       // an invoiced DO is treated as delivered (invoicing = completion).
       final hasDeliveredAt = d['delivered_at'] != null;
       final invoiced = (d['status'] as String?) == 'invoiced';
-      final doDelivered =
-          hasDeliveredAt || (!deliveryFlowEnabled && invoiced);
+      // Delivered if: the DO row is marked delivered, OR (flow off) it's
+      // invoiced, OR any of its stops (matched by voucher number) is delivered.
+      final voucherNo = (d['voucher_number'] as String?)?.trim();
+      final stopDeliveredByVoucher =
+          voucherNo != null && deliveredByVoucher.contains(voucherNo);
+      final doDelivered = hasDeliveredAt ||
+          (!deliveryFlowEnabled && invoiced) ||
+          stopDeliveredByVoucher;
 
       OrderStatus st;
       String? driverId, driverName, deliveryId;
