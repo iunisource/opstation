@@ -61,6 +61,17 @@ const List<_AdminToggle> _toggles = [
 
   // ─── Add more org-level toggles here ─────────────────────────────────────
   _AdminToggle(
+    'org.quotation_custom_company',
+    'Custom company name on quotations',
+    'When ON, quotations can print a custom company name (set below) in the '
+        'header instead of the real organization name. The quotation print menu '
+        'gets a "Show custom company name" toggle to switch it on per quote; it '
+        'is mutually exclusive with "Show company name".',
+    text: _TextSetting('org.quotation_custom_company_name', 'Custom company name',
+        hint: 'e.g. Alfa Trading Co.'),
+  ),
+
+  _AdminToggle(
     'org.cbr_collection_columns',
     'Collection columns on Customer Balance Report',
     'Show blank "Receipt #" and "Amount Collected" columns in the Customer '

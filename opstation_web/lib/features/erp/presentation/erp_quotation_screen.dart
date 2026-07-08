@@ -46,6 +46,9 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   bool _printCompany = true; // include company name on printed quotation
   bool _printBranch = true;  // include branch on printed quotation
   bool _printPreparedBy = true; // include prepared-by (username) on printed quotation
+  bool _printCustomCompany = false; // show admin-defined custom company name instead
+  bool _customCompanyAllowed = false; // admin toggle (org.quotation_custom_company)
+  String _customCompanyName = '';     // admin-defined name (org.quotation_custom_company_name)
 
   // Per-line field controllers + focus nodes, keyed by the line map identity.
   // Enables the Qty→Price→Discount→(reopen picker) Enter chain on each row.
@@ -111,8 +114,31 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     orgId = ref.read(currentUserProvider)?.orgId;
     branchId = ref.read(selectedBranchProvider)?['id'] as String?;
     await _loadRefs();
+    await _loadCustomCompanyConfig();
     await _loadList();
     if (mounted) setState(() => _loading = false);
+  }
+
+  // Load the admin-defined custom company name settings from app_config.
+  Future<void> _loadCustomCompanyConfig() async {
+    if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', orgId as Object)
+          .inFilter('key', ['org.quotation_custom_company', 'org.quotation_custom_company_name']);
+      bool allowed = false; String name = '';
+      for (final r in (rows as List)) {
+        final k = r['key'] as String?; final v = r['value'] as String?;
+        if (k == 'org.quotation_custom_company') allowed = v == 'true';
+        if (k == 'org.quotation_custom_company_name') name = v ?? '';
+      }
+      if (mounted) setState(() {
+        _customCompanyAllowed = allowed && name.trim().isNotEmpty;
+        _customCompanyName = name.trim();
+      });
+    } catch (_) {}
   }
 
   Future<void> _loadRefs() async {
@@ -649,7 +675,9 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             ? _doc!['voucher_number'].toString()
             : '(unsaved)',
         voucherTypeLabel: 'Quotation',
-        orgName: _printCompany ? realOrg : '',
+        orgName: _printCustomCompany && _customCompanyAllowed
+            ? _customCompanyName
+            : (_printCompany ? realOrg : ''),
         branchName: _printBranch ? realBranch : null,
         date: DateFormat('dd MMM yyyy').format(_doc!['voucher_date'] as DateTime),
         customerOrSupplier: custName,
@@ -834,6 +862,8 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             icon: const Icon(Icons.tune, size: 18),
             itemBuilder: (_) => [
               CheckedPopupMenuItem(value: 'company', checked: _printCompany, child: const Text('Show company name')),
+              if (_customCompanyAllowed)
+                CheckedPopupMenuItem(value: 'customCompany', checked: _printCustomCompany, child: const Text('Show custom company name')),
               CheckedPopupMenuItem(value: 'branch', checked: _printBranch, child: const Text('Show branch')),
               CheckedPopupMenuItem(value: 'preparedBy', checked: _printPreparedBy, child: const Text('Show prepared by')),
               const PopupMenuDivider(),
@@ -843,7 +873,14 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                 const PopupMenuItem(value: 'mark_saved', child: Text('Mark as Saved')),
             ],
             onSelected: (v) {
-              if (v == 'company') setState(() => _printCompany = !_printCompany);
+              if (v == 'company') setState(() {
+                _printCompany = !_printCompany;
+                if (_printCompany) _printCustomCompany = false; // mutually exclusive
+              });
+              if (v == 'customCompany') setState(() {
+                _printCustomCompany = !_printCustomCompany;
+                if (_printCustomCompany) _printCompany = false; // mutually exclusive
+              });
               if (v == 'branch') setState(() => _printBranch = !_printBranch);
               if (v == 'preparedBy') setState(() => _printPreparedBy = !_printPreparedBy);
               if (v == 'mark_draft') _setStatus('draft');
