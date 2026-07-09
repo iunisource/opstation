@@ -1697,7 +1697,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     }
     double cashSales = 0;
     for (final t in sales) { cashSales += _posCashCollected(t); }
-    final expectedDrawer = openingCash + cashSales - totalReturns - totalExpenses; // refunds & expenses are cash out of drawer
+    // Supplier/expense payments (CPVs) made from the till this session.
+    double totalPayments = 0; String payRows = '';
+    for (final p in _sessionPayments) {
+      final pa = (p['total_amount'] as num?)?.toDouble() ?? 0; totalPayments += pa;
+      final pv = p['voucher_number'] as String? ?? '-';
+      final pn = p['notes'] as String? ?? '';
+      final pt = p['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(p['created_at'] as String).toLocal()) : '';
+      payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${pa.toStringAsFixed(2)}</td></tr>';
+    }
+    final expectedDrawer = openingCash + cashSales - totalReturns - totalExpenses - totalPayments; // refunds, expenses & payments are cash out of drawer
     final cashDiff = expectedDrawer - closingCash;  // +ve = cash short, -ve = cash over
     final branch = _session['branches']?['name'] as String? ?? '-';
     final user = ref.read(currentUserProvider);
@@ -1781,6 +1790,11 @@ ${expRows.isNotEmpty ? '''<h2>Expenses</h2>
 <table><thead><tr><th>Time</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>
 <tbody>$expRows
 <tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:#c0392b">-${totalExpenses.toStringAsFixed(2)}</td></tr>
+</tbody></table>''' : ''}
+${payRows.isNotEmpty ? '''<h2>Supplier / Expense Payments (from till)</h2>
+<table><thead><tr><th>Time</th><th>Voucher</th><th>Description</th><th>Amount</th></tr></thead>
+<tbody>$payRows
+<tr class="total-row"><td colspan="3">TOTAL PAYMENTS</td><td style="text-align:right;color:#c0392b">-${totalPayments.toStringAsFixed(2)}</td></tr>
 </tbody></table>''' : ''}
 ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
 <table><thead><tr><th>Time</th><th>Customer</th><th>Original Txn</th><th>Refund</th></tr></thead>
@@ -2405,53 +2419,79 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
   // Pays either a supplier (Dr Accounts Payable) or an expense account
   // (Dr Expense) — Cr Cash in Hand. Session-linked so it reduces closing cash,
   // and posted to the GL via the shared post_cpv function (one posting path).
+  // Record a payment from the till as a proper CPV with one or MORE lines.
+  // Each line pays a supplier (Dr Accounts Payable) or an expense account
+  // (Dr Expense). One CPV, multiple lines. Cr Cash in Hand for the total.
+  // Session-linked (reduces closing cash), posted via shared post_cpv.
   Future<void> _addPayment() async {
-    final amtCtrl = TextEditingController();
-    final descCtrl = TextEditingController();
-    String payType = 'supplier'; // 'supplier' | 'expense'
-    String? supplierId; String? supplierName;
-    String? expenseAccId; String? expenseAccName;
-    final supplierSearchCtrl = TextEditingController();
+    // Each line: {type: 'supplier'|'expense', id, name, amtCtrl, descCtrl}
+    final payLines = <Map<String, dynamic>>[
+      {'type': 'supplier', 'id': null, 'name': null, 'amtCtrl': TextEditingController(), 'descCtrl': TextEditingController()},
+    ];
 
     final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) {
+      double total = 0;
+      for (final l in payLines) { total += double.tryParse((l['amtCtrl'] as TextEditingController).text.trim()) ?? 0; }
+
+      Widget lineCard(int idx) {
+        final l = payLines[idx];
+        final type = l['type'] as String;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              // type toggle
+              Expanded(child: Row(children: [
+                Expanded(child: GestureDetector(onTap: () => setS(() { l['type'] = 'supplier'; l['id'] = null; l['name'] = null; }),
+                  child: Container(padding: const EdgeInsets.symmetric(vertical: 5), decoration: BoxDecoration(color: type=='supplier' ? AppTheme.primary : Colors.white, borderRadius: const BorderRadius.horizontal(left: Radius.circular(5)), border: Border.all(color: AppTheme.border)),
+                    child: Text('Supplier', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: type=='supplier' ? Colors.white : AppTheme.textSecondary))))),
+                Expanded(child: GestureDetector(onTap: () => setS(() { l['type'] = 'expense'; l['id'] = null; l['name'] = null; }),
+                  child: Container(padding: const EdgeInsets.symmetric(vertical: 5), decoration: BoxDecoration(color: type=='expense' ? AppTheme.primary : Colors.white, borderRadius: const BorderRadius.horizontal(right: Radius.circular(5)), border: Border.all(color: AppTheme.border)),
+                    child: Text('Expense', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: type=='expense' ? Colors.white : AppTheme.textSecondary))))),
+              ])),
+              if (payLines.length > 1)
+                IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  onPressed: () => setS(() => payLines.removeAt(idx))),
+            ]),
+            const SizedBox(height: 6),
+            // account picker
+            if (type == 'supplier')
+              GestureDetector(onTap: () async {
+                final picked = await _pickSupplierDialog();
+                if (picked != null) setS(() { l['id'] = picked['id']; l['name'] = picked['name']; });
+              }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+                child: Row(children: [Expanded(child: Text(l['name'] as String? ?? 'Tap to pick supplier', style: TextStyle(fontSize: 12, color: l['name']==null ? AppTheme.textSecondary : null), overflow: TextOverflow.ellipsis)), const Icon(Icons.arrow_drop_down, size: 18)])))
+            else
+              DropdownButtonFormField<String>(value: l['id'] as String?, isExpanded: true, isDense: true,
+                decoration: const InputDecoration(hintText: 'Expense account', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
+                items: _expenseAccounts.map((a) => DropdownMenuItem(value: a['id'] as String, child: Text('${a['code']} — ${a['name']}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
+                onChanged: (v) => setS(() { l['id'] = v; l['name'] = _expenseAccounts.firstWhere((a) => a['id']==v, orElse: () => {})['name']; })),
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(flex: 2, child: TextField(controller: l['amtCtrl'] as TextEditingController, decoration: const InputDecoration(labelText: 'Amount', prefixText: 'Rs. ', isDense: true, border: OutlineInputBorder()),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], onChanged: (_) => setS(() {}))),
+              const SizedBox(width: 6),
+              Expanded(flex: 3, child: TextField(controller: l['descCtrl'] as TextEditingController, decoration: const InputDecoration(labelText: 'Description', isDense: true, border: OutlineInputBorder()))),
+            ]),
+          ]),
+        );
+      }
+
       return AlertDialog(
         title: const Text('Record Payment (CPV)'),
-        content: SizedBox(width: 400, child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Type toggle
-          Row(children: [
-            Expanded(child: GestureDetector(onTap: () => setS(() => payType = 'supplier'),
-              child: Container(padding: const EdgeInsets.symmetric(vertical: 8), decoration: BoxDecoration(color: payType=='supplier' ? AppTheme.primary : AppTheme.background, borderRadius: const BorderRadius.horizontal(left: Radius.circular(6)), border: Border.all(color: AppTheme.border)),
-                child: Text('Supplier', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: payType=='supplier' ? Colors.white : AppTheme.textSecondary))))),
-            Expanded(child: GestureDetector(onTap: () => setS(() => payType = 'expense'),
-              child: Container(padding: const EdgeInsets.symmetric(vertical: 8), decoration: BoxDecoration(color: payType=='expense' ? AppTheme.primary : AppTheme.background, borderRadius: const BorderRadius.horizontal(right: Radius.circular(6)), border: Border.all(color: AppTheme.border)),
-                child: Text('Expense', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: payType=='expense' ? Colors.white : AppTheme.textSecondary))))),
+        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (var i = 0; i < payLines.length; i++) lineCard(i),
+          ]))),
+          Align(alignment: Alignment.centerLeft, child: TextButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('Add line'),
+            onPressed: () => setS(() => payLines.add({'type': 'supplier', 'id': null, 'name': null, 'amtCtrl': TextEditingController(), 'descCtrl': TextEditingController()})))),
+          const Divider(),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            const Text('Total', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w800, color: AppTheme.primary)),
           ]),
-          const SizedBox(height: 12),
-          if (payType == 'supplier') ...[
-            // Supplier search + pick
-            TextField(controller: supplierSearchCtrl, decoration: const InputDecoration(labelText: 'Search supplier', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (_) => setS(() {})),
-            const SizedBox(height: 6),
-            SizedBox(height: 130, child: Builder(builder: (_) {
-              final q = supplierSearchCtrl.text.trim().toLowerCase();
-              final list = q.isEmpty ? _suppliers : _suppliers.where((s) => (s['name'] as String? ?? '').toLowerCase().contains(q)).toList();
-              if (list.isEmpty) return const Center(child: Text('No suppliers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)));
-              return ListView.builder(itemCount: list.length, itemBuilder: (_, i) {
-                final s = list[i]; final sel = s['id'] == supplierId;
-                return ListTile(dense: true, selected: sel, title: Text(s['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
-                  onTap: () => setS(() { supplierId = s['id'] as String?; supplierName = s['name'] as String?; }));
-              });
-            })),
-            if (supplierName != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Selected: $supplierName', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
-          ] else ...[
-            DropdownButtonFormField<String>(value: expenseAccId, isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Expense account', isDense: true),
-              items: _expenseAccounts.map((a) => DropdownMenuItem(value: a['id'] as String, child: Text('${a['code']} — ${a['name']}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
-              onChanged: (v) => setS(() { expenseAccId = v; expenseAccName = _expenseAccounts.firstWhere((a) => a['id']==v, orElse: () => {})['name'] as String?; })),
-          ],
-          const SizedBox(height: 12),
-          TextField(controller: amtCtrl, decoration: const InputDecoration(labelText: 'Amount *', prefixText: 'Rs. ', isDense: true), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
-          const SizedBox(height: 12),
-          TextField(controller: descCtrl, decoration: const InputDecoration(labelText: 'Description', isDense: true), maxLines: 2),
         ])),
         actions: [
           TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
@@ -2461,46 +2501,68 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     }));
     if (ok != true) return;
 
-    final amt = double.tryParse(amtCtrl.text.trim()) ?? 0;
-    if (amt <= 0) { _showSnack('Enter a valid amount'); return; }
-    if (payType == 'supplier' && supplierId == null) { _showSnack('Pick a supplier'); return; }
-    if (payType == 'expense' && expenseAccId == null) { _showSnack('Pick an expense account'); return; }
+    // Validate
+    final validLines = <Map<String, dynamic>>[];
+    for (final l in payLines) {
+      final amt = double.tryParse((l['amtCtrl'] as TextEditingController).text.trim()) ?? 0;
+      if (amt <= 0) continue;
+      if (l['id'] == null) { _showSnack('Each line needs a supplier/account'); return; }
+      validLines.add({'type': l['type'], 'id': l['id'], 'name': l['name'], 'amount': amt, 'desc': (l['descCtrl'] as TextEditingController).text.trim()});
+    }
+    if (validLines.isEmpty) { _showSnack('Add at least one payment line with an amount'); return; }
+    final total = validLines.fold<double>(0, (s, l) => s + (l['amount'] as double));
 
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final userName = ref.read(currentUserProvider)?.name ?? '';
     final bid = _session['branch_id'] as String? ?? '';
-    // The POS session reconciles against Cash in Hand (1110) — pay from it.
-    final cashAccId = 'coa_${orgId}_1110';
+    final cashAccId = 'coa_${orgId}_1110'; // POS reconciles against Cash in Hand
     final client = Supabase.instance.client;
     try {
-      // Voucher number (mirror CPV screen's scheme)
       final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
       final vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
       final vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
       final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-
       await client.from('cpv_vouchers').insert({
         'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr,
         'cash_account_id': cashAccId, 'cash_account_name': 'Cash in Hand',
-        'status': 'posted', 'total_amount': amt,
-        'notes': descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
+        'status': 'posted', 'total_amount': total,
         'created_by': userId, 'posted_by': userId, 'posted_by_name': userName,
-        'posted_at': DateTime.now().toIso8601String(),
-        'session_id': _session['id'],
+        'posted_at': DateTime.now().toIso8601String(), 'session_id': _session['id'],
       });
-      await client.from('cpv_voucher_lines').insert({
-        'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_0', 'voucher_id': vid,
-        'account_type': payType == 'supplier' ? 'supplier' : 'expense',
-        'account_id': payType == 'supplier' ? supplierId : expenseAccId,
-        'account_name': payType == 'supplier' ? supplierName : expenseAccName,
-        'description': descCtrl.text.trim(), 'amount': amt, 'line_order': 0,
-      });
-
-      // Post to GL via the shared function (balance-guarded, single path)
-      final res = await client.rpc('post_cpv', params: {'p_voucher_id': vid});
-      _showSnack('Payment posted: $vNum • Rs. ${amt.toStringAsFixed(2)}');
+      for (var i = 0; i < validLines.length; i++) {
+        final l = validLines[i];
+        await client.from('cpv_voucher_lines').insert({
+          'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid,
+          'account_type': l['type'] == 'supplier' ? 'supplier' : 'expense',
+          'account_id': l['id'], 'account_name': l['name'],
+          'description': l['desc'], 'amount': l['amount'], 'line_order': i,
+        });
+      }
+      await client.rpc('post_cpv', params: {'p_voucher_id': vid});
+      _showSnack('Payment posted: $vNum • Rs. ${total.toStringAsFixed(2)}');
       _loadData();
     } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Searchable supplier picker for a payment line.
+  Future<Map<String, dynamic>?> _pickSupplierDialog() async {
+    final searchCtrl = TextEditingController();
+    return showDialog<Map<String, dynamic>>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) {
+      final q = searchCtrl.text.trim().toLowerCase();
+      final list = q.isEmpty ? _suppliers : _suppliers.where((s) => (s['name'] as String? ?? '').toLowerCase().contains(q)).toList();
+      return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420, maxHeight: 500), child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(padding: const EdgeInsets.fromLTRB(16, 14, 8, 6), child: Row(children: [
+          const Expanded(child: Text('Select supplier', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+          IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(ctx)),
+        ])),
+        Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 8), child: TextField(controller: searchCtrl, autofocus: true,
+          decoration: const InputDecoration(hintText: 'Search…', prefixIcon: Icon(Icons.search, size: 20), isDense: true, border: OutlineInputBorder()), onChanged: (_) => setS(() {}))),
+        const Divider(height: 1),
+        Expanded(child: list.isEmpty ? const Center(child: Text('No suppliers', style: TextStyle(color: AppTheme.textSecondary)))
+          : ListView.separated(itemCount: list.length, separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) { final s = list[i]; return ListTile(dense: true, title: Text(s['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)), onTap: () => Navigator.pop(ctx, s)); })),
+      ])));
+    }));
   }
 
   // ── Hold Bill ─────────────────────────────────────────────────
