@@ -158,7 +158,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       return '';
     }
 
-    // 1. Sales Invoices -> Debit
+    // 1. Purchase Invoices -> Credit (increases what we owe the supplier)
     try {
       var siQ = client.from('purchase_invoices').select('*')
           .eq('org_id', orgId).eq('supplier_id', supplierId);
@@ -172,13 +172,13 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           entries.add({
             'date': date, 'voucher': vno,
             'description': vno.isNotEmpty ? 'Purchase Invoice ' + vno : 'Purchase Invoice',
-            'debit': total, 'credit': 0.0, 'id': si['id'] as String?, 'type': 'Purchase Invoice',
+            'debit': 0.0, 'credit': total, 'id': si['id'] as String?, 'type': 'Purchase Invoice',
           });
         }
       }
     } catch (e) { errors.add('SI: ' + e.toString()); }
 
-// 3. Purchase Return Invoices (SRI) -> Credit
+    // 3. Purchase Return Invoices -> Debit (reduces what we owe)
     for (final tbl in const ['purchase_return_invoices', 'sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
         var q = client.from(tbl).select('*')
@@ -193,7 +193,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             entries.add({
               'date': date, 'voucher': vno,
               'description': vno.isNotEmpty ? 'Purchase Return ' + vno : 'Purchase Return',
-              'debit': 0.0, 'credit': total, 'id': sr['id'] as String?, 'type': 'Purchase Return',
+              'debit': total, 'credit': 0.0, 'id': sr['id'] as String?, 'type': 'Purchase Return',
             });
           }
         }
@@ -202,7 +202,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     }
     // A supplier simply having no purchase returns is normal — no banner for that.
 
-    // 4. CRV -> Credit (supplier paid us)
+    // 4. CRV -> Credit (receipt/refund from supplier increases what we owe them)
     try {
       final crvVouchers = await client.from('crv_vouchers')
           .select('*').eq('org_id', orgId).eq('status', 'posted');
@@ -219,14 +219,14 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             'date': date,
             'voucher': (v['voucher_number'] as String?) ?? '',
             'description': 'Receipt — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
-            'debit': (line['amount'] as num?)?.toDouble() ?? 0, 'credit': 0.0,
+            'debit': 0.0, 'credit': (line['amount'] as num?)?.toDouble() ?? 0,
             'id': v['id'] as String?, 'type': 'Receipt (CRV)',
           });
         }
       }
     } catch (e) { errors.add('CRV: ' + e.toString()); }
 
-    // 5. CPV -> Credit (we paid supplier)
+    // 5. CPV -> Debit (we paid supplier, reducing what we owe)
     try {
       final cpvVouchers = await client.from('cpv_vouchers')
           .select('*').eq('org_id', orgId).eq('status', 'posted');
@@ -243,8 +243,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             'date': date,
             'voucher': (v['voucher_number'] as String?) ?? '',
             'description': 'Payment — ' + ((line['description'] as String?) ?? (v['voucher_number'] as String? ?? '')),
-            'debit': 0.0,
-            'credit': (line['amount'] as num?)?.toDouble() ?? 0, 'id': v['id'] as String?, 'type': 'Payment (CPV)',
+            'debit': (line['amount'] as num?)?.toDouble() ?? 0,
+            'credit': 0.0, 'id': v['id'] as String?, 'type': 'Payment (CPV)',
           });
         }
       }
@@ -282,7 +282,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
 
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
-    for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
+    // Supplier is a payable (credit-normal): balance = credit - debit, so an
+    // amount owed to the supplier shows as a positive balance.
+    for (final e in entries) { bal += (e['credit'] as double) - (e['debit'] as double); e['balance'] = bal; }
     setState(() { _entries = entries; _loading = false; _errors = errors; });
   }
 
@@ -305,7 +307,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     }).toList();
     // Recalculate running balance for filtered view
     double rb = 0;
-    return list.map((e) { rb += (e['debit'] as double) - (e['credit'] as double); return {...e, 'display_balance': rb}; }).toList();
+    return list.map((e) { rb += (e['credit'] as double) - (e['debit'] as double); return {...e, 'display_balance': rb}; }).toList();
   }
 
   @override
@@ -314,7 +316,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     final display = _displayEntries;
     double totalDebit = 0, totalCredit = 0;
     for (final e in display) { totalDebit += e['debit'] as double; totalCredit += e['credit'] as double; }
-    final netBal = totalDebit - totalCredit;
+    final netBal = totalCredit - totalDebit;
     final maxDrop = _filteredSuppliers.length.clamp(0, 10);
 
     return GestureDetector(
@@ -437,7 +439,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               const SizedBox(width: 10),
               _Stat(label: 'Total Credit', value: 'Rs. ${totalCredit.toStringAsFixed(2)}', color: Colors.green.shade700),
               const SizedBox(width: 10),
-              _Stat(label: 'Net Balance', value: 'Rs. ${netBal.toStringAsFixed(2)}', color: netBal > 0 ? AppTheme.danger : Colors.green.shade700),
+              _Stat(label: netBal >= 0 ? 'Net Payable' : 'Net Advance', value: 'Rs. ${netBal.abs().toStringAsFixed(2)}', color: netBal > 0 ? AppTheme.danger : Colors.green.shade700),
               const Spacer(),
               SizedBox(width: 200, child: TextField(controller: _entrySearchCtrl, decoration: const InputDecoration(hintText: 'Search entries...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)))),
               const SizedBox(width: 12),
@@ -557,7 +559,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       td += e['debit'] as double; tc += e['credit'] as double;
       buf.writeln([date, esc(e['voucher'] as String? ?? ''), esc(e['description'] as String), esc(e['type'] as String), (e['debit'] as double).toStringAsFixed(2), (e['credit'] as double).toStringAsFixed(2), (e['display_balance'] as double).toStringAsFixed(2)].join(','));
     }
-    buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (td - tc).toStringAsFixed(2));
+    buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (tc - td).toStringAsFixed(2));
     final csvContent = String.fromCharCode(0xFEFF) + buf.toString();
     final blob = html.Blob([csvContent], 'text/csv;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
@@ -811,7 +813,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       final branch = ref.read(selectedBranchProvider);
       double td = 0, tc = 0;
       for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
-      final netBal = td - tc;
+      final netBal = tc - td;
       final cust = _selectedSupplier!;
       final supplierName = (cust['name'] as String?) ?? '';
       final supplierCode = (cust['code'] as String?) ?? '';
