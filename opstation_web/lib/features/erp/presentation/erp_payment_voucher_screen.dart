@@ -275,10 +275,35 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   }
 
   Future<void> _delete() async {
-    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('Delete Voucher?'), content: const Text('This cannot be undone.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red))]));
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('Delete Voucher?'), content: const Text('This will reverse its GL posting and cannot be undone.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red))]));
     if (ok != true) return;
     try {
-      if (_currentVoucher != null) { await Supabase.instance.client.from('cpv_vouchers').delete().eq('id', _currentVoucher!['id'] as String); _snack('Deleted'); _newVoucher(); await _loadVouchers(); }
+      if (_currentVoucher != null) {
+        final client = Supabase.instance.client;
+        final vid = _currentVoucher!['id'] as String;
+        final orgId = _orgId;
+        // Reverse the GL first: remove this voucher's journal entry + lines so
+        // deleting the voucher also unwinds its Cash/AP posting. Without this,
+        // the GL keeps crediting Cash in Hand for a voucher that no longer
+        // exists (orphaned entry).
+        if (orgId != null) {
+          final prior = await client.from('journal_entries').select('id')
+              .eq('org_id', orgId).eq('reference_type', 'cpv').eq('reference_id', vid);
+          for (final e in (prior as List)) {
+            await client.from('journal_lines').delete().eq('entry_id', e['id'] as String);
+          }
+          await client.from('journal_entries').delete()
+              .eq('org_id', orgId).eq('reference_type', 'cpv').eq('reference_id', vid);
+          // legacy id scheme fallback
+          await client.from('journal_lines').delete().eq('entry_id', 'je_cpv_' + vid);
+          await client.from('journal_entries').delete().eq('id', 'je_cpv_' + vid);
+        }
+        await client.from('cpv_voucher_lines').delete().eq('voucher_id', vid);
+        await client.from('cpv_vouchers').delete().eq('id', vid);
+        _snack('Deleted & GL reversed');
+        _newVoucher();
+        await _loadVouchers();
+      }
     } catch (e) { _snack('Failed: $e'); }
   }
 
