@@ -663,7 +663,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         final expRows = await Supabase.instance.client.from('pos_expenses').select('*').eq('session_id', _session['id']).order('created_at', ascending: false);
         expenseList = List<Map<String, dynamic>>.from(expRows);
         try {
-          final payRows = await Supabase.instance.client.from('cpv_vouchers').select('id, voucher_number, total_amount, notes, created_at, cash_account_name').eq('session_id', _session['id']).eq('status', 'posted').order('created_at', ascending: false);
+          final payRows = await Supabase.instance.client.from('cpv_vouchers').select('id, voucher_number, total_amount, notes, created_at, cash_account_name, cpv_voucher_lines(account_name, account_type, description, amount)').eq('session_id', _session['id']).eq('status', 'posted').order('created_at', ascending: false);
           _sessionPayments = List<Map<String, dynamic>>.from(payRows);
         } catch (_) { _sessionPayments = []; }
       } catch (_) {}
@@ -1698,13 +1698,25 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     double cashSales = 0;
     for (final t in sales) { cashSales += _posCashCollected(t); }
     // Supplier/expense payments (CPVs) made from the till this session.
+    // One row per line so each supplier/account name shows; CPV# is reference.
     double totalPayments = 0; String payRows = '';
     for (final p in _sessionPayments) {
       final pa = (p['total_amount'] as num?)?.toDouble() ?? 0; totalPayments += pa;
       final pv = p['voucher_number'] as String? ?? '-';
-      final pn = p['notes'] as String? ?? '';
       final pt = p['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(p['created_at'] as String).toLocal()) : '';
-      payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${pa.toStringAsFixed(2)}</td></tr>';
+      final plines = (p['cpv_voucher_lines'] as List?) ?? const [];
+      if (plines.isEmpty) {
+        final pn = p['notes'] as String? ?? '';
+        payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${pa.toStringAsFixed(2)}</td></tr>';
+      } else {
+        for (final l in plines) {
+          final la = (l['amount'] as num?)?.toDouble() ?? 0;
+          final name = (l['account_name'] as String?) ?? '-';
+          final ldesc = (l['description'] as String?) ?? '';
+          final label = ldesc.isNotEmpty ? '$name — $ldesc' : name;
+          payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>$label</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${la.toStringAsFixed(2)}</td></tr>';
+        }
+      }
     }
     final expectedDrawer = openingCash + cashSales - totalReturns - totalExpenses - totalPayments; // refunds, expenses & payments are cash out of drawer
     final cashDiff = expectedDrawer - closingCash;  // +ve = cash short, -ve = cash over
@@ -1792,7 +1804,7 @@ ${expRows.isNotEmpty ? '''<h2>Expenses</h2>
 <tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:#c0392b">-${totalExpenses.toStringAsFixed(2)}</td></tr>
 </tbody></table>''' : ''}
 ${payRows.isNotEmpty ? '''<h2>Supplier / Expense Payments (from till)</h2>
-<table><thead><tr><th>Time</th><th>Voucher</th><th>Description</th><th>Amount</th></tr></thead>
+<table><thead><tr><th>Time</th><th>CPV Ref.</th><th>Paid To / Description</th><th>Amount</th></tr></thead>
 <tbody>$payRows
 <tr class="total-row"><td colspan="3">TOTAL PAYMENTS</td><td style="text-align:right;color:#c0392b">-${totalPayments.toStringAsFixed(2)}</td></tr>
 </tbody></table>''' : ''}
