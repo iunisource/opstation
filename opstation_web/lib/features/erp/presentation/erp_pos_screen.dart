@@ -519,6 +519,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _posCustomers = [];
   Map<String, dynamic>? _selectedPosCustomer;  // quick POS customer
   List<Map<String, dynamic>> _promoters = [];        // active sales promoters
+  List<Map<String, dynamic>> _suppliers = [];        // for POS payments (CPV)
+  List<Map<String, dynamic>> _expenseAccounts = [];  // expense COA accounts for CPV
+  List<Map<String, dynamic>> _sessionPayments = [];  // CPVs made from this session
   Map<String, dynamic>? _selectedPromoter;           // one promoter per bill (optional)
   Map<String, double> _stockMap = {};  // product_id → qty in stock
   bool _allowNoStock = false;           // org setting: allow selling without stock
@@ -617,6 +620,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         client.from('pos_customers').select('id, name, phone, cnic').eq('org_id', orgId).eq('branch_id', branchId).order('name'),
         client.from('pos_held_bills').select('*').eq('session_id', _session['id']).eq('status', 'held').order('held_at', ascending: false),
         client.from('sales_promoters').select('id, name, phone').eq('org_id', orgId).eq('is_active', true).order('name'),
+        client.from('suppliers').select('id, name').eq('org_id', orgId).order('name'),
+        client.from('chart_of_accounts').select('id, code, name').eq('org_id', orgId).eq('account_type', 'expense').order('code'),
       ]);
       final prods = List<Map<String, dynamic>>.from(results[1] as List);
       final stockRows = List<Map<String, dynamic>>.from(results[4] as List);
@@ -657,6 +662,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       try {
         final expRows = await Supabase.instance.client.from('pos_expenses').select('*').eq('session_id', _session['id']).order('created_at', ascending: false);
         expenseList = List<Map<String, dynamic>>.from(expRows);
+        try {
+          final payRows = await Supabase.instance.client.from('cpv_vouchers').select('id, voucher_number, total_amount, notes, created_at, cash_account_name').eq('session_id', _session['id']).eq('status', 'posted').order('created_at', ascending: false);
+          _sessionPayments = List<Map<String, dynamic>>.from(payRows);
+        } catch (_) { _sessionPayments = []; }
       } catch (_) {}
       // Load expenses separately (avoids Future.wait index issues)
       bool allowNoStock = false;
@@ -732,6 +741,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _posCustomers = List<Map<String, dynamic>>.from(results[5] as List);
         _heldBills = List<Map<String, dynamic>>.from(results[6] as List);
         _promoters = List<Map<String, dynamic>>.from(results[7] as List);
+        _suppliers = List<Map<String, dynamic>>.from(results[8] as List);
+        _expenseAccounts = List<Map<String, dynamic>>.from(results[9] as List);
         _posConfig = posCfg;
         _loading = false;
       });
@@ -1551,8 +1562,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final e in _expenses) {
       cashExpenses += (e['amount'] as num?)?.toDouble() ?? 0;
     }
+    double cashPayments = 0;
+    for (final p in _sessionPayments) {
+      cashPayments += (p['total_amount'] as num?)?.toDouble() ?? 0;
+    }
     final breakdown = _sessionBreakdown();
-    final expectedClose = opening + cashSales - cashRefunds - cashExpenses;
+    final expectedClose = opening + cashSales - cashRefunds - cashExpenses - cashPayments;
     final cashCtrl = TextEditingController(text: expectedClose.toStringAsFixed(2));
     final notesCtrl = TextEditingController();
     Widget ccRow(String label, double val, {bool bold = false}) => Padding(
@@ -1573,6 +1588,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
             ccRow('+ Cash sales', cashSales),
             ccRow('- Cash refunds', -cashRefunds),
             ccRow('- Cash expenses', -cashExpenses),
+            if (cashPayments > 0) ccRow('- Supplier/expense payments', -cashPayments),
             const Divider(height: 14),
             ccRow('Expected closing cash', expectedClose, bold: true),
           ]),
@@ -1812,7 +1828,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
             const SizedBox(width: 4),
             TextButton.icon(icon: const Icon(Icons.pause_circle_outline, size: 18), label: const Text('Holds'), onPressed: () async { final bill = await Navigator.of(context).push<Map<String, dynamic>>(MaterialPageRoute(builder: (_) => const ErpPosHeldBillsScreen())); if (bill != null && mounted) _restoreBill(bill); }, style: TextButton.styleFrom(foregroundColor: Colors.orange)),
             const SizedBox(width: 4),
-            TextButton.icon(icon: const Icon(Icons.receipt_long_outlined, size: 18), label: const Text('Expense'), onPressed: _addExpense, style: TextButton.styleFrom(foregroundColor: Colors.red.shade700)),
+            TextButton.icon(icon: const Icon(Icons.payments_outlined, size: 18), label: const Text('Payment'), onPressed: _addPayment, style: TextButton.styleFrom(foregroundColor: Colors.red.shade700)),
             const SizedBox(width: 4),
             TextButton.icon(icon: const Icon(Icons.summarize_outlined, size: 18), label: const Text('Summary'), onPressed: _exportSummary),
             const SizedBox(width: 4),
@@ -2385,38 +2401,104 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     );
   }
 
-  Future<void> _addExpense() async {
+  // Record a payment from the till as a proper CPV (Cash Payment Voucher).
+  // Pays either a supplier (Dr Accounts Payable) or an expense account
+  // (Dr Expense) — Cr Cash in Hand. Session-linked so it reduces closing cash,
+  // and posted to the GL via the shared post_cpv function (one posting path).
+  Future<void> _addPayment() async {
     final amtCtrl = TextEditingController();
-    final noteCtrl = TextEditingController();
-    String category = 'Transport';
-    const cats = ['Transport', 'Supplies', 'Food & Beverages', 'Utilities', 'Maintenance', 'Miscellaneous', 'Other'];
-    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) => AlertDialog(
-      title: const Text('Record Expense'),
-      content: SizedBox(width: 360, child: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: amtCtrl, decoration: const InputDecoration(labelText: 'Amount *', prefixText: 'Rs. '), keyboardType: const TextInputType.numberWithOptions(decimal: true), autofocus: true),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(value: category, decoration: const InputDecoration(labelText: 'Category'),
-          items: cats.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-          onChanged: (v) => setS(() => category = v ?? category)),
-        const SizedBox(height: 12),
-        TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: 'Note (optional)'), maxLines: 2),
-      ])),
-      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Save'))],
-    )));
+    final descCtrl = TextEditingController();
+    String payType = 'supplier'; // 'supplier' | 'expense'
+    String? supplierId; String? supplierName;
+    String? expenseAccId; String? expenseAccName;
+    final supplierSearchCtrl = TextEditingController();
+
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) {
+      return AlertDialog(
+        title: const Text('Record Payment (CPV)'),
+        content: SizedBox(width: 400, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Type toggle
+          Row(children: [
+            Expanded(child: GestureDetector(onTap: () => setS(() => payType = 'supplier'),
+              child: Container(padding: const EdgeInsets.symmetric(vertical: 8), decoration: BoxDecoration(color: payType=='supplier' ? AppTheme.primary : AppTheme.background, borderRadius: const BorderRadius.horizontal(left: Radius.circular(6)), border: Border.all(color: AppTheme.border)),
+                child: Text('Supplier', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: payType=='supplier' ? Colors.white : AppTheme.textSecondary))))),
+            Expanded(child: GestureDetector(onTap: () => setS(() => payType = 'expense'),
+              child: Container(padding: const EdgeInsets.symmetric(vertical: 8), decoration: BoxDecoration(color: payType=='expense' ? AppTheme.primary : AppTheme.background, borderRadius: const BorderRadius.horizontal(right: Radius.circular(6)), border: Border.all(color: AppTheme.border)),
+                child: Text('Expense', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: payType=='expense' ? Colors.white : AppTheme.textSecondary))))),
+          ]),
+          const SizedBox(height: 12),
+          if (payType == 'supplier') ...[
+            // Supplier search + pick
+            TextField(controller: supplierSearchCtrl, decoration: const InputDecoration(labelText: 'Search supplier', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (_) => setS(() {})),
+            const SizedBox(height: 6),
+            SizedBox(height: 130, child: Builder(builder: (_) {
+              final q = supplierSearchCtrl.text.trim().toLowerCase();
+              final list = q.isEmpty ? _suppliers : _suppliers.where((s) => (s['name'] as String? ?? '').toLowerCase().contains(q)).toList();
+              if (list.isEmpty) return const Center(child: Text('No suppliers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)));
+              return ListView.builder(itemCount: list.length, itemBuilder: (_, i) {
+                final s = list[i]; final sel = s['id'] == supplierId;
+                return ListTile(dense: true, selected: sel, title: Text(s['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
+                  onTap: () => setS(() { supplierId = s['id'] as String?; supplierName = s['name'] as String?; }));
+              });
+            })),
+            if (supplierName != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Selected: $supplierName', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
+          ] else ...[
+            DropdownButtonFormField<String>(value: expenseAccId, isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Expense account', isDense: true),
+              items: _expenseAccounts.map((a) => DropdownMenuItem(value: a['id'] as String, child: Text('${a['code']} — ${a['name']}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
+              onChanged: (v) => setS(() { expenseAccId = v; expenseAccName = _expenseAccounts.firstWhere((a) => a['id']==v, orElse: () => {})['name'] as String?; })),
+          ],
+          const SizedBox(height: 12),
+          TextField(controller: amtCtrl, decoration: const InputDecoration(labelText: 'Amount *', prefixText: 'Rs. ', isDense: true), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+          const SizedBox(height: 12),
+          TextField(controller: descCtrl, decoration: const InputDecoration(labelText: 'Description', isDense: true), maxLines: 2),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Save & Post')),
+        ],
+      );
+    }));
     if (ok != true) return;
+
     final amt = double.tryParse(amtCtrl.text.trim()) ?? 0;
     if (amt <= 0) { _showSnack('Enter a valid amount'); return; }
+    if (payType == 'supplier' && supplierId == null) { _showSnack('Pick a supplier'); return; }
+    if (payType == 'expense' && expenseAccId == null) { _showSnack('Pick an expense account'); return; }
+
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name ?? '';
+    final bid = _session['branch_id'] as String? ?? '';
+    // The POS session reconciles against Cash in Hand (1110) — pay from it.
+    final cashAccId = 'coa_${orgId}_1110';
+    final client = Supabase.instance.client;
     try {
-      await Supabase.instance.client.from('pos_expenses').insert({
-        'id': 'pex_${DateTime.now().millisecondsSinceEpoch}',
-        'org_id': orgId ?? '', 'branch_id': _session['branch_id']?.toString() ?? _session['branch_id'] as String? ?? '',
-        'session_id': _session['id'], 'amount': amt,
-        'category': category, 'note': noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
-        'created_by': userId,
+      // Voucher number (mirror CPV screen's scheme)
+      final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
+      final vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+      final vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
+      final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+      await client.from('cpv_vouchers').insert({
+        'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr,
+        'cash_account_id': cashAccId, 'cash_account_name': 'Cash in Hand',
+        'status': 'posted', 'total_amount': amt,
+        'notes': descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
+        'created_by': userId, 'posted_by': userId, 'posted_by_name': userName,
+        'posted_at': DateTime.now().toIso8601String(),
+        'session_id': _session['id'],
       });
-      _showSnack('Expense recorded: Rs. ${amt.toStringAsFixed(2)}');
+      await client.from('cpv_voucher_lines').insert({
+        'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_0', 'voucher_id': vid,
+        'account_type': payType == 'supplier' ? 'supplier' : 'expense',
+        'account_id': payType == 'supplier' ? supplierId : expenseAccId,
+        'account_name': payType == 'supplier' ? supplierName : expenseAccName,
+        'description': descCtrl.text.trim(), 'amount': amt, 'line_order': 0,
+      });
+
+      // Post to GL via the shared function (balance-guarded, single path)
+      final res = await client.rpc('post_cpv', params: {'p_voucher_id': vid});
+      _showSnack('Payment posted: $vNum • Rs. ${amt.toStringAsFixed(2)}');
       _loadData();
     } catch (e) { _showSnack('Failed: $e'); }
   }
