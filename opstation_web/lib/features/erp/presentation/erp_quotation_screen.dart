@@ -1126,7 +1126,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       'quantity': 1.0,
       'unit_price': (picked['selling_price'] as num?)?.toDouble() ?? 0.0,
       'discount': 0.0,
-      'discount_type': 'fixed',
+      'discount_type': 'percent',
     };
     setState(() => _lines.add(line));
     // After the row builds, focus its Qty field and select the text so typing
