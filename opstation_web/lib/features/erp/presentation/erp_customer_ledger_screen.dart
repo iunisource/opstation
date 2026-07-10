@@ -509,7 +509,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     double totalDebit = 0, totalCredit = 0;
     for (final e in display) { totalDebit += e['debit'] as double; totalCredit += e['credit'] as double; }
     final netBal = totalDebit - totalCredit;
-    final maxDrop = _filteredCustomers.length.clamp(0, 10);
+    final maxDrop = _filteredCustomers.length.clamp(0, 50);
 
     return GestureDetector(
       onTap: () { if (_showDropdown) setState(() => _showDropdown = false); },
