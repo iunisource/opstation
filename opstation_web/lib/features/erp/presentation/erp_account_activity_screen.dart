@@ -129,10 +129,74 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
         bal += dr - cr;
         e['balance'] = bal;
       }
+      // Enrich descriptions with the party (customer/supplier/promoter) name so
+      // shared control accounts (AR/AP/commission) are identifiable per line.
+      await _appendPartyNames(orgId, accId, from, to, entries);
       if (mounted) setState(() { _opening = opening; _entries = entries; _loaded = true; _loading = false; });
     } catch (e) {
       if (mounted) { _snack('Report error: $e'); setState(() => _loading = false); }
     }
+  }
+
+  // For a shared control account (AR/AP/commission), each journal line carries
+  // a party_id. Resolve those to customer/supplier/promoter names and append to
+  // the matching entry's description so lines are identifiable. Display-only.
+  Future<void> _appendPartyNames(String orgId, String accId, String from, String to, List<Map<String, dynamic>> entries) async {
+    try {
+      final client = Supabase.instance.client;
+      // 1) party_id per entry for THIS account (journal_lines carry party_id +
+      //    entry_id). Resolve entry_id -> entry_number via journal_entries.
+      final lines = await client.from('journal_lines')
+          .select('entry_id, party_id')
+          .eq('account_id', accId).eq('org_id', orgId).not('party_id', 'is', null);
+      final entryIdParty = <String, String>{}; // entry_id -> party_id
+      final partyIds = <String>{};
+      final entryIds = <String>{};
+      for (final l in (lines as List)) {
+        final pid = l['party_id'] as String?;
+        final eid = l['entry_id'] as String?;
+        if (pid != null && eid != null) { entryIdParty[eid] = pid; partyIds.add(pid); entryIds.add(eid); }
+      }
+      if (partyIds.isEmpty) return;
+
+      // Map entry_id -> entry_number
+      final numById = <String, String>{};
+      try {
+        final jes = await client.from('journal_entries').select('id, entry_number').inFilter('id', entryIds.toList());
+        for (final j in (jes as List)) { numById[j['id'] as String] = j['entry_number'] as String? ?? ''; }
+      } catch (_) {}
+      final entryParty = <String, String>{}; // entry_number -> party_id
+      entryIdParty.forEach((eid, pid) { final en = numById[eid]; if (en != null && en.isNotEmpty) entryParty[en] = pid; });
+
+      // 2) Resolve party ids -> names across customers/suppliers/promoters.
+      final names = <String, String>{};
+      final idList = partyIds.toList();
+      try {
+        final cs = await client.from('customers').select('id, shop_name').eq('org_id', orgId).inFilter('id', idList);
+        for (final c in (cs as List)) { names[c['id'] as String] = c['shop_name'] as String? ?? ''; }
+      } catch (_) {}
+      try {
+        final ss = await client.from('suppliers').select('id, name').eq('org_id', orgId).inFilter('id', idList);
+        for (final s in (ss as List)) { names[s['id'] as String] = s['name'] as String? ?? ''; }
+      } catch (_) {}
+      try {
+        final ps = await client.from('sales_promoters').select('id, name').eq('org_id', orgId).inFilter('id', idList);
+        for (final p in (ps as List)) { names[p['id'] as String] = p['name'] as String? ?? ''; }
+      } catch (_) {}
+
+      // 3) Append the name to each entry's description.
+      for (final e in entries) {
+        final en = e['entry_number'] as String?;
+        if (en == null) continue;
+        final pid = entryParty[en];
+        if (pid == null) continue;
+        final nm = names[pid];
+        if (nm != null && nm.isNotEmpty) {
+          final d = (e['description'] as String?) ?? '';
+          if (!d.contains(nm)) e['description'] = d.isEmpty ? nm : '$d — $nm';
+        }
+      }
+    } catch (_) { /* display enrichment is best-effort */ }
   }
 
   void _reset() {
