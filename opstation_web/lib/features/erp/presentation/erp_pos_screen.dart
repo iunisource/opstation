@@ -35,6 +35,57 @@ double _posCashCollected(Map<String, dynamic> t) {
   return (paid != null && paid < tot) ? paid : tot;
 }
 
+// Cash portion of POS refunds, mirroring post_pos_money's return-branch split.
+// A return only removes cash from the drawer for the part of the ORIGINAL sale
+// that was actually paid in cash; the credit part of the original reduces the
+// customer's receivable (Cr AR) and no cash moves. Counting the FULL return
+// total as cash out — the old behaviour — is what made expected closing cash
+// drift below GL Cash-in-Hand whenever a credit-sale return was involved
+// (e.g. a fully-on-credit return showed a phantom cash shortfall equal to the
+// return value). This keeps the POS cash chain in lock-step with GL by using
+// the identical split:
+//   arPortion   = (original.total − original.amount_paid) clamped to the refund
+//   cashPortion = refund − arPortion
+// Originals are resolved by reference_transaction_id (they may live in an
+// earlier session), so this is a batched DB lookup. Returns whose original is
+// missing fall back to full-cash — the safe legacy default.
+Future<double> _posCashRefundTotal(
+    SupabaseClient client, List<Map<String, dynamic>> returns) async {
+  if (returns.isEmpty) return 0;
+  final refIds = returns
+      .map((t) => t['reference_transaction_id'] as String?)
+      .whereType<String>()
+      .toSet()
+      .toList();
+  final Map<String, Map<String, dynamic>> origs = {};
+  if (refIds.isNotEmpty) {
+    try {
+      final rows = await client
+          .from('pos_transactions')
+          .select('id, total, amount_paid')
+          .inFilter('id', refIds);
+      for (final o in rows as List) {
+        origs[o['id'] as String] = Map<String, dynamic>.from(o as Map);
+      }
+    } catch (_) {}
+  }
+  double total = 0;
+  for (final t in returns) {
+    final refund = ((t['total'] as num?)?.toDouble() ?? 0).abs();
+    final refId = t['reference_transaction_id'] as String?;
+    final orig = refId == null ? null : origs[refId];
+    if (orig == null) {
+      total += refund; // legacy fallback: treat as full cash
+      continue;
+    }
+    final origTotal = (orig['total'] as num?)?.toDouble() ?? 0;
+    final origPaid = (orig['amount_paid'] as num?)?.toDouble() ?? origTotal;
+    final arPortion = (origTotal - origPaid).clamp(0.0, refund).toDouble();
+    total += refund - arPortion; // cash portion only
+  }
+  return total;
+}
+
 class ErpPosScreen extends ConsumerStatefulWidget {
   const ErpPosScreen({super.key});
   @override
@@ -138,19 +189,22 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
     try {
       final client = Supabase.instance.client;
       final sid = session['id'];
-      double cashSales = 0, cashRefunds = 0, cashExpenses = 0;
+      double cashSales = 0, cashExpenses = 0;
       final txns = await client
           .from('pos_transactions')
-          .select('total, amount_paid, payment_method, transaction_type, payment_details')
+          .select('total, amount_paid, payment_method, transaction_type, payment_details, reference_transaction_id')
           .eq('session_id', sid);
+      final returnTxns = <Map<String, dynamic>>[];
       for (final t in txns as List) {
         final type = (t['transaction_type'] as String?) ?? 'sale';
         if (type == 'return') {
-          cashRefunds += ((t['total'] as num?)?.toDouble() ?? 0).abs();
+          returnTxns.add(Map<String, dynamic>.from(t as Map));
         } else {
           cashSales += _posCashCollected(Map<String, dynamic>.from(t as Map));
         }
       }
+      // Only the cash portion of a refund leaves the drawer (credit returns hit AR).
+      final cashRefunds = await _posCashRefundTotal(client, returnTxns);
       try {
         final exps = await client
             .from('pos_expenses')
@@ -1563,15 +1617,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   Future<void> _closeSession() async {
     final opening = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
-    double cashSales = 0, cashRefunds = 0, cashExpenses = 0;
+    double cashSales = 0, cashExpenses = 0;
+    final returnTxns = _transactions
+        .where((t) => (t['transaction_type'] as String?) == 'return')
+        .toList();
     for (final t in _transactions) {
       final type = (t['transaction_type'] as String?) ?? 'sale';
-      if (type == 'return') {
-        cashRefunds += ((t['total'] as num?)?.toDouble() ?? 0).abs();
-      } else {
-        cashSales += _posCashCollected(t);
-      }
+      if (type != 'return') cashSales += _posCashCollected(t);
     }
+    // Only the cash portion of a refund leaves the drawer (credit returns hit AR).
+    final cashRefunds = await _posCashRefundTotal(Supabase.instance.client, returnTxns);
     for (final e in _expenses) {
       cashExpenses += (e['amount'] as num?)?.toDouble() ?? 0;
     }
@@ -1736,7 +1791,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         }
       }
     }
-    final expectedDrawer = openingCash + cashSales - totalReturns - totalExpenses - totalPayments; // refunds, expenses & payments are cash out of drawer
+    // For the drawer reconciliation use only the CASH portion of refunds — a
+    // credit-sale return reduces AR, not cash. (totalReturns above stays the
+    // full customer-facing refund value shown in the Total Refunds stat.)
+    final cashRefunds = await _posCashRefundTotal(client, returns);
+    final expectedDrawer = openingCash + cashSales - cashRefunds - totalExpenses - totalPayments; // cash refunds, expenses & payments are cash out of drawer
     // Customer receipts (CRVs) into the till this session — cash IN.
     double totalReceipts = 0; String rcvRows = '';
     for (final p in _sessionReceipts) {
