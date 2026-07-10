@@ -1447,21 +1447,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'moved_at': now, 'created_by': userId,
         });
       }
-      // Net AR movement updates the POS customer's balance:
-      // owed reduces their balance, an advance (overpayment) increases it.
-      if (netAr.abs() > 0.01 && _selectedPosCustomer != null) {
-        try {
-          final custId = _selectedPosCustomer!['id'] as String;
-          final existing = await client.from('pos_customers').select('balance').eq('id', custId).single();
-          final curBal = (existing['balance'] as num?)?.toDouble() ?? 0;
-          await client.from('pos_customers').update({'balance': curBal + balanceChange}).eq('id', custId);
-        } catch (_) {}
-      }
+      // Customer balances are GL-computed (via the sale's AR posting under
+      // customer_id) — no separate balance column to maintain.
       setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _selectedPromoter = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes(); }); _playSuccessSound();
       await _loadData();
       // Show receipt
       if (mounted) {
-        final txn = _transactions.firstWhere((t) => t['id'] == txnId, orElse: () => {'id': txnId, 'transaction_number': txnNumber, 'total': totalAmt, 'discount': discountAmt, 'payment_method': _paymentMethod, 'transacted_at': now, 'customers': _selectedCustomer != null ? {'shop_name': _selectedCustomer!['shop_name']} : (_selectedPosCustomer != null ? {'shop_name': _selectedPosCustomer!['name']} : null)});
+        final txn = _transactions.firstWhere((t) => t['id'] == txnId, orElse: () => {'id': txnId, 'transaction_number': txnNumber, 'total': totalAmt, 'discount': discountAmt, 'payment_method': _paymentMethod, 'transacted_at': now, 'customers': _selectedCustomer != null ? {'shop_name': _selectedCustomer!['shop_name']} : null});
         await showDialog(context: context, barrierDismissible: false, builder: (_) => _ReceiptDialog(
           transaction: txn, items: cartSnapshot,
           orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
@@ -1540,16 +1532,32 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     ));
     if (ok != true || nameCtrl.text.trim().isEmpty) return;
     try {
-      final id = 'posc_${DateTime.now().millisecondsSinceEpoch}';
-      await Supabase.instance.client.from('pos_customers').insert({
-        'id': id, 'org_id': orgId, 'branch_id': branchId,
-        'name': nameCtrl.text.trim(),
-        'phone': phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+      final client = Supabase.instance.client;
+      final name = nameCtrl.text.trim();
+      // Generate a POS-000N code (POS-origin customers).
+      final existing = await client.from('customers').select('code').eq('org_id', orgId).like('code', 'POS-%');
+      int maxN = 0;
+      for (final r in (existing as List)) {
+        final c = (r['code'] as String? ?? '');
+        final n = int.tryParse(c.replaceFirst('POS-', '')) ?? 0;
+        if (n > maxN) maxN = n;
+      }
+      final code = 'POS-${(maxN + 1).toString().padLeft(4, '0')}';
+      final id = 'cust_pos_${DateTime.now().millisecondsSinceEpoch}';
+      // A customer is a customer — created via POS is just a different route.
+      // Required ERP fields are defaulted; complete them later in ERP.
+      await client.from('customers').insert({
+        'id': id, 'org_id': orgId, 'code': code,
+        'shop_name': name, 'contact_person': name,
+        'phone': phoneCtrl.text.trim(), 'address': '',
         'cnic': cnicCtrl.text.trim().isEmpty ? null : cnicCtrl.text.trim(),
+        'is_active': true, 'location_capture_allowed': false,
+        'monthly_sale_target': 0, 'source': 'pos',
+        'updated_at': DateTime.now().toIso8601String(),
       });
-      final newCust = {'id': id, 'name': nameCtrl.text.trim(), 'phone': phoneCtrl.text.trim(), 'cnic': cnicCtrl.text.trim(), '_type': 'pos'};
-      setState(() { _posCustomers.add(newCust); _selectedPosCustomer = newCust; _selectedCustomer = null; _customerSearchCtrl.clear(); });
-      _showSnack('Customer "${nameCtrl.text.trim()}" added');
+      final newCust = {'id': id, 'shop_name': name, 'code': code, 'phone': phoneCtrl.text.trim(), 'cnic': cnicCtrl.text.trim(), 'source': 'pos'};
+      setState(() { _customers.add(newCust); _selectedCustomer = newCust; _selectedPosCustomer = null; _customerSearchCtrl.clear(); });
+      _showSnack('Customer "$name" added');
     } catch (e) { _showSnack('Failed: $e'); } finally { _checkingOut = false; }
   }
 
@@ -2015,10 +2023,8 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
           // the norm); tap to expand the search. Frees vertical space above
           // the bill list.
             Padding(padding: const EdgeInsets.fromLTRB(12, 12, 12, 0), child: Builder(builder: (_) {
-              final selected = _selectedPosCustomer ?? _selectedCustomer;
-              final selName = _selectedPosCustomer != null
-                  ? _selectedPosCustomer!['name'] as String
-                  : (_selectedCustomer != null ? _selectedCustomer!['shop_name'] as String : null);
+              final selected = _selectedCustomer;
+              final selName = _selectedCustomer != null ? _selectedCustomer!['shop_name'] as String? : null;
               if (!_customerExpanded) {
                 return InkWell(
                   onTap: _isOpen ? () => setState(() => _customerExpanded = true) : null,
@@ -2065,16 +2071,19 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 decoration: InputDecoration(
                   hintText: selName ?? 'Walk-in (optional)',
                   hintStyle: TextStyle(color: selected != null ? AppTheme.primary : AppTheme.textSecondary, fontWeight: selected != null ? FontWeight.w600 : FontWeight.normal),
-                  prefixIcon: Icon(_selectedPosCustomer != null ? Icons.person_pin : Icons.person_outline, size: 18, color: selected != null ? AppTheme.primary : AppTheme.textSecondary),
+                  prefixIcon: Icon(Icons.person_outline, size: 18, color: selected != null ? AppTheme.primary : AppTheme.textSecondary),
                   suffixIcon: selected != null ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _selectedCustomer = null; _selectedPosCustomer = null; _customerSearchCtrl.clear(); })) : null,
                   isDense: true, contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.border)),
                 ),
                 onChanged: (q) {
                   final ql = q.toLowerCase();
-                  final erpMatches = q.isEmpty ? <Map<String, dynamic>>[] : _customers.where((c) => (c['shop_name'] as String? ?? '').toLowerCase().contains(ql)).take(4).map((c) => {...c, '_type': 'erp'}).toList();
-                  final posMatches = q.isEmpty ? <Map<String, dynamic>>[] : _posCustomers.where((c) => (c['name'] as String? ?? '').toLowerCase().contains(ql) || (c['phone'] as String? ?? '').contains(ql)).take(4).map((c) => {...c, '_type': 'pos'}).toList();
-                  setState(() { _showCustomerDropdown = q.isNotEmpty; _filteredCustomers = [...posMatches, ...erpMatches]; });
+                  final matches = q.isEmpty ? <Map<String, dynamic>>[] : _customers.where((c) =>
+                      (c['shop_name'] as String? ?? '').toLowerCase().contains(ql) ||
+                      (c['phone'] as String? ?? '').toLowerCase().contains(ql) ||
+                      (c['code'] as String? ?? '').toLowerCase().contains(ql)
+                    ).take(8).toList();
+                  setState(() { _showCustomerDropdown = q.isNotEmpty; _filteredCustomers = matches; });
                 },
               ),
               if (_showCustomerDropdown)
@@ -2083,16 +2092,16 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                     ListTile(dense: true, leading: const Icon(Icons.add_circle, color: AppTheme.primary, size: 20), title: const Text('Quick-add new customer', style: TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w600)), onTap: () { setState(() => _showCustomerDropdown = false); _showQuickAddCustomer(); }),
                     if (_filteredCustomers.isNotEmpty) const Divider(height: 1),
                     ..._filteredCustomers.map((cx) {
-                      final isPos = cx['_type'] == 'pos';
-                      final name = isPos ? cx['name'] as String? ?? '-' : cx['shop_name'] as String? ?? '-';
-                      final sub = isPos ? cx['phone'] as String? : cx['code'] as String?;
+                      final isPos = cx['source'] == 'pos';
+                      final name = cx['shop_name'] as String? ?? '-';
+                      final sub = (cx['phone'] as String?)?.isNotEmpty == true ? cx['phone'] as String? : cx['code'] as String?;
                       return ListTile(dense: true,
                         leading: Icon(isPos ? Icons.person_pin : Icons.business, size: 18, color: isPos ? Colors.purple : AppTheme.textSecondary),
                         title: Text(name, style: const TextStyle(fontSize: 13)),
                         subtitle: sub != null && sub.isNotEmpty ? Text(sub, style: const TextStyle(fontSize: 11)) : null,
                         trailing: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: isPos ? Colors.purple.withOpacity(0.1) : AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text(isPos ? 'POS' : 'ERP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: isPos ? Colors.purple : AppTheme.primary))),
                         onTap: () => setState(() {
-                          if (isPos) { _selectedPosCustomer = cx; _selectedCustomer = null; } else { _selectedCustomer = cx; _selectedPosCustomer = null; }
+                          _selectedCustomer = cx; _selectedPosCustomer = null;
                           _customerSearchCtrl.clear(); _showCustomerDropdown = false; _customerExpanded = false;
                         }));
                     }),
@@ -2748,7 +2757,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     final orgId = _orgId;
     final branchId = _session['branch_id'] as String;
     final userId = ref.read(currentUserProvider)?.id;
-    final customerName = _selectedPosCustomer?['name'] as String? ?? _selectedCustomer?['shop_name'] as String? ?? 'Walk-in';
+    final customerName = _selectedCustomer?['shop_name'] as String? ?? 'Walk-in';
     try {
       await Supabase.instance.client.from('pos_held_bills').insert({
         'id': 'held_${DateTime.now().millisecondsSinceEpoch}',
@@ -2812,7 +2821,6 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     final billCustId = bill['customer_id'] as String?;
     final billCustName = bill['customer_name'] as String?;
     Map<String, dynamic>? restoredCustomer;
-    Map<String, dynamic>? restoredPosCustomer;
     if (billCustId != null) {
       // Regular customer: match the loaded list, else synthesize from stored name.
       restoredCustomer = _customers.firstWhere(
@@ -2820,10 +2828,10 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         orElse: () => {'id': billCustId, 'shop_name': billCustName ?? 'Customer'},
       );
     } else if (billCustName != null && billCustName.isNotEmpty && billCustName != 'Walk-in') {
-      // POS quick-customer stored by name only.
-      restoredPosCustomer = _posCustomers.firstWhere(
-        (c) => (c['name'] as String?) == billCustName,
-        orElse: () => {'id': null, 'name': billCustName},
+      // Customer stored by name (older held bills) — match in unified customers.
+      restoredCustomer = _customers.firstWhere(
+        (c) => (c['shop_name'] as String?) == billCustName,
+        orElse: () => {'id': billCustId, 'shop_name': billCustName},
       );
     }
     setState(() {
@@ -2833,7 +2841,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       _paymentMethod = const {'cash', 'card', 'other'}.contains(pm) ? pm! : 'cash';
       _stagedProduct = null; _stagedCartIndex = null;
       _selectedCustomer = restoredCustomer;
-      _selectedPosCustomer = restoredPosCustomer;
+      _selectedPosCustomer = null;
     });
     try {
       await Supabase.instance.client.from('pos_held_bills')

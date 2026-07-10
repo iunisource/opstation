@@ -82,7 +82,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       int from = 0; const pageSize = 1000;
       while (true) {
         final page = await Supabase.instance.client.from('customers')
-            .select('id, shop_name, code').eq('org_id', orgId)
+            .select('id, shop_name, code, source').eq('org_id', orgId)
             .order('shop_name').range(from, from + pageSize - 1);
         final list = List<Map<String, dynamic>>.from(page);
         all.addAll(list);
@@ -588,6 +588,12 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                           child: Row(children: [
                             Expanded(child: Text(c['shop_name'] as String? ?? '', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500))),
+                            if (c['source'] == 'pos') Container(
+                              margin: const EdgeInsets.only(right: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(color: Colors.purple.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                              child: const Text('POS', style: TextStyle(fontSize: 10, color: Colors.purple, fontWeight: FontWeight.w700)),
+                            ),
                             if (c['code'] != null) Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(4)),
