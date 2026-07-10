@@ -38,9 +38,9 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _loadingCustomers = true);
     try {
-      final rows = await Supabase.instance.client.from('pos_customers')
-          .select('id, name, phone, cnic, branch_id')
-          .eq('org_id', orgId).order('name');
+      final rows = await Supabase.instance.client.from('customers')
+          .select('id, shop_name, phone, cnic, code, source')
+          .eq('org_id', orgId).eq('is_active', true).order('shop_name');
       setState(() { _customers = List<Map<String, dynamic>>.from(rows); _loadingCustomers = false; });
     } catch (e) { _showSnack('Error: $e'); setState(() => _loadingCustomers = false); }
   }
@@ -51,11 +51,11 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
       final orgId = _orgId;
       var q = Supabase.instance.client.from('pos_transactions')
           .select('*, balance_change, amount_paid, pos_sessions(session_number, branches(name))')
-          .eq('org_id', orgId!).eq('pos_customer_id', customer['id'] as String)
+          .eq('org_id', orgId!).eq('customer_id', customer['id'] as String)
           .order('transacted_at', ascending: false);
       final rows = await q;
-      // Refresh customer to get latest balance
-      try { final fresh = await Supabase.instance.client.from('pos_customers').select('id,name,phone,cnic,branch_id,balance').eq('id', customer['id'] as String).single(); setState(() => _selectedCustomer = Map<String, dynamic>.from(fresh)); } catch (_) {}
+      // Refresh customer record
+      try { final fresh = await Supabase.instance.client.from('customers').select('id, shop_name, phone, cnic, code, source').eq('id', customer['id'] as String).single(); setState(() => _selectedCustomer = Map<String, dynamic>.from(fresh)); } catch (_) {}
       final txns = List<Map<String, dynamic>>.from(rows);
       // Load items for all transactions
       final txnIds = txns.map((t) => t['id'] as String).toList();
@@ -78,7 +78,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
     final q = _search.toLowerCase();
     return _customers.where((c) =>
         q.isEmpty ||
-        (c['name'] as String? ?? '').toLowerCase().contains(q) ||
+        (c['shop_name'] as String? ?? '').toLowerCase().contains(q) ||
         (c['phone'] as String? ?? '').contains(q) ||
         (c['cnic'] as String? ?? '').contains(q)).toList();
   }
@@ -122,10 +122,10 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                     final cust = filtered[i]; final sel = _selectedCustomer?['id'] == cust['id'];
                     return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                       leading: CircleAvatar(backgroundColor: AppTheme.primary.withOpacity(0.1), radius: 18,
-                        child: Text((cust['name'] as String? ?? '?').substring(0, 1).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary, fontSize: 13))),
-                      title: Text(cust['name'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w600, color: sel ? AppTheme.primary : null)),
+                        child: Text((cust['shop_name'] as String? ?? '?').substring(0, 1).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary, fontSize: 13))),
+                      title: Text(cust['shop_name'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w600, color: sel ? AppTheme.primary : null)),
                       subtitle: Text([cust['phone'] as String? ?? '', if ((cust['cnic'] as String?)?.isNotEmpty == true) cust['cnic'] as String].where((s) => s.isNotEmpty).join(' · '), style: const TextStyle(fontSize: 11)),
-                      trailing: Text(cust['branches']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                      trailing: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: (cust['source'] == 'pos' ? Colors.purple : AppTheme.primary).withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text(cust['source'] == 'pos' ? 'POS' : 'ERP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cust['source'] == 'pos' ? Colors.purple : AppTheme.primary))),
                       onTap: () => _loadTransactions(cust));
                   })),
           ])),
@@ -141,14 +141,15 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                 Container(padding: const EdgeInsets.fromLTRB(24, 20, 24, 16), color: Colors.white, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(_selectedCustomer!['name'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                      Text(_selectedCustomer!['shop_name'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
                       const SizedBox(height: 2),
                       Wrap(spacing: 16, children: [
                         if ((_selectedCustomer!['phone'] as String?)?.isNotEmpty == true)
                           _InfoChip(Icons.phone_outlined, _selectedCustomer!['phone'] as String),
                         if ((_selectedCustomer!['cnic'] as String?)?.isNotEmpty == true)
                           _InfoChip(Icons.badge_outlined, _selectedCustomer!['cnic'] as String),
-                        _InfoChip(Icons.storefront_outlined, _selectedCustomer!['branches']?['name'] as String? ?? '-'),
+                        if ((_selectedCustomer!['code'] as String?)?.isNotEmpty == true)
+                          _InfoChip(Icons.tag, _selectedCustomer!['code'] as String),
                       ]),
                     ])),
                     // Stats
@@ -227,7 +228,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
     );
   }
   void _printReceipt(Map<String, dynamic> t, List<Map<String, dynamic>> items) {
-    final customer = _selectedCustomer?['name'] as String? ?? 'Walk-in';
+    final customer = _selectedCustomer?['shop_name'] as String? ?? 'Walk-in';
     final total = (t['total'] as num?)?.toDouble() ?? 0;
     final disc = (t['discount'] as num?)?.toDouble() ?? 0;
     final subtotal = items.fold(0.0, (s, i) => s + ((i['quantity'] as num?)?.toDouble() ?? 0) * ((i['unit_price'] as num?)?.toDouble() ?? 0));
