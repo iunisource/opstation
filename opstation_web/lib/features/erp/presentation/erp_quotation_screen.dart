@@ -4,7 +4,10 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../services/voucher_pdf.dart';
+import '../../../core/widgets/product_picker.dart';
 
 // ============================================================================
 // QUOTATION VOUCHER  (Sales module)
@@ -38,6 +41,53 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   List<Map<String, dynamic>> _lines = [];  // working lines
 
   final _notesCtrl = TextEditingController();
+  final _globalDiscCtrl = TextEditingController(text: '0');
+  String _globalDiscType = 'fixed'; // fixed | percent
+  bool _printCompany = true; // include company name on printed quotation
+  bool _printBranch = true;  // include branch on printed quotation
+  bool _printPreparedBy = true; // include prepared-by (username) on printed quotation
+  bool _printCustomCompany = false; // show admin-defined custom company name instead
+  bool _customCompanyAllowed = false; // admin toggle (org.quotation_custom_company)
+  String _customCompanyName = '';     // admin-defined name (org.quotation_custom_company_name)
+
+  // Per-line field controllers + focus nodes, keyed by the line map identity.
+  // Enables the Qty→Price→Discount→(reopen picker) Enter chain on each row.
+  final Map<Map<String, dynamic>, Map<String, dynamic>> _lineCtl = {};
+
+  Map<String, dynamic> _ctl(Map<String, dynamic> l) {
+    return _lineCtl.putIfAbsent(l, () => {
+          'qtyCtrl': TextEditingController(text: (l['quantity'] as num?)?.toString() ?? '1'),
+          'priceCtrl': TextEditingController(text: (l['unit_price'] as num?)?.toStringAsFixed(2) ?? '0'),
+          'discCtrl': TextEditingController(text: (l['discount'] as num?)?.toString() ?? '0'),
+          'qtyFocus': FocusNode(),
+          'priceFocus': FocusNode(),
+          'discFocus': FocusNode(),
+        });
+  }
+
+  void _clearAllLineCtl() {
+    for (final c in _lineCtl.values) {
+      (c['qtyCtrl'] as TextEditingController).dispose();
+      (c['priceCtrl'] as TextEditingController).dispose();
+      (c['discCtrl'] as TextEditingController).dispose();
+      (c['qtyFocus'] as FocusNode).dispose();
+      (c['priceFocus'] as FocusNode).dispose();
+      (c['discFocus'] as FocusNode).dispose();
+    }
+    _lineCtl.clear();
+  }
+
+  void _disposeLineCtl(Map<String, dynamic> l) {
+    final c = _lineCtl.remove(l);
+    if (c != null) {
+      (c['qtyCtrl'] as TextEditingController).dispose();
+      (c['priceCtrl'] as TextEditingController).dispose();
+      (c['discCtrl'] as TextEditingController).dispose();
+      (c['qtyFocus'] as FocusNode).dispose();
+      (c['priceFocus'] as FocusNode).dispose();
+      (c['discFocus'] as FocusNode).dispose();
+    }
+  }
 
   @override
   void initState() {
@@ -48,6 +98,15 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   @override
   void dispose() {
     _notesCtrl.dispose();
+    _globalDiscCtrl.dispose();
+    for (final c in _lineCtl.values) {
+      (c['qtyCtrl'] as TextEditingController).dispose();
+      (c['priceCtrl'] as TextEditingController).dispose();
+      (c['discCtrl'] as TextEditingController).dispose();
+      (c['qtyFocus'] as FocusNode).dispose();
+      (c['priceFocus'] as FocusNode).dispose();
+      (c['discFocus'] as FocusNode).dispose();
+    }
     super.dispose();
   }
 
@@ -55,8 +114,31 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     orgId = ref.read(currentUserProvider)?.orgId;
     branchId = ref.read(selectedBranchProvider)?['id'] as String?;
     await _loadRefs();
+    await _loadCustomCompanyConfig();
     await _loadList();
     if (mounted) setState(() => _loading = false);
+  }
+
+  // Load the admin-defined custom company name settings from app_config.
+  Future<void> _loadCustomCompanyConfig() async {
+    if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', orgId as Object)
+          .inFilter('key', ['org.quotation_custom_company', 'org.quotation_custom_company_name']);
+      bool allowed = false; String name = '';
+      for (final r in (rows as List)) {
+        final k = r['key'] as String?; final v = r['value'] as String?;
+        if (k == 'org.quotation_custom_company') allowed = v == 'true';
+        if (k == 'org.quotation_custom_company_name') name = v ?? '';
+      }
+      if (mounted) setState(() {
+        _customCompanyAllowed = allowed && name.trim().isNotEmpty;
+        _customCompanyName = name.trim();
+      });
+    } catch (_) {}
   }
 
   Future<void> _loadRefs() async {
@@ -91,13 +173,54 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   Future<void> _loadList() async {
     if (orgId == null) return;
     try {
+      // No FK from quotations → customers/branches, so we can't use PostgREST
+      // embedded joins (they'd throw PGRST200 and the list would silently stay
+      // empty). Fetch plain rows and merge names from the already-loaded
+      // _customers / _branches reference lists.
       final rows = await _client
           .from('quotations')
-          .select('*, customers(shop_name), branches(name)')
+          .select('*')
           .eq('org_id', orgId!)
           .order('created_at', ascending: false);
       if (!mounted) return;
-      setState(() => _list = List<Map<String, dynamic>>.from(rows));
+      final list = List<Map<String, dynamic>>.from(rows);
+      for (final r in list) {
+        final cid = r['customer_id'] as String?;
+        final bid = r['branch_id'] as String?;
+        r['_customer_name'] = cid == null ? null
+            : (_customers.firstWhere((c) => c['id'] == cid, orElse: () => {})['shop_name'] as String?);
+        r['_branch_name'] = bid == null ? null
+            : (_branches.firstWhere((b) => b['id'] == bid, orElse: () => {})['name'] as String?);
+      }
+
+      // Derive the list "Value" from the source of truth. The quotations header
+      // has no maintained `total` column, so reading r['total'] renders 0.00 for
+      // every row. Instead sum each quotation's persisted quotation_items.line_total
+      // (already net of per-line discounts) and reduce by the header global
+      // discount — mirroring _grandTotal. One extra query, N+1-free, and it
+      // self-heals historical rows with no SQL backfill.
+      final qids = list.map((r) => r['id'] as String).toList();
+      final Map<String, double> subtotals = {};
+      if (qids.isNotEmpty) {
+        final items = await _client
+            .from('quotation_items')
+            .select('quotation_id, line_total')
+            .inFilter('quotation_id', qids);
+        for (final it in (items as List)) {
+          final qid = it['quotation_id'] as String?;
+          if (qid == null) continue;
+          subtotals[qid] = (subtotals[qid] ?? 0) + ((it['line_total'] as num?)?.toDouble() ?? 0);
+        }
+      }
+      for (final r in list) {
+        final sub = subtotals[r['id']] ?? 0;
+        final gd = (r['global_discount'] as num?)?.toDouble() ?? 0;
+        final gdt = r['global_discount_type'] as String? ?? 'fixed';
+        final gdAmt = gdt == 'percent' ? sub * gd.clamp(0, 100) / 100 : gd.clamp(0, sub);
+        r['_value'] = sub - gdAmt;
+      }
+
+      setState(() => _list = list);
     } catch (_) {}
   }
 
@@ -112,7 +235,22 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     return gross - da;
   }
 
-  double get _docTotal => _lines.fold(0.0, (s, l) => s + _lineTotal(l));
+  // Sum of line totals (after per-line discounts) — this is the subtotal.
+  double get _linesSubtotal => _lines.fold(0.0, (s, l) => s + _lineTotal(l));
+
+  // Global discount amount, applied to the subtotal AFTER line discounts.
+  double get _globalDiscAmt {
+    final raw = double.tryParse(_globalDiscCtrl.text.trim()) ?? 0;
+    if (_globalDiscType == 'percent') {
+      return _linesSubtotal * raw.clamp(0, 100) / 100;
+    }
+    return raw.clamp(0, _linesSubtotal);
+  }
+
+  double get _grandTotal => _linesSubtotal - _globalDiscAmt;
+
+  // Kept for existing callers (POS/print totals): the final payable.
+  double get _docTotal => _grandTotal;
 
   // ── New / open / edit ────────────────────────────────────────────────────
   void _newDoc() {
@@ -122,10 +260,13 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'branch_id': branchId,
         'voucher_date': DateTime.now(),
         'valid_until': null,
-        'status': 'draft',
+        'status': 'saved',
       };
+      _clearAllLineCtl();
       _lines = [];
       _notesCtrl.clear();
+      _globalDiscCtrl.text = '0';
+      _globalDiscType = 'fixed';
     });
   }
 
@@ -137,6 +278,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           .eq('quotation_id', row['id'] as String)
           .order('sr_no');
       if (!mounted) return;
+      _clearAllLineCtl();
       setState(() {
         _doc = {
           'id': row['id'],
@@ -146,6 +288,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           'voucher_date': row['voucher_date'] != null ? DateTime.parse(row['voucher_date'] as String) : DateTime.now(),
           'valid_until': row['valid_until'] != null ? DateTime.parse(row['valid_until'] as String) : null,
           'status': row['status'] ?? 'draft',
+          'created_by': row['created_by'],
         };
         _lines = List<Map<String, dynamic>>.from(items).map((it) => {
               'product_id': it['product_id'],
@@ -157,30 +300,24 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               'discount_type': it['discount_type'] ?? 'fixed',
             }).toList();
         _notesCtrl.text = row['notes'] as String? ?? '';
+        _globalDiscCtrl.text = ((row['global_discount'] as num?)?.toDouble() ?? 0).toString();
+        _globalDiscType = row['global_discount_type'] as String? ?? 'fixed';
       });
     } catch (_) {}
   }
 
-  void _closeDoc() => setState(() { _doc = null; _lines = []; });
-
-  void _addLine() {
-    setState(() => _lines.add({
-          'product_id': null,
-          'item_name': null,
-          'uom_id': null,
-          'quantity': 1.0,
-          'unit_price': 0.0,
-          'discount': 0.0,
-          'discount_type': 'fixed',
-        }));
-  }
+  void _closeDoc() => setState(() { _clearAllLineCtl(); _doc = null; _lines = []; });
 
   void _pickProduct(int idx, Map<String, dynamic> p) {
     setState(() {
-      _lines[idx]['product_id'] = p['id'];
-      _lines[idx]['item_name'] = p['name'];
-      _lines[idx]['uom_id'] = p['base_uom_id'];
-      _lines[idx]['unit_price'] = (p['selling_price'] as num?)?.toDouble() ?? 0.0;
+      final l = _lines[idx];
+      l['product_id'] = p['id'];
+      l['item_name'] = p['name'];
+      l['uom_id'] = p['base_uom_id'];
+      final newPrice = (p['selling_price'] as num?)?.toDouble() ?? 0.0;
+      l['unit_price'] = newPrice;
+      // keep the price field's controller in sync with the new product
+      (_ctl(l)['priceCtrl'] as TextEditingController).text = newPrice.toStringAsFixed(2);
     });
   }
 
@@ -195,14 +332,15 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     try {
       final isNew = _doc!['id'] == null;
       String qid = _doc!['id'] as String? ?? 'qt_${DateTime.now().microsecondsSinceEpoch}';
-      String? vnum = _doc!['voucher_number'] as String?;
+      String? vnum = _doc!['voucher_number']?.toString();
 
       if (isNew) {
         final y = DateTime.now().year;
         try {
-          vnum = await _client.rpc('next_voucher_number', params: {
+          final res = await _client.rpc('next_voucher_number', params: {
             'p_org_id': orgId, 'p_branch_id': _doc!['branch_id'], 'p_type': 'QT', 'p_year': y,
-          }) as String?;
+          });
+          vnum = res?.toString(); // RPC returns an integer sequence; store raw like SO
         } catch (_) { vnum = null; }
       }
 
@@ -214,8 +352,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'voucher_number': vnum,
         'voucher_date': DateFormat('yyyy-MM-dd').format(_doc!['voucher_date'] as DateTime),
         'valid_until': _doc!['valid_until'] != null ? DateFormat('yyyy-MM-dd').format(_doc!['valid_until'] as DateTime) : null,
-        'status': _doc!['status'] ?? 'draft',
+        'status': _doc!['status'] ?? 'saved',
         'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'global_discount': double.tryParse(_globalDiscCtrl.text.trim()) ?? 0,
+        'global_discount_type': _globalDiscType,
         'updated_at': DateTime.now().toIso8601String(),
       };
       if (isNew) {
@@ -297,6 +437,82 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     if (choice == 'pos') await _exportToPOS();
   }
 
+  Future<void> _markExported() async {
+    final id = _doc?['id'] as String?;
+    if (id == null) return;
+    try {
+      await _client.from('quotations').update({'status': 'exported', 'updated_at': DateTime.now().toIso8601String()}).eq('id', id);
+      _doc!['status'] = 'exported';
+      await _loadList();
+    } catch (_) {}
+  }
+
+  Future<void> _setStatus(String status) async {
+    final id = _doc?['id'] as String?;
+    if (id == null) { _toast('Save the quotation first'); return; }
+    try {
+      await _client.from('quotations').update({'status': status, 'updated_at': DateTime.now().toIso8601String()}).eq('id', id);
+      setState(() => _doc!['status'] = status);
+      await _loadList();
+      _toast('Marked as ${status[0].toUpperCase()}${status.substring(1)}');
+    } catch (e) { _toast('Failed: $e'); }
+  }
+
+  // Searchable customer picker: type to filter by shop name, plus a
+  // "Walk-in / none" option at the top to clear the selection.
+  Future<void> _pickCustomer() async {
+    String q = '';
+    final picked = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) {
+        final ql = q.trim().toLowerCase();
+        final filtered = ql.isEmpty
+            ? _customers
+            : _customers.where((c) =>
+                (c['shop_name'] as String? ?? '').toLowerCase().contains(ql) ||
+                (c['phone'] as String? ?? '').toLowerCase().contains(ql)).toList();
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(padding: const EdgeInsets.fromLTRB(16, 14, 8, 6), child: Row(children: [
+                const Expanded(child: Text('Select Customer', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+                IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(dctx).pop()),
+              ])),
+              Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 8), child: TextField(
+                autofocus: true,
+                decoration: InputDecoration(hintText: 'Search name or phone…', prefixIcon: const Icon(Icons.search, size: 20), isDense: true, border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
+                onChanged: (v) => setModal(() => q = v),
+              )),
+              const Divider(height: 1),
+              Flexible(child: ListView(children: [
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.person_off_outlined, size: 18, color: AppTheme.textSecondary),
+                  title: const Text('Walk-in / none', style: TextStyle(fontSize: 13.5)),
+                  onTap: () => Navigator.of(dctx).pop({'id': null}),
+                ),
+                const Divider(height: 1),
+                ...filtered.map((c) => ListTile(
+                      dense: true,
+                      title: Text(c['shop_name'] as String? ?? '-', style: const TextStyle(fontSize: 13.5)),
+                      subtitle: (c['phone'] as String?)?.isNotEmpty == true
+                          ? Text(c['phone'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+                          : null,
+                      onTap: () => Navigator.of(dctx).pop(c),
+                    )),
+              ])),
+            ]),
+          ),
+        );
+      }),
+    );
+    if (picked != null) {
+      setState(() => _doc!['customer_id'] = picked['id'] as String?);
+    }
+  }
+
   Future<void> _exportToSO() async {
     if (orgId == null || _doc == null) return;
     setState(() => _saving = true);
@@ -320,7 +536,13 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'source': 'quotation',
         'voucher_number': soVnum,
         'voucher_date': DateFormat('yyyy-MM-dd').format(_doc!['voucher_date'] as DateTime),
-        'notes': 'From quotation ${_doc!['voucher_number'] ?? ''}',
+        'notes': (() {
+          final base = 'From quotation ${_doc!['voucher_number'] ?? ''}';
+          final gd = double.tryParse(_globalDiscCtrl.text.trim()) ?? 0;
+          if (gd <= 0) return base;
+          final label = _globalDiscType == 'percent' ? '$gd%' : 'Rs. ${gd.toStringAsFixed(2)}';
+          return '$base | Global discount: $label (apply at invoice)';
+        })(),
         'created_by': ref.read(currentUserProvider)?.id,
         'ordered_at': DateTime.now().toIso8601String(),
       });
@@ -338,6 +560,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           }).toList();
       await _client.from('sales_order_items').insert(soItems);
 
+      await _markExported();
       if (!mounted) return;
       setState(() => _saving = false);
       _toast('Draft SO ${soVnum ?? ''} created');
@@ -394,8 +617,8 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'customer_id': _doc!['customer_id'],
         'customer_name': custName,
         'items': items,
-        'order_discount': 0,
-        'order_discount_type': 'fixed',
+        'order_discount': double.tryParse(_globalDiscCtrl.text.trim()) ?? 0,
+        'order_discount_type': _globalDiscType,
         'payment_method': 'cash',
         'total': _docTotal,
         'held_by': ref.read(currentUserProvider)?.id,
@@ -403,6 +626,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'status': 'held',
       });
 
+      await _markExported();
       if (!mounted) return;
       setState(() => _saving = false);
       _toast('Sent to POS Holds (${_doc!['voucher_number'] ?? ''})');
@@ -410,6 +634,94 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
       _toast('POS export failed: $e');
+    }
+  }
+
+  // ── Print / PDF ──────────────────────────────────────────────────────────
+  Future<void> _printQuotation() async {
+    if (_doc == null || _doc!['id'] == null) { _toast('Save the quotation first'); return; }
+    try {
+      final custName = _doc!['customer_id'] != null
+          ? (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'shop_name': 'Walk-in'})['shop_name'] as String?)
+          : 'Walk-in';
+      final custPhone = _doc!['customer_id'] != null
+          ? (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'phone': null})['phone'] as String?)
+          : null;
+      final branchName = _branches.firstWhere((b) => b['id'] == _doc!['branch_id'], orElse: () => {'name': null})['name'] as String?;
+
+      double subtotal = 0;
+      double discTotal = 0;
+      final lines = _lines.map((l) {
+        final qty = (l['quantity'] as num?)?.toDouble() ?? 0;
+        final price = (l['unit_price'] as num?)?.toDouble() ?? 0;
+        final d = (l['discount'] as num?)?.toDouble() ?? 0;
+        final dt = l['discount_type'] as String? ?? 'fixed';
+        final gross = qty * price;
+        final da = dt == 'percent' ? gross * d.clamp(0, 100) / 100 : d.clamp(0, gross);
+        final pct = gross > 0 ? (da / gross * 100) : 0.0; // effective % for the PDF column
+        subtotal += gross;
+        discTotal += da;
+        final prod = _products.firstWhere((p) => p['id'] == l['product_id'], orElse: () => {});
+        final uomAbbr = prod.isEmpty ? null : ((prod['uoms']?['abbreviation'] as String?) ?? (prod['uoms']?['name'] as String?));
+        return VoucherLine(
+          product: l['item_name'] as String? ?? '-',
+          sku: prod['sku'] as String?,
+          uom: uomAbbr,
+          qty: qty,
+          unitPrice: price,
+          discountPct: pct,
+          lineTotal: gross - da,
+        );
+      }).toList();
+
+      final realOrg = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+      final realBranch = _branches.firstWhere((b) => b['id'] == _doc!['branch_id'], orElse: () => {'name': null})['name'] as String?;
+      final validUntil = _doc!['valid_until'] != null
+          ? DateFormat('dd MMM yyyy').format(_doc!['valid_until'] as DateTime)
+          : null;
+      final globalDisc = _globalDiscAmt;
+      final remarksText = _notesCtrl.text.trim();
+
+      // "Prepared By" = the user who created/saved this quotation.
+      String? preparedBy;
+      final createdBy = _doc!['created_by'] as String?;
+      if (createdBy != null) {
+        try {
+          final u = await _client.from('users').select('name').eq('id', createdBy).maybeSingle();
+          preparedBy = u?['name'] as String?;
+        } catch (_) {}
+      }
+      preparedBy ??= ref.read(currentUserProvider)?.name;
+
+      // Validity + Remarks share one row (as relatedRefs cells) to save space.
+      final refs = <String, String>{};
+      if (validUntil != null) refs['Valid Until'] = validUntil;
+      if (remarksText.isNotEmpty) refs['Remarks'] = remarksText;
+
+      await VoucherPdf.printVoucher(
+        voucherNumber: (_doc!['voucher_number']?.toString().isNotEmpty ?? false)
+            ? _doc!['voucher_number'].toString()
+            : '(unsaved)',
+        voucherTypeLabel: 'Quotation',
+        orgName: _printCustomCompany && _customCompanyAllowed
+            ? _customCompanyName
+            : (_printCompany ? realOrg : ''),
+        branchName: _printBranch ? realBranch : null,
+        date: DateFormat('dd MMM yyyy').format(_doc!['voucher_date'] as DateTime),
+        customerOrSupplier: custName,
+        customerPhone: custPhone,
+        status: null, // no voucher status on quotation print
+        remarks: null, // remarks now rendered in the shared row below
+        relatedRefs: refs.isEmpty ? null : refs,
+        preparedBy: _printPreparedBy ? preparedBy : null,
+        lines: lines,
+        subtotal: subtotal,
+        discountTotal: discTotal + globalDisc,
+        grandTotal: subtotal - discTotal - globalDisc,
+        footerNote: null,
+      );
+    } catch (e) {
+      _toast('Print failed: $e');
     }
   }
 
@@ -425,13 +737,37 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     return _doc == null ? _buildList() : _buildEditor();
   }
 
+  bool _isExpired(Map<String, dynamic> r) {
+    final vu = r['valid_until'] as String?;
+    if (vu == null || vu.isEmpty) return false;
+    final d = DateTime.tryParse(vu);
+    if (d == null) return false;
+    final today = DateTime.now();
+    return d.isBefore(DateTime(today.year, today.month, today.day));
+  }
+
   Widget _buildList() {
     final q = _search.trim().toLowerCase();
     final rows = _list.where((r) {
-      if (_statusFilter != 'all' && (r['status'] ?? 'draft') != _statusFilter) return false;
+      final status = r['status'] as String? ?? 'saved';
+      final expired = _isExpired(r);
+      switch (_statusFilter) {
+        case 'all': break;
+        case 'expired':
+          if (!expired) return false;
+          break;
+        case 'saved':
+        case 'draft':
+        case 'exported':
+          // An expired quote is shown under Expired, not its stored status.
+          if (expired || status != _statusFilter) return false;
+          break;
+        default:
+          if (status != _statusFilter) return false;
+      }
       if (q.isEmpty) return true;
       final vn = (r['voucher_number'] as String? ?? '').toLowerCase();
-      final cn = (r['customers']?['shop_name'] as String? ?? '').toLowerCase();
+      final cn = (r['_customer_name'] as String? ?? '').toLowerCase();
       return vn.contains(q) || cn.contains(q);
     }).toList();
 
@@ -467,9 +803,9 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             underline: const SizedBox(),
             items: const [
               DropdownMenuItem(value: 'all', child: Text('All')),
+              DropdownMenuItem(value: 'saved', child: Text('Saved')),
               DropdownMenuItem(value: 'draft', child: Text('Draft')),
-              DropdownMenuItem(value: 'sent', child: Text('Sent')),
-              DropdownMenuItem(value: 'converted', child: Text('Converted')),
+              DropdownMenuItem(value: 'exported', child: Text('Exported')),
               DropdownMenuItem(value: 'expired', child: Text('Expired')),
             ],
             onChanged: (v) => setState(() => _statusFilter = v ?? 'all'),
@@ -484,6 +820,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             Expanded(flex: 3, child: Text('Customer', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
             Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
             Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+            Expanded(flex: 2, child: Padding(padding: EdgeInsets.only(right: 16), child: Text('Value', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary), textAlign: TextAlign.right))),
             Expanded(flex: 2, child: Text('Valid Until', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
             Expanded(flex: 2, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
           ]),
@@ -496,16 +833,17 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final r = rows[i];
-                final status = r['status'] as String? ?? 'draft';
+                final status = _isExpired(r) ? 'expired' : (r['status'] as String? ?? 'saved');
                 return InkWell(
                   onTap: () => _openDoc(r),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     child: Row(children: [
                       Expanded(flex: 2, child: Text(r['voucher_number'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary))),
-                      Expanded(flex: 3, child: Text(r['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 13))),
-                      Expanded(flex: 2, child: Text(r['branches']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                      Expanded(flex: 3, child: Text(r['_customer_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 13))),
+                      Expanded(flex: 2, child: Text(r['_branch_name'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text(r['voucher_date'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                      Expanded(flex: 2, child: Padding(padding: const EdgeInsets.only(right: 16), child: Text('Rs. ${((r['_value'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), textAlign: TextAlign.right))),
                       Expanded(flex: 2, child: Text(r['valid_until'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: _statusChip(status)),
                     ]),
@@ -520,9 +858,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   Widget _statusChip(String s) {
     Color c;
     switch (s) {
-      case 'converted': c = Colors.green; break;
-      case 'sent': c = AppTheme.primary; break;
+      case 'saved': c = Colors.green; break;
+      case 'exported': c = AppTheme.primary; break;
       case 'expired': c = Colors.red; break;
+      case 'draft': c = Colors.orange; break;
       default: c = Colors.grey;
     }
     return Align(alignment: Alignment.centerLeft, child: Container(
@@ -544,6 +883,42 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
           const Spacer(),
           if (!isNew) OutlinedButton.icon(
+            onPressed: _saving ? null : _printQuotation,
+            icon: const Icon(Icons.print_outlined, size: 18),
+            label: const Text('Print'),
+          ),
+          if (!isNew) PopupMenuButton<String>(
+            tooltip: 'Options',
+            icon: const Icon(Icons.tune, size: 18),
+            itemBuilder: (_) => [
+              CheckedPopupMenuItem(value: 'company', checked: _printCompany, child: const Text('Show company name')),
+              if (_customCompanyAllowed)
+                CheckedPopupMenuItem(value: 'customCompany', checked: _printCustomCompany, child: const Text('Show custom company name')),
+              CheckedPopupMenuItem(value: 'branch', checked: _printBranch, child: const Text('Show branch')),
+              CheckedPopupMenuItem(value: 'preparedBy', checked: _printPreparedBy, child: const Text('Show prepared by')),
+              const PopupMenuDivider(),
+              if ((_doc!['status'] as String? ?? 'saved') != 'draft')
+                const PopupMenuItem(value: 'mark_draft', child: Text('Mark as Draft')),
+              if ((_doc!['status'] as String? ?? 'saved') != 'saved')
+                const PopupMenuItem(value: 'mark_saved', child: Text('Mark as Saved')),
+            ],
+            onSelected: (v) {
+              if (v == 'company') setState(() {
+                _printCompany = !_printCompany;
+                if (_printCompany) _printCustomCompany = false; // mutually exclusive
+              });
+              if (v == 'customCompany') setState(() {
+                _printCustomCompany = !_printCustomCompany;
+                if (_printCustomCompany) _printCompany = false; // mutually exclusive
+              });
+              if (v == 'branch') setState(() => _printBranch = !_printBranch);
+              if (v == 'preparedBy') setState(() => _printPreparedBy = !_printPreparedBy);
+              if (v == 'mark_draft') _setStatus('draft');
+              if (v == 'mark_saved') _setStatus('saved');
+            },
+          ),
+          if (!isNew) const SizedBox(width: 10),
+          if (!isNew) OutlinedButton.icon(
             onPressed: _saving ? null : _exportDialog,
             icon: const Icon(Icons.ios_share, size: 18),
             label: const Text('Export'),
@@ -561,16 +936,21 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         const SizedBox(height: 16),
         // Header fields
         Wrap(spacing: 16, runSpacing: 12, children: [
-          _field('Customer', SizedBox(width: 260, child: DropdownButtonFormField<String?>(
-            value: _doc!['customer_id'] as String?,
-            isExpanded: true,
-            decoration: _dec(),
-            hint: const Text('Walk-in / none'),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('Walk-in / none')),
-              ..._customers.map((c) => DropdownMenuItem<String?>(value: c['id'] as String, child: Text(c['shop_name'] as String? ?? '-', overflow: TextOverflow.ellipsis))),
-            ],
-            onChanged: (v) => setState(() => _doc!['customer_id'] = v),
+          _field('Customer', SizedBox(width: 260, child: InkWell(
+            onTap: _pickCustomer,
+            child: InputDecorator(
+              decoration: _dec(),
+              child: Row(children: [
+                Expanded(child: Text(
+                  _doc!['customer_id'] == null
+                      ? 'Walk-in / none'
+                      : (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'shop_name': '-'})['shop_name'] as String? ?? '-'),
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, color: _doc!['customer_id'] == null ? AppTheme.textSecondary : Colors.black87),
+                )),
+                const Icon(Icons.arrow_drop_down, size: 20, color: AppTheme.textSecondary),
+              ]),
+            ),
           ))),
           _field('Branch', SizedBox(width: 220, child: DropdownButtonFormField<String>(
             value: _doc!['branch_id'] as String?,
@@ -621,15 +1001,55 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         )),
         const Divider(height: 1),
         Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Row(children: [
-          TextButton.icon(onPressed: _addLine, icon: const Icon(Icons.add, size: 18), label: const Text('Add Line')),
-          const Spacer(),
-          const Text('Total  ', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-          Text('Rs. ${_docTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          TextButton.icon(onPressed: _addLineAndPick, icon: const Icon(Icons.add, size: 18), label: const Text('Add Line')),
           const SizedBox(width: 8),
+          if (_lines.isNotEmpty)
+            TextButton.icon(onPressed: _bulkDiscountDialog, icon: const Icon(Icons.percent, size: 16), label: const Text('Discount All Lines')),
+          const Spacer(),
         ])),
+        // Totals block: Subtotal → Global Discount (fixed/%) → Grand Total
+        Align(
+          alignment: Alignment.centerRight,
+          child: SizedBox(width: 360, child: Column(children: [
+            Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
+              const Text('Subtotal', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              const Spacer(),
+              Text('Rs. ${_linesSubtotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ])),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
+              const Text('Global Discount', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              const Spacer(),
+              SizedBox(width: 90, child: TextField(
+                controller: _globalDiscCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textAlign: TextAlign.right,
+                decoration: _dec(),
+                style: const TextStyle(fontSize: 13),
+                onChanged: (_) => setState(() {}),
+              )),
+              const SizedBox(width: 6),
+              DropdownButton<String>(
+                value: _globalDiscType,
+                underline: const SizedBox(),
+                isDense: true,
+                items: const [DropdownMenuItem(value: 'fixed', child: Text('Rs', style: TextStyle(fontSize: 12))), DropdownMenuItem(value: 'percent', child: Text('%', style: TextStyle(fontSize: 12)))],
+                onChanged: (v) => setState(() => _globalDiscType = v ?? 'fixed'),
+              ),
+              const SizedBox(width: 6),
+              SizedBox(width: 70, child: Text('- ${_globalDiscAmt.toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, color: Colors.orange))),
+            ])),
+            const Divider(),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
+              const Text('Grand Total', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+              const Spacer(),
+              Text('Rs. ${_grandTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+            ])),
+          ])),
+        ),
+        const SizedBox(height: 12),
         SizedBox(width: 420, child: TextField(
           controller: _notesCtrl,
-          decoration: InputDecoration(labelText: 'Notes (optional)', isDense: true,
+          decoration: InputDecoration(labelText: 'Remarks (optional)', isDense: true,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
           maxLines: 2,
         )),
@@ -639,6 +1059,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
 
   Widget _lineRow(int i) {
     final l = _lines[i];
+    final c = _ctl(l);
     final prod = _products.firstWhere((p) => p['id'] == l['product_id'], orElse: () => {});
     final uomAbbr = prod.isEmpty ? '-' : ((prod['uoms']?['abbreviation'] as String?) ?? (prod['uoms']?['name'] as String?) ?? '-');
     return Padding(
@@ -655,27 +1076,46 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           ),
         )),
         Expanded(flex: 1, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Text(uomAbbr, style: const TextStyle(fontSize: 13)))),
-        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextFormField(
-          initialValue: (l['quantity'] as num?)?.toString() ?? '1',
+        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextField(
+          controller: c['qtyCtrl'] as TextEditingController,
+          focusNode: c['qtyFocus'] as FocusNode,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          textInputAction: TextInputAction.next,
           decoration: _dec(),
           style: const TextStyle(fontSize: 13),
           onChanged: (v) => setState(() => l['quantity'] = double.tryParse(v) ?? 0),
+          onSubmitted: (_) {
+            final f = c['priceFocus'] as FocusNode;
+            final pc = c['priceCtrl'] as TextEditingController;
+            pc.selection = TextSelection(baseOffset: 0, extentOffset: pc.text.length);
+            f.requestFocus();
+          },
         ))),
-        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextFormField(
-          initialValue: (l['unit_price'] as num?)?.toStringAsFixed(2) ?? '0',
+        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: TextField(
+          controller: c['priceCtrl'] as TextEditingController,
+          focusNode: c['priceFocus'] as FocusNode,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          textInputAction: TextInputAction.next,
           decoration: _dec(),
           style: const TextStyle(fontSize: 13),
           onChanged: (v) => setState(() => l['unit_price'] = double.tryParse(v) ?? 0),
+          onSubmitted: (_) {
+            final f = c['discFocus'] as FocusNode;
+            final dc = c['discCtrl'] as TextEditingController;
+            dc.selection = TextSelection(baseOffset: 0, extentOffset: dc.text.length);
+            f.requestFocus();
+          },
         ))),
         Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Row(children: [
-          Expanded(child: TextFormField(
-            initialValue: (l['discount'] as num?)?.toString() ?? '0',
+          Expanded(child: TextField(
+            controller: c['discCtrl'] as TextEditingController,
+            focusNode: c['discFocus'] as FocusNode,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textInputAction: TextInputAction.done,
             decoration: _dec(),
             style: const TextStyle(fontSize: 13),
             onChanged: (v) => setState(() => l['discount'] = double.tryParse(v) ?? 0),
+            onSubmitted: (_) => _addLineAndPick(), // reopen picker for next line
           )),
           const SizedBox(width: 4),
           DropdownButton<String>(
@@ -690,59 +1130,100 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         SizedBox(width: 40, child: IconButton(
           icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
           visualDensity: VisualDensity.compact,
-          onPressed: () => setState(() => _lines.removeAt(i)),
+          onPressed: () => setState(() { _disposeLineCtl(l); _lines.removeAt(i); }),
         )),
       ]),
     );
   }
 
+  // Open the shared product picker (keyboard nav) for an existing line row.
   Future<void> _productPicker(int idx) async {
-    String q = '';
-    final picked = await showDialog<Map<String, dynamic>>(
+    final picked = await pickProduct(context, _products, title: 'Select product');
+    if (picked != null && picked.isNotEmpty) _pickProduct(idx, picked);
+  }
+
+  // Add-product loop with per-line Enter chain:
+  //   pick product → line added → focus its Qty → Enter → Price → Enter →
+  //   Discount → Enter → reopen picker → repeat. Ends when the picker is
+  //   dismissed (× or Esc).
+  Future<void> _addLineAndPick() async {
+    final picked = await pickProduct(context, _products, title: 'Add product to quotation');
+    if (picked == null || picked.isEmpty) return; // × / Esc ends the loop
+    final line = {
+      'product_id': picked['id'],
+      'item_name': picked['name'],
+      'uom_id': picked['base_uom_id'],
+      'quantity': 1.0,
+      'unit_price': (picked['selling_price'] as num?)?.toDouble() ?? 0.0,
+      'discount': 0.0,
+      'discount_type': 'percent',
+    };
+    setState(() => _lines.add(line));
+    // After the row builds, focus its Qty field and select the text so typing
+    // replaces the default. The Enter chain (wired in _lineRow) carries through
+    // Price → Discount → back into this method to reopen the picker.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _ctl(line);
+      final qc = c['qtyCtrl'] as TextEditingController;
+      qc.selection = TextSelection(baseOffset: 0, extentOffset: qc.text.length);
+      (c['qtyFocus'] as FocusNode).requestFocus();
+    });
+  }
+
+  // Bulk discount: choose a type (Rs/%) applied to ALL lines, and optionally a
+  // value. If a value is entered it's pushed to every line (overwriting); if
+  // left blank only the type is applied and each line keeps its own value.
+  Future<void> _bulkDiscountDialog() async {
+    String type = _globalDiscType == 'percent' ? 'percent' : 'fixed';
+    final valCtrl = TextEditingController();
+    final applied = await showDialog<bool>(
       context: context,
-      builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) {
-        final ql = q.trim().toLowerCase();
-        final filtered = ql.isEmpty
-            ? _products.take(50).toList()
-            : _products.where((p) =>
-                (p['name'] as String? ?? '').toLowerCase().contains(ql) ||
-                (p['sku'] as String? ?? '').toLowerCase().contains(ql)).take(50).toList();
-        return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520, maxHeight: 600),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Padding(padding: const EdgeInsets.fromLTRB(18, 16, 12, 8), child: Row(children: [
-                const Text('Select Product', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                const Spacer(),
-                IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(dctx)),
-              ])),
-              Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 8), child: TextField(
-                autofocus: true,
-                decoration: InputDecoration(hintText: 'Search name or SKU...', prefixIcon: const Icon(Icons.search, size: 18), isDense: true, filled: true, fillColor: const Color(0xFFF8F9FA), border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)),
-                onChanged: (v) => setModal(() => q = v),
-              )),
-              const Divider(height: 1),
-              Flexible(child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: filtered.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (_, k) {
-                  final p = filtered[k];
-                  return ListTile(
-                    dense: true,
-                    title: Text(p['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    subtitle: Text('SKU ${p['sku'] ?? '-'}  ·  Rs. ${(p['selling_price'] as num?)?.toStringAsFixed(2) ?? '0'}', style: const TextStyle(fontSize: 11)),
-                    onTap: () => Navigator.pop(dctx, p),
-                  );
-                },
-              )),
-            ]),
+      builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Discount All Lines', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Discount type', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Row(children: [
+            ChoiceChip(label: const Text('Rs (Fixed)'), selected: type == 'fixed', onSelected: (_) => setModal(() => type = 'fixed')),
+            const SizedBox(width: 8),
+            ChoiceChip(label: const Text('% (Percent)'), selected: type == 'percent', onSelected: (_) => setModal(() => type = 'percent')),
+          ]),
+          const SizedBox(height: 16),
+          const Text('Value (optional)', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: valCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              hintText: type == 'percent' ? 'e.g. 10 (applies 10% to all lines)' : 'e.g. 50 (applies Rs. 50 to all lines)',
+              isDense: true,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
           ),
-        );
-      }),
+          const SizedBox(height: 8),
+          const Text('Leave value blank to change only the type on every line (each line keeps its own amount). Entering a value overwrites every line\u2019s discount.',
+              style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(dctx, true), child: const Text('Apply to all')),
+        ],
+      )),
     );
-    if (picked != null) _pickProduct(idx, picked);
+    if (applied != true) return;
+    final raw = valCtrl.text.trim();
+    final hasValue = raw.isNotEmpty;
+    final value = double.tryParse(raw) ?? 0;
+    setState(() {
+      for (final l in _lines) {
+        l['discount_type'] = type;
+        if (hasValue) l['discount'] = value;
+        // sync the row's controllers so the grid reflects the change
+        final c = _ctl(l);
+        if (hasValue) (c['discCtrl'] as TextEditingController).text = value.toString();
+      }
+    });
   }
 
   Widget _field(String label, Widget child) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
