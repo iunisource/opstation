@@ -522,6 +522,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _suppliers = [];        // for POS payments (CPV)
   List<Map<String, dynamic>> _expenseAccounts = [];  // expense COA accounts for CPV
   List<Map<String, dynamic>> _sessionPayments = [];  // CPVs made from this session
+  List<Map<String, dynamic>> _sessionReceipts = [];  // CRVs made from this session
   Map<String, dynamic>? _selectedPromoter;           // one promoter per bill (optional)
   Map<String, double> _stockMap = {};  // product_id → qty in stock
   bool _allowNoStock = false;           // org setting: allow selling without stock
@@ -666,6 +667,10 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           final payRows = await Supabase.instance.client.from('cpv_vouchers').select('id, voucher_number, total_amount, notes, created_at, cash_account_name, cpv_voucher_lines(account_name, account_type, description, amount)').eq('session_id', _session['id']).eq('status', 'posted').order('created_at', ascending: false);
           _sessionPayments = List<Map<String, dynamic>>.from(payRows);
         } catch (_) { _sessionPayments = []; }
+        try {
+          final rcvRows = await Supabase.instance.client.from('crv_vouchers').select('id, voucher_number, total_amount, notes, created_at, crv_voucher_lines(account_name, account_type, description, amount)').eq('session_id', _session['id']).eq('status', 'posted').order('created_at', ascending: false);
+          _sessionReceipts = List<Map<String, dynamic>>.from(rcvRows);
+        } catch (_) { _sessionReceipts = []; }
       } catch (_) {}
       // Load expenses separately (avoids Future.wait index issues)
       bool allowNoStock = false;
@@ -1566,8 +1571,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final p in _sessionPayments) {
       cashPayments += (p['total_amount'] as num?)?.toDouble() ?? 0;
     }
+    double cashReceipts = 0;
+    for (final p in _sessionReceipts) {
+      cashReceipts += (p['total_amount'] as num?)?.toDouble() ?? 0;
+    }
     final breakdown = _sessionBreakdown();
-    final expectedClose = opening + cashSales - cashRefunds - cashExpenses - cashPayments;
+    final expectedClose = opening + cashSales - cashRefunds - cashExpenses - cashPayments + cashReceipts;
     final cashCtrl = TextEditingController(text: expectedClose.toStringAsFixed(2));
     final notesCtrl = TextEditingController();
     Widget ccRow(String label, double val, {bool bold = false}) => Padding(
@@ -1589,6 +1598,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
             ccRow('- Cash refunds', -cashRefunds),
             ccRow('- Cash expenses', -cashExpenses),
             if (cashPayments > 0) ccRow('- Supplier/expense payments', -cashPayments),
+            if (cashReceipts > 0) ccRow('+ Customer receipts', cashReceipts),
             const Divider(height: 14),
             ccRow('Expected closing cash', expectedClose, bold: true),
           ]),
@@ -1719,7 +1729,28 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       }
     }
     final expectedDrawer = openingCash + cashSales - totalReturns - totalExpenses - totalPayments; // refunds, expenses & payments are cash out of drawer
-    final cashDiff = expectedDrawer - closingCash;  // +ve = cash short, -ve = cash over
+    // Customer receipts (CRVs) into the till this session — cash IN.
+    double totalReceipts = 0; String rcvRows = '';
+    for (final p in _sessionReceipts) {
+      final pa = (p['total_amount'] as num?)?.toDouble() ?? 0; totalReceipts += pa;
+      final pv = p['voucher_number'] as String? ?? '-';
+      final pt = p['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(p['created_at'] as String).toLocal()) : '';
+      final plines = (p['crv_voucher_lines'] as List?) ?? const [];
+      if (plines.isEmpty) {
+        final pn = p['notes'] as String? ?? '';
+        rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${pa.toStringAsFixed(2)}</td></tr>';
+      } else {
+        for (final l in plines) {
+          final la = (l['amount'] as num?)?.toDouble() ?? 0;
+          final name = (l['account_name'] as String?) ?? '-';
+          final ldesc = (l['description'] as String?) ?? '';
+          final label = ldesc.isNotEmpty ? '$name — $ldesc' : name;
+          rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>$label</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${la.toStringAsFixed(2)}</td></tr>';
+        }
+      }
+    }
+    final expectedDrawerFinal = expectedDrawer + totalReceipts; // receipts are cash INTO the drawer
+    final cashDiff = expectedDrawerFinal - closingCash;  // +ve = cash short, -ve = cash over
     final branch = _session['branches']?['name'] as String? ?? '-';
     final user = ref.read(currentUserProvider);
     final cashier = user?.name ?? user?.id ?? '-';
@@ -1808,6 +1839,11 @@ ${payRows.isNotEmpty ? '''<h2>Supplier / Expense Payments (from till)</h2>
 <tbody>$payRows
 <tr class="total-row"><td colspan="3">TOTAL PAYMENTS</td><td style="text-align:right;color:#c0392b">-${totalPayments.toStringAsFixed(2)}</td></tr>
 </tbody></table>''' : ''}
+${rcvRows.isNotEmpty ? '''<h2>Customer Receipts (into till)</h2>
+<table><thead><tr><th>Time</th><th>CRV Ref.</th><th>Received From / Description</th><th>Amount</th></tr></thead>
+<tbody>$rcvRows
+<tr class="total-row"><td colspan="3">TOTAL RECEIPTS</td><td style="text-align:right;color:#1e7e34">+${totalReceipts.toStringAsFixed(2)}</td></tr>
+</tbody></table>''' : ''}
 ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
 <table><thead><tr><th>Time</th><th>Customer</th><th>Original Txn</th><th>Refund</th></tr></thead>
 <tbody>$retRows
@@ -1855,6 +1891,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
             TextButton.icon(icon: const Icon(Icons.pause_circle_outline, size: 18), label: const Text('Holds'), onPressed: () async { final bill = await Navigator.of(context).push<Map<String, dynamic>>(MaterialPageRoute(builder: (_) => const ErpPosHeldBillsScreen())); if (bill != null && mounted) _restoreBill(bill); }, style: TextButton.styleFrom(foregroundColor: Colors.orange)),
             const SizedBox(width: 4),
             TextButton.icon(icon: const Icon(Icons.payments_outlined, size: 18), label: const Text('Payment'), onPressed: _addPayment, style: TextButton.styleFrom(foregroundColor: Colors.red.shade700)),
+            TextButton.icon(icon: const Icon(Icons.savings_outlined, size: 18), label: const Text('Receipt'), onPressed: _addReceipt, style: TextButton.styleFrom(foregroundColor: Colors.green.shade700)),
             const SizedBox(width: 4),
             TextButton.icon(icon: const Icon(Icons.summarize_outlined, size: 18), label: const Text('Summary'), onPressed: _exportSummary),
             const SizedBox(width: 4),
@@ -2573,6 +2610,134 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         Expanded(child: list.isEmpty ? const Center(child: Text('No suppliers', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(itemCount: list.length, separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (_, i) { final s = list[i]; return ListTile(dense: true, title: Text(s['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)), onTap: () => Navigator.pop(ctx, s)); })),
+      ])));
+    }));
+  }
+
+  // Record a customer receipt into the till as a CRV (cash IN). Mirror of
+  // _addPayment: multi-line, each line credits a customer's receivable (or an
+  // account). Dr Cash / Cr AR. Session-linked (increases closing cash), posted
+  // via shared post_crv.
+  Future<void> _addReceipt() async {
+    final rcvLines = <Map<String, dynamic>>[
+      {'id': null, 'name': null, 'amtCtrl': TextEditingController(), 'descCtrl': TextEditingController()},
+    ];
+
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) {
+      double total = 0;
+      for (final l in rcvLines) { total += double.tryParse((l['amtCtrl'] as TextEditingController).text.trim()) ?? 0; }
+
+      Widget lineCard(int idx) {
+        final l = rcvLines[idx];
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Expanded(child: Text('Customer', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary))),
+              if (rcvLines.length > 1)
+                IconButton(icon: const Icon(Icons.close, size: 16, color: Colors.red), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  onPressed: () => setS(() => rcvLines.removeAt(idx))),
+            ]),
+            const SizedBox(height: 6),
+            GestureDetector(onTap: () async {
+              final picked = await _pickCustomerDialog();
+              if (picked != null) setS(() { l['id'] = picked['id']; l['name'] = picked['shop_name'] ?? picked['code']; });
+            }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+              child: Row(children: [Expanded(child: Text(l['name'] as String? ?? 'Tap to pick customer', style: TextStyle(fontSize: 12, color: l['name']==null ? AppTheme.textSecondary : null), overflow: TextOverflow.ellipsis)), const Icon(Icons.arrow_drop_down, size: 18)]))),
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(flex: 2, child: TextField(controller: l['amtCtrl'] as TextEditingController, decoration: const InputDecoration(labelText: 'Amount', prefixText: 'Rs. ', isDense: true, border: OutlineInputBorder()),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], onChanged: (_) => setS(() {}))),
+              const SizedBox(width: 6),
+              Expanded(flex: 3, child: TextField(controller: l['descCtrl'] as TextEditingController, decoration: const InputDecoration(labelText: 'Description', isDense: true, border: OutlineInputBorder()))),
+            ]),
+          ]),
+        );
+      }
+
+      return AlertDialog(
+        title: const Text('Record Receipt (CRV)'),
+        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (var i = 0; i < rcvLines.length; i++) lineCard(i),
+          ]))),
+          Align(alignment: Alignment.centerLeft, child: TextButton.icon(icon: const Icon(Icons.add, size: 16), label: const Text('Add line'),
+            onPressed: () => setS(() => rcvLines.add({'id': null, 'name': null, 'amtCtrl': TextEditingController(), 'descCtrl': TextEditingController()})))),
+          const Divider(),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            const Text('Total', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text('Rs. ${total.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w800, color: Colors.green.shade700)),
+          ]),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Save & Post')),
+        ],
+      );
+    }));
+    if (ok != true) return;
+
+    final validLines = <Map<String, dynamic>>[];
+    for (final l in rcvLines) {
+      final amt = double.tryParse((l['amtCtrl'] as TextEditingController).text.trim()) ?? 0;
+      if (amt <= 0) continue;
+      if (l['id'] == null) { _showSnack('Each line needs a customer'); return; }
+      validLines.add({'id': l['id'], 'name': l['name'], 'amount': amt, 'desc': (l['descCtrl'] as TextEditingController).text.trim()});
+    }
+    if (validLines.isEmpty) { _showSnack('Add at least one receipt line with an amount'); return; }
+    final total = validLines.fold<double>(0, (s, l) => s + (l['amount'] as double));
+
+    final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name ?? '';
+    final bid = _session['branch_id'] as String? ?? '';
+    final cashAccId = 'coa_${orgId}_1110';
+    final client = Supabase.instance.client;
+    try {
+      final cnt = await client.from('crv_vouchers').select('id').eq('org_id', orgId!);
+      final vNum = 'CRV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+      final vid = 'crv_${DateTime.now().millisecondsSinceEpoch}';
+      final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      await client.from('crv_vouchers').insert({
+        'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr,
+        'cash_account_id': cashAccId, 'cash_account_name': 'Cash in Hand',
+        'status': 'posted', 'total_amount': total,
+        'created_by': userId, 'posted_by': userId, 'posted_by_name': userName,
+        'posted_at': DateTime.now().toIso8601String(), 'session_id': _session['id'],
+      });
+      for (var i = 0; i < validLines.length; i++) {
+        final l = validLines[i];
+        await client.from('crv_voucher_lines').insert({
+          'id': 'crvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid,
+          'account_type': 'customer', 'account_id': l['id'], 'account_name': l['name'],
+          'description': l['desc'], 'amount': l['amount'], 'line_order': i,
+        });
+      }
+      await client.rpc('post_crv', params: {'p_voucher_id': vid});
+      _showSnack('Receipt posted: $vNum • Rs. ${total.toStringAsFixed(2)}');
+      _loadData();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<Map<String, dynamic>?> _pickCustomerDialog() async {
+    final searchCtrl = TextEditingController();
+    return showDialog<Map<String, dynamic>>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) {
+      final q = searchCtrl.text.trim().toLowerCase();
+      final list = q.isEmpty ? _customers : _customers.where((c) => ((c['shop_name'] as String? ?? '') + (c['code'] as String? ?? '')).toLowerCase().contains(q)).toList();
+      return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420, maxHeight: 500), child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(padding: const EdgeInsets.fromLTRB(16, 14, 8, 6), child: Row(children: [
+          const Expanded(child: Text('Select customer', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+          IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(ctx)),
+        ])),
+        Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 8), child: TextField(controller: searchCtrl, autofocus: true,
+          decoration: const InputDecoration(hintText: 'Search…', prefixIcon: Icon(Icons.search, size: 20), isDense: true, border: OutlineInputBorder()), onChanged: (_) => setS(() {}))),
+        const Divider(height: 1),
+        Expanded(child: list.isEmpty ? const Center(child: Text('No customers', style: TextStyle(color: AppTheme.textSecondary)))
+          : ListView.separated(itemCount: list.length, separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) { final c = list[i]; return ListTile(dense: true, title: Text(c['shop_name'] as String? ?? c['code'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
+              subtitle: c['code'] != null ? Text(c['code'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)) : null,
+              onTap: () => Navigator.pop(ctx, c)); })),
       ])));
     }));
   }
