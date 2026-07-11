@@ -187,8 +187,11 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       for (final r in list) {
         final cid = r['customer_id'] as String?;
         final bid = r['branch_id'] as String?;
-        r['_customer_name'] = cid == null ? null
-            : (_customers.firstWhere((c) => c['id'] == cid, orElse: () => {})['shop_name'] as String?);
+        final oneOffName = (r['customer_name_text'] as String?)?.trim();
+        r['_customer_name'] = cid != null
+            ? (_customers.firstWhere((c) => c['id'] == cid, orElse: () => {})['shop_name'] as String?)
+            : ((oneOffName != null && oneOffName.isNotEmpty) ? oneOffName : null);
+        r['_one_off'] = cid == null && oneOffName != null && oneOffName.isNotEmpty;
         r['_branch_name'] = bid == null ? null
             : (_branches.firstWhere((b) => b['id'] == bid, orElse: () => {})['name'] as String?);
       }
@@ -257,6 +260,8 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     setState(() {
       _doc = {
         'customer_id': null,
+        'customer_name_text': null,
+        'customer_phone_text': null,
         'branch_id': branchId,
         'voucher_date': DateTime.now(),
         'valid_until': null,
@@ -283,6 +288,8 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         _doc = {
           'id': row['id'],
           'customer_id': row['customer_id'],
+          'customer_name_text': row['customer_name_text'],
+          'customer_phone_text': row['customer_phone_text'],
           'branch_id': row['branch_id'],
           'voucher_number': row['voucher_number'],
           'voucher_date': row['voucher_date'] != null ? DateTime.parse(row['voucher_date'] as String) : DateTime.now(),
@@ -349,6 +356,9 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'org_id': orgId,
         'branch_id': _doc!['branch_id'],
         'customer_id': _doc!['customer_id'],
+        // One-off prospect name; null whenever a real customer is linked.
+        'customer_name_text': _doc!['customer_id'] == null ? _doc!['customer_name_text'] : null,
+        'customer_phone_text': _doc!['customer_id'] == null ? _doc!['customer_phone_text'] : null,
         'voucher_number': vnum,
         'voucher_date': DateFormat('yyyy-MM-dd').format(_doc!['voucher_date'] as DateTime),
         'valid_until': _doc!['valid_until'] != null ? DateFormat('yyyy-MM-dd').format(_doc!['valid_until'] as DateTime) : null,
@@ -458,14 +468,38 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     } catch (e) { _toast('Failed: $e'); }
   }
 
+  // Display name for a quotation: a registered customer's shop_name, else the
+  // free-text one-off name, else Walk-in. Used by the list, header and PDFs.
+  String _custDisplay(Map<String, dynamic> d) {
+    final cid = d['customer_id'] as String?;
+    if (cid != null) {
+      return (_customers.firstWhere((c) => c['id'] == cid,
+          orElse: () => {'shop_name': '-'})['shop_name'] as String?) ?? '-';
+    }
+    final txt = (d['customer_name_text'] as String?)?.trim();
+    if (txt != null && txt.isNotEmpty) return txt;
+    return 'Walk-in / none';
+  }
+
+  // True when the quotation carries a typed-in name rather than a real customer.
+  bool _isOneOff(Map<String, dynamic> d) =>
+      (d['customer_id'] as String?) == null &&
+      ((d['customer_name_text'] as String?)?.trim().isNotEmpty ?? false);
+
   // Searchable customer picker: type to filter by shop name, plus a
-  // "Walk-in / none" option at the top to clear the selection.
+  // "Walk-in / none" option to clear the selection, plus a free-text
+  // "one-off name" option so a quote can be raised for a prospect without
+  // polluting the customer master. A one-off stores customer_name_text /
+  // customer_phone_text and leaves customer_id null — no customers row is
+  // created. The SO confirm guard forces a real customer before anything
+  // can post to AR.
   Future<void> _pickCustomer() async {
     String q = '';
     final picked = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) {
-        final ql = q.trim().toLowerCase();
+        final raw = q.trim();
+        final ql = raw.toLowerCase();
         final filtered = ql.isEmpty
             ? _customers
             : _customers.where((c) =>
@@ -491,8 +525,18 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                   dense: true,
                   leading: const Icon(Icons.person_off_outlined, size: 18, color: AppTheme.textSecondary),
                   title: const Text('Walk-in / none', style: TextStyle(fontSize: 13.5)),
-                  onTap: () => Navigator.of(dctx).pop({'id': null}),
+                  onTap: () => Navigator.of(dctx).pop({'id': null, '_oneOff': false}),
                 ),
+                if (raw.isNotEmpty)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.edit_note, size: 18, color: AppTheme.primary),
+                    title: Text('Use "$raw" as a one-off name',
+                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppTheme.primary)),
+                    subtitle: const Text('No customer record is created',
+                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    onTap: () => Navigator.of(dctx).pop({'id': null, '_oneOff': true, '_name': raw}),
+                  ),
                 const Divider(height: 1),
                 ...filtered.map((c) => ListTile(
                       dense: true,
@@ -500,7 +544,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                       subtitle: (c['phone'] as String?)?.isNotEmpty == true
                           ? Text(c['phone'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))
                           : null,
-                      onTap: () => Navigator.of(dctx).pop(c),
+                      onTap: () => Navigator.of(dctx).pop({...c, '_oneOff': false}),
                     )),
               ])),
             ]),
@@ -508,13 +552,70 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         );
       }),
     );
-    if (picked != null) {
-      setState(() => _doc!['customer_id'] = picked['id'] as String?);
+    if (picked == null) return;
+    final oneOff = picked['_oneOff'] == true;
+    if (oneOff) {
+      // Optional phone for the one-off name.
+      final phoneCtrl = TextEditingController();
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c2) => AlertDialog(
+          title: Text('One-off: ${picked['_name']}'),
+          content: SizedBox(width: 320, child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Align(alignment: Alignment.centerLeft, child: Text(
+              'This name is stored on the quotation only. No customer record is created.',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+            const SizedBox(height: 12),
+            TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'Phone (optional)'), autofocus: true),
+          ])),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(c2).pop(false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.of(c2).pop(true), child: const Text('Use name')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      setState(() {
+        _doc!['customer_id'] = null;
+        _doc!['customer_name_text'] = picked['_name'] as String?;
+        _doc!['customer_phone_text'] = phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim();
+      });
+      return;
     }
+    // Registered customer, or Walk-in/none: clear any one-off name.
+    setState(() {
+      _doc!['customer_id'] = picked['id'] as String?;
+      _doc!['customer_name_text'] = null;
+      _doc!['customer_phone_text'] = null;
+    });
   }
 
   Future<void> _exportToSO() async {
     if (orgId == null || _doc == null) return;
+    // A one-off quotation has no real customer. The SO is created with a null
+    // customer_id and the user picks/creates one there — the SO confirm guard
+    // ("Select a customer before confirming") blocks it going any further, so
+    // nothing can reach DO/SI/AR without a party. Warn up front so the empty
+    // customer field on the SO isn't a surprise.
+    if (_isOneOff(_doc!)) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('One-off customer name'),
+          content: SizedBox(width: 380, child: Text(
+            '"${_doc!['customer_name_text']}" is a typed-in name, not a registered customer.\n\n'
+            'The Sales Order will be created with no customer selected. You will need to '
+            'select or create a customer on the SO before it can be confirmed.',
+            style: const TextStyle(fontSize: 13),
+          )),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Continue')),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
     setState(() => _saving = true);
     try {
       final y = DateTime.now().year;
@@ -605,9 +706,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             'discount_type': l['discount_type'] ?? 'fixed',
           }).toList();
 
-      final custName = _doc!['customer_id'] != null
-          ? (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'shop_name': 'Walk-in'})['shop_name'] as String?)
-          : 'Walk-in';
+      // Carries the one-off typed name through to the POS hold when no real
+      // customer is linked. customer_id stays null — POS allows an empty
+      // customer for cash sales and already blocks credit without one.
+      final custName = _custDisplay(_doc!);
 
       await _client.from('pos_held_bills').insert({
         'id': 'hb_${DateTime.now().microsecondsSinceEpoch}',
@@ -641,12 +743,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   Future<void> _printQuotation() async {
     if (_doc == null || _doc!['id'] == null) { _toast('Save the quotation first'); return; }
     try {
-      final custName = _doc!['customer_id'] != null
-          ? (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'shop_name': 'Walk-in'})['shop_name'] as String?)
-          : 'Walk-in';
+      final custName = _custDisplay(_doc!);
       final custPhone = _doc!['customer_id'] != null
           ? (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'phone': null})['phone'] as String?)
-          : null;
+          : (_doc!['customer_phone_text'] as String?);
       final branchName = _branches.firstWhere((b) => b['id'] == _doc!['branch_id'], orElse: () => {'name': null})['name'] as String?;
 
       double subtotal = 0;
@@ -840,7 +940,17 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     child: Row(children: [
                       Expanded(flex: 2, child: Text(r['voucher_number'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary))),
-                      Expanded(flex: 3, child: Text(r['_customer_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 13))),
+                      Expanded(flex: 3, child: Row(children: [
+                        Flexible(child: Text(r['_customer_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
+                        if (r['_one_off'] == true) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(color: Colors.orange.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(4)),
+                            child: const Text('one-off', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.orange)),
+                          ),
+                        ],
+                      ])),
                       Expanded(flex: 2, child: Text(r['_branch_name'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text(r['voucher_date'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Padding(padding: const EdgeInsets.only(right: 16), child: Text('Rs. ${((r['_value'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), textAlign: TextAlign.right))),
@@ -942,12 +1052,21 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               decoration: _dec(),
               child: Row(children: [
                 Expanded(child: Text(
-                  _doc!['customer_id'] == null
-                      ? 'Walk-in / none'
-                      : (_customers.firstWhere((c) => c['id'] == _doc!['customer_id'], orElse: () => {'shop_name': '-'})['shop_name'] as String? ?? '-'),
+                  _custDisplay(_doc!),
                   maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13, color: _doc!['customer_id'] == null ? AppTheme.textSecondary : Colors.black87),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: (_doc!['customer_id'] == null && !_isOneOff(_doc!))
+                        ? AppTheme.textSecondary : Colors.black87,
+                  ),
                 )),
+                if (_isOneOff(_doc!))
+                  Container(
+                    margin: const EdgeInsets.only(right: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(color: Colors.orange.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(4)),
+                    child: const Text('one-off', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.orange)),
+                  ),
                 const Icon(Icons.arrow_drop_down, size: 20, color: AppTheme.textSecondary),
               ]),
             ),
