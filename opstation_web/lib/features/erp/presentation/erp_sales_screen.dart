@@ -600,6 +600,16 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   Future<void> _confirmOrder() async {
     if (_items.isEmpty) { _showSnack('Add items first'); return; }
+    // A confirmed SO flows SO → DO → SI, and the SI posts to AR against
+    // customer_id as party_id. A null customer here would produce an invoice
+    // with no party to receive against — uncollectable, un-ageable, invisible
+    // on any ledger. Drafting without a customer stays allowed; confirming does
+    // not. This guards every path into an SO, not just quotation conversion.
+    final custId = _detail['customer_id'] as String?;
+    if (custId == null || custId.isEmpty) {
+      _showSnack('Select a customer before confirming');
+      return;
+    }
     try {
       await Supabase.instance.client.from('sales_orders').update({
         'status': 'confirmed', 'is_locked': true,
