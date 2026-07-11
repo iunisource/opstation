@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
 import 'my_orders_screen.dart';
+import 'salesperson_files_screen.dart';
 import 'salesperson_performance_screen.dart';
 
 /// Whether the customer sales-targets feature is on for this org. Gates the
@@ -95,6 +96,14 @@ class SalespersonDrawer extends ConsumerWidget {
             label: 'My Orders',
             subtitle: 'Orders you submitted',
             onTap: () => _go(context, const MyOrdersScreen()),
+          ),
+          const Divider(height: 1),
+          _tile(
+            context,
+            icon: Icons.folder_shared_outlined,
+            label: 'Files',
+            subtitle: 'Price lists, brochures & guides',
+            onTap: () => _go(context, const SalespersonFilesScreen()),
           ),
           const Divider(height: 1),
           _tile(

@@ -37,6 +37,7 @@ import '../../features/routes/presentation/route_form_screen.dart';
 import '../../features/routes/presentation/routes_list_screen.dart';
 import '../../features/salesperson/presentation/route_history_screen.dart';
 import '../../features/salesperson/presentation/route_in_progress_screen.dart';
+import '../../features/salesperson/presentation/salesperson_files_screen.dart';
 import '../../features/salesperson/presentation/salesperson_home_screen.dart';
 import '../../features/surveyor/presentation/surveyor_home_screen.dart';
 import '../../features/surveyor/presentation/placement_audit_screen.dart';
@@ -253,6 +254,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/salesperson/history',
         builder: (_, __) => const RouteHistoryScreen(),
+      ),
+      GoRoute(
+        path: '/salesperson/files',
+        builder: (_, __) => const SalespersonFilesScreen(),
       ),
       GoRoute(
         path: '/admin/team/drivers',
