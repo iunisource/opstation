@@ -264,6 +264,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/compliance', builder: (_, __) => const ComplianceScreen()),
           GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
           GoRoute(path: '/operations/files', builder: (_, __) => const RetailerFilesScreen()),
+          // Read-only Files view for ERP users — same screen, audience-filtered.
+          GoRoute(path: '/erp/files', builder: (_, __) => const RetailerFilesScreen(audience: 'erpUser')),
           GoRoute(path: '/operations/notifications', builder: (_, __) => const NotificationsComposerScreen()),
           GoRoute(path: '/operations/retailers', builder: (_, __) => const RetailersAdminScreen()),
           GoRoute(path: '/assets', builder: (_, __) => const ErpAssetsScreen()),

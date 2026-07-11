@@ -8,11 +8,26 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
+/// The three audiences a shared file can be visible to. Keys match the values
+/// stored in shared_files.visible_to (a text[]), so any combination is valid —
+/// "all" is simply all three selected rather than a separate sentinel value.
+const Map<String, String> _kAudiences = {
+  'retailer': 'Retailers',
+  'salesperson': 'Salespeople',
+  'erpUser': 'ERP Users',
+};
+
 /// Admin "Files" area (Operations menu). Admins upload images / PDFs / videos
 /// into the private `retailer-files` Storage bucket and record them in
-/// `shared_files`; retailers later read these (via RPC) in their portal/app.
+/// `shared_files`; retailers, salespeople and ERP users read these in their
+/// respective surfaces, filtered by `visible_to`.
+///
+/// Set [audience] to make this a read-only consumer view for one role (e.g. the
+/// ERP menu's Files screen passes 'erpUser'). Left null it is the admin view:
+/// every file, plus upload and delete.
 class RetailerFilesScreen extends ConsumerStatefulWidget {
-  const RetailerFilesScreen({super.key});
+  final String? audience;
+  const RetailerFilesScreen({super.key, this.audience});
   @override
   ConsumerState<RetailerFilesScreen> createState() => _RetailerFilesScreenState();
 }
@@ -20,6 +35,8 @@ class RetailerFilesScreen extends ConsumerStatefulWidget {
 class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
   static const _bucket = 'retailer-files';
   static const _maxBytes = 50 * 1024 * 1024; // 50 MB
+
+  bool get _readOnly => widget.audience != null;
 
   bool _loading = true;
   List<Map<String, dynamic>> _files = [];
@@ -41,12 +58,16 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
     }
     setState(() => _loading = true);
     try {
-      final rows = await Supabase.instance.client
+      var q = Supabase.instance.client
           .from('shared_files')
           .select()
           .eq('org_id', orgId)
-          .eq('is_active', true)
-          .order('created_at', ascending: false);
+          .eq('is_active', true);
+      // Consumer views (ERP menu, etc.) see only files whose visible_to array
+      // contains their role. The admin view passes no audience and sees all.
+      final aud = widget.audience;
+      if (aud != null) q = q.contains('visible_to', [aud]);
+      final rows = await q.order('created_at', ascending: false);
       if (!mounted) return;
       setState(() {
         _files = List<Map<String, dynamic>>.from(rows);
@@ -186,6 +207,10 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
     String audience = 'all';
+    // Which ROLES may see this file. Orthogonal to `audience`, which targets
+    // WHICH retailer (all vs one specific customer). Overloading `audience`
+    // with roles would have destroyed the customer-targeting feature.
+    final Set<String> visibleTo = {'retailer'};
     Map<String, dynamic>? customer;
     Uint8List? bytes;
     String? fileName;
@@ -235,7 +260,9 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
               _snack('Choose a file to upload');
               return;
             }
-            if (audience == 'customer' && customer == null) {
+            if (audience == 'customer' &&
+                visibleTo.contains('retailer') &&
+                customer == null) {
               _snack('Pick the customer this file is for');
               return;
             }
@@ -256,7 +283,11 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
                 'file_type': fileType,
                 'storage_path': path,
                 'audience': audience,
-                'audience_ref': audience == 'customer' ? customer!['id'] : null,
+                'audience_ref':
+                    (audience == 'customer' && visibleTo.contains('retailer'))
+                        ? customer!['id']
+                        : null,
+                'visible_to': visibleTo.toList(),
                 'uploaded_by': client.auth.currentUser?.id,
               });
               if (mounted) Navigator.pop(ctx);
@@ -310,23 +341,69 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
                       ]),
                     ],
                     const SizedBox(height: 16),
-                    const Text('Visible to',
-                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                    const SizedBox(height: 6),
                     Row(children: [
-                      ChoiceChip(
-                        label: const Text('All retailers'),
-                        selected: audience == 'all',
-                        onSelected: (_) => setS(() => audience = 'all'),
-                      ),
-                      const SizedBox(width: 8),
-                      ChoiceChip(
-                        label: const Text('Specific customer'),
-                        selected: audience == 'customer',
-                        onSelected: (_) => setS(() => audience = 'customer'),
+                      const Text('Visible to',
+                          style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => setS(() {
+                          if (visibleTo.length == 3) {
+                            visibleTo
+                              ..clear()
+                              ..add('retailer');
+                          } else {
+                            visibleTo
+                              ..clear()
+                              ..addAll(_kAudiences.keys);
+                          }
+                        }),
+                        child: Text(visibleTo.length == 3 ? 'Clear' : 'Select all',
+                            style: const TextStyle(fontSize: 11)),
                       ),
                     ]),
-                    if (audience == 'customer') ...[
+                    const SizedBox(height: 2),
+                    Wrap(spacing: 8, children: [
+                      for (final e in _kAudiences.entries)
+                        FilterChip(
+                          label: Text(e.value),
+                          selected: visibleTo.contains(e.key),
+                          onSelected: (sel) => setS(() {
+                            if (sel) {
+                              visibleTo.add(e.key);
+                            } else {
+                              // Never allow an empty set — a file nobody can see
+                              // is silently dead. Keep at least one audience.
+                              if (visibleTo.length > 1) visibleTo.remove(e.key);
+                            }
+                            if (!visibleTo.contains('retailer')) {
+                              audience = 'all';
+                              customer = null;
+                            }
+                          }),
+                        ),
+                    ]),
+                    // Customer targeting only means anything when retailers can
+                    // see the file at all.
+                    if (visibleTo.contains('retailer')) ...[
+                      const SizedBox(height: 12),
+                      const Text('Which retailers',
+                          style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                      const SizedBox(height: 6),
+                      Row(children: [
+                        ChoiceChip(
+                          label: const Text('All retailers'),
+                          selected: audience == 'all',
+                          onSelected: (_) => setS(() => audience = 'all'),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('Specific customer'),
+                          selected: audience == 'customer',
+                          onSelected: (_) => setS(() => audience = 'customer'),
+                        ),
+                      ]),
+                    ],
+                    if (audience == 'customer' && visibleTo.contains('retailer')) ...[
                       const SizedBox(height: 8),
                       InkWell(
                         onTap: () async {
@@ -406,8 +483,21 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
     }
   }
 
-  String _audienceLabel(Map<String, dynamic> f) =>
-      f['audience'] == 'customer' ? 'Specific customer' : 'All retailers';
+  /// Human label combining both dimensions: which roles see the file, and —
+  /// when retailers are among them — whether it is targeted at one customer.
+  String _audienceLabel(Map<String, dynamic> f) {
+    final raw = f['visible_to'];
+    final roles = raw is List ? raw.map((e) => '$e').toList() : <String>['retailer'];
+    final names = [
+      for (final r in _kAudiences.keys)
+        if (roles.contains(r)) _kAudiences[r]!,
+    ];
+    final who = names.isEmpty ? 'Nobody' : names.join(', ');
+    if (roles.contains('retailer') && f['audience'] == 'customer') {
+      return '$who (specific customer)';
+    }
+    return who;
+  }
 
   // ── build ──────────────────────────────────────────────────────────────
   @override
@@ -431,16 +521,19 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Refresh'),
             const SizedBox(width: 8),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.upload_file, size: 18),
-              label: const Text('Upload file'),
-              onPressed: _uploadDialog,
-            ),
+            if (!_readOnly)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.upload_file, size: 18),
+                label: const Text('Upload file'),
+                onPressed: _uploadDialog,
+              ),
           ]),
           const SizedBox(height: 8),
-          const Text(
-            'Images, PDFs and videos shared with retailers in their app and portal.',
-            style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+          Text(
+            _readOnly
+                ? 'Images, PDFs and videos shared with you.'
+                : 'Images, PDFs and videos shared with retailers, salespeople and ERP users.',
+            style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
           ),
           const SizedBox(height: 16),
           Expanded(
@@ -485,12 +578,13 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
                                   tooltip: 'View',
                                   onPressed: () => _view(f),
                                 ),
-                                IconButton(
-                                  icon: const Icon(Icons.delete_outline, size: 18),
-                                  color: AppTheme.danger,
-                                  tooltip: 'Remove',
-                                  onPressed: () => _delete(f),
-                                ),
+                                if (!_readOnly)
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline, size: 18),
+                                    color: AppTheme.danger,
+                                    tooltip: 'Remove',
+                                    onPressed: () => _delete(f),
+                                  ),
                               ]),
                             ),
                           );
