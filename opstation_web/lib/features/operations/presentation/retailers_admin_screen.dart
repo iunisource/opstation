@@ -40,7 +40,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
       final client = Supabase.instance.client;
       final loginRows = await client
           .from('users')
-          .select('customer_id, email, password_temporary, is_active')
+          .select('id, customer_id, email, password_temporary, is_active')
           .eq('org_id', orgId)
           .eq('role', 'retailer');
       final logins = <String, Map<String, dynamic>>{};
@@ -106,7 +106,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
       if (ids.isNotEmpty) {
         final loginRows = await client
             .from('users')
-            .select('customer_id, email, password_temporary, is_active')
+            .select('id, customer_id, email, password_temporary, is_active')
             .inFilter('customer_id', ids)
             .eq('role', 'retailer');
         for (final l in loginRows as List) {
@@ -195,6 +195,55 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
         ]),
       );
 
+  /// Block / unblock a retailer's portal login.
+  ///
+  /// Flips users.is_active, which auth_controller already enforces at sign-in —
+  /// so this genuinely locks them out, it is not a cosmetic badge. Reversible:
+  /// the user row, its customer link and history all survive, and the toggle
+  /// flips straight back. Supabase's own auth.users (banned_until / deleted_at)
+  /// is deliberately left alone; is_active on public.users is the layer this
+  /// app reads.
+  Future<void> _toggleLogin(Map<String, dynamic> c, Map<String, dynamic> login, bool val) async {
+    final userId = login['id'] as String?;
+    if (userId == null) {
+      _snack('Cannot update: login record has no id');
+      return;
+    }
+    // Blocking locks a real person out of the portal — confirm it. Unblocking
+    // is harmless, so it goes through without a prompt.
+    if (!val) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Block login'),
+          content: Text(
+              '"${c['shop_name']}" will no longer be able to sign in to the retailer portal.\n\n'
+              'Their account and history are kept — you can re-enable the login at any time.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Block login'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    final prev = login['is_active'] == true;
+    setState(() => login['is_active'] = val); // optimistic
+    try {
+      await Supabase.instance.client
+          .from('users')
+          .update({'is_active': val}).eq('id', userId);
+      _snack(val ? 'Login enabled' : 'Login blocked');
+    } catch (e) {
+      setState(() => login['is_active'] = prev); // roll back on failure
+      _snack('Could not update: ${e.toString().split('\n').first}');
+    }
+  }
+
   Future<void> _toggleLocation(Map<String, dynamic> c, bool val) async {
     final prev = c['location_capture_allowed'] == true;
     setState(() => c['location_capture_allowed'] = val); // optimistic
@@ -224,7 +273,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           const Text(
-              'Give a customer a portal/app login and control whether they can share their location.',
+              'Give a customer a portal/app login, block or re-enable it, and control whether they can share their location.',
               style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           if (!canProvision) ...[
             const SizedBox(height: 8),
@@ -265,6 +314,8 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                       final c = _results[i];
                       final login = _logins[c['id']];
                       final hasLogin = login != null;
+                      final loginOn = hasLogin && login['is_active'] == true;
+                      final blocked = hasLogin && !loginOn;
                       final locOn = c['location_capture_allowed'] == true;
                       return Container(
                         decoration: BoxDecoration(
@@ -284,14 +335,21 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                                 Text(
                                   [
                                     c['code'] as String? ?? '',
-                                    if (hasLogin)
+                                    if (blocked)
+                                      'Login blocked'
+                                    else if (hasLogin)
                                       'Login active'
                                     else
                                       'No login',
                                   ].join('  •  '),
                                   style: TextStyle(
                                       fontSize: 12,
-                                      color: hasLogin ? AppTheme.success : AppTheme.textSecondary),
+                                      fontWeight: blocked ? FontWeight.w700 : FontWeight.w400,
+                                      color: blocked
+                                          ? AppTheme.danger
+                                          : hasLogin
+                                              ? AppTheme.success
+                                              : AppTheme.textSecondary),
                                 ),
                               ],
                             ),
@@ -306,11 +364,20 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                           ]),
                           const SizedBox(width: 12),
                           if (hasLogin)
-                            const Chip(
-                              label: Text('Login', style: TextStyle(fontSize: 11)),
-                              avatar: Icon(Icons.check_circle, size: 16, color: AppTheme.success),
-                              visualDensity: VisualDensity.compact,
-                            )
+                            Row(mainAxisSize: MainAxisSize.min, children: [
+                              Text('Login',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: blocked ? FontWeight.w700 : FontWeight.w400,
+                                      color: blocked ? AppTheme.danger : AppTheme.textSecondary)),
+                              Switch(
+                                value: loginOn,
+                                activeColor: AppTheme.success,
+                                onChanged: canProvision
+                                    ? (v) => _toggleLogin(c, login, v)
+                                    : null,
+                              ),
+                            ])
                           else
                             ElevatedButton.icon(
                               icon: const Icon(Icons.person_add_alt, size: 16),
