@@ -200,22 +200,20 @@ final fieldOrderPendingCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
-/// Count of retailer-placed orders awaiting review for the org. A retailer order
-/// is a real sales_order (source='retailer') left in 'draft' until staff confirm
-/// it, so "pending" is exactly that pair. Drives the live nav badge on the
-/// Retailer Orders menu item; invalidated by erp_retailer_orders_screen on
-/// confirm/reject and on realtime arrival.
+/// Count of retailer orders awaiting review. A retailer order is a REQUEST in
+/// its own table — nothing exists in sales_orders until staff approve it, which
+/// is what stops a pending request being confirmed by accident from the Sales
+/// Orders screen. Invalidated on approve/reject and on realtime arrival.
 final retailerOrderPendingCountProvider = FutureProvider<int>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
   try {
     final res = await client
-        .from('sales_orders')
+        .from('retailer_orders')
         .select('id')
         .eq('org_id', user.orgId!)
-        .eq('source', 'retailer')
-        .eq('status', 'draft');
+        .eq('status', 'submitted');
     return (res as List).length;
   } catch (_) {
     return 0;

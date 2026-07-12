@@ -9,14 +9,17 @@ import '../../auth/auth_controller.dart';
 
 /// Retailer Orders review queue.
 ///
-/// Retailers submit from the app (`retailer_place_order`), which writes a REAL
-/// sales_orders row — source='retailer', status='draft', voucher_number NULL.
-/// Unlike Field Orders (which converts from its own table), this screen reviews
-/// draft SOs in place. Confirming mints the voucher number and moves the order
-/// into the normal SO → DO → SI pipeline.
+/// Retailers submit from the app into `retailer_orders` — a REQUEST, not a sales
+/// order. Nothing exists in sales_orders until staff approve here, exactly as
+/// Field Orders works. That separation is the point: a pending request cannot be
+/// confirmed by accident from the Sales Orders screen, and no unnumbered ghost
+/// SOs accumulate.
+///
+/// Approving calls `approve_retailer_order`, which creates the draft SO with a
+/// proper SO-2026-NNNN and re-resolves each price live from the product master.
 ///
 /// Full parity with Field Orders: live nav badge, realtime arrival, new-order
-/// chime, and editable lines before confirmation.
+/// chime, and editable lines before approval.
 class ErpRetailerOrdersScreen extends ConsumerStatefulWidget {
   const ErpRetailerOrdersScreen({super.key});
   @override
@@ -32,7 +35,7 @@ class _ErpRetailerOrdersScreenState
   final _money = NumberFormat('#,##0.00');
   final _df = DateFormat('d MMM yyyy');
 
-  String _filter = 'draft';
+  String _filter = 'submitted';
   bool _loading = true, _saving = false;
   List<Map<String, dynamic>> _orders = [];
   final Map<String, String> _custNames = {};
@@ -85,7 +88,7 @@ class _ErpRetailerOrdersScreenState
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
-          table: 'sales_orders',
+          table: 'retailer_orders',
           filter: PostgresChangeFilter(
               type: PostgresChangeFilterType.eq,
               column: 'org_id',
@@ -96,12 +99,11 @@ class _ErpRetailerOrdersScreenState
   }
 
   Future<void> _onNewOrder(Map<String, dynamic> row) async {
-    if ((row['source'] as String?) != 'retailer') return;
-    if ((row['status'] as String?) != 'draft') return;
+    if ((row['status'] as String?) != 'submitted') return;
     _playNewOrderTone();
     _maybeWarnAudioBlocked();
     ref.invalidate(retailerOrderPendingCountProvider);
-    if (_filter == 'draft') {
+    if (_filter == 'submitted') {
       // The header row arrives before its lines are written, so a prepend would
       // render Rs. 0.00 and then silently correct itself. Reload instead.
       _loadOrders();
@@ -248,15 +250,11 @@ class _ErpRetailerOrdersScreenState
     }
     setState(() => _loading = true);
     try {
-      var q = _client
-          .from('sales_orders')
-          .select()
-          .eq('org_id', orgId)
-          .eq('source', 'retailer');
+      var q = _client.from('retailer_orders').select().eq('org_id', orgId);
       if (_filter != 'all') q = q.eq('status', _filter);
 
       final rows = List<Map<String, dynamic>>.from(
-          await q.order('created_at', ascending: false));
+          await q.order('submitted_at', ascending: false));
 
       final custIds = <String>{
         for (final o in rows)
@@ -272,21 +270,22 @@ class _ErpRetailerOrdersScreenState
         }
       }
 
-      // sales_orders has NO total column anywhere in this system — order value
-      // is always derived from its lines.
+      // Value is derived from the request's lines. price_at_submit is what the
+      // retailer was SHOWN — the live price is re-resolved at approval, so this
+      // figure is indicative, not a commitment.
       final ids = [for (final o in rows) o['id'] as String];
       final totals = <String, double>{};
       final counts = <String, int>{};
       if (ids.isNotEmpty) {
         final items = await _client
-            .from('sales_order_items')
-            .select('sales_order_id, quantity, unit_price, discount')
-            .inFilter('sales_order_id', ids);
+            .from('retailer_order_items')
+            .select('retailer_order_id, quantity, price_at_submit')
+            .inFilter('retailer_order_id', ids);
         for (final it in items as List) {
-          final id = it['sales_order_id'] as String?;
+          final id = it['retailer_order_id'] as String?;
           if (id == null) continue;
-          totals[id] = (totals[id] ?? 0) +
-              (_d(it['quantity']) * _d(it['unit_price']) - _d(it['discount']));
+          totals[id] =
+              (totals[id] ?? 0) + (_d(it['quantity']) * _d(it['price_at_submit']));
           counts[id] = (counts[id] ?? 0) + 1;
         }
       }
@@ -299,7 +298,7 @@ class _ErpRetailerOrdersScreenState
       setState(() {
         _orders = rows;
         _loading = false;
-        if (_filter == 'draft') _newWhileAway = 0;
+        if (_filter == 'submitted') _newWhileAway = 0;
       });
     } catch (e) {
       if (!mounted) return;
@@ -316,11 +315,18 @@ class _ErpRetailerOrdersScreenState
     });
     try {
       final items = await _client
-          .from('sales_order_items')
-          .select('id, product_id, quantity, unit_price, discount, uom_id')
-          .eq('sales_order_id', o['id']);
+          .from('retailer_order_items')
+          .select('id, product_id, quantity, price_at_submit, uom_id')
+          .eq('retailer_order_id', o['id']);
+      final rows = List<Map<String, dynamic>>.from(items);
+      // Normalise onto the same keys the editor uses, so the line widgets do not
+      // need to know which table they came from.
+      for (final l in rows) {
+        l['unit_price'] = _d(l['price_at_submit']);
+        l['discount'] = 0.0;
+      }
       if (!mounted) return;
-      setState(() => _lines = List<Map<String, dynamic>>.from(items));
+      setState(() => _lines = rows);
     } catch (e) {
       _snack('Could not load lines: $e');
     }
@@ -402,18 +408,18 @@ class _ErpRetailerOrdersScreenState
   }
 
   // ── Confirm / Reject ───────────────────────────────────────────────────────
-  /// Rewrites the lines (they may have been edited), preserves the retailer's
-  /// ORIGINAL request in `remarks`, mints the voucher number (the BEFORE INSERT
-  /// trigger cannot — these rows were deliberately created with a NULL number),
-  /// and confirms into the normal SO flow.
+  /// Approve.
   ///
-  /// The remarks note matters: a shopkeeper who asks for 10 and is confirmed for
-  /// 6 otherwise has no record of what they actually requested, and nothing in
-  /// the system would show the order was changed.
-  Future<void> _confirm() async {
+  /// The retailer order is a REQUEST, not a sales order — nothing exists in
+  /// sales_orders until this runs. If staff edited the lines, we write them back
+  /// to the request first (so the record of what was approved is accurate), then
+  /// `approve_retailer_order` creates the draft SO with a proper SO-2026-NNNN,
+  /// re-resolving each price live from the product master and falling back to
+  /// price_at_submit — exactly as approve_field_order does.
+  Future<void> _approve() async {
     final o = _selected;
-    final orgId = _orgId;
-    if (o == null || orgId == null) return;
+    final userId = ref.read(currentUserProvider)?.id;
+    if (o == null || userId == null) return;
     if (_lines.isEmpty) {
       _snack('An order must have at least one line.');
       return;
@@ -423,99 +429,71 @@ class _ErpRetailerOrdersScreenState
         _snack('Quantities must be greater than zero.');
         return;
       }
-      if (l['uom_id'] == null) {
-        _snack('A line is missing its unit of measure.');
-        return;
-      }
     }
     setState(() => _saving = true);
-    final soId = o['id'] as String;
+    final roId = o['id'] as String;
     try {
-      final orig = await _client
-          .from('sales_order_items')
-          .select('product_id, quantity, unit_price')
-          .eq('sales_order_id', soId);
-      final origNote = [
-        for (final l in orig as List)
-          '${_products[l['product_id']]?['name'] ?? l['product_id']}'
-              ' x${_d(l['quantity']).toStringAsFixed(0)}'
-              ' @${_money.format(_d(l['unit_price']))}'
-      ].join('; ');
-
+      // Persist any edits back onto the request before approving.
       await _client
-          .from('sales_order_items')
+          .from('retailer_order_items')
           .delete()
-          .eq('sales_order_id', soId);
-      await _client.from('sales_order_items').insert([
+          .eq('retailer_order_id', roId);
+      await _client.from('retailer_order_items').insert([
         for (final l in _lines)
           {
-            'sales_order_id': soId,
+            'retailer_order_id': roId,
             'product_id': l['product_id'],
             'uom_id': l['uom_id'],
             'quantity': _d(l['quantity']),
-            'unit_price': _d(l['unit_price']),
-            'discount': _d(l['discount']),
+            'price_at_submit': _d(l['unit_price']),
           }
       ]);
 
-      final patch = <String, dynamic>{
-        'status': 'confirmed',
-        'branch_id': _confirmBranchId ?? o['branch_id'],
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      };
+      final so = await _client.rpc('approve_retailer_order', params: {
+        'p_id': roId,
+        'p_user': userId,
+        'p_branch': _confirmBranchId,
+      });
 
-      final existing = (o['remarks'] as String?)?.trim() ?? '';
-      if (origNote.isNotEmpty && !existing.contains('Retailer requested')) {
-        patch['remarks'] = [
-          if (existing.isNotEmpty) existing,
-          'Retailer requested: $origNote',
-        ].join('\n');
-      }
-
-      final hasVoucher = (o['voucher_number'] as String?)?.isNotEmpty == true;
-      if (!hasVoucher) {
-        try {
-          final vnum = await _client.rpc('next_voucher_number', params: {
-            'p_org_id': orgId,
-            'p_branch_id': patch['branch_id'],
-            'p_type': 'SO',
-            'p_year': DateTime.now().year,
-          });
-          if (vnum != null) patch['voucher_number'] = vnum.toString();
-        } catch (e) {
-          _snack('Could not assign a voucher number: $e');
-          setState(() => _saving = false);
-          return;
-        }
-      }
-
-      await _client.from('sales_orders').update(patch).eq('id', soId);
       ref.invalidate(retailerOrderPendingCountProvider);
       if (!mounted) return;
       setState(() {
         _saving = false;
         _selected = null;
       });
-      final v = patch['voucher_number'];
-      _snack(v != null ? 'Order confirmed — $v' : 'Order confirmed.');
+      _snack(so != null
+          ? 'Approved — Sales Order created.'
+          : 'Approved.');
       _loadOrders();
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      _snack('Confirm failed: $e');
+      _snack('Approve failed: $e');
     }
   }
 
   Future<void> _reject() async {
     final o = _selected;
+    final userId = ref.read(currentUserProvider)?.id;
     if (o == null) return;
+    final reasonCtrl = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('Reject order'),
-        content: Text(
-            'Reject this order from ${_custNames[o['customer_id']] ?? '—'}?\n\n'
-            'It stays visible to the retailer, marked rejected. Nothing is posted.'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('Reject this order from ${_custNames[o['customer_id']] ?? '—'}?\n\n'
+              'No sales order is created. The retailer sees it marked rejected.'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: reasonCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Reason (optional)',
+              hintText: 'e.g. Over credit limit',
+              isDense: true,
+            ),
+          ),
+        ]),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(c, false),
@@ -531,8 +509,13 @@ class _ErpRetailerOrdersScreenState
     if (ok != true) return;
     setState(() => _saving = true);
     try {
-      await _client.from('sales_orders').update({
+      await _client.from('retailer_orders').update({
         'status': 'rejected',
+        'reject_reason': reasonCtrl.text.trim().isEmpty
+            ? null
+            : reasonCtrl.text.trim(),
+        'reviewed_by': userId,
+        'reviewed_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', o['id']);
       ref.invalidate(retailerOrderPendingCountProvider);
@@ -564,9 +547,9 @@ class _ErpRetailerOrdersScreenState
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.4)),
           const SizedBox(width: 18),
-          _chip('draft', 'Pending'),
+          _chip('submitted', 'Pending'),
           const SizedBox(width: 8),
-          _chip('confirmed', 'Confirmed'),
+          _chip('approved', 'Approved'),
           const SizedBox(width: 8),
           _chip('rejected', 'Rejected'),
           const SizedBox(width: 8),
@@ -603,13 +586,13 @@ class _ErpRetailerOrdersScreenState
 
   Widget _chip(String value, String label) {
     final on = _filter == value;
-    final badge = value == 'draft' && _newWhileAway > 0 && !on;
+    final badge = value == 'submitted' && _newWhileAway > 0 && !on;
     return InkWell(
       onTap: () {
         setState(() {
           _filter = value;
           _selected = null;
-          if (value == 'draft') _newWhileAway = 0;
+          if (value == 'submitted') _newWhileAway = 0;
         });
         _loadOrders();
       },
@@ -654,7 +637,7 @@ class _ErpRetailerOrdersScreenState
               size: 34, color: AppTheme.textSecondary),
           const SizedBox(height: 8),
           Text(
-            _filter == 'draft'
+            _filter == 'submitted'
                 ? 'No retailer orders awaiting review.'
                 : 'Nothing here.',
             style: const TextStyle(color: AppTheme.textSecondary),
@@ -687,10 +670,10 @@ class _ErpRetailerOrdersScreenState
                     const SizedBox(height: 2),
                     Text(
                       [
-                        o['voucher_number'] ?? 'unnumbered',
-                        _branchNames[o['branch_id']] ?? '—',
-                        if (o['voucher_date'] != null)
-                          _df.format(DateTime.parse('${o['voucher_date']}')),
+                        _branchNames[o['branch_id']] ?? 'No branch',
+                        if (o['submitted_at'] != null)
+                          _df.format(
+                              DateTime.parse('${o['submitted_at']}').toLocal()),
                       ].join('  •  '),
                       style: const TextStyle(
                           fontSize: 11.5, color: AppTheme.textSecondary),
@@ -724,18 +707,18 @@ class _ErpRetailerOrdersScreenState
     Color c;
     String label = s;
     switch (s.toLowerCase()) {
-      case 'draft':
+      case 'submitted':
         c = Colors.orange;
         label = 'pending';
         break;
       case 'rejected':
         c = AppTheme.danger;
         break;
-      case 'confirmed':
-        c = AppTheme.primary;
+      case 'approved':
+        c = Colors.teal;
         break;
       default:
-        c = Colors.teal;
+        c = AppTheme.primary;
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -763,7 +746,7 @@ class _ErpRetailerOrdersScreenState
         ),
       );
     }
-    final pending = '${o['status']}' == 'draft';
+    final pending = '${o['status']}' == 'submitted';
 
     return Container(
       decoration: BoxDecoration(
@@ -783,7 +766,12 @@ class _ErpRetailerOrdersScreenState
                       style: const TextStyle(
                           fontSize: 16, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 2),
-                  Text('${o['voucher_number'] ?? 'unnumbered'}',
+                  Text(
+                      o['sales_order_id'] != null
+                          ? 'Sales Order created'
+                          : (o['reject_reason'] as String?)?.isNotEmpty == true
+                              ? 'Rejected: ${o['reject_reason']}'
+                              : 'Awaiting review',
                       style: const TextStyle(
                           fontSize: 12, color: AppTheme.textSecondary)),
                 ],
@@ -930,16 +918,16 @@ class _ErpRetailerOrdersScreenState
                   flex: 2,
                   child: ElevatedButton.icon(
                     icon: const Icon(Icons.check, size: 18),
-                    label: Text(_saving ? 'Working…' : 'Confirm Order'),
+                    label: Text(_saving ? 'Working…' : 'Approve → Sales Order'),
                     style:
                         ElevatedButton.styleFrom(minimumSize: const Size(0, 44)),
-                    onPressed: _saving ? null : _confirm,
+                    onPressed: _saving ? null : _approve,
                   ),
                 ),
               ]),
               const SizedBox(height: 8),
               const Text(
-                "Confirming assigns a voucher number and moves this into the Sales Order flow. If you change the lines, the retailer's original request is kept in the order remarks.",
+                'Approving creates a draft Sales Order (SO-2026-NNNN). Nothing exists in Sales Orders until then — a pending request cannot be confirmed by mistake from elsewhere.',
                 style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
               ),
             ],
