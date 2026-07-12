@@ -200,6 +200,28 @@ final fieldOrderPendingCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+/// Count of retailer-placed orders awaiting review for the org. A retailer order
+/// is a real sales_order (source='retailer') left in 'draft' until staff confirm
+/// it, so "pending" is exactly that pair. Drives the live nav badge on the
+/// Retailer Orders menu item; invalidated by erp_retailer_orders_screen on
+/// confirm/reject and on realtime arrival.
+final retailerOrderPendingCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final res = await client
+        .from('sales_orders')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('source', 'retailer')
+        .eq('status', 'draft');
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // ─── MainLayout ───────────────────────────────────────────────────────────────
 
 // ─── Nav layout mode (top bar ↔ sidebar) ───────────────────────
@@ -393,6 +415,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
   final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
+  final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -445,7 +468,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/quotation')) _menuItem(context, 'Quotation',            Icons.request_quote_outlined,     '/erp/quotation',             location),
         if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
         if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
-        if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location),
+        if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
         if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
         if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location),
         _menuDivider(),
@@ -552,7 +575,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
-          _trimDividers(salesItems), badge: fieldOrdersPending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
