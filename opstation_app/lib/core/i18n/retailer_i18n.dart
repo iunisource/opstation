@@ -1,0 +1,155 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// Retailer-facing localisation (English / Urdu).
+///
+/// Deliberately NOT flutter_localizations + ARB codegen: the scope is the
+/// retailer surfaces only, and dragging gen-l10n into the build for ~40 strings
+/// would add a codegen step to every build for the whole app. A plain map keyed
+/// by locale is enough, stays readable, and costs nothing at build time. If
+/// localisation ever spreads to staff screens, that is the point to migrate.
+///
+/// Urdu is RIGHT-TO-LEFT. Screens that use these strings must be wrapped in the
+/// [RetailerLocaleScope] below, which supplies the correct Directionality —
+/// otherwise Urdu renders left-aligned and reads wrong.
+
+const _kLocaleKey = 'retailer_locale';
+
+class RetailerLocale {
+  static const en = 'en';
+  static const ur = 'ur';
+}
+
+class RetailerLocaleController extends AsyncNotifier<String> {
+  @override
+  Future<String> build() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kLocaleKey) ?? RetailerLocale.en;
+  }
+
+  Future<void> set(String locale) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kLocaleKey, locale);
+    state = AsyncData(locale);
+  }
+
+  Future<void> toggle() async {
+    final cur = state.valueOrNull ?? RetailerLocale.en;
+    await set(cur == RetailerLocale.en ? RetailerLocale.ur : RetailerLocale.en);
+  }
+}
+
+final retailerLocaleProvider =
+    AsyncNotifierProvider<RetailerLocaleController, String>(
+        RetailerLocaleController.new);
+
+/// Wraps retailer screens: supplies Directionality (RTL for Urdu) and exposes
+/// the string table via [T.of].
+class RetailerLocaleScope extends ConsumerWidget {
+  final Widget child;
+  const RetailerLocaleScope({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final loc = ref.watch(retailerLocaleProvider).valueOrNull ?? RetailerLocale.en;
+    return Directionality(
+      textDirection:
+          loc == RetailerLocale.ur ? TextDirection.rtl : TextDirection.ltr,
+      child: _LocaleInherited(locale: loc, child: child),
+    );
+  }
+}
+
+class _LocaleInherited extends InheritedWidget {
+  final String locale;
+  const _LocaleInherited({required this.locale, required super.child});
+
+  @override
+  bool updateShouldNotify(_LocaleInherited old) => old.locale != locale;
+}
+
+/// String lookup. `T.of(context).signIn`
+class T {
+  final String locale;
+  const T._(this.locale);
+
+  static T of(BuildContext context) {
+    final i = context.dependOnInheritedWidgetOfExactType<_LocaleInherited>();
+    return T._(i?.locale ?? RetailerLocale.en);
+  }
+
+  bool get isUrdu => locale == RetailerLocale.ur;
+
+  String _s(String en, String ur) => locale == RetailerLocale.ur ? ur : en;
+
+  // ── Role picker ───────────────────────────────────────────────────────
+  String get whoAreYou => _s('Who is signing in?', 'کون سائن اِن کر رہا ہے؟');
+  String get staff => _s('Staff', 'اسٹاف');
+  String get staffSub => _s('Sales, delivery, office', 'سیلز، ڈیلیوری، دفتر');
+  String get retailer => _s('Retailer', 'دکاندار');
+  String get retailerSub => _s('Place orders for your shop', 'اپنی دکان کے لیے آرڈر دیں');
+  String get notYou => _s('Not you? Change', 'آپ نہیں؟ تبدیل کریں');
+
+  // ── Retailer login ────────────────────────────────────────────────────
+  String get retailerSignIn => _s('Retailer Sign In', 'دکاندار سائن اِن');
+  String get yourCode => _s('Your code', 'آپ کا کوڈ');
+  String get codeHint => _s('e.g. 767', 'مثلاً 767');
+  String get password => _s('Password', 'پاس ورڈ');
+  String get signIn => _s('Sign In', 'سائن اِن');
+  String get enterCodeAndPassword =>
+      _s('Enter your code and password', 'اپنا کوڈ اور پاس ورڈ درج کریں');
+  String get noRetailerForCode =>
+      _s('No retailer account found for that code.', 'اس کوڈ کے لیے کوئی اکاؤنٹ نہیں ملا۔');
+  String get invalidCodeOrPassword =>
+      _s('Invalid code or password.', 'کوڈ یا پاس ورڈ غلط ہے۔');
+  String get askAdminForCode => _s(
+      'Your code is on your shop account. Ask our team if you do not have it.',
+      'آپ کا کوڈ آپ کے شاپ اکاؤنٹ پر ہے۔ اگر نہیں ہے تو ہماری ٹیم سے پوچھیں۔');
+
+  // ── Password change ───────────────────────────────────────────────────
+  String get setNewPassword => _s('Set a new password', 'نیا پاس ورڈ بنائیں');
+  String get setNewPasswordSub => _s(
+      'For your security, please change the password you were given.',
+      'اپنی حفاظت کے لیے، دیا گیا پاس ورڈ تبدیل کریں۔');
+  String get newPassword => _s('New password', 'نیا پاس ورڈ');
+  String get confirmPassword => _s('Confirm password', 'پاس ورڈ کی تصدیق');
+  String get passwordsDoNotMatch =>
+      _s('Passwords do not match.', 'پاس ورڈ آپس میں نہیں ملتے۔');
+  String get passwordTooShort =>
+      _s('Use at least 6 characters.', 'کم از کم 6 حروف استعمال کریں۔');
+  String get save => _s('Save', 'محفوظ کریں');
+
+  // ── Common ────────────────────────────────────────────────────────────
+  String get cancel => _s('Cancel', 'منسوخ');
+  String get logout => _s('Log out', 'لاگ آؤٹ');
+  String get somethingWentWrong =>
+      _s('Something went wrong. Please try again.', 'کچھ غلط ہو گیا۔ دوبارہ کوشش کریں۔');
+}
+
+/// Small EN/اردو toggle. Placed on the login screens deliberately: a shopkeeper
+/// who cannot read English needs the language switch BEFORE signing in, not
+/// buried in a settings menu behind the login wall.
+class LanguageToggle extends ConsumerWidget {
+  const LanguageToggle({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final loc = ref.watch(retailerLocaleProvider).valueOrNull ?? RetailerLocale.en;
+    return SegmentedButton<String>(
+      showSelectedIcon: false,
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        textStyle: WidgetStatePropertyAll(
+            TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      ),
+      segments: const [
+        ButtonSegment(value: RetailerLocale.en, label: Text('English')),
+        ButtonSegment(value: RetailerLocale.ur, label: Text('اردو')),
+      ],
+      selected: {loc},
+      onSelectionChanged: (s) =>
+          ref.read(retailerLocaleProvider.notifier).set(s.first),
+    );
+  }
+}

@@ -8,6 +8,11 @@ import '../../features/auth/models/user_role.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/splash_screen.dart';
 import '../../features/auth/providers/auth_controller.dart';
+import '../../features/retailer/retailer_auth_controller.dart';
+import '../../features/retailer/presentation/retailer_change_password_screen.dart';
+import '../../features/retailer/presentation/retailer_home_screen.dart';
+import '../../features/retailer/presentation/retailer_login_screen.dart';
+import '../../features/retailer/presentation/role_picker_screen.dart';
 import '../../features/customers/presentation/customer_detail_screen.dart';
 import '../../features/customers/presentation/customer_form_screen.dart';
 import '../../features/customers/presentation/customers_list_screen.dart';
@@ -52,34 +57,70 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     initialLocation: '/',
     debugLogDiagnostics: false,
     redirect: (context, state) {
+      // Two INDEPENDENT sessions coexist here:
+      //   - staff    (authControllerProvider)  resolves only from the
+      //              'opstation_session' prefs key
+      //   - retailer (retailerAuthControllerProvider) resolves only from a live
+      //              Supabase session + its own prefs marker
+      // Neither can satisfy the other's check, so at most one is ever non-null.
+      // Retailers are checked first: a shopkeeper who signs in should never be
+      // routed into a staff home even if a stale staff key somehow lingers.
       final auth = ref.read(authControllerProvider);
-      final loggedIn = auth.valueOrNull != null;
+      final rAuth = ref.read(retailerAuthControllerProvider);
+
       final loc = state.matchedLocation;
       final atSplash = loc == '/';
-      final atLogin = loc == '/login';
+      final atPicker = loc == '/pick';
+      final atStaffLogin = loc == '/login';
+      final atRetailerLogin = loc == '/r/login';
+      final atRetailerPassword = loc == '/r/password';
 
-      // While auth is loading, stay on splash for the initial boot — but if a
-      // login attempt is in flight (we're on /login), stay there so the login
-      // screen remains mounted and can surface auth errors instead of being
-      // swapped to splash, which silently drops the error.
-      if (auth.isLoading) return atLogin ? null : '/';
-
-      if (!loggedIn) {
-        return atLogin ? null : '/login';
+      // While either controller is loading, hold on splash — unless a sign-in
+      // is in flight on a login screen, which must stay mounted so it can
+      // surface its own error instead of being swapped out (which drops it).
+      if (auth.isLoading || rAuth.isLoading) {
+        return (atStaffLogin || atRetailerLogin) ? null : '/';
       }
 
-      // Logged in — if sitting on splash or login, send to role home.
-      if (atSplash || atLogin) {
-        return auth.value!.role.homeRoute;
+      final retailer = rAuth.valueOrNull;
+      final staff = auth.valueOrNull;
+
+      if (retailer != null) {
+        // Provisioned with their CODE as the password — force a real one before
+        // anything else is reachable.
+        if (retailer.mustChangePassword) {
+          return atRetailerPassword ? null : '/r/password';
+        }
+        if (atSplash ||
+            atPicker ||
+            atStaffLogin ||
+            atRetailerLogin ||
+            atRetailerPassword) {
+          return '/r';
+        }
+        return null;
       }
 
-      // TODO (Slice 2): enforce that role can access the requested route.
-      return null;
+      if (staff != null) {
+        if (atSplash || atPicker || atStaffLogin || atRetailerLogin) {
+          return staff.role.homeRoute;
+        }
+        return null;
+      }
+
+      // Nobody signed in. The picker remembers the last door used, so returning
+      // staff are not taxed a tap every day.
+      if (atStaffLogin || atRetailerLogin || atPicker) return null;
+      return '/pick';
     },
     refreshListenable: _RouterRefresh(ref),
     routes: [
       GoRoute(path: '/', builder: (_, __) => const SplashScreen()),
       GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
+      GoRoute(path: '/pick', builder: (_, __) => const RolePickerScreen()),
+      GoRoute(path: '/r/login', builder: (_, __) => const RetailerLoginScreen()),
+      GoRoute(path: '/r/password', builder: (_, __) => const RetailerChangePasswordScreen()),
+      GoRoute(path: '/r', builder: (_, __) => const RetailerHomeScreen()),
       GoRoute(
         path: '/salesperson',
         builder: (_, __) => const SalespersonHomeScreen(),
@@ -325,5 +366,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 class _RouterRefresh extends ChangeNotifier {
   _RouterRefresh(Ref ref) {
     ref.listen(authControllerProvider, (_, __) => notifyListeners());
+    // Without this the router never re-evaluates when a retailer signs in or
+    // out, and they would sit on the login screen after a successful sign-in.
+    ref.listen(retailerAuthControllerProvider, (_, __) => notifyListeners());
   }
 }
