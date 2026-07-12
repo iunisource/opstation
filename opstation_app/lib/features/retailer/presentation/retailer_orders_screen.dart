@@ -7,43 +7,18 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
 import 'retailer_shell.dart';
 
-/// `retailer_my_orders()` returns rows straight from `sales_orders` scoped to
-/// the caller — so a retailer sees their REAL order, in the same lifecycle your
-/// team works. When ordering lands (Phase 3) it will write a draft sales_order
-/// with source='retailer', which means it appears here immediately and flows
-/// through the existing SO → DO → SI pipeline. No parallel order table.
+/// The retailer's own order requests.
+///
+/// `retailer_my_orders()` reads `retailer_orders` — the REQUEST, not a sales
+/// order. Nothing exists in sales_orders until staff approve it, so this screen
+/// shows the honest thing: what they asked for and where it stands. Once
+/// approved it also carries the SO number, which is the retailer's proof the
+/// order is real.
 final retailerOrdersProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final client = Supabase.instance.client;
-  final res = await client.rpc('retailer_my_orders');
+  final res = await Supabase.instance.client.rpc('retailer_my_orders');
   if (res is! List) return [];
-  final orders = [for (final r in res) Map<String, dynamic>.from(r as Map)];
-
-  // sales_orders has NO total column anywhere in this system — order value is
-  // always DERIVED from its lines. Reading a `grand_total` here would render
-  // Rs. 0.00 for every order, exactly the bug the quotation list had.
-  final ids = [for (final o in orders) o['id'] as String];
-  if (ids.isNotEmpty) {
-    try {
-      final items = await client
-          .from('sales_order_items')
-          .select('sales_order_id, quantity, unit_price, discount')
-          .inFilter('sales_order_id', ids);
-      final totals = <String, double>{};
-      for (final it in items as List) {
-        final soId = it['sales_order_id'] as String?;
-        if (soId == null) continue;
-        final q = (it['quantity'] as num?)?.toDouble() ?? 0;
-        final p = (it['unit_price'] as num?)?.toDouble() ?? 0;
-        final d = (it['discount'] as num?)?.toDouble() ?? 0;
-        totals[soId] = (totals[soId] ?? 0) + (q * p - d);
-      }
-      for (final o in orders) {
-        o['_total'] = totals[o['id']] ?? 0;
-      }
-    } catch (_) {/* leave _total unset; the row just shows no amount */}
-  }
-  return orders;
+  return [for (final r in res) Map<String, dynamic>.from(r as Map)];
 });
 
 class RetailerOrdersScreen extends ConsumerWidget {
@@ -61,20 +36,23 @@ class RetailerOrdersScreen extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => ListView(children: [
           const SizedBox(height: 140),
-          Center(child: Text(t.somethingWentWrong,
-              style: TextStyle(color: AppColors.textSecondaryLight))),
+          Center(
+              child: Text(t.somethingWentWrong,
+                  style: TextStyle(color: AppColors.textSecondaryLight))),
         ]),
         data: (rows) {
           if (rows.isEmpty) {
             return ListView(children: [
               const SizedBox(height: 130),
-              Center(child: Column(children: [
-                Icon(Icons.receipt_long_outlined,
-                    size: 40, color: AppColors.textSecondaryLight),
-                const SizedBox(height: 10),
-                Text(t.noOrders,
-                    style: TextStyle(color: AppColors.textSecondaryLight)),
-              ])),
+              Center(
+                child: Column(children: [
+                  Icon(Icons.receipt_long_outlined,
+                      size: 40, color: AppColors.textSecondaryLight),
+                  const SizedBox(height: 10),
+                  Text(t.noOrders,
+                      style: TextStyle(color: AppColors.textSecondaryLight)),
+                ]),
+              ),
             ]);
           }
           return ListView.separated(
@@ -84,22 +62,44 @@ class RetailerOrdersScreen extends ConsumerWidget {
             itemBuilder: (_, i) {
               final o = rows[i];
               final status = '${o['status'] ?? ''}';
-              final vno = (o['voucher_number'] as String?) ?? '—';
-              final date = o['voucher_date'];
-              final total = (o['_total'] as num?)?.toDouble();
+              final vno = o['voucher_number'] as String?;
+              final reason = o['reject_reason'] as String?;
+              final total = (o['total'] as num?)?.toDouble() ?? 0;
+              final lines = (o['lines'] as num?)?.toInt() ?? 0;
+              final at = o['submitted_at'];
+
               return ListTile(
-                title: Text(vno,
-                    style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700)),
-                subtitle: Text(
-                  [
-                    if (date != null) df.format(DateTime.parse('$date')),
-                    if (total != null) rs(total),
-                  ].join('  •  '),
-                  style: TextStyle(
-                      fontSize: 12.5, color: AppColors.textSecondaryLight),
+                leading: _statusIcon(status),
+                title: Text(
+                  vno ?? '${lines} ${lines == 1 ? t.item : t.items}',
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w700),
                 ),
-                trailing: _StatusChip(status: status),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      [
+                        if (at != null)
+                          df.format(DateTime.parse('$at').toLocal()),
+                        rs(total),
+                      ].join('  •  '),
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          color: AppColors.textSecondaryLight),
+                    ),
+                    if (status == 'rejected' &&
+                        reason != null &&
+                        reason.trim().isNotEmpty)
+                      Text(reason,
+                          style: TextStyle(
+                              fontSize: 11.5, color: AppColors.danger)),
+                  ],
+                ),
+                isThreeLine: status == 'rejected' &&
+                    reason != null &&
+                    reason.trim().isNotEmpty,
+                trailing: _StatusChip(status: status, t: t),
               );
             },
           );
@@ -107,24 +107,40 @@ class RetailerOrdersScreen extends ConsumerWidget {
       ),
     );
   }
+
+  Widget _statusIcon(String s) {
+    switch (s) {
+      case 'approved':
+        return const Icon(Icons.check_circle, color: Colors.teal, size: 22);
+      case 'rejected':
+        return Icon(Icons.cancel, color: AppColors.danger, size: 22);
+      default:
+        return const Icon(Icons.schedule, color: Colors.orange, size: 22);
+    }
+  }
 }
 
 class _StatusChip extends StatelessWidget {
   final String status;
-  const _StatusChip({required this.status});
+  final T t;
+  const _StatusChip({required this.status, required this.t});
 
   @override
   Widget build(BuildContext context) {
-    final s = status.toLowerCase();
-    Color c;
-    if (s == 'delivered' || s == 'completed' || s == 'invoiced') {
-      c = Colors.teal;
-    } else if (s == 'cancelled') {
-      c = AppColors.danger;
-    } else if (s == 'draft') {
-      c = AppColors.textSecondaryLight;
-    } else {
-      c = AppColors.primary;
+    late Color c;
+    late String label;
+    switch (status) {
+      case 'approved':
+        c = Colors.teal;
+        label = t.isUrdu ? 'منظور' : 'Approved';
+        break;
+      case 'rejected':
+        c = AppColors.danger;
+        label = t.isUrdu ? 'مسترد' : 'Rejected';
+        break;
+      default:
+        c = Colors.orange;
+        label = t.isUrdu ? 'زیر غور' : 'Pending';
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
@@ -132,11 +148,9 @@ class _StatusChip extends StatelessWidget {
         color: c.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Text(
-        status.replaceAll('_', ' '),
-        style: TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w700, color: c),
-      ),
+      child: Text(label,
+          style:
+              TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
     );
   }
 }
