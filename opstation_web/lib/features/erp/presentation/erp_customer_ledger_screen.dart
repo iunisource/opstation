@@ -37,7 +37,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   String _typeFilter = 'All';
   final _entrySearchCtrl = TextEditingController();
 
-  static const _types = ['All', 'Sales Invoice', 'Sale Return', 'POS Sale', 'POS Return', 'Receipt (CRV)', 'Payment (CPV)', 'Journal (JV)'];
+  static const _types = ['All', 'Sales Invoice', 'Sale Return', 'POS Sale', 'POS Payment', 'POS Return', 'POS Refund (Cash)', 'Receipt (CRV)', 'Payment (CPV)', 'Journal (JV)'];
 
   @override
   void initState() {
@@ -217,44 +217,81 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           }
         }
 
-        // A customer ledger records what the customer OWES — i.e. the AR side
-        // only. A POS sale paid in cash never touches the customer's account, so
-        // debiting the full total here made cash sales appear as unpaid balances
-        // (Hamza Abbas Bakhsh: cash sale of 4,940 showing as 4,940 receivable,
-        // while POS Customer History correctly showed Account Balance 0.00).
+        // A customer ledger should be a COMPLETE account of the relationship,
+        // not just the unpaid slice — so every POS transaction is shown at full
+        // value, followed by whatever was settled on the spot. The balance then
+        // nets to what is actually outstanding.
         //
-        // Mirror post_pos_money exactly:
-        //   sale   -> AR debit  = total − amount_paid   (0 for a full cash sale)
-        //   return -> AR credit = the AR portion of the ORIGINAL sale, capped at
-        //             the refund; the cash portion is refunded from the drawer
-        //             and likewise never touches the account.
-        double arAmount;
+        //   Cash sale 4,940 →  Dr 4,940 (sale)  then  Cr 4,940 (cash paid)  → bal 0
+        //   Credit sale     →  Dr full          , no settlement line         → bal = full
+        //   Part-paid 5,000/2,000 → Dr 5,000, Cr 2,000                       → bal 3,000
+        //
+        // Previously the ledger debited the full total and never credited the
+        // cash paid, so a cash sale looked like an unpaid receivable (Hamza
+        // Abbas Bakhsh: 4,940 cash sale showing as 4,940 owed, while POS Customer
+        // History and the GL both correctly said 0.00).
+        //
+        // The settlement line is SYNTHESISED from amount_paid, not read from a
+        // document: post_pos_money books a cash sale straight to Dr Cash / Cr POS
+        // Sales with no CRV, so nothing else in this ledger credits it and there
+        // is no double-count risk.
+        final dateStr = ((t['transacted_at'] ?? t['created_at'] ?? '') as String);
+
         if (isReturn) {
-          if (origTxn == null) {
-            // Original not found — fall back to the legacy full-value credit
-            // rather than silently dropping the entry.
-            arAmount = amt;
-          } else {
+          // Full return value credited back to the customer…
+          entries.add({
+            'date': dateStr,
+            'voucher': vno,
+            'description': refTrxNo.isNotEmpty ? 'Ref ' + refTrxNo : '',
+            'debit': 0.0,
+            'credit': amt,
+            'id': tid.isNotEmpty ? tid : null, 'type': 'POS Return',
+          });
+          // …less the part handed back in cash from the drawer, which never
+          // touched the account. Only the credit portion of the ORIGINAL sale
+          // stays on the ledger.
+          double cashRefund = amt;
+          if (origTxn != null) {
             final origTotal = (origTxn['total'] as num?)?.toDouble() ?? 0;
             final origPaid = (origTxn['amount_paid'] as num?)?.toDouble() ?? origTotal;
-            arAmount = (origTotal - origPaid).clamp(0.0, amt).toDouble();
+            final arPortion = (origTotal - origPaid).clamp(0.0, amt).toDouble();
+            cashRefund = amt - arPortion;
+          } else {
+            cashRefund = 0; // original unknown — leave the credit on the account
+          }
+          if (cashRefund > 0) {
+            entries.add({
+              'date': dateStr,
+              'voucher': vno,
+              'description': 'Cash refund',
+              'debit': cashRefund,
+              'credit': 0.0,
+              'id': tid.isNotEmpty ? tid : null, 'type': 'POS Refund (Cash)',
+            });
           }
         } else {
-          final paid = (t['amount_paid'] as num?)?.toDouble() ?? amt;
-          arAmount = (amt - paid).clamp(0.0, amt).toDouble();
+          // The sale, at full value.
+          entries.add({
+            'date': dateStr,
+            'voucher': vno,
+            'description': '',
+            'debit': amt,
+            'credit': 0.0,
+            'id': tid.isNotEmpty ? tid : null, 'type': 'POS Sale',
+          });
+          // Whatever was paid at the till, settling it then and there.
+          final paid = ((t['amount_paid'] as num?)?.toDouble() ?? amt).clamp(0.0, amt).toDouble();
+          if (paid > 0) {
+            entries.add({
+              'date': dateStr,
+              'voucher': vno,
+              'description': 'Paid at POS',
+              'debit': 0.0,
+              'credit': paid,
+              'id': tid.isNotEmpty ? tid : null, 'type': 'POS Payment',
+            });
+          }
         }
-        // Nothing hit the customer's account (fully-cash sale, or a return of
-        // one) — it does not belong on the ledger at all.
-        if (arAmount == 0) continue;
-
-        entries.add({
-          'date': ((t['transacted_at'] ?? t['created_at'] ?? '') as String),
-          'voucher': vno,
-          'description': (isReturn && refTrxNo.isNotEmpty) ? 'Ref ' + refTrxNo : '',
-          'debit': isReturn ? 0.0 : arAmount,
-          'credit': isReturn ? arAmount : 0.0,
-          'id': tid.isNotEmpty ? tid : null, 'type': isReturn ? 'POS Return' : 'POS Sale',
-        });
       }
     } catch (e) { errors.add('POS: ' + e.toString()); }
 
@@ -379,7 +416,24 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       }
     } catch (e) { errors.add('JV: ' + e.toString()); }
 
-    entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
+    // Dart's sort is not stable, so entries sharing a timestamp (a POS sale and
+    // the payment that settles it are written with the same transacted_at) could
+    // otherwise come out payment-first, making the running balance dip negative.
+    // _seq orders them: the document line, then its settlement.
+    int seqOf(Map<String, dynamic> e) {
+      switch (e['type'] as String? ?? '') {
+        case 'POS Payment':
+        case 'POS Refund (Cash)':
+          return 1; // settlement always follows the document it settles
+        default:
+          return 0;
+      }
+    }
+    entries.sort((a, b) {
+      final d = (a['date'] as String).compareTo(b['date'] as String);
+      if (d != 0) return d;
+      return seqOf(a).compareTo(seqOf(b));
+    });
     double bal = 0;
     for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
     setState(() { _entries = entries; _loading = false; _errors = errors; });
