@@ -200,6 +200,12 @@ class T {
   String get priceNote => _s(
       'Prices are indicative. Your order is confirmed by our team.',
       'قیمتیں تخمینی ہیں۔ آرڈر کی تصدیق ہماری ٹیم کرے گی۔');
+  String get brands => _s('Brands', 'برانڈز');
+  String get chooseBrand => _s('Choose a brand', 'برانڈ منتخب کریں');
+  String get allBrands => _s('All brands', 'تمام برانڈز');
+  String get products => _s('products', 'پروڈکٹس');
+  String get quantity => _s('Quantity', 'مقدار');
+  String get done => _s('Done', 'مکمل');
 }
 
 /// Small EN/اردو toggle. Placed on the login screens deliberately: a shopkeeper
