@@ -175,6 +175,31 @@ class T {
   String get noFiles => _s('No files shared with you yet.', 'ابھی کوئی فائل شیئر نہیں کی گئی۔');
   String get noUpdates => _s('No updates.', 'کوئی اطلاع نہیں۔');
   String get couldNotOpen => _s('Could not open the file.', 'فائل نہیں کھل سکی۔');
+
+  // ── Ordering ──────────────────────────────────────────────────────────
+  String get searchProducts => _s('Search products…', 'پروڈکٹ تلاش کریں…');
+  String get noProducts => _s(
+      'No products available to you yet. Please contact our team.',
+      'ابھی آپ کے لیے کوئی پروڈکٹ دستیاب نہیں۔ ہماری ٹیم سے رابطہ کریں۔');
+  String get noMatches => _s('No products match your search.', 'تلاش سے کوئی پروڈکٹ نہیں ملا۔');
+  String get cart => _s('Cart', 'ٹوکری');
+  String get reviewOrder => _s('Review order', 'آرڈر دیکھیں');
+  String get items => _s('items', 'اشیاء');
+  String get item => _s('item', 'شے');
+  String get total => _s('Total', 'کل');
+  String get confirmOrder => _s('Confirm Order', 'آرڈر کی تصدیق کریں');
+  String get cartEmpty => _s('Your cart is empty.', 'آپ کی ٹوکری خالی ہے۔');
+  String get orderPlaced =>
+      _s('Order placed. Our team will confirm it shortly.',
+         'آرڈر موصول ہو گیا۔ ہماری ٹیم جلد تصدیق کرے گی۔');
+  String get orderFailed =>
+      _s('Could not place the order. Please try again.', 'آرڈر نہیں بھیجا جا سکا۔ دوبارہ کوشش کریں۔');
+  String get branch => _s('Branch', 'برانچ');
+  String get chooseBranch => _s('Choose a branch', 'برانچ منتخب کریں');
+  String get remove => _s('Remove', 'ہٹا دیں');
+  String get priceNote => _s(
+      'Prices are indicative. Your order is confirmed by our team.',
+      'قیمتیں تخمینی ہیں۔ آرڈر کی تصدیق ہماری ٹیم کرے گی۔');
 }
 
 /// Small EN/اردو toggle. Placed on the login screens deliberately: a shopkeeper

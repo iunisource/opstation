@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
+import 'retailer_browse_screen.dart';
 import 'retailer_shell.dart';
 
 /// Balance + aging for the signed-in retailer.
@@ -289,10 +290,9 @@ class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen> {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14)),
                   ),
-                  // Phase 3. Deliberately inert with an honest message rather
-                  // than a dead button that looks broken.
-                  onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(t.orderingSoon)),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const RetailerBrowseScreen()),
                   ),
                 ),
               ),

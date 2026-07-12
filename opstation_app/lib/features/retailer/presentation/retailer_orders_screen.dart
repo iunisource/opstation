@@ -14,9 +14,36 @@ import 'retailer_shell.dart';
 /// through the existing SO → DO → SI pipeline. No parallel order table.
 final retailerOrdersProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final res = await Supabase.instance.client.rpc('retailer_my_orders');
+  final client = Supabase.instance.client;
+  final res = await client.rpc('retailer_my_orders');
   if (res is! List) return [];
-  return [for (final r in res) Map<String, dynamic>.from(r as Map)];
+  final orders = [for (final r in res) Map<String, dynamic>.from(r as Map)];
+
+  // sales_orders has NO total column anywhere in this system — order value is
+  // always DERIVED from its lines. Reading a `grand_total` here would render
+  // Rs. 0.00 for every order, exactly the bug the quotation list had.
+  final ids = [for (final o in orders) o['id'] as String];
+  if (ids.isNotEmpty) {
+    try {
+      final items = await client
+          .from('sales_order_items')
+          .select('sales_order_id, quantity, unit_price, discount')
+          .inFilter('sales_order_id', ids);
+      final totals = <String, double>{};
+      for (final it in items as List) {
+        final soId = it['sales_order_id'] as String?;
+        if (soId == null) continue;
+        final q = (it['quantity'] as num?)?.toDouble() ?? 0;
+        final p = (it['unit_price'] as num?)?.toDouble() ?? 0;
+        final d = (it['discount'] as num?)?.toDouble() ?? 0;
+        totals[soId] = (totals[soId] ?? 0) + (q * p - d);
+      }
+      for (final o in orders) {
+        o['_total'] = totals[o['id']] ?? 0;
+      }
+    } catch (_) {/* leave _total unset; the row just shows no amount */}
+  }
+  return orders;
 });
 
 class RetailerOrdersScreen extends ConsumerWidget {
@@ -59,7 +86,7 @@ class RetailerOrdersScreen extends ConsumerWidget {
               final status = '${o['status'] ?? ''}';
               final vno = (o['voucher_number'] as String?) ?? '—';
               final date = o['voucher_date'];
-              final total = (o['grand_total'] as num?)?.toDouble();
+              final total = (o['_total'] as num?)?.toDouble();
               return ListTile(
                 title: Text(vno,
                     style: const TextStyle(
