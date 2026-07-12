@@ -202,22 +202,57 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         final isReturn = ttype == 'return' || ttotalRaw < 0;
         final amt = ttotalRaw.abs();
         String refTrxNo = '';
+        Map<String, dynamic>? origTxn;
         if (isReturn) {
           for (final f in const ['reference_transaction_id', 'original_transaction_id', 'parent_transaction_id', 'ref_transaction_id', 'reference_id']) {
             final refId = t[f];
             if (refId is String && refId.isNotEmpty) {
               final orig = posMap[refId];
-              if (orig != null) refTrxNo = (orig['transaction_number'] as String?) ?? '';
+              if (orig != null) {
+                origTxn = orig;
+                refTrxNo = (orig['transaction_number'] as String?) ?? '';
+              }
               break;
             }
           }
         }
+
+        // A customer ledger records what the customer OWES — i.e. the AR side
+        // only. A POS sale paid in cash never touches the customer's account, so
+        // debiting the full total here made cash sales appear as unpaid balances
+        // (Hamza Abbas Bakhsh: cash sale of 4,940 showing as 4,940 receivable,
+        // while POS Customer History correctly showed Account Balance 0.00).
+        //
+        // Mirror post_pos_money exactly:
+        //   sale   -> AR debit  = total − amount_paid   (0 for a full cash sale)
+        //   return -> AR credit = the AR portion of the ORIGINAL sale, capped at
+        //             the refund; the cash portion is refunded from the drawer
+        //             and likewise never touches the account.
+        double arAmount;
+        if (isReturn) {
+          if (origTxn == null) {
+            // Original not found — fall back to the legacy full-value credit
+            // rather than silently dropping the entry.
+            arAmount = amt;
+          } else {
+            final origTotal = (origTxn['total'] as num?)?.toDouble() ?? 0;
+            final origPaid = (origTxn['amount_paid'] as num?)?.toDouble() ?? origTotal;
+            arAmount = (origTotal - origPaid).clamp(0.0, amt).toDouble();
+          }
+        } else {
+          final paid = (t['amount_paid'] as num?)?.toDouble() ?? amt;
+          arAmount = (amt - paid).clamp(0.0, amt).toDouble();
+        }
+        // Nothing hit the customer's account (fully-cash sale, or a return of
+        // one) — it does not belong on the ledger at all.
+        if (arAmount == 0) continue;
+
         entries.add({
           'date': ((t['transacted_at'] ?? t['created_at'] ?? '') as String),
           'voucher': vno,
           'description': (isReturn && refTrxNo.isNotEmpty) ? 'Ref ' + refTrxNo : '',
-          'debit': isReturn ? 0.0 : amt,
-          'credit': isReturn ? amt : 0.0,
+          'debit': isReturn ? 0.0 : arAmount,
+          'credit': isReturn ? arAmount : 0.0,
           'id': tid.isNotEmpty ? tid : null, 'type': isReturn ? 'POS Return' : 'POS Sale',
         });
       }
