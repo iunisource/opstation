@@ -80,33 +80,47 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
                         alignment: Alignment.centerRight,
                         child: LanguageToggle(),
                       ),
-                      const SizedBox(height: 28),
-                      Container(
-                        height: 56,
-                        width: 56,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(14),
+                      const SizedBox(height: 24),
+                      // Center() so the square is not stretched to full width by
+                      // the parent Column's CrossAxisAlignment.stretch — which is
+                      // what turned the logo into a wide slab.
+                      Center(
+                        child: Container(
+                          height: 72,
+                          width: 72,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: AppColors.primary,
+                            borderRadius: BorderRadius.circular(19),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.primary.withValues(alpha: 0.28),
+                                blurRadius: 20,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
+                          child: const Icon(Icons.storefront,
+                              color: Colors.white, size: 34),
                         ),
-                        child: Icon(Icons.storefront_outlined,
-                            color: AppColors.primary, size: 28),
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 20),
                       Text(
                         t.retailerSignIn,
+                        textAlign: TextAlign.center,
                         style: const TextStyle(
                             fontSize: 24, fontWeight: FontWeight.w800),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 8),
                       Text(
                         t.askAdminForCode,
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                             fontSize: 13.5,
                             height: 1.4,
                             color: AppColors.textSecondaryLight),
                       ),
-                      const SizedBox(height: 26),
+                      const SizedBox(height: 28),
                       TextField(
                         controller: _codeCtrl,
                         autofocus: true,
