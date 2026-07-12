@@ -4,42 +4,26 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
-import '../retailer_auth_controller.dart';
 import 'retailer_cart.dart';
 import 'retailer_checkout_sheet.dart';
 import 'retailer_shell.dart';
 
 /// Products this retailer may order.
 ///
-/// The join to `retailer_brands` is the same entitlement rule the server
-/// enforces in `retailer_place_order`. Doing it here too is not duplication for
-/// its own sake — it means the retailer never SEES a product they cannot order,
-/// rather than seeing it and being refused at checkout. The server check remains
-/// the actual boundary; this one is courtesy.
+/// MUST go through `retailer_my_products()` (SECURITY DEFINER), not a direct
+/// query on products/retailer_brands. RLS on those tables is written for staff,
+/// so a retailer's PostgREST read returns ZERO ROWS silently — which is exactly
+/// how a retailer with three brands tagged saw "no products available". Every
+/// other retailer read in this system (files, orders, aging, notifications) goes
+/// through an RPC for the same reason; this one was the outlier.
+///
+/// The RPC applies the same brand-entitlement join that `retailer_place_order`
+/// enforces, so what is shown and what may be ordered cannot diverge.
 final retailerProductsProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final me = ref.watch(retailerAuthControllerProvider).valueOrNull;
-  if (me == null) return [];
-  final client = Supabase.instance.client;
-
-  final brands = await client
-      .from('retailer_brands')
-      .select('sub_group')
-      .eq('customer_id', me.customerId);
-  final subs = [
-    for (final b in brands as List)
-      if ((b['sub_group'] as String?)?.isNotEmpty == true) b['sub_group'] as String
-  ];
-  if (subs.isEmpty) return [];
-
-  final rows = await client
-      .from('products')
-      .select('id, name, sku, product_sub_group, selling_price')
-      .eq('org_id', me.orgId)
-      .eq('is_active', true)
-      .inFilter('product_sub_group', subs)
-      .order('name');
-  return [for (final r in rows as List) Map<String, dynamic>.from(r as Map)];
+  final res = await Supabase.instance.client.rpc('retailer_my_products');
+  if (res is! List) return [];
+  return [for (final r in res) Map<String, dynamic>.from(r as Map)];
 });
 
 class RetailerBrowseScreen extends ConsumerStatefulWidget {
