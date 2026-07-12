@@ -125,6 +125,56 @@ class T {
   String get logout => _s('Log out', 'لاگ آؤٹ');
   String get somethingWentWrong =>
       _s('Something went wrong. Please try again.', 'کچھ غلط ہو گیا۔ دوبارہ کوشش کریں۔');
+  String get retry => _s('Try again', 'دوبارہ کوشش کریں');
+  String get close => _s('Close', 'بند کریں');
+
+  // ── Nav ───────────────────────────────────────────────────────────────
+  String get home => _s('Home', 'ہوم');
+  String get orders => _s('Orders', 'آرڈرز');
+  String get complaints => _s('Complaints', 'شکایات');
+  String get files => _s('Files', 'فائلیں');
+  String get updates => _s('Updates', 'اطلاعات');
+
+  // ── Home ──────────────────────────────────────────────────────────────
+  String get outstanding => _s('Outstanding balance', 'واجب الادا رقم');
+  String get showAging => _s('Show aging', 'ایجنگ دیکھیں');
+  String get hideAging => _s('Hide aging', 'ایجنگ چھپائیں');
+  String get creditLimit => _s('Credit limit', 'کریڈٹ کی حد');
+  String get noDues => _s('No dues. Thank you!', 'کوئی واجبات نہیں۔ شکریہ!');
+  String get placeOrder => _s('Place Order', 'آرڈر دیں');
+  String get overLimitTitle => _s('Over credit limit', 'کریڈٹ کی حد سے زیادہ');
+  String get overLimitBody => _s(
+      'Your account is over its credit limit. New orders may not be approved until payment is received.',
+      'آپ کا اکاؤنٹ کریڈٹ کی حد سے تجاوز کر چکا ہے۔ ادائیگی تک نئے آرڈر منظور نہیں ہو سکتے۔');
+  String get bucketCur => _s('0–30 days', '0–30 دن');
+  String get bucket1 => _s('31–60 days', '31–60 دن');
+  String get bucket2 => _s('61–90 days', '61–90 دن');
+  String get bucket3 => _s('91–120 days', '91–120 دن');
+  String get bucket4 => _s('Over 120 days', '120 دن سے زیادہ');
+
+  // ── Orders ────────────────────────────────────────────────────────────
+  String get noOrders => _s('No orders yet.', 'ابھی کوئی آرڈر نہیں۔');
+  String get orderingSoon =>
+      _s('Ordering is coming next.', 'آرڈر کی سہولت جلد آ رہی ہے۔');
+
+  // ── Complaints ────────────────────────────────────────────────────────
+  String get newComplaint => _s('New complaint', 'نئی شکایت');
+  String get subject => _s('Subject', 'موضوع');
+  String get subjectHint =>
+      _s('e.g. Delivery is late', 'مثلاً ڈیلیوری دیر سے آئی');
+  String get details => _s('Details (optional)', 'تفصیل (اختیاری)');
+  String get send => _s('Send', 'بھیجیں');
+  String get subjectRequired => _s('Please write a subject.', 'براہ کرم موضوع لکھیں۔');
+  String get complaintSent =>
+      _s('Complaint sent. We will get back to you.', 'شکایت بھیج دی گئی۔ ہم رابطہ کریں گے۔');
+  String get noComplaints => _s('No complaints raised.', 'کوئی شکایت درج نہیں۔');
+  String get resolved => _s('Resolved', 'حل ہو گیا');
+  String get open_ => _s('Open', 'زیر التوا');
+
+  // ── Files / Updates ───────────────────────────────────────────────────
+  String get noFiles => _s('No files shared with you yet.', 'ابھی کوئی فائل شیئر نہیں کی گئی۔');
+  String get noUpdates => _s('No updates.', 'کوئی اطلاع نہیں۔');
+  String get couldNotOpen => _s('Could not open the file.', 'فائل نہیں کھل سکی۔');
 }
 
 /// Small EN/اردو toggle. Placed on the login screens deliberately: a shopkeeper

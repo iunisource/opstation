@@ -10,7 +10,7 @@ import '../../features/auth/presentation/splash_screen.dart';
 import '../../features/auth/providers/auth_controller.dart';
 import '../../features/retailer/retailer_auth_controller.dart';
 import '../../features/retailer/presentation/retailer_change_password_screen.dart';
-import '../../features/retailer/presentation/retailer_home_screen.dart';
+import '../../features/retailer/presentation/retailer_shell.dart';
 import '../../features/retailer/presentation/retailer_login_screen.dart';
 import '../../features/retailer/presentation/role_picker_screen.dart';
 import '../../features/customers/presentation/customer_detail_screen.dart';
@@ -120,7 +120,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/pick', builder: (_, __) => const RolePickerScreen()),
       GoRoute(path: '/r/login', builder: (_, __) => const RetailerLoginScreen()),
       GoRoute(path: '/r/password', builder: (_, __) => const RetailerChangePasswordScreen()),
-      GoRoute(path: '/r', builder: (_, __) => const RetailerHomeScreen()),
+      GoRoute(path: '/r', builder: (_, __) => const RetailerShell()),
       GoRoute(
         path: '/salesperson',
         builder: (_, __) => const SalespersonHomeScreen(),
