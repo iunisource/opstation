@@ -21,12 +21,60 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
   List<Map<String, dynamic>> _results = [];
   // customer_id -> existing retailer login row (email, etc.)
   final Map<String, Map<String, dynamic>> _logins = {};
+  // customer_id -> the product sub-groups ("brands") that retailer may order from.
+  final Map<String, Set<String>> _brands = {};
+  // Every distinct product_sub_group in the org — the taggable brand list.
+  List<String> _allBrands = [];
+
+  /// The brand vocabulary is derived from products.product_sub_group, which is
+  /// where the brand actually lives (main_group is the category — Cables,
+  /// Ceramics — and product_group is a near-duplicate of it). Free text today,
+  /// so a typo silently costs a retailer visibility; worth constraining later.
+  Future<void> _loadBrandVocab() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('products')
+          .select('product_sub_group')
+          .eq('org_id', orgId)
+          .eq('is_active', true)
+          .not('product_sub_group', 'is', null);
+      final set = <String>{};
+      for (final r in rows as List) {
+        final g = (r['product_sub_group'] as String?)?.trim();
+        if (g != null && g.isNotEmpty) set.add(g);
+      }
+      final list = set.toList()..sort();
+      if (!mounted) return;
+      setState(() => _allBrands = list);
+    } catch (_) {/* non-fatal: the picker will just be empty */}
+  }
+
+  /// Brand tags for the customers currently on screen.
+  Future<void> _loadBrandsFor(List<String> customerIds) async {
+    _brands.clear();
+    if (customerIds.isEmpty) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('retailer_brands')
+          .select('customer_id, sub_group')
+          .inFilter('customer_id', customerIds);
+      for (final r in rows as List) {
+        final cid = r['customer_id'] as String?;
+        final sg = r['sub_group'] as String?;
+        if (cid == null || sg == null) continue;
+        _brands.putIfAbsent(cid, () => <String>{}).add(sg);
+      }
+    } catch (_) {/* non-fatal */}
+  }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
   @override
   void initState() {
     super.initState();
+    _loadBrandVocab();
     _loadExisting();
   }
 
@@ -60,6 +108,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
             .order('shop_name');
         results = List<Map<String, dynamic>>.from(rows);
       }
+      await _loadBrandsFor([for (final c in results) c['id'] as String]);
       if (!mounted) return;
       setState(() {
         _logins
@@ -113,6 +162,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
           _logins[l['customer_id'] as String] = Map<String, dynamic>.from(l);
         }
       }
+      await _loadBrandsFor(ids);
       if (!mounted) return;
       setState(() {
         _results = results;
@@ -244,6 +294,127 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
     }
   }
 
+  /// Multi-select of the product sub-groups this retailer may order from.
+  /// Empty selection is meaningful — it means "no brands assigned", and the
+  /// retailer will see nothing, so the row makes that state visible rather than
+  /// letting it look like a configuration that simply hasn't loaded.
+  Future<void> _editBrands(Map<String, dynamic> c) async {
+    final cid = c['id'] as String;
+    final selected = <String>{...(_brands[cid] ?? const <String>{})};
+    String q = '';
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => StatefulBuilder(builder: (dctx, setS) {
+        final ql = q.trim().toLowerCase();
+        final visible = ql.isEmpty
+            ? _allBrands
+            : _allBrands.where((b) => b.toLowerCase().contains(ql)).toList();
+        return AlertDialog(
+          title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Brands — ${c['shop_name']}', style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 2),
+            Text('${selected.length} of ${_allBrands.length} selected',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          ]),
+          content: SizedBox(
+            width: 460,
+            height: 460,
+            child: Column(children: [
+              TextField(
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Search brands…',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (v) => setS(() => q = v),
+              ),
+              const SizedBox(height: 6),
+              Row(children: [
+                TextButton(
+                  onPressed: () => setS(() => selected.addAll(visible)),
+                  child: const Text('Select all', style: TextStyle(fontSize: 12)),
+                ),
+                TextButton(
+                  onPressed: () => setS(() => selected.removeAll(visible)),
+                  child: const Text('Clear', style: TextStyle(fontSize: 12)),
+                ),
+              ]),
+              const Divider(height: 1),
+              Expanded(
+                child: _allBrands.isEmpty
+                    ? const Center(
+                        child: Text('No product sub-groups found.',
+                            style: TextStyle(color: AppTheme.textSecondary)))
+                    : ListView.builder(
+                        itemCount: visible.length,
+                        itemBuilder: (_, i) {
+                          final b = visible[i];
+                          return CheckboxListTile(
+                            dense: true,
+                            value: selected.contains(b),
+                            title: Text(b, style: const TextStyle(fontSize: 13.5)),
+                            onChanged: (v) => setS(() {
+                              if (v == true) {
+                                selected.add(b);
+                              } else {
+                                selected.remove(b);
+                              }
+                            }),
+                          );
+                        },
+                      ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(dctx, true), child: const Text('Save')),
+          ],
+        );
+      }),
+    );
+    if (saved != true) return;
+
+    // Diff against what was stored, so we only write what actually changed.
+    final before = _brands[cid] ?? const <String>{};
+    final toAdd = selected.difference(before);
+    final toRemove = before.difference(selected);
+    if (toAdd.isEmpty && toRemove.isEmpty) return;
+
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final client = Supabase.instance.client;
+    try {
+      if (toRemove.isNotEmpty) {
+        await client
+            .from('retailer_brands')
+            .delete()
+            .eq('customer_id', cid)
+            .inFilter('sub_group', toRemove.toList());
+      }
+      if (toAdd.isNotEmpty) {
+        final now = DateTime.now().microsecondsSinceEpoch;
+        var i = 0;
+        await client.from('retailer_brands').insert([
+          for (final b in toAdd)
+            {
+              'id': 'rb_${now}_${i++}',
+              'org_id': orgId,
+              'customer_id': cid,
+              'sub_group': b,
+            }
+        ]);
+      }
+      setState(() => _brands[cid] = selected);
+      _snack('Brands updated (${selected.length})');
+    } catch (e) {
+      _snack('Could not save brands: ${e.toString().split('\n').first}');
+    }
+  }
+
   Future<void> _toggleLocation(Map<String, dynamic> c, bool val) async {
     final prev = c['location_capture_allowed'] == true;
     setState(() => c['location_capture_allowed'] = val); // optimistic
@@ -355,6 +526,33 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                             ),
                           ),
                           Row(mainAxisSize: MainAxisSize.min, children: [
+                            if (hasLogin) ...[
+                              Builder(builder: (_) {
+                                final n = (_brands[c['id']] ?? const <String>{}).length;
+                                final none = n == 0;
+                                return OutlinedButton.icon(
+                                  icon: Icon(Icons.sell_outlined,
+                                      size: 15,
+                                      color: none ? AppTheme.warning : AppTheme.primary),
+                                  label: Text(
+                                    none ? 'No brands' : '$n brand${n == 1 ? '' : 's'}',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: none ? FontWeight.w700 : FontWeight.w500,
+                                        color: none ? AppTheme.warning : AppTheme.primary),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                    side: BorderSide(
+                                        color: none
+                                            ? AppTheme.warning.withValues(alpha: 0.5)
+                                            : AppTheme.border),
+                                  ),
+                                  onPressed: canProvision ? () => _editBrands(c) : null,
+                                );
+                              }),
+                              const SizedBox(width: 12),
+                            ],
                             const Text('Location',
                                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                             Switch(
