@@ -341,31 +341,42 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     final rows = _filteredTasks;
     final doneToday =
         _taskFilter == 'today' ? rows.where((t) => t['status'] == 'done').length : 0;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Wrap(spacing: context.isMobile ? 6 : 8, runSpacing: 6, children: [
-        for (final f in const ['today', 'open', 'overdue', 'done'])
-          Padding(
-            padding: EdgeInsets.zero,
-            child: ChoiceChip(
-              visualDensity: context.isMobile ? VisualDensity.compact : VisualDensity.standard,
-              labelStyle: TextStyle(fontSize: context.isMobile ? 11 : 13),
-              label: Text({
-                'today': 'Today',
-                'open': 'All open',
-                'overdue': 'Overdue',
-                'done': 'Done (30d)',
-              }[f]!),
-              selected: _taskFilter == f,
-              onSelected: (_) => setState(() => _taskFilter = f),
-            ),
-          ),
-        const Spacer(),
-        Text(
-          _taskFilter == 'today'
-              ? '$doneToday / ${rows.length} done'
-              : '${rows.length} task${rows.length == 1 ? '' : 's'}',
-          style: const TextStyle(color: AppTheme.textSecondary),
+    final chips = [
+      for (final f in const ['today', 'open', 'overdue', 'done'])
+        ChoiceChip(
+          visualDensity: context.isMobile ? VisualDensity.compact : VisualDensity.standard,
+          labelStyle: TextStyle(fontSize: context.isMobile ? 11 : 13),
+          label: Text({
+            'today': 'Today',
+            'open': 'All open',
+            'overdue': 'Overdue',
+            'done': 'Done (30d)',
+          }[f]!),
+          selected: _taskFilter == f,
+          onSelected: (_) => setState(() => _taskFilter = f),
         ),
+    ];
+    final countText = Text(
+      _taskFilter == 'today'
+          ? '$doneToday / ${rows.length} done'
+          : '${rows.length} task${rows.length == 1 ? '' : 's'}',
+      style: const TextStyle(color: AppTheme.textSecondary),
+    );
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // A Spacer() must NOT go inside a Wrap — Spacer is a Flexible, which only
+      // works in a Flex (Row/Column). In a Wrap it has no flex parent and paints
+      // as an unconstrained grey box, which is exactly what swallowed this list.
+      Row(children: [
+        Expanded(
+          child: Wrap(
+            spacing: context.isMobile ? 6 : 8,
+            runSpacing: 6,
+            children: chips,
+          ),
+        ),
+        const SizedBox(width: 10),
+        countText,
       ]),
       const SizedBox(height: 12),
       Expanded(
