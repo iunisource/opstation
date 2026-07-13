@@ -697,9 +697,19 @@ Widget _branchSelector(WidgetRef ref, Set<String> modules) {
           final branches = ref.watch(userBranchesProvider).valueOrNull ?? [];
           final selected = ref.watch(selectedBranchProvider);
           if (branches.isEmpty) return const SizedBox.shrink();
-          if (selected == null && branches.isNotEmpty) {
+
+          // The selected branch must belong to the CURRENT org. Previously this
+          // only restored when nothing was selected, so switching org left the
+          // old org's branch sitting in the provider: screens kept reporting
+          // "Branch: <other org's branch>", and the dropdown rendered blank
+          // because its value was not among the items. Worse, that stale id was
+          // being passed into queries. So re-validate on every build.
+          final selectedId = selected?['id'] as String?;
+          final stillValid = selectedId != null && branches.any((b) => b['id'] == selectedId);
+          if (!stillValid) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (ref.read(selectedBranchProvider) != null) return;
+              final cur = ref.read(selectedBranchProvider)?['id'] as String?;
+              if (cur != null && branches.any((b) => b['id'] == cur)) return;
               final savedId = html.window.localStorage['op_selected_branch_id'];
               Map<String, dynamic>? restored;
               if (savedId != null) {
@@ -707,7 +717,9 @@ Widget _branchSelector(WidgetRef ref, Set<String> modules) {
                   if (b['id'] == savedId) { restored = Map<String, dynamic>.from(b); break; }
                 }
               }
-              ref.read(selectedBranchProvider.notifier).state = restored ?? branches.first;
+              final next = restored ?? Map<String, dynamic>.from(branches.first);
+              ref.read(selectedBranchProvider.notifier).state = next;
+              html.window.localStorage['op_selected_branch_id'] = next['id'] as String;
             });
           }
           return Container(
@@ -720,7 +732,10 @@ Widget _branchSelector(WidgetRef ref, Set<String> modules) {
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
-                value: selected?['id'] as String?,
+                // Guard: an id not present in items makes the dropdown render
+                // empty. During the frame after an org switch, that is exactly
+                // what the stale value was.
+                value: stillValid ? selectedId : null,
                 dropdownColor: AppTheme.sidebarPanel,
                 icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white54, size: 14),
                 isDense: true,

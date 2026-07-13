@@ -623,7 +623,24 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                 ]),
               ),
               if (_selectedCustomer != null && _entries.isNotEmpty)
-                Wrap(spacing: 8, children: [
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.calendar_today_outlined, size: 15),
+                    label: Text(
+                      _dateFrom == null && _dateTo == null ? 'Date Range'
+                        : '${_dateFrom == null ? '…' : DateFormat('d MMM').format(_dateFrom!)} – ${_dateTo == null ? '…' : DateFormat('d MMM').format(_dateTo!)}',
+                      style: const TextStyle(fontSize: 12)),
+                    onPressed: _pickDateRange,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: Icon(Icons.hourglass_bottom_outlined, size: 16, color: Colors.orange.shade800),
+                    label: Text('Show Aging', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)),
+                    onPressed: _showAging,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      side: BorderSide(color: Colors.orange.shade300)),
+                  ),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.print_outlined, size: 16),
                     label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
@@ -708,23 +725,6 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                 ),
             ])),
             if (_selectedCustomer != null) ...[
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.date_range, size: 14),
-                label: Text(
-                  (_dateFrom != null || _dateTo != null)
-                    ? '${_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : '...'}  →  ${_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : '...'}'
-                    : 'Date Range', style: const TextStyle(fontSize: 12)),
-                onPressed: () async {
-                  final picked = await showDateRangePicker(
-                    context: context, firstDate: DateTime(2020),
-                    lastDate: DateTime.now().add(const Duration(days: 365)),
-                    initialDateRange: (_dateFrom != null && _dateTo != null) ? DateTimeRange(start: _dateFrom!, end: _dateTo!) : null,
-                  );
-                  if (picked != null) setState(() { _dateFrom = picked.start; _dateTo = picked.end; });
-                },
-                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-              ),
               if (_dateFrom != null || _dateTo != null) ...[
                 const SizedBox(width: 6),
                 TextButton(onPressed: () => setState(() { _dateFrom = null; _dateTo = null; }), child: const Text('Clear', style: TextStyle(fontSize: 12))),
@@ -862,6 +862,139 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       case 'Journal (JV)': return Colors.teal;
       default: return AppTheme.textSecondary;
     }
+  }
+
+  /// The date-range picker, lifted out of the old inline button so the header
+  /// group and any future caller share one implementation.
+  Future<void> _pickDateRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDateRange: (_dateFrom != null && _dateTo != null)
+          ? DateTimeRange(start: _dateFrom!, end: _dateTo!) : null,
+    );
+    if (picked != null && mounted) {
+      setState(() { _dateFrom = picked.start; _dateTo = picked.end; });
+    }
+  }
+
+  /// Aging for the selected customer, straight from `rpc_customer_aging` — the
+  /// same RPC Customer 360 and the Aging report use. Buckets are GL-true and tie
+  /// to account 1210, so this cannot drift from the other two screens.
+  Future<void> _showAging() async {
+    final cust = _selectedCustomer;
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (cust == null || orgId == null) return;
+    final custId = cust['id'] as String;
+
+    showDialog(context: context, builder: (_) => const Center(child: CircularProgressIndicator()));
+
+    double b1 = 0, b2 = 0, b3 = 0, b4 = 0, net = 0;
+    final items = <Map<String, dynamic>>[];
+    String? err;
+    try {
+      final client = Supabase.instance.client;
+      final asOf = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final params = {'p_org_id': orgId, 'p_as_of': asOf};
+
+      final agg = await client.rpc('rpc_customer_aging', params: params) as List;
+      for (final a in agg) {
+        if ((a as Map)['customer_id'] == custId) {
+          b1 = (a['b1'] as num?)?.toDouble() ?? 0;
+          b2 = (a['b2'] as num?)?.toDouble() ?? 0;
+          b3 = (a['b3'] as num?)?.toDouble() ?? 0;
+          b4 = (a['b4'] as num?)?.toDouble() ?? 0;
+          net = (a['total'] as num?)?.toDouble() ?? 0;
+          break;
+        }
+      }
+      // Drill-down is best-effort: the buckets are the point, the documents are a bonus.
+      try {
+        final det = await client.rpc('rpc_customer_aging_detail', params: params) as List;
+        for (final d in det) {
+          final m = d as Map;
+          if (m['customer_id'] != custId) continue;
+          items.add({
+            'voucher': (m['reference_number'] as String?) ?? '-',
+            'date': DateTime.tryParse('${m['ref_date']}'),
+            'amount': (m['open_amt'] as num?)?.toDouble() ?? 0,
+            'age': (m['age_days'] as num?)?.toInt() ?? 0,
+          });
+        }
+        items.sort((a, b) => (b['age'] as int).compareTo(a['age'] as int));
+      } catch (_) {}
+    } catch (e) {
+      err = '$e';
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop(); // dismiss the spinner
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text('Aging — ${cust['shop_name'] ?? ''}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          Text('As of ${DateFormat('d MMM yyyy').format(DateTime.now())}',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w400)),
+        ]),
+        content: SizedBox(
+          width: context.isMobile ? double.maxFinite : 520,
+          child: err != null
+            ? Text('Could not load aging: $err', style: const TextStyle(fontSize: 12, color: AppTheme.danger))
+            : SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                AdaptiveKpiRow(children: [
+                  _AgeBucket(label: 'Current', value: b1, color: AppTheme.success),
+                  _AgeBucket(label: '1–30 days', value: b2, color: Colors.orange),
+                  _AgeBucket(label: '31–60 days', value: b3, color: Colors.deepOrange),
+                  _AgeBucket(label: '60+ days', value: b4, color: AppTheme.danger),
+                ]),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.background,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Row(children: [
+                    const Text('Total Outstanding', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    Text('Rs. ${net.toStringAsFixed(2)}',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800,
+                            color: net > 0 ? AppTheme.danger : AppTheme.success)),
+                  ]),
+                ),
+                if (items.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const Text('Open documents', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+                  const SizedBox(height: 6),
+                  for (final it in items)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      child: Row(children: [
+                        SizedBox(width: 110, child: Text(it['voucher'] as String,
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                        Expanded(child: Text(
+                            it['date'] == null ? '-' : DateFormat('d MMM yy').format(it['date'] as DateTime),
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                        Text('${it['age']}d  ',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                                color: (it['age'] as int) > 60 ? AppTheme.danger
+                                     : (it['age'] as int) > 30 ? Colors.deepOrange
+                                     : AppTheme.textSecondary)),
+                        Text('Rs. ${(it['amount'] as double).toStringAsFixed(2)}',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                ],
+              ])),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
+      ),
+    );
   }
 
   void _exportCsv() {
@@ -1258,6 +1391,33 @@ class _Stat extends StatelessWidget {
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
       Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: color)),
+    ]),
+  );
+}
+
+/// One aging bucket. No fixed width — AdaptiveKpiRow sizes it, so it is two-up
+/// on a phone and four-across on desktop.
+class _AgeBucket extends StatelessWidget {
+  final String label;
+  final double value;
+  final Color color;
+  const _AgeBucket({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: color.withOpacity(0.07),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: color.withOpacity(0.25)),
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary),
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      const SizedBox(height: 2),
+      Text('Rs. ${value.toStringAsFixed(0)}',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color),
+          maxLines: 1, overflow: TextOverflow.ellipsis),
     ]),
   );
 }
