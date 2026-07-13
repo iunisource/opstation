@@ -649,7 +649,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     onPressed: _exportCsv,
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.green.shade300)),
                   ),
-                ]),,
+                ]),
             ],
           ] else
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -692,7 +692,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     onPressed: _exportCsv,
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.green.shade300)),
                   ),
-                ]),,
+                ]),
             ]),
           const SizedBox(height: 16),
           if (_errors.isNotEmpty) Container(
