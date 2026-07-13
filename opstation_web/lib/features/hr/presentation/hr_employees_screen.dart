@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
+import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
 import 'package:pdf/pdf.dart';
@@ -672,8 +674,9 @@ $docsHtml
         || (e['cnic'] as String? ?? '').toLowerCase().contains(q);
     }).toList();
 
-    return Container(color: AppTheme.background, child: Row(children: [
-      if (_drawerOpen) Container(width: 300,
+    // Desktop: list + detail side by side. Mobile: the list fills the screen and
+    // selecting an employee pushes the detail as its own route with a back button.
+    final listPane = Container(
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
           Container(padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
@@ -712,9 +715,9 @@ $docsHtml
                   ]),
                 ));
               })),
-        ])),
+        ]));
 
-      Expanded(child: Column(children: [
+    final detailPane = Column(children: [
         Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
@@ -834,8 +837,14 @@ $docsHtml
             _docsSection(),
             const SizedBox(height: 30),
           ]))),
-      ])),
-    ]));
+      ]);
+
+    return AdaptiveMasterDetail(
+      selected: _current?['id'],
+      detailTitle: (_current?['full_name'] as String?) ?? 'Employee',
+      list: listPane,
+      detail: detailPane,
+    );
   }
 
   // ---- form widgets ----

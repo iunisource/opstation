@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 
 class DashboardScreen extends ConsumerWidget {
@@ -18,7 +19,7 @@ class DashboardScreen extends ConsumerWidget {
     return Container(
       color: AppTheme.background,
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(32),
+        padding: context.pagePadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -266,8 +267,11 @@ class _DashboardStatsState extends State<_DashboardStats> {
         Row(children: [
           const Text("Today's Overview", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           const Spacer(),
-          Text(DateFormat('EEEE, d MMM yyyy').format(DateTime.now()), style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-          const SizedBox(width: 12),
+          // The full date string overflows a phone header; short form there.
+          Flexible(child: Text(
+            DateFormat(context.isMobile ? 'd MMM' : 'EEEE, d MMM yyyy').format(DateTime.now()),
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            overflow: TextOverflow.ellipsis)),
           IconButton(icon: const Icon(Icons.refresh), onPressed: () { setState(() => _loading = true); _load(); }),
         ]),
         const SizedBox(height: 16),
@@ -312,9 +316,14 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 200px fixed fits exactly one card per row on a phone, wasting half the
+    // screen. Half-width (minus the Wrap spacing) gives two per row.
+    final w = context.isMobile
+        ? (MediaQuery.sizeOf(context).width - 24 - 16) / 2
+        : 200.0;
     final body = Container(
-      width: 200,
-      padding: const EdgeInsets.all(20),
+      width: w,
+      padding: EdgeInsets.all(context.isMobile ? 14 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),

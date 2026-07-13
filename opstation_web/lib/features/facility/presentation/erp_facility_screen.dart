@@ -8,6 +8,8 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
+import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../erp/services/asset_pdf.dart';
 
@@ -222,7 +224,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
   Widget build(BuildContext context) {
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(28),
+      padding: context.pagePadding,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Text('Facility Maintenance',
@@ -292,7 +294,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     final today = _dash['due_today'] ?? 0;
     final done7 = _dash['done_7d'] ?? 0;
     final rate = _dash['on_time_rate'];
-    return Row(children: [
+    return AdaptiveKpiRow(children: [
       _stat('Open', '$open', AppTheme.primary),
       _stat('Overdue', '$overdue', AppTheme.danger),
       _stat('Due today', '$today', Colors.orange),
@@ -301,23 +303,25 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     ]);
   }
 
+  /// No Expanded here: AdaptiveKpiRow decides the width (Expanded on desktop,
+  /// half-width on a phone). Hard-coding Expanded made the card a 70px sliver
+  /// that stacked its label one letter per line.
   Widget _stat(String label, String value, Color color) {
-    return Expanded(
-      child: Container(
-        margin: const EdgeInsets.only(right: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.border),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(value,
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: color)),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-        ]),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
       ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(value,
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: color)),
+        const SizedBox(height: 2),
+        Text(label,
+            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+            maxLines: 1, overflow: TextOverflow.ellipsis),
+      ]),
     );
   }
 
@@ -327,10 +331,10 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     final doneToday =
         _taskFilter == 'today' ? rows.where((t) => t['status'] == 'done').length : 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
+      Wrap(spacing: 8, runSpacing: 6, children: [
         for (final f in const ['today', 'open', 'overdue', 'done'])
           Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: EdgeInsets.zero,
             child: ChoiceChip(
               label: Text({
                 'today': 'Today',

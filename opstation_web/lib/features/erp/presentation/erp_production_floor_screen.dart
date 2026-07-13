@@ -5,6 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
+import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
 import 'running_dot.dart';
@@ -166,23 +168,23 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
     final voided = jobs.where((j) => j['status'] == 'cancelled').toList();
     final openUnits = [...queued, ...inProg].fold(0.0, (s, j) => s + _remaining(j));
 
-    return Container(color: AppTheme.background, padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        const Text('Production Floor', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-        const SizedBox(width: 16),
+    return Container(color: AppTheme.background, padding: context.pagePadding, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Title, count chips and controls all flow. In a Row they overflowed the
+      // moment the window narrowed; the chips ended up stacking one letter high.
+      Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+        Text('Production Floor', style: TextStyle(fontSize: context.isMobile ? 20 : 24, fontWeight: FontWeight.w800)),
         _statChip('Queued', queued.length, Colors.orange),
-        const SizedBox(width: 8),
         _statChip('In progress', inProg.length, Colors.blue),
-        const SizedBox(width: 8),
         _statChip('Completed', done.length, Colors.green),
-        const SizedBox(width: 8),
         _statChip('Units to make', _trim(openUnits), Colors.deepPurple),
-        const Spacer(),
-        Row(children: [
+        Row(mainAxisSize: MainAxisSize.min, children: [
           const Text('All branches', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           Switch(value: _allBranches, onChanged: (v) => setState(() => _allBranches = v)),
         ]),
-        const SizedBox(width: 8),
         ToggleButtons(
           isSelected: [_viewMode == 0, _viewMode == 1, _viewMode == 2],
           onPressed: (i) {
@@ -197,7 +199,6 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
             Icon(Icons.history, size: 18),
           ],
         ),
-        const SizedBox(width: 8),
         IconButton(icon: const Icon(Icons.refresh), onPressed: _load, tooltip: 'Refresh'),
       ]),
       const SizedBox(height: 16),
@@ -318,6 +319,16 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
   }
 
   Widget _kanbanView(List<Map<String, dynamic>> queued, List<Map<String, dynamic>> inProg, List<Map<String, dynamic>> done) {
+    // Three columns at 380px gives each ~118px — a job card cannot render in that.
+    // On a phone the same three lanes become tabs, so one lane gets full width.
+    if (context.isMobile) {
+      return _MobileKanbanTabs(
+        queued: _column('Queued', Colors.orange, queued),
+        inProgress: _column('In Progress', Colors.blue, inProg),
+        completed: _column('Completed', Colors.green, done),
+        counts: [queued.length, inProg.length, done.length],
+      );
+    }
     return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Expanded(child: _column('Queued', Colors.orange, queued)),
       const SizedBox(width: 12),
@@ -677,5 +688,57 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
         if (detail != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(detail, style: const TextStyle(fontSize: 12))),
       ]))),
     ]));
+  }
+}
+
+/// The kanban's three lanes as tabs. Keeps the same columns — they just get the
+/// full width one at a time instead of a third of a phone screen each.
+class _MobileKanbanTabs extends StatefulWidget {
+  final Widget queued, inProgress, completed;
+  final List<int> counts;
+  const _MobileKanbanTabs({
+    required this.queued,
+    required this.inProgress,
+    required this.completed,
+    required this.counts,
+  });
+
+  @override
+  State<_MobileKanbanTabs> createState() => _MobileKanbanTabsState();
+}
+
+class _MobileKanbanTabsState extends State<_MobileKanbanTabs>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tc = TabController(length: 3, vsync: this);
+
+  @override
+  void dispose() {
+    _tc.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      TabBar(
+        controller: _tc,
+        labelColor: AppTheme.primary,
+        unselectedLabelColor: AppTheme.textSecondary,
+        indicatorColor: AppTheme.primary,
+        labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+        tabs: [
+          Tab(text: 'Queued (${widget.counts[0]})'),
+          Tab(text: 'Active (${widget.counts[1]})'),
+          Tab(text: 'Done (${widget.counts[2]})'),
+        ],
+      ),
+      const SizedBox(height: 10),
+      Expanded(
+        child: TabBarView(
+          controller: _tc,
+          children: [widget.queued, widget.inProgress, widget.completed],
+        ),
+      ),
+    ]);
   }
 }

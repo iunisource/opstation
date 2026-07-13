@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
+import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
 import 'package:go_router/go_router.dart';
@@ -1111,8 +1113,11 @@ $runSection
       if (cur.isNotEmpty) activeWorkers.add(cur.first);
     }
 
-    return Container(color: AppTheme.background, child: Row(children: [
-      if (_drawerOpen) Container(width: 300,
+    // Desktop: list + detail side by side, unchanged.
+    // Mobile:  the list fills the screen; picking a job pushes the detail as its
+    //          own route with a back button. A 300px list beside a detail pane on
+    //          a 380px phone left the detail unusable.
+    final listPane = Container(
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
           Container(padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
@@ -1158,9 +1163,9 @@ $runSection
                   ]),
                 ));
               })),
-        ])),
+        ]));
 
-      Expanded(child: Column(children: [
+    final detailPane = Column(children: [
         Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
@@ -1268,8 +1273,14 @@ $runSection
             const SizedBox(height: 18),
             _runsSection(),
           ]))),
-      ])),
-    ]));
+      ]);
+
+    return AdaptiveMasterDetail(
+      selected: _current?['id'],
+      detailTitle: _current?['job_number'] as String? ?? 'Job Card',
+      list: listPane,
+      detail: detailPane,
+    );
   }
 
   Widget _costSummary() {

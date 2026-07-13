@@ -8,6 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
+import '../../../core/widgets/adaptive_table.dart';
+import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
@@ -322,14 +325,20 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     return GestureDetector(
       onTap: () { if (_showDropdown) setState(() => _showDropdown = false); },
       child: Container(
-        color: AppTheme.background, padding: const EdgeInsets.all(24),
+        color: AppTheme.background, padding: context.pagePadding,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Supplier Ledger', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-              Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-            ]),
-            const Spacer(),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: 10,
+            children: [
+              SizedBox(
+                width: context.isMobile ? double.infinity : null,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Supplier Ledger', style: TextStyle(fontSize: context.isMobile ? 20 : 24, fontWeight: FontWeight.w800)),
+                  Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                ]),
+              ),
             if (_selectedSupplier != null && _entries.isNotEmpty) ...[
               OutlinedButton.icon(
                 icon: const Icon(Icons.print_outlined, size: 16),
@@ -434,15 +443,15 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           ]),
           const SizedBox(height: 12),
           if (_selectedSupplier != null && _entries.isNotEmpty) ...[
-            Row(children: [
+            AdaptiveKpiRow(children: [
               _Stat(label: 'Total Debit', value: 'Rs. ${totalDebit.toStringAsFixed(2)}', color: AppTheme.primary),
-              const SizedBox(width: 10),
               _Stat(label: 'Total Credit', value: 'Rs. ${totalCredit.toStringAsFixed(2)}', color: Colors.green.shade700),
-              const SizedBox(width: 10),
               _Stat(label: netBal >= 0 ? 'Net Payable' : 'Net Advance', value: 'Rs. ${netBal.abs().toStringAsFixed(2)}', color: netBal > 0 ? AppTheme.danger : Colors.green.shade700),
-              const Spacer(),
-              SizedBox(width: 200, child: TextField(controller: _entrySearchCtrl, decoration: const InputDecoration(hintText: 'Search entries...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)))),
-              const SizedBox(width: 12),
+            ]),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: TextField(controller: _entrySearchCtrl, decoration: const InputDecoration(hintText: 'Search entries...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)))),
+              const SizedBox(width: 10),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
@@ -461,64 +470,82 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             const SizedBox(height: 12),
             const Text('Search and select a supplier to view their ledger', style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
           ])))
-          else Expanded(child: Container(
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
-            child: Column(children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
-                child: const Row(children: [
-                  SizedBox(width: 90, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
-                  SizedBox(width: 100, child: Text('Voucher', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
-                  Expanded(child: Text('Description', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
-                  SizedBox(width: 80, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
-                  SizedBox(width: 110, child: Text('Debit', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
-                  SizedBox(width: 110, child: Text('Credit', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
-                  SizedBox(width: 110, child: Text('Balance', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppTheme.textSecondary))),
-                ]),
+          else Expanded(child: AdaptiveTable<Map<String, dynamic>>(
+            rows: display,
+            empty: const Center(child: Text('No transactions found.', style: TextStyle(color: AppTheme.textSecondary))),
+            columns: [
+              AdaptiveColumn(
+                label: 'Date', width: 90,
+                cell: (e) {
+                  final dt = DateTime.tryParse(e['date'] as String? ?? '');
+                  return Text(dt != null ? DateFormat('d MMM yy').format(dt) : '-', style: const TextStyle(fontSize: 12));
+                },
               ),
-              const Divider(height: 1),
-              Expanded(child: display.isEmpty
-                  ? const Center(child: Text('No transactions found.', style: TextStyle(color: AppTheme.textSecondary)))
-                  : ListView.separated(
-                      itemCount: display.length, separatorBuilder: (_, __) => const Divider(height: 1, color: AppTheme.border),
-                      itemBuilder: (_, i) {
-                        final e = display[i];
-                        final ds = e['date'] as String? ?? '';
-                        final dt = DateTime.tryParse(ds); final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
-                        final debit = e['debit'] as double; final credit = e['credit'] as double;
-                        final bal = e['display_balance'] as double; final type = e['type'] as String;
-                        return Container(
-                          color: i.isEven ? null : Colors.grey.shade50,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                          child: Row(children: [
-                            SizedBox(width: 90, child: Text(date, style: const TextStyle(fontSize: 12))),
-                            SizedBox(width: 100, child: MouseRegion(cursor: SystemMouseCursors.click, child: GestureDetector(onTap: () => _openVoucher(e), child: Text(e['voucher'] as String? ?? '', style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600, decoration: TextDecoration.underline), overflow: TextOverflow.ellipsis)))),
-                            Expanded(child: Text(e['description'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
-                            SizedBox(width: 80, child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(color: _typeColor(type).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                              child: Text(type, style: TextStyle(fontSize: 9, color: _typeColor(type), fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
-                            )),
-                            SizedBox(width: 110, child: Text(debit > 0 ? 'Rs. ${debit.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: debit > 0 ? AppTheme.primary : Colors.black26))),
-                            SizedBox(width: 110, child: Text(credit > 0 ? 'Rs. ${credit.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: credit > 0 ? Colors.green.shade700 : Colors.black26))),
-                            SizedBox(width: 110, child: Text('Rs. ${bal.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: bal > 0 ? AppTheme.danger : Colors.green.shade700))),
-                          ]),
-                        );
-                      })),
-              if (display.isNotEmpty) Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)), border: const Border(top: BorderSide(color: AppTheme.border))),
-                child: Row(children: [
-                  const SizedBox(width: 90), const SizedBox(width: 100),
-                  Expanded(child: Text('${display.length} entries', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-                  const SizedBox(width: 80),
-                  SizedBox(width: 110, child: Text('Rs. ${totalDebit.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.primary))),
-                  SizedBox(width: 110, child: Text('Rs. ${totalCredit.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.green.shade700))),
-                  SizedBox(width: 110, child: Text('Rs. ${netBal.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: netBal > 0 ? AppTheme.danger : Colors.green.shade700))),
-                ]),
+              AdaptiveColumn(
+                label: 'Voucher', width: 100, isTitle: true,
+                cell: (e) => MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: () => _openVoucher(e),
+                    child: Text(e['voucher'] as String? ?? '',
+                      style: TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w700, decoration: TextDecoration.underline),
+                      overflow: TextOverflow.ellipsis),
+                  ),
+                ),
               ),
-            ]),
+              AdaptiveColumn(
+                label: 'Description', width: null,
+                cell: (e) => Text(e['description'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis),
+              ),
+              AdaptiveColumn(
+                label: 'Type', width: 80,
+                cell: (e) {
+                  final type = e['type'] as String;
+                  return Align(alignment: Alignment.centerLeft, child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(color: _typeColor(type).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                    child: Text(type, style: TextStyle(fontSize: 9, color: _typeColor(type), fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+                  ));
+                },
+              ),
+              AdaptiveColumn(
+                label: 'Debit', width: 110, align: TextAlign.right,
+                cell: (e) {
+                  final d = e['debit'] as double;
+                  return Text(d > 0 ? 'Rs. ${d.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: d > 0 ? AppTheme.primary : Colors.black26));
+                },
+              ),
+              AdaptiveColumn(
+                label: 'Credit', width: 110, align: TextAlign.right,
+                cell: (e) {
+                  final c = e['credit'] as double;
+                  return Text(c > 0 ? 'Rs. ${c.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c > 0 ? Colors.green.shade700 : Colors.black26));
+                },
+              ),
+              AdaptiveColumn(
+                label: 'Balance', width: 110, align: TextAlign.right, isTrailing: true,
+                cell: (e) {
+                  final b = e['display_balance'] as double;
+                  return Text('Rs. ${b.toStringAsFixed(2)}', textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: b > 0 ? AppTheme.danger : Colors.green.shade700));
+                },
+              ),
+            ],
+            footer: display.isEmpty ? null : Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.background,
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+                border: const Border(top: BorderSide(color: AppTheme.border)),
+              ),
+              child: Row(children: [
+                Expanded(child: Text('${display.length} entries', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+                Text('Rs. ${netBal.toStringAsFixed(2)}',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: netBal > 0 ? AppTheme.danger : Colors.green.shade700)),
+              ]),
+            ),
           )),
         ]),
       ),
