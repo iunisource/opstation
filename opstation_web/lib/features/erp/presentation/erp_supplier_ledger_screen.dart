@@ -327,34 +327,60 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       child: Container(
         color: AppTheme.background, padding: context.pagePadding,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            runSpacing: 10,
-            children: [
-              SizedBox(
-                width: context.isMobile ? double.infinity : null,
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Supplier Ledger', style: TextStyle(fontSize: context.isMobile ? 20 : 24, fontWeight: FontWeight.w800)),
-                  Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                ]),
-              ),
+          // Desktop: title left, actions hard right (a Wrap with spaceBetween
+          // collapses to "buttons hugging the title" once the title is narrow).
+          // Mobile: title on its own line, actions wrapping beneath.
+          // Desktop: title left, actions pinned hard right. Mobile: title on its
+          // own line with the actions wrapping beneath it.
+          if (context.isMobile) ...[
+            const Text('Supplier Ledger', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+            Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
+                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
             if (_selectedSupplier != null && _entries.isNotEmpty) ...[
-              OutlinedButton.icon(
-                icon: const Icon(Icons.print_outlined, size: 16),
-                label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
-                onPressed: _printLedger,
-                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
-                label: Text('Export Excel', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
-                onPressed: _exportCsv,
-                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.green.shade300)),
-              ),
+              const SizedBox(height: 10),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.print_outlined, size: 16),
+                    label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
+                    onPressed: _printLedger,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
+                    label: Text('Export Excel', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
+                    onPressed: _exportCsv,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      side: BorderSide(color: Colors.green.shade300)),
+                  ),
+                ]),
             ],
-          ]),
+          ] else
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Supplier Ledger', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+              ]),
+              const Spacer(),
+              if (_selectedSupplier != null && _entries.isNotEmpty)
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.print_outlined, size: 16),
+                    label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
+                    onPressed: _printLedger,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
+                    label: Text('Export Excel', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
+                    onPressed: _exportCsv,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      side: BorderSide(color: Colors.green.shade300)),
+                  ),
+                ]),
+            ]),
           const SizedBox(height: 16),
           if (_errors.isNotEmpty) Container(
             margin: const EdgeInsets.only(bottom: 12),

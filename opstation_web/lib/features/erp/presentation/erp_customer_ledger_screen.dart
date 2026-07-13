@@ -608,22 +608,16 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       child: Container(
         color: AppTheme.background, padding: context.pagePadding,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Title and actions share a row on desktop; on a phone the actions wrap
-          // to their own line rather than colliding with the heading.
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            runSpacing: 10,
-            children: [
-              SizedBox(
-                width: context.isMobile ? double.infinity : null,
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Customer Ledger', style: TextStyle(fontSize: context.isMobile ? 20 : 24, fontWeight: FontWeight.w800)),
-                  Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                ]),
-              ),
-              if (_selectedCustomer != null && _entries.isNotEmpty)
-                Wrap(spacing: 8, runSpacing: 8, children: [
+          // Desktop: title left, actions pinned hard right (a Wrap with
+          // spaceBetween collapses to "buttons hugging the title" once the title
+          // is narrow). Mobile: title on its own line, actions wrapping beneath.
+          if (context.isMobile) ...[
+            Text('Customer Ledger', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+            Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
+                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            if (_selectedCustomer != null && _entries.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(spacing: 8, runSpacing: 8, children: [
                   OutlinedButton.icon(
                     icon: const Icon(Icons.calendar_today_outlined, size: 15),
                     label: Text(
@@ -634,9 +628,11 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
                   ),
                   OutlinedButton.icon(
-                    icon: Icon(Icons.hourglass_bottom_outlined, size: 16, color: Colors.orange.shade800),
+                    icon: _agingLoading
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : Icon(Icons.hourglass_bottom_outlined, size: 16, color: Colors.orange.shade800),
                     label: Text('Show Aging', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)),
-                    onPressed: _showAging,
+                    onPressed: _agingLoading ? null : _showAging,
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       side: BorderSide(color: Colors.orange.shade300)),
@@ -653,9 +649,51 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     onPressed: _exportCsv,
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.green.shade300)),
                   ),
-                ]),
+                ]),,
             ],
-          ),
+          ] else
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Customer Ledger', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+              ]),
+              const Spacer(),
+              if (_selectedCustomer != null && _entries.isNotEmpty)
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.calendar_today_outlined, size: 15),
+                    label: Text(
+                      _dateFrom == null && _dateTo == null ? 'Date Range'
+                        : '${_dateFrom == null ? '…' : DateFormat('d MMM').format(_dateFrom!)} – ${_dateTo == null ? '…' : DateFormat('d MMM').format(_dateTo!)}',
+                      style: const TextStyle(fontSize: 12)),
+                    onPressed: _pickDateRange,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: _agingLoading
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : Icon(Icons.hourglass_bottom_outlined, size: 16, color: Colors.orange.shade800),
+                    label: Text('Show Aging', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)),
+                    onPressed: _agingLoading ? null : _showAging,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      side: BorderSide(color: Colors.orange.shade300)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.print_outlined, size: 16),
+                    label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
+                    onPressed: _printLedger,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
+                    label: Text('Export Excel', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
+                    onPressed: _exportCsv,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.green.shade300)),
+                  ),
+                ]),,
+            ]),
           const SizedBox(height: 16),
           if (_errors.isNotEmpty) Container(
             margin: const EdgeInsets.only(bottom: 12),
@@ -880,15 +918,22 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   }
 
   /// Aging for the selected customer, straight from `rpc_customer_aging` — the
-  /// same RPC Customer 360 and the Aging report use. Buckets are GL-true and tie
-  /// to account 1210, so this cannot drift from the other two screens.
+  /// same RPC Customer 360 and the Aging report use, so the buckets cannot drift
+  /// from those screens.
+  ///
+  /// Deliberately fetches BEFORE showing anything. The previous version showed a
+  /// spinner dialog and then popped it, but `Navigator.of(context)` here is the
+  /// screen's navigator, not the dialog's — so the pop unwound the go_router
+  /// route instead, leaving a white screen.
+  bool _agingLoading = false;
+
   Future<void> _showAging() async {
     final cust = _selectedCustomer;
     final orgId = ref.read(currentUserProvider)?.orgId;
-    if (cust == null || orgId == null) return;
+    if (cust == null || orgId == null || _agingLoading) return;
     final custId = cust['id'] as String;
 
-    showDialog(context: context, builder: (_) => const Center(child: CircularProgressIndicator()));
+    setState(() => _agingLoading = true);
 
     double b1 = 0, b2 = 0, b3 = 0, b4 = 0, net = 0;
     final items = <Map<String, dynamic>>[];
@@ -909,7 +954,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           break;
         }
       }
-      // Drill-down is best-effort: the buckets are the point, the documents are a bonus.
+      // Drill-down is best-effort: the buckets are the point.
       try {
         final det = await client.rpc('rpc_customer_aging_detail', params: params) as List;
         for (final d in det) {
@@ -929,28 +974,36 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     }
 
     if (!mounted) return;
-    Navigator.of(context).pop(); // dismiss the spinner
-    if (!mounted) return;
+    setState(() => _agingLoading = false);
 
-    showDialog(
+    await showDialog<void>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text('Aging — ${cust['shop_name'] ?? ''}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          Text('Aging — ${cust['shop_name'] ?? ''}',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
           Text('As of ${DateFormat('d MMM yyyy').format(DateTime.now())}',
               style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w400)),
         ]),
         content: SizedBox(
           width: context.isMobile ? double.maxFinite : 520,
           child: err != null
-            ? Text('Could not load aging: $err', style: const TextStyle(fontSize: 12, color: AppTheme.danger))
+            ? Text('Could not load aging: $err',
+                style: const TextStyle(fontSize: 12, color: AppTheme.danger))
             : SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                AdaptiveKpiRow(children: [
-                  _AgeBucket(label: 'Current', value: b1, color: AppTheme.success),
-                  _AgeBucket(label: '1–30 days', value: b2, color: Colors.orange),
-                  _AgeBucket(label: '31–60 days', value: b3, color: Colors.deepOrange),
-                  _AgeBucket(label: '60+ days', value: b4, color: AppTheme.danger),
-                ]),
+                // Plain Wrap, not AdaptiveKpiRow: inside a dialog the width is
+                // unbounded, and Expanded in an unbounded Row throws.
+                LayoutBuilder(builder: (_, c) {
+                  final w = c.maxWidth.isFinite
+                      ? (c.maxWidth - 10) / 2
+                      : 150.0;
+                  return Wrap(spacing: 10, runSpacing: 10, children: [
+                    SizedBox(width: w, child: _AgeBucket(label: 'Current', value: b1, color: Colors.green.shade700)),
+                    SizedBox(width: w, child: _AgeBucket(label: '1–30 days', value: b2, color: Colors.orange)),
+                    SizedBox(width: w, child: _AgeBucket(label: '31–60 days', value: b3, color: Colors.deepOrange)),
+                    SizedBox(width: w, child: _AgeBucket(label: '60+ days', value: b4, color: AppTheme.danger)),
+                  ]);
+                }),
                 const SizedBox(height: 14),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -964,19 +1017,21 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     const Spacer(),
                     Text('Rs. ${net.toStringAsFixed(2)}',
                         style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800,
-                            color: net > 0 ? AppTheme.danger : AppTheme.success)),
+                            color: net > 0 ? AppTheme.danger : Colors.green.shade700)),
                   ]),
                 ),
                 if (items.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  const Text('Open documents', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+                  const Text('Open documents',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
                   const SizedBox(height: 6),
                   for (final it in items)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 5),
                       child: Row(children: [
-                        SizedBox(width: 110, child: Text(it['voucher'] as String,
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                        SizedBox(width: 104, child: Text(it['voucher'] as String,
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis)),
                         Expanded(child: Text(
                             it['date'] == null ? '-' : DateFormat('d MMM yy').format(it['date'] as DateTime),
                             style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
@@ -992,7 +1047,13 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                 ],
               ])),
         ),
-        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
+        actions: [
+          TextButton(
+            // Pop the DIALOG's navigator, not the screen's.
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
