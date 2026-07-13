@@ -226,36 +226,43 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
       color: AppTheme.background,
       padding: context.pagePadding,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Text('Facility Maintenance',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-          const SizedBox(width: 16),
-          SizedBox(
-            width: 200,
-            child: DropdownButtonFormField<String>(
-              value: _branch,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Branch', isDense: true),
-              items: [
-                const DropdownMenuItem(value: 'all', child: Text('All branches')),
-                for (final b in _branches)
-                  DropdownMenuItem(value: b['id'] as String, child: Text('${b['name']}')),
-              ],
-              onChanged: (v) {
-                setState(() => _branch = v ?? 'all');
-                _refreshDash();
-              },
+        // Title + branch picker in one Row overflowed the right edge on a phone.
+        // Wrap lets the picker drop to its own line.
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            Text('Facility Maintenance',
+                style: TextStyle(fontSize: context.isMobile ? 22 : 28, fontWeight: FontWeight.w800)),
+            SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                value: _branch,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Branch', isDense: true),
+                items: [
+                  const DropdownMenuItem(value: 'all', child: Text('All branches')),
+                  for (final b in _branches)
+                    DropdownMenuItem(value: b['id'] as String, child: Text('${b['name']}')),
+                ],
+                onChanged: (v) {
+                  setState(() => _branch = v ?? 'all');
+                  _refreshDash();
+                },
+              ),
             ),
-          ),
-          const Spacer(),
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh), tooltip: 'Refresh'),
-        ]),
-        const SizedBox(height: 4),
-        const Text('Recurring upkeep so the place stays visit-ready',
-            style: TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 16),
+            IconButton(onPressed: _load, icon: const Icon(Icons.refresh), tooltip: 'Refresh'),
+          ],
+        ),
+        if (!context.isMobile) ...[
+          const SizedBox(height: 4),
+          const Text('Recurring upkeep so the place stays visit-ready',
+              style: TextStyle(color: AppTheme.textSecondary)),
+        ],
+        SizedBox(height: context.isMobile ? 10 : 16),
         _statsBand(),
-        const SizedBox(height: 16),
+        SizedBox(height: context.isMobile ? 10 : 16),
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -306,9 +313,13 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
   /// No Expanded here: AdaptiveKpiRow decides the width (Expanded on desktop,
   /// half-width on a phone). Hard-coding Expanded made the card a 70px sliver
   /// that stacked its label one letter per line.
+  /// Compact on a phone. At desktop scale these five cards run to three rows
+  /// (~450px), which starved the Expanded task list below them of height — the
+  /// list rendered as a grey slab a few pixels tall.
   Widget _stat(String label, String value, Color color) {
+    final mob = context.isMobile;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: EdgeInsets.symmetric(horizontal: mob ? 10 : 16, vertical: mob ? 8 : 14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
@@ -316,10 +327,10 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(value,
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: color)),
-        const SizedBox(height: 2),
+            style: TextStyle(fontSize: mob ? 17 : 24, fontWeight: FontWeight.w800, color: color)),
+        SizedBox(height: mob ? 0 : 2),
         Text(label,
-            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+            style: TextStyle(fontSize: mob ? 10 : 12, color: AppTheme.textSecondary),
             maxLines: 1, overflow: TextOverflow.ellipsis),
       ]),
     );
@@ -331,11 +342,13 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     final doneToday =
         _taskFilter == 'today' ? rows.where((t) => t['status'] == 'done').length : 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Wrap(spacing: 8, runSpacing: 6, children: [
+      Wrap(spacing: context.isMobile ? 6 : 8, runSpacing: 6, children: [
         for (final f in const ['today', 'open', 'overdue', 'done'])
           Padding(
             padding: EdgeInsets.zero,
             child: ChoiceChip(
+              visualDensity: context.isMobile ? VisualDensity.compact : VisualDensity.standard,
+              labelStyle: TextStyle(fontSize: context.isMobile ? 11 : 13),
               label: Text({
                 'today': 'Today',
                 'open': 'All open',
