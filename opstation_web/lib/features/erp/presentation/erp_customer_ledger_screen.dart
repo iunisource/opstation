@@ -935,7 +935,11 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
     setState(() => _agingLoading = true);
 
-    double b1 = 0, b2 = 0, b3 = 0, b4 = 0, net = 0;
+    // The RPC returns FIVE buckets: cur (0-30), b1 (31-60), b2 (61-90),
+    // b3 (91-120), b4 (120+). Reading b1..b4 as if they were 0-30..60+ shifted
+    // every figure one bucket and silently dropped `cur` — the popup showed
+    // 31-60's value under "Current" and lost 15,010 entirely.
+    double cur = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, net = 0;
     final items = <Map<String, dynamic>>[];
     String? err;
     try {
@@ -946,6 +950,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       final agg = await client.rpc('rpc_customer_aging', params: params) as List;
       for (final a in agg) {
         if ((a as Map)['customer_id'] == custId) {
+          cur = (a['cur'] as num?)?.toDouble() ?? 0;
           b1 = (a['b1'] as num?)?.toDouble() ?? 0;
           b2 = (a['b2'] as num?)?.toDouble() ?? 0;
           b3 = (a['b3'] as num?)?.toDouble() ?? 0;
@@ -997,11 +1002,14 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                   final w = c.maxWidth.isFinite
                       ? (c.maxWidth - 10) / 2
                       : 150.0;
+                  // Same five buckets and the same boundaries as the Customer
+                  // Aging report, so the two can never disagree.
                   return Wrap(spacing: 10, runSpacing: 10, children: [
-                    SizedBox(width: w, child: _AgeBucket(label: 'Current', value: b1, color: Colors.green.shade700)),
-                    SizedBox(width: w, child: _AgeBucket(label: '1–30 days', value: b2, color: Colors.orange)),
-                    SizedBox(width: w, child: _AgeBucket(label: '31–60 days', value: b3, color: Colors.deepOrange)),
-                    SizedBox(width: w, child: _AgeBucket(label: '60+ days', value: b4, color: AppTheme.danger)),
+                    SizedBox(width: w, child: _AgeBucket(label: 'Current (0–30)', value: cur, color: Colors.green.shade700)),
+                    SizedBox(width: w, child: _AgeBucket(label: '31–60 days', value: b1, color: Colors.orange)),
+                    SizedBox(width: w, child: _AgeBucket(label: '61–90 days', value: b2, color: Colors.deepOrange)),
+                    SizedBox(width: w, child: _AgeBucket(label: '91–120 days', value: b3, color: Colors.red.shade600)),
+                    SizedBox(width: w, child: _AgeBucket(label: '120+ days', value: b4, color: AppTheme.danger)),
                   ]);
                 }),
                 const SizedBox(height: 14),
