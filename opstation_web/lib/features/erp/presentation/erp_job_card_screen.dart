@@ -1180,42 +1180,74 @@ $runSection
         ]));
 
     final detailPane = Column(children: [
-        Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        // The action strip. On desktop everything fits one row. On a phone it did
+        // not: "Produce Batch" — the primary action, and the one a floor
+        // supervisor actually reaches for — was being clipped off the edge. So on
+        // mobile the icons keep one row and the two real buttons get a full-width
+        // row of their own beneath, as proper tap targets.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            // On mobile the route's app bar already carries the job number and a
-            // back button, so repeating both here just eats vertical space on an
-            // already-long form. Keep only the progress figure and the actions.
-            if (!context.isMobile) ...[
-              IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
-              const SizedBox(width: 8),
-              Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              if (!context.isMobile) ...[
+                IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                const SizedBox(width: 8),
+                Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+              ],
+              if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
+              if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_leftLabel(_plannedQty, _producedQty)}',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
+              if (context.isMobile) const Spacer(),
+              if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail', visualDensity: VisualDensity.compact),
+              if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)', visualDensity: VisualDensity.compact),
+              if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
+              if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
+              if (_current != null && _status != 'completed' && _status != 'cancelled')
+                IconButton(
+                  tooltip: running ? 'Pause' : 'Play',
+                  icon: Icon(running ? Icons.pause_circle : Icons.play_circle, size: 28,
+                    color: running ? Colors.orange.shade800 : Colors.green.shade700),
+                  onPressed: _busy ? null : _toggleRunning,
+                  visualDensity: VisualDensity.compact,
+                ),
+              // Desktop keeps Save + Produce inline.
+              if (!context.isMobile) ...[
+                const SizedBox(width: 8),
+                if (_editable) OutlinedButton.icon(
+                  icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
+                  label: const Text('Save'), onPressed: _saving || _busy ? null : () => _save()),
+                const SizedBox(width: 8),
+                if (_current != null && _remainingQty > 0 && _status != 'cancelled') ElevatedButton.icon(
+                  icon: const Icon(Icons.add_task, size: 16), label: const Text('Produce Batch'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+                  onPressed: _busy ? null : _produceBatch),
+              ],
+            ]),
+            // Mobile: the real buttons get their own full-width row.
+            if (context.isMobile && (_editable || (_current != null && _remainingQty > 0 && _status != 'cancelled'))) ...[
+              const SizedBox(height: 8),
+              Row(children: [
+                if (_editable)
+                  Expanded(child: OutlinedButton.icon(
+                    icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
+                    label: const Text('Save'),
+                    onPressed: _saving || _busy ? null : () => _save(),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
+                  )),
+                if (_editable && _current != null && _remainingQty > 0 && _status != 'cancelled')
+                  const SizedBox(width: 8),
+                if (_current != null && _remainingQty > 0 && _status != 'cancelled')
+                  Expanded(flex: 2, child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add_task, size: 16),
+                    label: const Text('Produce Batch'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 12)),
+                    onPressed: _busy ? null : _produceBatch,
+                  )),
+              ]),
             ],
-            if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
-            if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_leftLabel(_plannedQty, _producedQty)}',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
-            if (context.isMobile) const Spacer(),
-            if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail'),
-            if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)'),
-            if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)'),
-            if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete'),
-            if (_editable) OutlinedButton.icon(
-              icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
-              label: const Text('Save'), onPressed: _saving || _busy ? null : () => _save()),
-            const SizedBox(width: 8),
-            if (_current != null && _status != 'completed' && _status != 'cancelled') ...[
-              IconButton(
-                tooltip: running ? 'Pause' : 'Play',
-                icon: Icon(running ? Icons.pause_circle : Icons.play_circle, size: 28,
-                  color: running ? Colors.orange.shade800 : Colors.green.shade700),
-                onPressed: _busy ? null : _toggleRunning,
-              ),
-              const SizedBox(width: 8),
-            ],
-            if (_current != null && _remainingQty > 0 && _status != 'cancelled') ElevatedButton.icon(
-              icon: const Icon(Icons.add_task, size: 16), label: const Text('Produce Batch'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
-              onPressed: _busy ? null : _produceBatch),
           ])),
         Expanded(child: _loadingProducts
           ? const Center(child: CircularProgressIndicator())
