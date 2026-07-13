@@ -1084,6 +1084,20 @@ $runSection
   }
 
   // ---------- UI helpers ----------
+  /// Field width. On a phone every field takes the full line — a 190px Branch
+  /// beside a 140px Date left the "Bill of Materials" field with ~40px, which is
+  /// what made its label wrap one letter per line.
+  double _fw(double w) => context.isMobile ? double.infinity : w;
+
+  /// Compact figure for the mobile batch card.
+  Widget _runChip(String label, String value, Color color) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(fontSize: 9, color: AppTheme.textSecondary)),
+      Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+    ],
+  );
+
   Widget _labeled(String label, Widget child) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
     const SizedBox(height: 5), child,
@@ -1169,12 +1183,18 @@ $runSection
         Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
-            IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
-            const SizedBox(width: 8),
-            Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+            // On mobile the route's app bar already carries the job number and a
+            // back button, so repeating both here just eats vertical space on an
+            // already-long form. Keep only the progress figure and the actions.
+            if (!context.isMobile) ...[
+              IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+              const SizedBox(width: 8),
+              Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+            ],
             if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
             if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text('${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_leftLabel(_plannedQty, _producedQty)}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
+            if (context.isMobile) const Spacer(),
             if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail'),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)'),
             if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)'),
@@ -1199,28 +1219,24 @@ $runSection
           ])),
         Expanded(child: _loadingProducts
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 190, child: _labeled('Branch', _readonlyBox((ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—'))),
-              const SizedBox(width: 12),
-              SizedBox(width: 140, child: _labeled('Date', _dateField())),
-              const SizedBox(width: 12),
-              Expanded(child: _labeled('Bill of Materials *', _editable
+          : SingleChildScrollView(padding: EdgeInsets.all(context.isMobile ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Wrap(spacing: 12, runSpacing: 14, crossAxisAlignment: WrapCrossAlignment.start, children: [
+              SizedBox(width: _fw(190), child: _labeled('Branch', _readonlyBox((ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—'))),
+              SizedBox(width: _fw(140), child: _labeled('Date', _dateField())),
+              SizedBox(width: _fw(300), child: _labeled('Bill of Materials *', _editable
                 ? _ProductField(key: ValueKey('bom_${_current?['id'] ?? 'new'}_$_bomId'), initialLabel: _bomLabel.isEmpty ? '' : (_bomLabel + (_fgLabel.isNotEmpty ? ' — $_fgLabel' : '')), filterFn: _filterBoms, onPick: (b) => _pickBom(b['id'] as String))
                 : _readonlyBox(_bomLabel.isEmpty ? '—' : '$_bomLabel — $_fgLabel'))),
             ]),
             const SizedBox(height: 14),
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 130, child: _labeled('Planned Qty *', TextField(controller: _plannedQtyCtrl, enabled: _editable, keyboardType: TextInputType.number,
+            Wrap(spacing: 12, runSpacing: 14, crossAxisAlignment: WrapCrossAlignment.start, children: [
+              SizedBox(width: _fw(130), child: _labeled('Planned Qty *', TextField(controller: _plannedQtyCtrl, enabled: _editable, keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                 decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 11)),
                 onChanged: (_) { if (_bomId != null && _current == null) _rescale(); setState(() {}); }))),
-              const SizedBox(width: 12),
-              SizedBox(width: 100, child: _labeled('Priority', TextField(controller: _priorityCtrl, enabled: _editable, keyboardType: TextInputType.number,
+              SizedBox(width: _fw(100), child: _labeled('Priority', TextField(controller: _priorityCtrl, enabled: _editable, keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9]'))],
                 decoration: const InputDecoration(isDense: true, hintText: '0', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 11))))),
-              const SizedBox(width: 12),
-              SizedBox(width: 210, child: _labeled('Work Center', Row(children: [
+              SizedBox(width: _fw(210), child: _labeled('Work Center', Row(children: [
                 Expanded(child: DropdownButtonFormField<String?>(
                   value: _wcCtrl.text.trim().isEmpty ? null : _wcCtrl.text.trim(), isExpanded: true,
                   decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
@@ -1230,8 +1246,7 @@ $runSection
                 if (_editable) IconButton(icon: const Icon(Icons.settings_outlined, size: 16), tooltip: 'Manage work centers',
                   visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 30), onPressed: _manageWorkCenters),
               ]))),
-              const SizedBox(width: 12),
-              SizedBox(width: 230, child: _labeled('Assigned To', Row(children: [
+              SizedBox(width: _fw(230), child: _labeled('Assigned To', Row(children: [
                 Expanded(child: DropdownButtonFormField<String?>(value: _assignedWorkerId, isExpanded: true,
                   decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
                   items: [const DropdownMenuItem<String?>(value: null, child: Text('—')),
@@ -1242,8 +1257,8 @@ $runSection
               ]))),
             ]),
             const SizedBox(height: 14),
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 420, child: _labeled('Customer (optional)', _editable
+            Wrap(children: [
+              SizedBox(width: _fw(420), child: _labeled('Customer (optional)', _editable
                 ? Row(children: [
                     Expanded(child: _ProductField(
                       key: ValueKey('cust_${_current?['id'] ?? 'new'}_$_customerId'),
@@ -1385,7 +1400,9 @@ $runSection
             Text('${_runs.where((r) => r['status'] == 'posted').length} posted', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ])),
         if (_runs.isEmpty) const Padding(padding: EdgeInsets.all(14), child: Text('No batches yet. Use "Produce Batch" to record production with QC.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-        if (_runs.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+        // Desktop: the table. Mobile: one card per batch — 424px of fixed columns
+        // plus an Expanded date left "Date" as a one-letter-per-line column.
+        if (_runs.isNotEmpty && !context.isMobile) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: const [
             SizedBox(width: 44, child: Text('Batch', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             Expanded(child: Text('Date', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
@@ -1395,19 +1412,55 @@ $runSection
             SizedBox(width: 100, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             SizedBox(width: 80, child: Text('', style: TextStyle(fontSize: 11))),
           ])),
-        for (final r in _runs)
-          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
-            child: Row(children: [
-              SizedBox(width: 44, child: Text('R${r['run_no']}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
-              Expanded(child: Text('${r['run_date'] ?? ''}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-              SizedBox(width: 70, child: Text(_trim((r['produced_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-              SizedBox(width: 70, child: Text(_trim((r['accepted_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.green))),
-              SizedBox(width: 60, child: Text(_trim((r['rejected_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.red))),
-              SizedBox(width: 100, child: Text(_money((r['total_cost'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-              SizedBox(width: 80, child: Align(alignment: Alignment.centerRight, child: r['status'] == 'posted'
-                ? TextButton(onPressed: _busy ? null : () => _voidRun(r), style: TextButton.styleFrom(foregroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero), child: const Text('Void', style: TextStyle(fontSize: 12)))
-                : Text(r['status'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
-            ])),
+        if (!context.isMobile)
+          for (final r in _runs)
+            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
+              child: Row(children: [
+                SizedBox(width: 44, child: Text('R${r['run_no']}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                Expanded(child: Text('${r['run_date'] ?? ''}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                SizedBox(width: 70, child: Text(_trim((r['produced_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+                SizedBox(width: 70, child: Text(_trim((r['accepted_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.green))),
+                SizedBox(width: 60, child: Text(_trim((r['rejected_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.red))),
+                SizedBox(width: 100, child: Text(_money((r['total_cost'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+                SizedBox(width: 80, child: Align(alignment: Alignment.centerRight, child: r['status'] == 'posted'
+                  ? TextButton(onPressed: _busy ? null : () => _voidRun(r), style: TextButton.styleFrom(foregroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero), child: const Text('Void', style: TextStyle(fontSize: 12)))
+                  : Text(r['status'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
+              ])),
+        if (context.isMobile)
+          for (final r in _runs)
+            Container(
+              margin: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.background,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Text('R${r['run_no']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text('${r['run_date'] ?? ''}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                  Text(_money((r['total_cost'] as num? ?? 0).toDouble()), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                ]),
+                const SizedBox(height: 6),
+                Row(children: [
+                  _runChip('Produced', _trim((r['produced_qty'] as num? ?? 0).toDouble()), AppTheme.textPrimary),
+                  const SizedBox(width: 8),
+                  _runChip('Accepted', _trim((r['accepted_qty'] as num? ?? 0).toDouble()), Colors.green.shade700),
+                  const SizedBox(width: 8),
+                  _runChip('Reject', _trim((r['rejected_qty'] as num? ?? 0).toDouble()), Colors.red.shade700),
+                  const Spacer(),
+                  if (r['status'] == 'posted')
+                    TextButton(onPressed: _busy ? null : () => _voidRun(r),
+                      style: TextButton.styleFrom(foregroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero),
+                      child: const Text('Void', style: TextStyle(fontSize: 12)))
+                  else
+                    Text(r['status'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                ]),
+              ]),
+            ),
+        if (context.isMobile) const SizedBox(height: 10),
       ]));
   }
 }
