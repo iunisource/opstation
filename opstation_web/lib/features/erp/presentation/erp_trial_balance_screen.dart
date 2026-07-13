@@ -7,6 +7,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/reports/branch_scope.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpTrialBalanceScreen extends ConsumerStatefulWidget {
@@ -19,7 +20,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
   DateTime _from = DateTime(DateTime.now().year, 1, 1);
   DateTime _to   = DateTime.now();
   bool _loading  = false;
-  bool _allBranches = false;
+  bool _allBranches = true;  // org-wide first; a TB only balances org-wide
   List<Map<String, dynamic>> _rows = [];
   // level-4 detail rows grouped by their level-3 parent code
   Map<String, List<Map<String, dynamic>>> _children = {};
@@ -36,11 +37,15 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     setState(() => _loading = true);
     try {
       final branch = ref.read(selectedBranchProvider);
+      // p_branch_ids (array), not p_branch_id. BranchScope decides what "all"
+      // means for THIS user: null (org-wide) only for an unrestricted admin; an
+      // erpUser always gets their own branch ids, never null.
+      final scope = await ref.read(branchScopeProvider.future);
       final params = {
         'p_org_id': orgId,
         'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
         'p_date_to':   DateFormat('yyyy-MM-dd').format(_to),
-        'p_branch_id': _allBranches ? null : branch?['id'],
+        'p_branch_ids': scope.resolve(allSelected: _allBranches, selected: branch),
       };
       final client = Supabase.instance.client;
       final res = await client.rpc('rpc_trial_balance', params: params);
@@ -128,6 +133,8 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
   Widget build(BuildContext context) {
     ref.listen(selectedBranchProvider, (_, __) => _load());
     final branch = ref.watch(selectedBranchProvider);
+    final scope = ref.watch(branchScopeProvider).valueOrNull ??
+        const BranchScope(restricted: false, allowed: []);
     final fmt = NumberFormat('#,##0.00');
     double tDr = _rows.fold(0.0, (s, r) => s + (r['closing_dr'] as num? ?? 0));
     double tCr = _rows.fold(0.0, (s, r) => s + (r['closing_cr'] as num? ?? 0));
@@ -143,7 +150,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
         ]),
         const SizedBox(height: 4),
-        Text(_allBranches || branch == null ? 'All Branches (organization-wide)' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary)),
+        Text(scope.label(allSelected: _allBranches, selected: branch), style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Row(children: [
           _datePicker('From', _from, (d) { setState(() => _from = d); _load(); }, maxDate: _to),
@@ -153,9 +160,15 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
           // A trial balance is an org-level statement; a single-branch view won't
           // balance when stock has moved between branches (in-transit accounts).
           // This toggle flips to the exact organization-wide view.
-          if (branch != null) OutlinedButton.icon(
+          // "All" means different things to different people: org-wide for an
+          // admin, but only the user's OWN branches for an erpUser — which is why
+          // BranchScope resolves it rather than passing null blindly. A user with
+          // exactly one branch gets no toggle; there is nothing to consolidate.
+          if (scope.canToggleAll) OutlinedButton.icon(
             icon: Icon(_allBranches ? Icons.account_tree : Icons.store, size: 16),
-            label: Text(_allBranches ? 'All Branches' : 'This Branch'),
+            label: Text(_allBranches
+                ? (scope.restricted ? 'All My Branches' : 'All Branches')
+                : 'This Branch'),
             onPressed: () { setState(() => _allBranches = !_allBranches); _load(); },
           ),
         ]),

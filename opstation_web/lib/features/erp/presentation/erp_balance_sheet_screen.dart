@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/reports/branch_scope.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
@@ -41,17 +42,30 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     await _load();
   }
 
+  /// Defaults TRUE — see the P&L screen. This one is worse: it previously sent
+  /// no branch parameter at all, so a branch-scoped erpUser was shown the whole
+  /// company's balance sheet.
+  bool _allBranches = true;
+
   Future<void> _load() async {
     String? orgId = ref.read(currentUserProvider)?.orgId;
     orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
     if (orgId == null) { WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _load(); }); return; }
     setState(() => _loading = true);
     try {
+      // This screen previously sent NO branch parameter at all, so it always
+      // returned organisation-wide figures — an erpUser scoped to one branch was
+      // shown the whole company's balance sheet. Now scoped like the others.
+      final branch = ref.read(selectedBranchProvider);
+      final scope = await ref.read(branchScopeProvider.future);
+      final branchIds = scope.resolve(allSelected: _allBranches, selected: branch);
+
       List<Map<String, dynamic>> bsRows = [];
       try {
         final bsRes = await Supabase.instance.client.rpc('rpc_balance_sheet', params: <String, dynamic>{
           'p_org_id': orgId,
           'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf),
+          'p_branch_ids': branchIds,
         });
         bsRows = List<Map<String, dynamic>>.from(bsRes as List);
       } catch (e) {
@@ -65,6 +79,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         final dRes = await Supabase.instance.client.rpc('rpc_balance_sheet_detail', params: <String, dynamic>{
           'p_org_id': orgId,
           'p_as_of': DateFormat('yyyy-MM-dd').format(_asOf),
+          'p_branch_ids': branchIds,
         });
         for (final d in List<Map<String, dynamic>>.from(dRes as List)) {
           (children[(d['parent_code'] ?? '') as String] ??= []).add(d);
@@ -142,6 +157,8 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   Widget build(BuildContext context) {
     ref.listen(selectedBranchProvider, (_, __) => _load());
     final branch = ref.watch(selectedBranchProvider);
+    final scope = ref.watch(branchScopeProvider).valueOrNull ??
+        const BranchScope(restricted: false, allowed: []);
     final fmt = NumberFormat('#,##0.00');
 
     final assets  = _bsRows.where((r) => r['account_type'] == 'asset').toList();
@@ -164,8 +181,22 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
           IconButton(onPressed: _refreshWithSweep, icon: const Icon(Icons.refresh), tooltip: 'Refresh (posts pending POS cost)'),
         ]),
         const SizedBox(height: 4),
-        Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary)),
+        Text(scope.label(allSelected: _allBranches, selected: branch), style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
+        Row(children: [
+          // "All" means different things to different people: org-wide for an
+          // admin, but only the user's OWN branches for an erpUser — which is why
+          // BranchScope resolves it rather than passing null blindly. A user with
+          // exactly one branch gets no toggle; there is nothing to consolidate.
+          if (scope.canToggleAll) OutlinedButton.icon(
+            icon: Icon(_allBranches ? Icons.account_tree : Icons.store, size: 16),
+            label: Text(_allBranches
+                ? (scope.restricted ? 'All My Branches' : 'All Branches')
+                : 'This Branch'),
+            onPressed: () { setState(() => _allBranches = !_allBranches); _load(); },
+          ),
+        ]),
+        const SizedBox(height: 12),
         OutlinedButton.icon(
           icon: const Icon(Icons.calendar_today, size: 16),
           label: Text('As of: ${DateFormat('d MMM yyyy').format(_asOf)}'),

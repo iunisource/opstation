@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/reports/branch_scope.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
@@ -38,6 +39,11 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     await _load();
   }
 
+  /// Defaults TRUE: an owner opening the P&L wants the whole business first.
+  /// Previously it silently scoped to whatever branch was selected in the
+  /// sidebar, which is very easy to misread as company-wide numbers.
+  bool _allBranches = true;
+
   Future<void> _load() async {
     String? orgId = ref.read(currentUserProvider)?.orgId;
     orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
@@ -45,11 +51,15 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     setState(() => _loading = true);
     try {
       final branch = ref.read(selectedBranchProvider);
+      // Previously this passed the sidebar branch unconditionally, so an owner
+      // could never see a consolidated P&L — the company's numbers were silently
+      // whichever branch happened to be selected. Now it defaults to all.
+      final scope = await ref.read(branchScopeProvider.future);
       final params = {
         'p_org_id': orgId,
         'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
         'p_date_to':   DateFormat('yyyy-MM-dd').format(_to),
-        'p_branch_id': branch?['id'],
+        'p_branch_ids': scope.resolve(allSelected: _allBranches, selected: branch),
       };
       final client = Supabase.instance.client;
       final res = await client.rpc('rpc_profit_loss', params: params);
@@ -162,6 +172,8 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   Widget build(BuildContext context) {
     ref.listen(selectedBranchProvider, (_, __) => _load());
     final branch = ref.watch(selectedBranchProvider);
+    final scope = ref.watch(branchScopeProvider).valueOrNull ??
+        const BranchScope(restricted: false, allowed: []);
     final fmt = NumberFormat('#,##0.00');
 
     final revenue = _rows.where((r) => r['account_type'] == 'revenue').toList();
@@ -183,12 +195,24 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
           IconButton(onPressed: _refreshWithSweep, icon: const Icon(Icons.refresh), tooltip: 'Refresh (posts pending POS cost)'),
         ]),
         const SizedBox(height: 4),
-        Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}', style: const TextStyle(color: AppTheme.textSecondary)),
+        Text(scope.label(allSelected: _allBranches, selected: branch), style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Row(children: [
           _datePicker('From', _from, (d) { setState(() => _from = d); _load(); }, maxDate: _to),
           const SizedBox(width: 12),
           _datePicker('To', _to, (d) { setState(() => _to = d); _load(); }, minDate: _from),
+          const SizedBox(width: 12),
+          // "All" means different things to different people: org-wide for an
+          // admin, but only the user's OWN branches for an erpUser — which is why
+          // BranchScope resolves it rather than passing null blindly. A user with
+          // exactly one branch gets no toggle; there is nothing to consolidate.
+          if (scope.canToggleAll) OutlinedButton.icon(
+            icon: Icon(_allBranches ? Icons.account_tree : Icons.store, size: 16),
+            label: Text(_allBranches
+                ? (scope.restricted ? 'All My Branches' : 'All Branches')
+                : 'This Branch'),
+            onPressed: () { setState(() => _allBranches = !_allBranches); _load(); },
+          ),
         ]),
         if (!_loading && _rows.isNotEmpty) ...[
           const SizedBox(height: 12),
