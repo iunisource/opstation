@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
 
 const _taxonomyTypes = {
@@ -143,6 +144,45 @@ class _ErpProductClassificationsScreenState
         ],
       ),
     );
+  }
+
+  /// Brand logo. Only meaningful on `sub_group` — that IS the brand dimension
+  /// (Cables → Fast Cables), and it is what retailers are entitled against and
+  /// what they browse by. A logo on "Fast Moving" or "Finished Goods" would be
+  /// noise, so the control is not offered there.
+  Future<void> _uploadLogo(Map<String, dynamic> item) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    try {
+      final url = await CatalogImageUploader.pickAndUpload(
+        orgId: orgId,
+        folder: 'brands',
+        keyHint: item['id'] as String,
+      );
+      if (url == null) return; // cancelled
+      await Supabase.instance.client
+          .from('product_taxonomies')
+          .update({'logo_url': url}).eq('id', item['id']);
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Logo updated.')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      }
+    }
+  }
+
+  Future<void> _removeLogo(Map<String, dynamic> item) async {
+    try {
+      await Supabase.instance.client
+          .from('product_taxonomies')
+          .update({'logo_url': null}).eq('id', item['id']);
+      await _load();
+    } catch (_) {}
   }
 
   Future<void> _delete(String id, String taxonomyType) async {
@@ -309,14 +349,39 @@ class _ErpProductClassificationsScreenState
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (_, i) {
                       final item = items[i];
+                      final isBrand = type == 'sub_group';
+                      final logo = item['logo_url'] as String?;
                       return Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 20, vertical: 12),
                         child: Row(children: [
+                          if (isBrand) ...[
+                            _LogoThumb(url: logo),
+                            const SizedBox(width: 12),
+                          ],
                           Expanded(
                               child: Text(item['name'] as String? ?? '',
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w600))),
+                          if (isBrand) ...[
+                            TextButton.icon(
+                              icon: Icon(
+                                  logo == null
+                                      ? Icons.add_photo_alternate_outlined
+                                      : Icons.swap_horiz,
+                                  size: 16),
+                              label: Text(logo == null ? 'Add logo' : 'Replace',
+                                  style: const TextStyle(fontSize: 12)),
+                              onPressed: () => _uploadLogo(item),
+                            ),
+                            if (logo != null)
+                              IconButton(
+                                tooltip: 'Remove logo',
+                                icon: const Icon(Icons.hide_image_outlined,
+                                    size: 17, color: AppTheme.textSecondary),
+                                onPressed: () => _removeLogo(item),
+                              ),
+                          ],
                           IconButton(
                             icon: const Icon(Icons.edit_outlined, size: 18),
                             onPressed: () => _showDialog(type, item),
@@ -479,6 +544,34 @@ class _ErpProductClassificationsScreenState
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Small square preview. Falls back to a neutral placeholder rather than an
+/// empty gap, so a brand without a logo still reads as a deliberate row.
+class _LogoThumb extends StatelessWidget {
+  final String? url;
+  const _LogoThumb({this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      width: 38,
+      decoration: BoxDecoration(
+        color: AppTheme.background,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: url == null
+          ? const Icon(Icons.sell_outlined,
+              size: 17, color: AppTheme.textSecondary)
+          : Image.network(url!,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined,
+                  size: 16, color: AppTheme.textSecondary)),
     );
   }
 }

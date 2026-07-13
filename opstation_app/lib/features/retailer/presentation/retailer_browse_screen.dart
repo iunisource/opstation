@@ -22,6 +22,21 @@ final retailerProductsProvider =
   return [for (final r in res) Map<String, dynamic>.from(r as Map)];
 });
 
+/// Brand logos + the org's "show images" switch, in one call.
+///
+/// Images are OFF by default. With thousands of products and few photos, turning
+/// them on prematurely gives a wall of grey placeholders — worse than the honest
+/// text list. So the admin flips this only once the catalogue is worth showing,
+/// and every widget below falls back to text when an image is missing.
+final retailerCatalogMetaProvider =
+    FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
+  try {
+    final res = await Supabase.instance.client.rpc('retailer_catalog_meta');
+    if (res is Map) return Map<String, dynamic>.from(res);
+  } catch (_) {}
+  return {'show_images': false, 'brands': {}};
+});
+
 /// Brand-first browse. A retailer tagged to several brands thinks in brands
 /// ("what Paklite LED do I need?"), not in one flat 340-item list — so pick the
 /// brand, then the products within it. With a single brand we skip the picker
@@ -92,6 +107,10 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(retailerProductsProvider);
+    final meta = ref.watch(retailerCatalogMetaProvider).valueOrNull;
+    final showImages = meta?['show_images'] == true;
+    final brandLogos = Map<String, dynamic>.from(
+        (meta?['brands'] as Map?) ?? const {});
     final cart = ref.watch(cartProvider);
     final count = ref.watch(cartCountProvider);
     final total = ref.watch(cartTotalProvider);
@@ -135,8 +154,10 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
               if (_brand == null && brands.length == 1) {
                 _brand = brands.first;
               }
-              if (_brand == null) return _brandList(brands, rows, t);
-              return _productList(rows, cart, t);
+              if (_brand == null) {
+                return _brandList(brands, rows, t, brandLogos);
+              }
+              return _productList(rows, cart, t, showImages);
             },
           ),
           bottomNavigationBar: count == 0
@@ -190,8 +211,8 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
     );
   }
 
-  Widget _brandList(
-      List<String> brands, List<Map<String, dynamic>> rows, T t) {
+  Widget _brandList(List<String> brands, List<Map<String, dynamic>> rows, T t,
+      Map<String, dynamic> logos) {
     final counts = <String, int>{};
     for (final p in rows) {
       final b = '${p['product_sub_group'] ?? ''}';
@@ -217,17 +238,7 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
             child: ListTile(
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              leading: Container(
-                height: 44,
-                width: 44,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(Icons.sell_outlined,
-                    color: AppColors.primary, size: 21),
-              ),
+              leading: _BrandLogo(url: logos[b] as String?),
               title: Text(b,
                   style: const TextStyle(
                       fontSize: 15.5, fontWeight: FontWeight.w700)),
@@ -248,8 +259,8 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
     );
   }
 
-  Widget _productList(
-      List<Map<String, dynamic>> rows, Map<String, CartLine> cart, T t) {
+  Widget _productList(List<Map<String, dynamic>> rows,
+      Map<String, CartLine> cart, T t, bool showImages) {
     final inBrand = (_brand == null || _brand!.isEmpty)
         ? rows
         : rows.where((p) => p['product_sub_group'] == _brand).toList();
@@ -302,6 +313,10 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 10),
                     child: Row(children: [
+                      if (showImages) ...[
+                        _ProductThumb(url: p['image_url'] as String?),
+                        const SizedBox(width: 12),
+                      ],
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -420,6 +435,65 @@ class _Stepper extends StatelessWidget {
           onPressed: onAdd,
         ),
       ]),
+    );
+  }
+}
+
+/// Brand mark on the brand picker. Falls back to a tinted icon — a brand with no
+/// logo should still look like a considered row, not a broken one.
+class _BrandLogo extends StatelessWidget {
+  final String? url;
+  const _BrandLogo({this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 46,
+      width: 46,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: url == null
+            ? AppColors.primary.withValues(alpha: 0.10)
+            : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: url == null
+            ? null
+            : Border.all(color: Colors.black.withValues(alpha: 0.08)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: url == null
+          ? Icon(Icons.sell_outlined, color: AppColors.primary, size: 21)
+          : Image.network(url!,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) =>
+                  Icon(Icons.sell_outlined, color: AppColors.primary, size: 21)),
+    );
+  }
+}
+
+/// Product thumbnail, shown only when the admin has switched images on.
+class _ProductThumb extends StatelessWidget {
+  final String? url;
+  const _ProductThumb({this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 52,
+      width: 52,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: url == null
+          ? Icon(Icons.inventory_2_outlined,
+              size: 20, color: AppColors.textSecondaryLight)
+          : Image.network(url!,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Icon(Icons.inventory_2_outlined,
+                  size: 20, color: AppColors.textSecondaryLight)),
     );
   }
 }

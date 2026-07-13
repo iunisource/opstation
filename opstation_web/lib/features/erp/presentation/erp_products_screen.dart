@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpProductsScreen extends ConsumerStatefulWidget {
@@ -555,6 +556,9 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     String? productClass = product?['product_class'] as String?;
     String? movementCategory = product?['product_movement_category'] as String?;
     bool isConsignment = product?['is_consignment'] == true;
+    // Optional. Nullable by design — thousands of products exist with no image,
+    // and every surface must render cleanly without one.
+    String? imageUrl = product?['image_url'] as String?;
 
     Widget _taxonomyDropdown(String type, String label, String? value, void Function(String?) onChanged) {
       final items = _taxonomies[type] ?? [];
@@ -588,9 +592,78 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                           color: AppTheme.textSecondary)),
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(labelText: 'Product Name *')),
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  // Optional product photo. Shown to retailers only when the
+                  // "Show product images" admin toggle is ON.
+                  Column(children: [
+                    Container(
+                      height: 68,
+                      width: 68,
+                      decoration: BoxDecoration(
+                        color: AppTheme.background,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: imageUrl == null
+                          ? const Icon(Icons.inventory_2_outlined,
+                              size: 24, color: AppTheme.textSecondary)
+                          : Image.network(imageUrl!,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                  Icons.broken_image_outlined,
+                                  size: 20,
+                                  color: AppTheme.textSecondary)),
+                    ),
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      height: 26,
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 6)),
+                        onPressed: () async {
+                          final orgId = ref.read(currentUserProvider)?.orgId;
+                          if (orgId == null) return;
+                          try {
+                            final url = await CatalogImageUploader.pickAndUpload(
+                              orgId: orgId,
+                              folder: 'products',
+                              keyHint: product?['id'] as String? ??
+                                  DateTime.now().millisecondsSinceEpoch.toString(),
+                            );
+                            if (url != null) setS(() => imageUrl = url);
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Upload failed: $e')));
+                            }
+                          }
+                        },
+                        child: Text(imageUrl == null ? 'Add photo' : 'Change',
+                            style: const TextStyle(fontSize: 11)),
+                      ),
+                    ),
+                    if (imageUrl != null)
+                      SizedBox(
+                        height: 22,
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 6),
+                              foregroundColor: AppTheme.textSecondary),
+                          onPressed: () => setS(() => imageUrl = null),
+                          child: const Text('Remove',
+                              style: TextStyle(fontSize: 10)),
+                        ),
+                      ),
+                  ]),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: TextField(
+                        controller: nameCtrl,
+                        decoration:
+                            const InputDecoration(labelText: 'Product Name *')),
+                  ),
+                ]),
                 const SizedBox(height: 12),
                 Row(children: [
                   Expanded(
@@ -752,6 +825,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'cost_price': isConsignment ? 0 : (double.tryParse(costPriceCtrl.text.trim()) ?? 0),
                   'low_stock_limit': double.tryParse(lowStockCtrl.text.trim()) ?? 0,
                   'is_consignment': isConsignment,
+                  'image_url': imageUrl,
                   'updated_at': DateTime.now().toUtc().toIso8601String(),
                 };
                 try {

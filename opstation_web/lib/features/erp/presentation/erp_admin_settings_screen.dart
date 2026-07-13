@@ -194,6 +194,16 @@ const List<_AdminToggle> _toggles = [
         'from the client via a manual journal voucher. When OFF, the consignment '
         'checkbox is hidden; products already flagged keep their behaviour.',
   ),
+  _AdminToggle(
+    'org.show_product_images',
+    'Show product images in the retailer app',
+    'When ON, retailers browsing your catalogue see brand logos and product '
+        'photos instead of a plain text list. Images are optional per product — '
+        'anything without one falls back to the text row, so a partly-filled '
+        'catalogue still looks deliberate. Leave this OFF until you have uploaded '
+        'enough images to be worth it: switching it on with an empty catalogue '
+        'shows a wall of placeholders and makes the app look broken.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
