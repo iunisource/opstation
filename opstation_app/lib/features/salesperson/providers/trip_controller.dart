@@ -151,7 +151,7 @@ class TripController extends AsyncNotifier<TripState> {
             await notifService.sendToUser(
               targetUserId: a.id,
               title: 'Route Started',
-              body: '${user?.name ?? 'Salesperson'} started ${route.name}',
+              body: '${user?.name ?? 'Salesperson'} started ${route.name} at ${_clock(DateTime.now())}',
             );
           }
         }
@@ -203,7 +203,7 @@ class TripController extends AsyncNotifier<TripState> {
             await notifService.sendToUser(
               targetUserId: a.id,
               title: 'Route Completed',
-              body: '${active.userName} completed ${active.routeName}',
+              body: '${active.userName} completed ${active.routeName} at ${_clock(DateTime.now())}',
             );
           }
         }
@@ -388,3 +388,15 @@ class TripController extends AsyncNotifier<TripState> {
 
 final tripControllerProvider =
     AsyncNotifierProvider<TripController, TripState>(TripController.new);
+
+/// Local wall-clock time for notification bodies. An admin seeing "Musa started
+/// Route A" has no idea whether that was five minutes ago or at 6am — the push
+/// may arrive late, or be read hours later from the tray.
+String _clock(DateTime t) {
+  final l = t.toLocal();
+  final h24 = l.hour;
+  final h = h24 % 12 == 0 ? 12 : h24 % 12;
+  final m = l.minute.toString().padLeft(2, '0');
+  final ap = h24 < 12 ? 'AM' : 'PM';
+  return '$h:$m $ap';
+}

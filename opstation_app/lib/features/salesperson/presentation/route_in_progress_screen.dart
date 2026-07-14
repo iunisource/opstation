@@ -243,7 +243,47 @@ class _ProgressHeader extends StatelessWidget {
                 Text('$pct%', style: const TextStyle(fontWeight: FontWeight.w700)),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            // Total collected on this route. The reps were adding it up on paper
+            // because the app knew the figure and never showed it.
+            Builder(builder: (_) {
+              final collected = trip.visits.fold<int>(0, (sum, v) => sum + v.amount);
+              final receipts = trip.visits.where((v) => v.amount > 0).length;
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: collected > 0
+                      ? AppColors.success.withValues(alpha: 0.08)
+                      : AppColors.borderLight.withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: collected > 0
+                        ? AppColors.success.withValues(alpha: 0.30)
+                        : AppColors.borderLight,
+                  ),
+                ),
+                child: Row(children: [
+                  Icon(Icons.payments_outlined, size: 17,
+                      color: collected > 0 ? AppColors.success : AppColors.textSecondaryLight),
+                  const SizedBox(width: 8),
+                  const Text('Collected',
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                  const SizedBox(width: 6),
+                  Text('($receipts receipt${receipts == 1 ? '' : 's'})',
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.textSecondaryLight)),
+                  const Spacer(),
+                  Text('Rs ${_thousands(collected)}',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: collected > 0 ? AppColors.success : AppColors.textSecondaryLight,
+                      )),
+                ]),
+              );
+            }),
+            const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
@@ -797,4 +837,16 @@ class _CompletedFooter extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 12500 -> 12,500. Reps read these numbers aloud to shopkeepers; an unspaced
+/// figure invites a misread.
+String _thousands(int v) {
+  final s = v.toString();
+  final b = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+    b.write(s[i]);
+  }
+  return b.toString();
 }

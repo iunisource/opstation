@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -36,7 +38,10 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshDeviceFix());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _refreshDeviceFix();
+      _startGpsPolling();
+    });
   }
 
   @override
@@ -44,23 +49,56 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
     _amountCtrl.dispose();
     _crCtrl.dispose();
     _notesCtrl.dispose();
+    _gpsPoll?.cancel();
     super.dispose();
   }
 
-  Future<void> _refreshDeviceFix() async {
+  Timer? _gpsPoll;
+
+  /// A GPS fix arrives coarse and sharpens over several seconds — the first
+  /// reading indoors can be 100m+ wide, which is why reps standing inside a shop
+  /// were being marked "outside range". A single shot at dialog-open captured
+  /// that first bad fix and kept it. So poll: every 2s we take a fresh fix and
+  /// keep the BEST one seen, and the health bar shows the rep whether to wait a
+  /// moment or go ahead. Polling stops once the fix is good enough to be useless
+  /// to improve further, or when the sheet closes.
+  Future<void> _refreshDeviceFix({bool silent = false}) async {
     if (_fetchingDeviceFix) return;
-    setState(() {
+    if (!silent) {
+      setState(() {
+        _fetchingDeviceFix = true;
+        _deviceFix = null;
+      });
+    } else {
       _fetchingDeviceFix = true;
-      _deviceFix = null;
-    });
+    }
     final gps = ref.read(deviceGpsServiceProvider);
     final fix = await gps.getFix();
     if (!mounted) return;
     setState(() {
-      _deviceFix = fix == null
+      final next = fix == null
           ? const SimulatedFix.unavailable()
           : SimulatedFix(lat: fix.lat, lng: fix.lng, accuracyMeters: fix.accuracy);
+      // Keep whichever fix is tighter — a later reading is not automatically
+      // a better one.
+      final cur = _deviceFix;
+      final curAcc = (cur != null && cur.available) ? (cur.accuracyMeters ?? 9999) : 9999;
+      final nextAcc = next.available ? (next.accuracyMeters ?? 9999) : 9999;
+      _deviceFix = (cur == null || !cur.available || nextAcc < curAcc) ? next : cur;
       _fetchingDeviceFix = false;
+    });
+  }
+
+  void _startGpsPolling() {
+    _gpsPoll?.cancel();
+    _gpsPoll = Timer.periodic(const Duration(seconds: 2), (t) async {
+      if (!mounted) { t.cancel(); return; }
+      final f = _deviceFix;
+      final acc = (f != null && f.available) ? (f.accuracyMeters ?? 9999) : 9999;
+      // Good enough — no point burning battery chasing decimetres.
+      if (acc <= 15) { t.cancel(); return; }
+      if (t.tick > 20) { t.cancel(); return; }   // give up after ~40s
+      await _refreshDeviceFix(silent: true);
     });
   }
 
@@ -217,6 +255,14 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                           ]),
                         )
                       else
+                        _LocationHealthBar(
+                          fix: fix,
+                          distance: distance,
+                          radius: radius,
+                          searching: _fetchingDeviceFix || (_gpsPoll?.isActive ?? false),
+                          onRetry: _refreshDeviceFix,
+                        ),
+                        const SizedBox(height: 10),
                         _GpsBanner(
                           fix: fix, distance: distance,
                           hasLocation: hasLocation, radius: radius, accuracyWarn: accuracyWarn,
@@ -509,6 +555,132 @@ class _AddPhotoTile extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Live GPS quality, so a rep knows whether to wait two seconds or go ahead.
+///
+/// Marking is never blocked — the rep is standing in the shop and knows it. But
+/// a fix that is still 90m wide will record the visit as "outside range" through
+/// no fault of theirs, and today they had no way to see that coming. This shows
+/// the accuracy sharpening in real time, exactly like WhatsApp's location screen.
+class _LocationHealthBar extends StatelessWidget {
+  final SimulatedFix fix;
+  final double? distance;
+  final double radius;
+  final bool searching;
+  final VoidCallback onRetry;
+
+  const _LocationHealthBar({
+    required this.fix,
+    required this.distance,
+    required this.radius,
+    required this.searching,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final acc = fix.available ? fix.accuracyMeters : null;
+
+    // Bands chosen against the geofence, not in the abstract: a 100m fence with a
+    // 90m error is a coin toss, which is precisely the failure the reps hit.
+    final Color tone;
+    final String label;
+    final double bar;
+    if (acc == null) {
+      tone = AppColors.textSecondaryLight;
+      label = searching ? 'Finding your location…' : 'Location unavailable';
+      bar = 0.08;
+    } else if (acc <= 20) {
+      tone = AppColors.success;
+      label = 'Strong signal — ready';
+      bar = 1.0;
+    } else if (acc <= 50) {
+      tone = AppColors.warningDark;
+      label = searching ? 'Improving… you can wait a moment' : 'Fair signal';
+      bar = 0.6;
+    } else {
+      tone = AppColors.dangerDark;
+      label = searching ? 'Weak — waiting for a better fix…' : 'Weak signal';
+      bar = 0.28;
+    }
+
+    final inRange = distance != null && distance! <= radius;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tone.withValues(alpha: 0.30)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          if (searching)
+            SizedBox(
+              width: 13, height: 13,
+              child: CircularProgressIndicator(strokeWidth: 2, color: tone),
+            )
+          else
+            Icon(
+              acc == null ? Icons.location_disabled
+                : acc <= 20 ? Icons.gps_fixed
+                : Icons.gps_not_fixed,
+              size: 15, color: tone,
+            ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: tone)),
+          ),
+          if (acc != null)
+            Text('±${acc.round()} m',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: tone)),
+          if (!searching)
+            InkWell(
+              onTap: onRetry,
+              child: const Padding(
+                padding: EdgeInsets.only(left: 8),
+                child: Icon(Icons.refresh, size: 16, color: AppColors.textSecondaryLight),
+              ),
+            ),
+        ]),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: bar),
+            duration: const Duration(milliseconds: 400),
+            builder: (_, v, __) => LinearProgressIndicator(
+              value: v,
+              minHeight: 5,
+              backgroundColor: AppColors.borderLight,
+              valueColor: AlwaysStoppedAnimation(tone),
+            ),
+          ),
+        ),
+        if (distance != null) ...[
+          const SizedBox(height: 7),
+          Row(children: [
+            Icon(inRange ? Icons.check_circle : Icons.error_outline,
+                size: 13,
+                color: inRange ? AppColors.success : AppColors.warningDark),
+            const SizedBox(width: 5),
+            Text(
+              inRange
+                  ? '${distance!.round()} m from the shop — inside the ${radius.round()} m fence'
+                  : '${distance!.round()} m from the shop — outside the ${radius.round()} m fence',
+              style: TextStyle(
+                fontSize: 11.5,
+                color: inRange ? AppColors.success : AppColors.warningDark,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ]),
+        ],
+      ]),
     );
   }
 }

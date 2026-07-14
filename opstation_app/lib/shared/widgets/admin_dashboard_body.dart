@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../features/admin/providers/admin_dashboard_stats.dart';
+import '../../features/admin/providers/admin_dashboard_realtime.dart';
 import 'role_home_scaffold.dart';
 import 'section_label.dart';
 import 'temp_password_banner.dart';
@@ -33,6 +34,10 @@ class AdminDashboardBody extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Holding this alive opens the Realtime channel; disposing the screen closes
+    // it. The stats then refresh themselves whenever a rep in the field marks a
+    // visit — no polling, no pull-to-refresh, no logout.
+    ref.watch(adminDashboardRealtimeProvider);
     final statsAsync = ref.watch(adminDashboardStatsProvider);
     final stats = statsAsync.valueOrNull;
     return ListView(
