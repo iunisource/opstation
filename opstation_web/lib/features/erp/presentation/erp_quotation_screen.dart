@@ -984,7 +984,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   Widget _buildEditor() {
     final isNew = _doc!['id'] == null;
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           IconButton(icon: const Icon(Icons.arrow_back), onPressed: _closeDoc),
@@ -1043,13 +1043,13 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
           ),
         ]),
-        const SizedBox(height: 16),
-        // Header fields
-        Wrap(spacing: 16, runSpacing: 12, children: [
-          _field('Customer', SizedBox(width: 260, child: InkWell(
+        const SizedBox(height: 10),
+        // Header fields — labels inside the boxes, so the whole band is one row tall.
+        Wrap(spacing: 10, runSpacing: 8, children: [
+          _field('Customer', SizedBox(width: 250, child: InkWell(
             onTap: _pickCustomer,
             child: InputDecorator(
-              decoration: _dec(),
+              decoration: _decLabel('Customer'),
               child: Row(children: [
                 Expanded(child: Text(
                   _custDisplay(_doc!),
@@ -1071,10 +1071,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               ]),
             ),
           ))),
-          _field('Branch', SizedBox(width: 220, child: DropdownButtonFormField<String>(
+          _field('Branch', SizedBox(width: 200, child: DropdownButtonFormField<String>(
             value: _doc!['branch_id'] as String?,
             isExpanded: true,
-            decoration: _dec(),
+            decoration: _decLabel('Branch'),
             items: _branches.map((b) => DropdownMenuItem<String>(value: b['id'] as String, child: Text(b['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))).toList(),
             onChanged: (v) => setState(() => _doc!['branch_id'] = v),
           ))),
@@ -1083,23 +1083,23 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               final d = await showDatePicker(context: context, initialDate: _doc!['voucher_date'] as DateTime, firstDate: DateTime(2020), lastDate: DateTime(2100));
               if (d != null) setState(() => _doc!['voucher_date'] = d);
             },
-            child: InputDecorator(decoration: _dec(), child: Text(DateFormat('dd MMM yyyy').format(_doc!['voucher_date'] as DateTime), style: const TextStyle(fontSize: 13))),
+            child: InputDecorator(decoration: _decLabel('Date'), child: Text(DateFormat('dd MMM yyyy').format(_doc!['voucher_date'] as DateTime), style: const TextStyle(fontSize: 13))),
           ))),
-          _field('Valid Until (optional)', SizedBox(width: 180, child: InkWell(
+          _field('Valid Until', SizedBox(width: 170, child: InkWell(
             onTap: () async {
               final d = await showDatePicker(context: context, initialDate: (_doc!['valid_until'] as DateTime?) ?? DateTime.now().add(const Duration(days: 15)), firstDate: DateTime(2020), lastDate: DateTime(2100));
               if (d != null) setState(() => _doc!['valid_until'] = d);
             },
-            child: InputDecorator(decoration: _dec(), child: Row(children: [
+            child: InputDecorator(decoration: _decLabel('Valid Until'), child: Row(children: [
               Expanded(child: Text(_doc!['valid_until'] != null ? DateFormat('dd MMM yyyy').format(_doc!['valid_until'] as DateTime) : '—', style: const TextStyle(fontSize: 13))),
               if (_doc!['valid_until'] != null) InkWell(onTap: () => setState(() => _doc!['valid_until'] = null), child: const Icon(Icons.clear, size: 14)),
             ])),
           ))),
         ]),
-        const SizedBox(height: 20),
+        const SizedBox(height: 10),
         // Lines header
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(color: Color(0xFFF8F9FA)),
           child: Row(children: const [
             SizedBox(width: 40, child: Text('Sr#', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
@@ -1119,59 +1119,87 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           itemBuilder: (_, i) => _lineRow(i),
         )),
         const Divider(height: 1),
-        Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Row(children: [
-          TextButton.icon(onPressed: _addLineAndPick, icon: const Icon(Icons.add, size: 18), label: const Text('Add Line')),
-          const SizedBox(width: 8),
+        Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Row(children: [
+          TextButton.icon(
+            onPressed: _addLineAndPick,
+            icon: const Icon(Icons.add, size: 17),
+            label: const Text('Add Line', style: TextStyle(fontSize: 13)),
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          ),
+          const SizedBox(width: 6),
           if (_lines.isNotEmpty)
-            TextButton.icon(onPressed: _bulkDiscountDialog, icon: const Icon(Icons.percent, size: 16), label: const Text('Discount All Lines')),
+            TextButton.icon(
+              onPressed: _bulkDiscountDialog,
+              icon: const Icon(Icons.percent, size: 15),
+              label: const Text('Discount All Lines', style: TextStyle(fontSize: 13)),
+              style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+            ),
           const Spacer(),
+          Text('${_lines.length} line${_lines.length == 1 ? '' : 's'}',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         ])),
-        // Totals block: Subtotal → Global Discount (fixed/%) → Grand Total
-        Align(
-          alignment: Alignment.centerRight,
-          child: SizedBox(width: 360, child: Column(children: [
-            Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
-              const Text('Subtotal', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-              const Spacer(),
-              Text('Rs. ${_linesSubtotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            ])),
-            Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
-              const Text('Global Discount', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-              const Spacer(),
-              SizedBox(width: 90, child: TextField(
-                controller: _globalDiscCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                textAlign: TextAlign.right,
-                decoration: _dec(),
-                style: const TextStyle(fontSize: 13),
-                onChanged: (_) => setState(() {}),
-              )),
-              const SizedBox(width: 6),
-              DropdownButton<String>(
-                value: _globalDiscType,
-                underline: const SizedBox(),
-                isDense: true,
-                items: const [DropdownMenuItem(value: 'fixed', child: Text('Rs', style: TextStyle(fontSize: 12))), DropdownMenuItem(value: 'percent', child: Text('%', style: TextStyle(fontSize: 12)))],
-                onChanged: (v) => setState(() => _globalDiscType = v ?? 'fixed'),
-              ),
-              const SizedBox(width: 6),
-              SizedBox(width: 70, child: Text('- ${_globalDiscAmt.toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, color: Colors.orange))),
-            ])),
-            const Divider(),
-            Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
-              const Text('Grand Total', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
-              const Spacer(),
-              Text('Rs. ${_grandTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
-            ])),
-          ])),
+        const SizedBox(height: 6),
+        // Totals as a single footer strip. Stacked (Subtotal / Discount / Grand
+        // Total on their own rows) plus a separate Remarks box below cost ~170px
+        // of height — on a 768px laptop that is three lines of the quotation you
+        // cannot see. One row costs ~48px, and Remarks sits beside it.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F9FA),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            SizedBox(width: 260, child: TextField(
+              controller: _notesCtrl,
+              decoration: _decLabel('Remarks (optional)'),
+              style: const TextStyle(fontSize: 13),
+              maxLines: 1,
+            )),
+            const SizedBox(width: 18),
+            Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Subtotal', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+              Text('Rs. ${_linesSubtotal.toStringAsFixed(2)}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ]),
+            const SizedBox(width: 18),
+            Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Global Discount', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+              const SizedBox(height: 2),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                SizedBox(width: 78, height: 30, child: TextField(
+                  controller: _globalDiscCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  textAlign: TextAlign.right,
+                  decoration: _dec(),
+                  style: const TextStyle(fontSize: 13),
+                  onChanged: (_) => setState(() {}),
+                )),
+                const SizedBox(width: 4),
+                DropdownButton<String>(
+                  value: _globalDiscType,
+                  underline: const SizedBox(),
+                  isDense: true,
+                  items: const [
+                    DropdownMenuItem(value: 'fixed', child: Text('Rs', style: TextStyle(fontSize: 12))),
+                    DropdownMenuItem(value: 'percent', child: Text('%', style: TextStyle(fontSize: 12))),
+                  ],
+                  onChanged: (v) => setState(() => _globalDiscType = v ?? 'fixed'),
+                ),
+                const SizedBox(width: 6),
+                Text('- ${_globalDiscAmt.toStringAsFixed(2)}',
+                    style: const TextStyle(fontSize: 12, color: Colors.orange)),
+              ]),
+            ]),
+            const Spacer(),
+            Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+              const Text('Grand Total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+              Text('Rs. ${_grandTotal.toStringAsFixed(2)}',
+                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+            ]),
+          ]),
         ),
-        const SizedBox(height: 12),
-        SizedBox(width: 420, child: TextField(
-          controller: _notesCtrl,
-          decoration: InputDecoration(labelText: 'Remarks (optional)', isDense: true,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
-          maxLines: 2,
-        )),
       ]),
     );
   }
@@ -1182,9 +1210,9 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     final prod = _products.firstWhere((p) => p['id'] == l['product_id'], orElse: () => {});
     final uomAbbr = prod.isEmpty ? '-' : ((prod['uoms']?['abbreviation'] as String?) ?? (prod['uoms']?['name'] as String?) ?? '-');
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Row(children: [
-        SizedBox(width: 40, child: Text('${i + 1}', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+        SizedBox(width: 34, child: Text('${i + 1}', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
         Expanded(flex: 4, child: InkWell(
           onTap: () => _productPicker(i),
           child: InputDecorator(
@@ -1345,16 +1373,27 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     });
   }
 
-  Widget _field(String label, Widget child) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 4),
-        child,
-      ]);
+  Widget _field(String label, Widget child) => child;
 
+  /// Dense by design. This decoration is used by every line row, so 4px of
+  /// vertical padding here is 4px x every line on screen — the difference
+  /// between seeing 4 lines and seeing 9 on a 768px laptop.
   InputDecoration _dec() => InputDecoration(
         isDense: true,
         filled: true, fillColor: const Color(0xFFF8F9FA),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
+      );
+
+  /// Header-field decoration: the label lives INSIDE the box, so each field
+  /// costs ~18px less than a label stacked above an input.
+  InputDecoration _decLabel(String label) => InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        isDense: true,
+        filled: true, fillColor: const Color(0xFFF8F9FA),
+        contentPadding: const EdgeInsets.fromLTRB(8, 14, 8, 6),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
       );
 }
