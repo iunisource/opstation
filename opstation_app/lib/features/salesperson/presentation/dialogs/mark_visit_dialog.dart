@@ -258,6 +258,7 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                           fix: fix,
                           distance: distance,
                           radius: radius,
+                          hasLocation: hasLocation,
                           searching: _fetchingDeviceFix || (_gpsPoll?.isActive ?? false),
                           onRetry: _refreshDeviceFix,
                         ),
@@ -343,16 +344,24 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                         const SizedBox(width: 12),
                         Expanded(
                           flex: 2,
-                          child: ElevatedButton.icon(
-                            onPressed: _submitting ? null : _submit,
-                            icon: _submitting
-                                ? const SizedBox(width: 16, height: 16,
-                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                : const Icon(Icons.check_circle_outline, size: 18),
-                            label: const Text('Mark visit'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: inRange && hasLocation
-                                  ? AppColors.primary : AppColors.warningDark,
+                          // Green and gently pulsing when the fix is good and the
+                          // rep is inside the fence — a positive cue that this
+                          // visit will verify. Amber otherwise: still tappable
+                          // (never block a rep standing in a shop), just honest
+                          // that it will record as unverified.
+                          child: _PulsingButton(
+                            active: inRange && hasLocation && !_submitting,
+                            child: ElevatedButton.icon(
+                              onPressed: _submitting ? null : _submit,
+                              icon: _submitting
+                                  ? const SizedBox(width: 16, height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.check_circle_outline, size: 18),
+                              label: const Text('Mark visit'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: inRange && hasLocation
+                                    ? AppColors.success : AppColors.warningDark,
+                              ),
                             ),
                           ),
                         ),
@@ -443,6 +452,7 @@ class _LocationHealthBar extends StatelessWidget {
   final SimulatedFix fix;
   final double? distance;
   final double radius;
+  final bool hasLocation;
   final bool searching;
   final VoidCallback onRetry;
 
@@ -450,12 +460,45 @@ class _LocationHealthBar extends StatelessWidget {
     required this.fix,
     required this.distance,
     required this.radius,
+    required this.hasLocation,
     required this.searching,
     required this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
+    // No coordinates stored against the shop. This is a data problem, not a
+    // signal problem — waiting will not help, and the visit will always record
+    // as unverified. The rep should know that is not their fault, and someone
+    // should fix the customer record.
+    if (!hasLocation) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: AppColors.warningDark.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.warningDark.withValues(alpha: 0.30)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.location_off_outlined, size: 16, color: AppColors.warningDark),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('No location saved for this shop',
+                  style: TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w700,
+                      color: AppColors.warningDark)),
+              const SizedBox(height: 2),
+              Text('The visit will be recorded, but cannot be location-verified.',
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      color: AppColors.warningDark.withValues(alpha: 0.85))),
+            ]),
+          ),
+        ]),
+      );
+    }
+
     final acc = fix.available ? fix.accuracyMeters : null;
 
     // Bands chosen against the geofence, not in the abstract: a 100m fence with a
@@ -555,6 +598,53 @@ class _LocationHealthBar extends StatelessWidget {
           ]),
         ],
       ]),
+    );
+  }
+}
+
+/// A soft pulse behind the primary action when the fix is good — a cue the rep
+/// can read from across a shop counter, without a jarring blink.
+class _PulsingButton extends StatefulWidget {
+  final bool active;
+  final Widget child;
+  const _PulsingButton({required this.active, required this.child});
+
+  @override
+  State<_PulsingButton> createState() => _PulsingButtonState();
+}
+
+class _PulsingButtonState extends State<_PulsingButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.active) return widget.child;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, child) => DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.success.withValues(alpha: 0.20 + 0.28 * _c.value),
+              blurRadius: 10 + 12 * _c.value,
+              spreadRadius: 1 + 2 * _c.value,
+            ),
+          ],
+        ),
+        child: child,
+      ),
+      child: widget.child,
     );
   }
 }

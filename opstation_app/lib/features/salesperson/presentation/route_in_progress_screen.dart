@@ -398,7 +398,7 @@ class _StopsList extends ConsumerWidget {
   }
 }
 
-class _StopCard extends StatelessWidget {
+class _StopCard extends StatefulWidget {
   final int index;
   static const _tones = {
     VisitStatus.verified: AppColors.success,
@@ -424,10 +424,31 @@ class _StopCard extends StatelessWidget {
     required this.onSkip,
   });
 
+  @override
+  State<_StopCard> createState() => _StopCardState();
+}
+
+class _StopCardState extends State<_StopCard> {
+  /// A finished stop starts collapsed, but the rep can open it again — to
+  /// re-check a phone number, reopen the map, or place an order for a shop they
+  /// have already collected from. Collapsing must not mean losing access.
+  bool _open = false;
+
+  int get index => widget.index;
+  Customer get customer => widget.customer;
+  Visit? get visit => widget.visit;
+  bool get canVisit => widget.canVisit;
+  bool get readOnly => widget.readOnly;
+  VoidCallback get onMarkVisit => widget.onMarkVisit;
+  VoidCallback get onSkip => widget.onSkip;
+
   Widget _collapsed(BuildContext context, VisitStatus status) {
-    final tone = _tones[status] ?? AppColors.textSecondaryLight;
+    final tone = _StopCard._tones[status] ?? AppColors.textSecondaryLight;
     final amount = visit?.amount ?? 0;
-    return Container(
+    return InkWell(
+      onTap: () => setState(() => _open = true),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
@@ -462,7 +483,10 @@ class _StopCard extends StatelessWidget {
         ] else
           Text(status.label,
               style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: tone)),
+        const SizedBox(width: 6),
+        const Icon(Icons.expand_more, size: 17, color: AppColors.textSecondaryLight),
       ]),
+      ),
     );
   }
 
@@ -476,8 +500,30 @@ class _StopCard extends StatelessWidget {
     // hour ago. The line keeps what they might still want to check: that it was
     // done, and what was collected.
     final settled = status != null && !canVisit;
-    if (settled && !readOnly) return _collapsed(context, status);
+    if (settled && !readOnly && !_open) return _collapsed(context, status);
 
+    // An expanded-but-settled stop gets a tap target to fold it away again.
+    if (settled && !readOnly && _open) {
+      return Stack(children: [
+        _fullCard(context, status),
+        Positioned(
+          top: 4, right: 4,
+          child: InkWell(
+            onTap: () => setState(() => _open = false),
+            borderRadius: BorderRadius.circular(20),
+            child: const Padding(
+              padding: EdgeInsets.all(6),
+              child: Icon(Icons.expand_less, size: 20, color: AppColors.textSecondaryLight),
+            ),
+          ),
+        ),
+      ]);
+    }
+
+    return _fullCard(context, status);
+  }
+
+  Widget _fullCard(BuildContext context, VisitStatus? status) {
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
