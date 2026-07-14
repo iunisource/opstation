@@ -28,6 +28,13 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   Map<String, TextEditingController> _costCtrl = {};
   Map<String, TextEditingController> _discCtrl = {};
   VoucherMeta _meta = VoucherMeta();
+  // The supplier's own invoice number, and a free-text description. Both live on
+  // the PI header: the vendor's number is what you reconcile their statement
+  // against, and the description is what makes the supplier ledger readable —
+  // today every row just repeats "Purchase Invoice PI-2026-0001", which tells a
+  // reader nothing they cannot already see in the Voucher column.
+  final TextEditingController _vendorNoCtrl = TextEditingController();
+  final TextEditingController _descCtrl = TextEditingController();
   bool _listLoading = true;
   bool _detailLoading = false;
   String _search = '';
@@ -36,7 +43,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   @override
   void initState() { super.initState(); _loadList(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
   @override
-  void dispose() { for (final c in _costCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); super.dispose(); }
+  void dispose() { for (final c in _costCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); _vendorNoCtrl.dispose(); _descCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -63,7 +70,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_invoices')
-          .select('id,voucher_number,voucher_date,grand_total,is_locked,supplier_id,grn_id,suppliers(name),purchase_grns(voucher_number)')
+          .select('id,voucher_number,voucher_date,grand_total,is_locked,supplier_id,grn_id,vendor_invoice_no,description,suppliers(name),purchase_grns(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -83,6 +90,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: inv['created_by'] as String?);
       setState(() {
         _detail = Map<String, dynamic>.from(inv); _items = List<Map<String, dynamic>>.from(items);
+        _vendorNoCtrl.text = (inv['vendor_invoice_no'] as String?) ?? '';
+        _descCtrl.text = (inv['description'] as String?) ?? '';
         _meta = meta; _detailLoading = false; _initCtrls();
       });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
@@ -228,6 +237,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     try {
       await Supabase.instance.client.from('purchase_invoices').update({
         'is_locked': true, 'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'vendor_invoice_no': _vendorNoCtrl.text.trim().isEmpty ? null : _vendorNoCtrl.text.trim(),
+        'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', piId);
       if (grnId != null) {
@@ -292,6 +303,11 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     final refs = <String, String>{};
     if (_detail['purchase_grns']?['voucher_number'] != null) refs['GRN #'] = _detail['purchase_grns']['voucher_number'] as String;
     if (_detail['purchase_orders']?['voucher_number'] != null) refs['PO #'] = _detail['purchase_orders']['voucher_number'] as String;
+    // The supplier's own invoice number belongs on the printed document — it is
+    // what they will quote back to you on a statement or a query.
+    final vNo = _detail['vendor_invoice_no'] as String?;
+    if (vNo != null && vNo.isNotEmpty) refs['Vendor Inv #'] = vNo;
+    final vDesc = (_detail['description'] as String?)?.trim();
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Purchase Invoice',
@@ -306,7 +322,19 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       subtotal: (_detail['subtotal'] as num?)?.toDouble() ?? 0,
       discountTotal: (_detail['discount_total'] as num?)?.toDouble() ?? 0,
       grandTotal: (_detail['grand_total'] as num?)?.toDouble() ?? 0,
-      preparedBy: _meta.preparedBy, footerNote: _meta.purchaseFooterNote ?? _meta.footerNote,
+      preparedBy: _meta.preparedBy,
+      // Description leads the footer, then the org's standard purchase note.
+      footerNote: [
+        if (vDesc != null && vDesc.isNotEmpty) vDesc,
+        if ((_meta.purchaseFooterNote ?? _meta.footerNote) != null)
+          (_meta.purchaseFooterNote ?? _meta.footerNote)!,
+      ].join('\n\n').trim().isEmpty
+          ? null
+          : [
+              if (vDesc != null && vDesc.isNotEmpty) vDesc,
+              if ((_meta.purchaseFooterNote ?? _meta.footerNote) != null)
+                (_meta.purchaseFooterNote ?? _meta.footerNote)!,
+            ].join('\n\n'),
       relatedRefs: refs.isNotEmpty ? refs : null,
     );
   }
@@ -398,11 +426,57 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
           _PiChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           if (_detail['purchase_grns']?['voucher_number'] != null) _PiChip(label: 'GRN #', value: _detail['purchase_grns']['voucher_number'] as String),
           if (_detail['purchase_orders']?['voucher_number'] != null) _PiChip(label: 'PO #', value: _detail['purchase_orders']['voucher_number'] as String),
+          if (_isLocked && (_detail['vendor_invoice_no'] as String?)?.isNotEmpty == true)
+            _PiChip(label: 'Vendor Inv #', value: _detail['vendor_invoice_no'] as String),
           _PiChip(label: 'Status', value: _isLocked ? 'Invoiced' : 'Draft'),
           if (_isLocked) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
         ]),
         if (sup != null) _PiInfoStrip(address: sup['address'] as String?, contact: sup['contact_person'] as String?, phone: (sup['contact_number'] ?? sup['phone']) as String?, ntn: sup['ntn'] as String?, preparedBy: _meta.preparedBy),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        // Vendor invoice # and description. Editable while draft; once the invoice
+        // is locked they become part of the record (shown as chips / on the PDF).
+        if (_isDraft)
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(width: 220, child: TextField(
+              controller: _vendorNoCtrl,
+              decoration: InputDecoration(
+                labelText: "Vendor Invoice # (optional)",
+                hintText: "Supplier's own number",
+                isDense: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              style: const TextStyle(fontSize: 13),
+            )),
+            const SizedBox(width: 12),
+            Expanded(child: TextField(
+              controller: _descCtrl,
+              decoration: InputDecoration(
+                labelText: 'Description (optional)',
+                hintText: 'Shown in the supplier ledger and on the printed invoice',
+                isDense: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              style: const TextStyle(fontSize: 13),
+            )),
+          ]),
+        if (_isDraft) const SizedBox(height: 12),
+        if (_isLocked && (_detail['description'] as String?)?.isNotEmpty == true)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppTheme.background,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Row(children: [
+              const Icon(Icons.notes, size: 15, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              Expanded(child: Text(_detail['description'] as String,
+                  style: const TextStyle(fontSize: 12.5))),
+            ]),
+          ),
+        const SizedBox(height: 4),
         if (_isDraft) Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.primary.withOpacity(0.25))),
           child: const Row(children: [Icon(Icons.edit_note, size: 15, color: AppTheme.primary), SizedBox(width: 8), Expanded(child: Text('Enter unit costs and discounts below, then click "Save Invoice" to lock.', style: TextStyle(fontSize: 12, color: AppTheme.primary)))])),

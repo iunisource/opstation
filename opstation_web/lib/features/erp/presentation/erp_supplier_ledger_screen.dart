@@ -174,7 +174,22 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         if (total > 0) {
           entries.add({
             'date': date, 'voucher': vno,
-            'description': vno.isNotEmpty ? 'Purchase Invoice ' + vno : 'Purchase Invoice',
+            // Prefer the typed description and the supplier's own invoice number.
+            // "Purchase Invoice PI-2026-0001" repeated the Voucher column and told
+            // the reader nothing; the vendor's number is what reconciles against
+            // their statement.
+            'description': () {
+              final d = (si['description'] as String?)?.trim() ?? '';
+              final ven = (si['vendor_invoice_no'] as String?)?.trim() ?? '';
+              final parts = <String>[
+                if (d.isNotEmpty) d,
+                if (ven.isNotEmpty) 'Vendor Inv #' + ven,
+              ];
+              if (parts.isEmpty) {
+                return vno.isNotEmpty ? 'Purchase Invoice ' + vno : 'Purchase Invoice';
+              }
+              return parts.join('  ·  ');
+            }(),
             'debit': 0.0, 'credit': total, 'id': si['id'] as String?, 'type': 'Purchase Invoice',
           });
         }
