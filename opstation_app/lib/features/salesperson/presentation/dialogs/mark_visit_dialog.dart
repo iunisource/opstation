@@ -169,7 +169,6 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
     final distance = _distance;
     final tripState = ref.watch(tripControllerProvider).valueOrNull;
     final radius = tripState?.geofenceRadiusMeters ?? 100;
-    final accuracyWarn = tripState?.accuracyWarnThresholdMeters ?? 50;
     final inRange = distance != null && distance <= radius;
     final hasLocation = widget.customer.hasLocation;
 
@@ -261,11 +260,6 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                           radius: radius,
                           searching: _fetchingDeviceFix || (_gpsPoll?.isActive ?? false),
                           onRetry: _refreshDeviceFix,
-                        ),
-                        const SizedBox(height: 10),
-                        _GpsBanner(
-                          fix: fix, distance: distance,
-                          hasLocation: hasLocation, radius: radius, accuracyWarn: accuracyWarn,
                         ),
                       const SizedBox(height: 16),
 
@@ -372,126 +366,6 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
         ),
       ),
     );
-  }
-}
-
-class _GpsBanner extends StatelessWidget {
-  final SimulatedFix fix;
-  final double? distance;
-  final bool hasLocation;
-  final double radius;
-  final double accuracyWarn;
-
-  const _GpsBanner({
-    required this.fix, required this.distance,
-    required this.hasLocation, required this.radius, required this.accuracyWarn,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (!fix.available) {
-      return _box(AppColors.dangerLight, AppColors.dangerDark, Icons.gps_off,
-          'GPS unavailable — visit will be marked No Location');
-    }
-    if (!hasLocation) {
-      return _box(AppColors.warningLight, AppColors.warningDark, Icons.location_off_outlined,
-          'Customer has no saved location — visit will be marked No Location');
-    }
-    final acc = fix.accuracyMeters ?? 0;
-    final accBad = acc > accuracyWarn;
-    final outside = distance != null && distance! > radius;
-    return Column(children: [
-      _box(
-        accBad ? AppColors.warningLight : AppColors.successLight,
-        accBad ? AppColors.warningDark : AppColors.successDark,
-        Icons.gps_fixed,
-        accBad ? 'GPS captured (±${acc.round()}m — weak signal)'
-               : 'GPS captured (±${acc.round()}m — good signal)',
-      ),
-      if (outside) ...[
-        const SizedBox(height: 8),
-        _box(AppColors.dangerLight, AppColors.dangerDark, Icons.warning_amber_outlined,
-            '${GeoUtils.formatDistance(distance!)} from customer — outside ${radius.round()}m range'),
-      ],
-      const SizedBox(height: 8),
-      _AccuracyBar(accuracy: acc, warn: accuracyWarn),
-    ]);
-  }
-
-  Widget _box(Color bg, Color fg, IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
-      child: Row(children: [
-        Icon(icon, color: fg, size: 18),
-        const SizedBox(width: 8),
-        Expanded(child: Text(text,
-            style: TextStyle(color: fg, fontSize: 13, fontWeight: FontWeight.w500))),
-      ]),
-    );
-  }
-}
-
-class _DistanceRow extends StatelessWidget {
-  final double distance;
-  final double radius;
-  const _DistanceRow({required this.distance, required this.radius});
-
-  @override
-  Widget build(BuildContext context) {
-    final inRange = distance <= radius;
-    final color = inRange ? AppColors.success : AppColors.danger;
-    final ratio = (distance / (radius * 2)).clamp(0.0, 1.0);
-    return Row(children: [
-      const Text('Distance:',
-          style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
-      const SizedBox(width: 8),
-      Expanded(
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: ratio,
-            minHeight: 6,
-            backgroundColor: AppColors.borderLight,
-            valueColor: AlwaysStoppedAnimation(color),
-          ),
-        ),
-      ),
-      const SizedBox(width: 8),
-      Text(GeoUtils.formatDistance(distance),
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
-    ]);
-  }
-}
-
-class _AccuracyBar extends StatelessWidget {
-  final double accuracy;
-  final double warn;
-  const _AccuracyBar({required this.accuracy, required this.warn});
-
-  @override
-  Widget build(BuildContext context) {
-    final ratio = (accuracy / (warn * 2)).clamp(0.0, 1.0);
-    final good = accuracy <= warn;
-    return Row(children: [
-      const Text('GPS accuracy:',
-          style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
-      const SizedBox(width: 8),
-      Expanded(
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: 1 - ratio, minHeight: 6,
-            backgroundColor: AppColors.borderLight,
-            valueColor: AlwaysStoppedAnimation(good ? AppColors.success : AppColors.warningDark),
-          ),
-        ),
-      ),
-      const SizedBox(width: 8),
-      Text('±${accuracy.round()}m',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-              color: good ? AppColors.success : AppColors.warningDark)),
-    ]);
   }
 }
 

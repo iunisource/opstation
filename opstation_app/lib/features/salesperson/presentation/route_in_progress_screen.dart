@@ -178,13 +178,16 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
           _ProgressHeader(trip: trip),
           if (!isCompleted) ...[
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: TextField(
                 controller: _searchCtrl,
                 onChanged: (_) => setState(() {}),
+                style: const TextStyle(fontSize: 14),
                 decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   hintText: 'Search stops...',
-                  prefixIcon: Icon(Icons.search, size: 20),
+                  prefixIcon: Icon(Icons.search, size: 18),
                 ),
               ),
             ),
@@ -208,81 +211,95 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
   }
 }
 
-class _ProgressHeader extends StatelessWidget {
+/// The route header, collapsed to one line.
+///
+/// It previously stacked a progress bar, a collection strip, and a four-cell KPI
+/// row — around 200px before the first stop appeared. A rep with 30 stops spends
+/// the day scrolling past figures they glance at once. So: a single summary line
+/// they can tap to expand when they actually want the breakdown.
+class _ProgressHeader extends StatefulWidget {
   final Trip trip;
   const _ProgressHeader({required this.trip});
 
   @override
+  State<_ProgressHeader> createState() => _ProgressHeaderState();
+}
+
+class _ProgressHeaderState extends State<_ProgressHeader> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
+    final trip = widget.trip;
     final pct = trip.completionPercent.round();
+    final collected = trip.visits.fold<int>(0, (sum, v) => sum + v.amount);
+    final receipts = trip.visits.where((v) => v.amount > 0).length;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
       child: Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: AppColors.borderLight),
         ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: trip.completionPercent / 100,
-                      minHeight: 6,
-                      backgroundColor: AppColors.borderLight,
-                      valueColor: const AlwaysStoppedAnimation(AppColors.primary),
-                    ),
+        child: Column(children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Row(children: [
+              // Progress ring beats a full-width bar: same information, a tenth
+              // of the width.
+              SizedBox(
+                width: 30, height: 30,
+                child: Stack(alignment: Alignment.center, children: [
+                  CircularProgressIndicator(
+                    value: trip.completionPercent / 100,
+                    strokeWidth: 3.5,
+                    backgroundColor: AppColors.borderLight,
+                    valueColor: const AlwaysStoppedAnimation(AppColors.primary),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Text('$pct%', style: const TextStyle(fontWeight: FontWeight.w700)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // Total collected on this route. The reps were adding it up on paper
-            // because the app knew the figure and never showed it.
-            Builder(builder: (_) {
-              final collected = trip.visits.fold<int>(0, (sum, v) => sum + v.amount);
-              final receipts = trip.visits.where((v) => v.amount > 0).length;
-              return Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                decoration: BoxDecoration(
-                  color: collected > 0
-                      ? AppColors.success.withValues(alpha: 0.08)
-                      : AppColors.borderLight.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: collected > 0
-                        ? AppColors.success.withValues(alpha: 0.30)
-                        : AppColors.borderLight,
-                  ),
-                ),
-                child: Row(children: [
-                  Icon(Icons.payments_outlined, size: 17,
-                      color: collected > 0 ? AppColors.success : AppColors.textSecondaryLight),
-                  const SizedBox(width: 8),
-                  const Text('Collected',
-                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-                  const SizedBox(width: 6),
-                  Text('($receipts receipt${receipts == 1 ? '' : 's'})',
-                      style: const TextStyle(
-                          fontSize: 11, color: AppColors.textSecondaryLight)),
-                  const Spacer(),
-                  Text('Rs ${_thousands(collected)}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: collected > 0 ? AppColors.success : AppColors.textSecondaryLight,
-                      )),
+                  Text('$pct',
+                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
                 ]),
-              );
-            }),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(children: [
+                      _Pip(trip.verifiedCount, AppColors.success, Icons.check),
+                      const SizedBox(width: 9),
+                      _Pip(trip.outsideCount, AppColors.warningDark, Icons.warning_amber_rounded),
+                      const SizedBox(width: 9),
+                      _Pip(trip.skippedCount, AppColors.textSecondaryLight, Icons.skip_next),
+                      const SizedBox(width: 9),
+                      _Pip(trip.pendingCount, AppColors.primary,
+                          trip.isClosed ? Icons.remove_circle_outline : Icons.schedule),
+                    ]),
+                    const SizedBox(height: 3),
+                    Text(
+                      collected > 0
+                          ? 'Rs ${_thousands(collected)} collected · $receipts receipt${receipts == 1 ? '' : 's'}'
+                          : 'Nothing collected yet',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: collected > 0 ? AppColors.success : AppColors.textSecondaryLight,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(_expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20, color: AppColors.textSecondaryLight),
+            ]),
+          ),
+          if (_expanded) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1),
             const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -309,17 +326,36 @@ class _ProgressHeader extends StatelessWidget {
                   icon: trip.isClosed ? Icons.remove_circle_outline : Icons.schedule,
                   iconColor: AppColors.primary,
                   count: trip.pendingCount,
-                  // Once the trip is closed, nothing can still be "pending".
-                  // Customers that never got a real visit are "Missed".
+                  // Once the trip is closed nothing can still be "pending" —
+                  // customers that never got a real visit are "Missed".
                   label: trip.isClosed ? 'Missed' : 'Pending',
                 ),
               ],
             ),
           ],
-        ),
+        ]),
       ),
     );
   }
+}
+
+/// A count with an icon, small enough for four to sit on one line.
+class _Pip extends StatelessWidget {
+  final int count;
+  final Color color;
+  final IconData icon;
+  const _Pip(this.count, this.color, this.icon);
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 2),
+          Text('$count',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+        ],
+      );
 }
 
 class _StopsList extends ConsumerWidget {
@@ -340,24 +376,8 @@ class _StopsList extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       children: [
-        Row(
-          children: [
-            const Icon(Icons.list_alt,
-                size: 16, color: AppColors.textSecondaryLight),
-            const SizedBox(width: 6),
-            Text(
-              'Stops (${trip.totalStops})',
-              style: const TextStyle(
-                color: AppColors.textSecondaryLight,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
         for (int i = 0; i < filtered.length; i++) ...[
           _StopCard(
             index: trip.stopSnapshot.indexOf(filtered[i]) + 1,
@@ -380,6 +400,13 @@ class _StopsList extends ConsumerWidget {
 
 class _StopCard extends StatelessWidget {
   final int index;
+  static const _tones = {
+    VisitStatus.verified: AppColors.success,
+    VisitStatus.outside: AppColors.warningDark,
+    VisitStatus.noLocation: AppColors.warningDark,
+    VisitStatus.skipped: AppColors.textSecondaryLight,
+  };
+
   final Customer customer;
   final Visit? visit;
   final bool canVisit;
@@ -397,9 +424,60 @@ class _StopCard extends StatelessWidget {
     required this.onSkip,
   });
 
+  Widget _collapsed(BuildContext context, VisitStatus status) {
+    final tone = _tones[status] ?? AppColors.textSecondaryLight;
+    final amount = visit?.amount ?? 0;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Row(children: [
+        SizedBox(
+          width: 22,
+          child: Text('$index',
+              style: const TextStyle(
+                  fontSize: 11, color: AppColors.textSecondaryLight,
+                  fontWeight: FontWeight.w600)),
+        ),
+        Icon(
+          status == VisitStatus.verified ? Icons.check_circle
+            : status == VisitStatus.skipped ? Icons.skip_next
+            : Icons.warning_amber_rounded,
+          size: 16, color: tone,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(customer.shopName,
+              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        if (amount > 0) ...[
+          Text('Rs ${_thousands(amount)}',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w800,
+                  color: AppColors.success)),
+        ] else
+          Text(status.label,
+              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: tone)),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = visit?.status;
+
+    // A stop that is done and cannot be revisited collapses to a single line.
+    // A rep on a 30-stop route should not scroll past a full card — with a phone
+    // number, a map button and an Order button — for a shop they finished an
+    // hour ago. The line keeps what they might still want to check: that it was
+    // done, and what was collected.
+    final settled = status != null && !canVisit;
+    if (settled && !readOnly) return _collapsed(context, status);
+
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
