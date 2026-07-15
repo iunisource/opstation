@@ -51,6 +51,15 @@ class SmsService {
     required Map<String, String> placeholders,
   }) async {
     try {
+      // Normalize the number to the bare digit form the gateway accepts, the
+      // same format proven to work in direct testing (923XXXXXXXXX). Customer
+      // records store it as "+923154074223"; the leading "+", spaces and dashes
+      // are stripped. A local "03XXXXXXXXX" is converted to "923XXXXXXXXX".
+      phone = phone.replaceAll(RegExp(r'[^0-9]'), '');
+      if (phone.startsWith('0')) {
+        phone = '92' + phone.substring(1);
+      }
+
       final orgId = _ref.read(orgIdProvider);
       if (orgId == null) {
         await Sentry.captureMessage('SMS skipped: orgId is null',
