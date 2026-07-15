@@ -7,14 +7,17 @@ import '../database/app_database.dart';
 import '../database/app_database_provider.dart';
 
 /// Periodically checks the wall clock against the configured cut-off.
-/// At or after cut-off local time, any open trip is auto-closed with
-/// [TripCloseReason.cutoff].
+/// Each open trip is auto-closed once ITS OWN start-day cut-off has passed,
+/// with [TripCloseReason.cutoff] and `ended_at` backdated to that day — so a
+/// trip always ends on the day it began, even if the app was closed at cut-off
+/// time and the sweep only runs a day or more later.
 ///
 /// The cut-off time is a string in 'HH:mm' local time, stored in app_config
 /// under key 'cutoff_time'. Default: '23:00' (11 PM).
 ///
-/// To avoid double-close on the same day, a 'last_cutoff_run' date is
-/// stamped in app_config.
+/// The sweep is idempotent (it only touches trips whose cut-off is already
+/// past and still open), so it can safely run on every tick without a
+/// once-per-day guard.
 class CutoffService {
   CutoffService(this._ref);
   final Ref _ref;
@@ -60,38 +63,75 @@ class CutoffService {
     final cutM = int.tryParse(parts[1]);
     if (cutH == null || cutM == null) return;
 
-    final now = DateTime.now();
-    final dayKey =
-        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    final lastRun = await _db.getConfig('last_cutoff_run');
-    if (lastRun == dayKey) return;
+    // Close any open trip whose OWN start-day cut-off has already passed,
+    // backdated to that day (see _closeOverdueTripsAsCutoff). This runs on
+    // every tick rather than only "once, after today's cut-off": a trip left
+    // open on a day when the app happened to be closed at cut-off time is then
+    // caught up on the next launch and still stamped with its correct day —
+    // instead of lingering open and later inheriting whatever day the sweep
+    // finally ran on. A trip still inside its own current day stays open.
+    final closed = await _closeOverdueTripsAsCutoff(cutH, cutM);
 
-    final past = now.hour > cutH || (now.hour == cutH && now.minute >= cutM);
-    if (!past) return;
-
-    await _closeOpenTripsAsCutoff();
-    await _db.setConfig('last_cutoff_run', dayKey);
-
-    // Refresh the trip controller so the UI reflects the close — must
-    // always run, not only on day rollover.
-    await _ref.read(tripControllerProvider.notifier).refreshAfterCutoff();
+    if (closed > 0) {
+      // Refresh the trip controller so the UI reflects the close.
+      await _ref.read(tripControllerProvider.notifier).refreshAfterCutoff();
+    }
   }
 
-  Future<void> _closeOpenTripsAsCutoff() async {
-    // Drift stores DateTime columns as unix seconds (int), not ISO strings.
-    // Use seconds-since-epoch to match the column type so date-range queries
-    // (tripsClosedOnLocalDate) return these rows.
-    //
-    // Note on endLat/endLng: left NULL on cut-off. A cut-off happens at a
-    // fixed wall-clock time (e.g. 23:59 local) and the salesperson may be
-    // at home / asleep / offline — requesting a GPS fix here would usually
-    // fail or return a stale home fix. The PDF renders "Cut-off at HH:MM"
-    // without a location for cut-off trips.
-    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    await _db.customStatement(
-      "UPDATE trips SET ended_at = ?, close_reason = 'cutoff' WHERE ended_at IS NULL",
-      [nowSeconds],
-    );
+  /// Closes every open trip whose own start-day cut-off has already elapsed,
+  /// stamping `ended_at` to that start day's cut-off time — NOT to the moment
+  /// this sweep runs. Returns the number of trips closed.
+  ///
+  /// Why per-trip and backdated: a trip belongs to the day it began and must
+  /// end that same day. The previous version set `ended_at = now()` for all
+  /// open trips at once, so a trip started before midnight but not swept until
+  /// the next morning was stamped with the wrong day (and several stale days'
+  /// trips all collapsed onto one timestamp). That misdated close is what put
+  /// yesterday's collections under today on the dashboards.
+  ///
+  /// Note on endLat/endLng: left NULL on cut-off. A cut-off happens at a fixed
+  /// wall-clock time and the salesperson may be at home / asleep / offline —
+  /// requesting a GPS fix here would usually fail or return a stale home fix.
+  /// The PDF renders "Cut-off at HH:MM" without a location for cut-off trips.
+  Future<int> _closeOverdueTripsAsCutoff(int cutH, int cutM) async {
+    // Drift stores DateTime columns as unix seconds (int), not ISO strings, so
+    // we read and write seconds throughout to match the column type (the same
+    // representation tripsClosedOnLocalDate / tripsInRangeForUser range-query).
+    final rows = await _db
+        .customSelect('SELECT id, started_at FROM trips WHERE ended_at IS NULL')
+        .get();
+    if (rows.isEmpty) return 0;
+
+    final now = DateTime.now();
+    final nowSeconds = now.millisecondsSinceEpoch ~/ 1000;
+    var closed = 0;
+
+    for (final row in rows) {
+      final id = row.read<String>('id');
+      final startedSeconds = row.read<int>('started_at');
+      final startedAt =
+          DateTime.fromMillisecondsSinceEpoch(startedSeconds * 1000);
+
+      // The cut-off instant for THIS trip's own start day.
+      final cutoffAt =
+          DateTime(startedAt.year, startedAt.month, startedAt.day, cutH, cutM);
+
+      // Still inside its own day's window (cut-off yet to come) => a genuinely
+      // open current trip => leave it alone.
+      if (cutoffAt.isAfter(now)) continue;
+
+      // Backdate to the start-day cut-off, clamped so the end is never before
+      // the start (trip begun after its own cut-off time) nor in the future.
+      final endSeconds = (cutoffAt.millisecondsSinceEpoch ~/ 1000)
+          .clamp(startedSeconds, nowSeconds);
+
+      await _db.customStatement(
+        "UPDATE trips SET ended_at = ?, close_reason = 'cutoff' WHERE id = ?",
+        [endSeconds, id],
+      );
+      closed++;
+    }
+    return closed;
   }
 }
 

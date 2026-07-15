@@ -352,12 +352,21 @@ class SalespersonRepository {
     final rangeEnd = DateTime(endInclusive.year, endInclusive.month,
             endInclusive.day)
         .add(const Duration(days: 1));
+    // Bucket by the day the trip was RUN (startedAt), not when it was
+    // administratively closed (endedAt). A trip begun before midnight but
+    // closed the next morning — by the salesperson leaving it open, or by
+    // the cutoff scheduler — otherwise dumped its entire collection into the
+    // wrong day. That is why yesterday's collections were surfacing under the
+    // leaderboard's "Today". Still require a closed trip (endedAt not null):
+    // the active trip is added separately by callers, so relaxing that guard
+    // would double-count it.
     final q = _db.select(_db.trips)
       ..where((t) =>
-          t.endedAt.isBiggerOrEqualValue(rangeStart) &
-          t.endedAt.isSmallerThanValue(rangeEnd) &
+          t.endedAt.isNotNull() &
+          t.startedAt.isBiggerOrEqualValue(rangeStart) &
+          t.startedAt.isSmallerThanValue(rangeEnd) &
           t.userId.equals(userId))
-      ..orderBy([(t) => OrderingTerm.asc(t.endedAt)]);
+      ..orderBy([(t) => OrderingTerm.asc(t.startedAt)]);
     if (_orgId != null) {
       q.where((t) => t.orgId.isNull() | t.orgId.equals(_orgId!));
     }
