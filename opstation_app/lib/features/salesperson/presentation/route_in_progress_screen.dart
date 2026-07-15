@@ -386,6 +386,19 @@ class _StopsList extends ConsumerWidget {
             visit: ref
                 .read(tripControllerProvider.notifier)
                 .latestVisitFor(filtered[i].id),
+            // All of this stop's visits, oldest → newest, so multiple same-day
+            // collections each render as their own line. Sourced from the same
+            // notifier state as latestVisitFor above, so a just-added second
+            // collection appears immediately.
+            collections: [
+              for (final v in (ref
+                          .read(tripControllerProvider)
+                          .valueOrNull
+                          ?.active
+                          ?.visits ??
+                      const <Visit>[]))
+                if (v.customerId == filtered[i].id) v,
+            ]..sort((a, b) => a.timestamp.compareTo(b.timestamp)),
             canVisit:
                 ref.read(tripControllerProvider.notifier).canVisit(filtered[i].id),
             readOnly: readOnly,
@@ -410,6 +423,7 @@ class _StopCard extends StatefulWidget {
 
   final Customer customer;
   final Visit? visit;
+  final List<Visit> collections;
   final bool canVisit;
   final bool readOnly;
   final VoidCallback onMarkVisit;
@@ -419,6 +433,7 @@ class _StopCard extends StatefulWidget {
     required this.index,
     required this.customer,
     required this.visit,
+    required this.collections,
     required this.canVisit,
     required this.readOnly,
     required this.onMarkVisit,
@@ -438,6 +453,7 @@ class _StopCardState extends State<_StopCard> {
   int get index => widget.index;
   Customer get customer => widget.customer;
   Visit? get visit => widget.visit;
+  List<Visit> get collections => widget.collections;
   bool get canVisit => widget.canVisit;
   bool get readOnly => widget.readOnly;
   VoidCallback get onMarkVisit => widget.onMarkVisit;
@@ -494,7 +510,9 @@ class _StopCardState extends State<_StopCard> {
 
   Widget _collapsed(BuildContext context, VisitStatus status) {
     final tone = _StopCard._tones[status] ?? AppColors.textSecondaryLight;
-    final amount = visit?.amount ?? 0;
+    // Sum across every collection at this stop so the one-liner reflects the
+    // full amount (morning + evening), not just the most recent visit.
+    final amount = collections.fold<int>(0, (s, v) => s + v.amount);
     return InkWell(
       onTap: () => setState(() => _open = true),
       borderRadius: BorderRadius.circular(10),
@@ -544,12 +562,13 @@ class _StopCardState extends State<_StopCard> {
   Widget build(BuildContext context) {
     final status = visit?.status;
 
-    // A stop that is done and cannot be revisited collapses to a single line.
-    // A rep on a 30-stop route should not scroll past a full card — with a phone
-    // number, a map button and an Order button — for a shop they finished an
-    // hour ago. The line keeps what they might still want to check: that it was
-    // done, and what was collected.
-    final settled = status != null && !canVisit;
+    // A visited stop collapses to a single line — even if it can still be
+    // collected from again. A rep on a 30-stop route should not scroll past a
+    // full card for a shop they finished an hour ago. Tapping the line reopens
+    // it (to collect again, check a number, or place an order). Keying this on
+    // "has a visit" rather than "can't revisit" is what keeps re-collectable
+    // stops collapsible.
+    final settled = status != null;
     if (settled && !readOnly && !_open) return _collapsed(context, status);
 
     // An expanded-but-settled stop gets a tap target to fold it away again.
@@ -654,9 +673,12 @@ class _StopCardState extends State<_StopCard> {
               if (status != null) _statusBadge(status),
             ],
           ),
-          if (visit != null) ...[
+          if (collections.isNotEmpty) ...[
             const SizedBox(height: 10),
-            _VisitMeta(visit: visit!),
+            for (final v in collections) ...[
+              _VisitMeta(visit: v),
+              if (!identical(v, collections.last)) const SizedBox(height: 4),
+            ],
           ],
           if (!readOnly) ...[
             const SizedBox(height: 12),
@@ -728,9 +750,7 @@ class _StopCardState extends State<_StopCard> {
                   child: ElevatedButton.icon(
                     onPressed: canVisit ? onMarkVisit : null,
                     icon: const Icon(Icons.check_circle_outline, size: 18),
-                    label: Text(visit != null && visit!.allowsRevisit
-                        ? 'Revisit'
-                        : 'Mark visit'),
+                    label: Text(visit != null ? 'Mark Again' : 'Mark visit'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       minimumSize: const Size(0, 44),
