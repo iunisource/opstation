@@ -377,8 +377,18 @@ class TripController extends AsyncNotifier<TripState> {
   bool canVisit(String customerId) {
     final latest = latestVisitFor(customerId);
     if (latest == null) return true;
+    // A skipped stop stays locked — reopening a no-show goes through its own
+    // flow, not a silent re-collect.
     if (latest.status == VisitStatus.skipped) return false;
-    return latest.allowsRevisit;
+    // Otherwise the stop is always collectable again. A customer who paid in
+    // the morning can pay again in the evening: that second payment is a new
+    // transaction, appended as its own Visit line item (own receipt, own GPS
+    // fix, own timestamp) via markVisit — it never overwrites the earlier one.
+    // Trip.totalCollected already folds across every visit, so totals stack.
+    // NOTE: this intentionally does NOT touch Visit.allowsRevisit, which still
+    // gates Trip.pendingCount — a paid stop must remain "not pending" for
+    // coverage/score math even though it can be collected from again.
+    return true;
   }
 
   void noteNewPendingVisit() {
@@ -388,6 +398,84 @@ class TripController extends AsyncNotifier<TripState> {
 
 final tripControllerProvider =
     AsyncNotifierProvider<TripController, TripState>(TripController.new);
+
+/// Period selector for the salesperson home stats cards.
+enum HomeStatsPeriod { today, week, month }
+
+/// Aggregated home stats for a period. Uses the salesperson-facing PERMISSIVE
+/// coverage (any non-skipped visit counts) — the same measure the home shows
+/// for Today — not the strict verified-only score the admin leaderboard uses.
+class HomePeriodStats {
+  final int totalStops;
+  final int visited;
+  final int collected;
+
+  const HomePeriodStats({
+    required this.totalStops,
+    required this.visited,
+    required this.collected,
+  });
+
+  double get score =>
+      totalStops == 0 ? 0.0 : (visited / totalStops) * 100.0;
+
+  static const empty =
+      HomePeriodStats(totalStops: 0, visited: 0, collected: 0);
+}
+
+/// This-week / this-month stats for the home cards. Reuses the SAME trip source
+/// as the leaderboard — [SalespersonRepository.tripsInRangeForUser], which
+/// buckets by the day a trip was RUN (startedAt) — and folds the permissive
+/// per-trip coverage the home already sums for Today, just over a wider window.
+///
+/// Watches [tripControllerProvider] so a freshly-recorded collection refreshes
+/// the numbers. Closed trips (from the range query) and the currently-active
+/// trip never overlap — the range query requires endedAt to be set — so adding
+/// the active trip cannot double-count.
+final homePeriodStatsProvider = FutureProvider.autoDispose
+    .family<HomePeriodStats, HomeStatsPeriod>((ref, period) async {
+  await ref.watch(tripControllerProvider.future);
+
+  final user = ref.watch(authControllerProvider).valueOrNull;
+  final userId = user?.id ?? '';
+  if (userId.isEmpty) return HomePeriodStats.empty;
+
+  final repo = ref.watch(salespersonRepositoryProvider);
+  final now = DateTime.now();
+  late DateTime rangeStart;
+  switch (period) {
+    case HomeStatsPeriod.today:
+      rangeStart = DateTime(now.year, now.month, now.day);
+      break;
+    case HomeStatsPeriod.week:
+      // Calendar week, Monday-anchored (weekday: Mon=1 … Sun=7).
+      final daysSinceMonday = now.weekday - 1;
+      rangeStart = DateTime(now.year, now.month, now.day)
+          .subtract(Duration(days: daysSinceMonday));
+      break;
+    case HomeStatsPeriod.month:
+      rangeStart = DateTime(now.year, now.month, 1);
+      break;
+  }
+
+  final trips = await repo.tripsInRangeForUser(rangeStart, now, userId);
+  final active = await repo.activeTripForUser(userId);
+  final all = [...trips, if (active != null) active];
+
+  var totalStops = 0;
+  var visited = 0;
+  var collected = 0;
+  for (final t in all) {
+    totalStops += t.totalStops;
+    visited += t.visitedCount;
+    collected += t.totalCollected;
+  }
+  return HomePeriodStats(
+    totalStops: totalStops,
+    visited: visited,
+    collected: collected,
+  );
+});
 
 /// Local wall-clock time for notification bodies. An admin seeing "Musa started
 /// Route A" has no idea whether that was five minutes ago or at 6am — the push

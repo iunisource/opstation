@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../orders/presentation/order_create_modal.dart';
 
@@ -442,6 +443,55 @@ class _StopCardState extends State<_StopCard> {
   VoidCallback get onMarkVisit => widget.onMarkVisit;
   VoidCallback get onSkip => widget.onSkip;
 
+  void _snack(BuildContext context, String msg) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Dial the customer's phone via the device dialer. No-ops with a hint
+  /// when the shop has no number on file rather than a dead tap.
+  Future<void> _callCustomer(BuildContext context) async {
+    final phone = customer.phone.trim();
+    if (phone.isEmpty) {
+      _snack(context, 'No phone number saved for ${customer.shopName}');
+      return;
+    }
+    final uri = Uri(scheme: 'tel', path: phone);
+    try {
+      final ok = await launchUrl(uri);
+      if (!ok && context.mounted) _snack(context, 'Could not open the dialer');
+    } catch (_) {
+      if (context.mounted) _snack(context, 'Could not open the dialer');
+    }
+  }
+
+  /// Open Google Maps directions to the customer. Uses stored coordinates
+  /// when available; otherwise falls back to a maps search on the shop name
+  /// and address so the button still does something useful.
+  Future<void> _openDirections(BuildContext context) async {
+    final Uri uri;
+    if (customer.hasLocation) {
+      uri = Uri.parse(
+          'https://www.google.com/maps/dir/?api=1&destination=${customer.latitude},${customer.longitude}');
+    } else {
+      final q = [customer.shopName, customer.address]
+          .where((s) => s.trim().isNotEmpty)
+          .join(', ');
+      if (q.isEmpty) {
+        _snack(context, 'No location or address for ${customer.shopName}');
+        return;
+      }
+      uri = Uri.parse(
+          'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
+    }
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && context.mounted) _snack(context, 'Could not open maps');
+    } catch (_) {
+      if (context.mounted) _snack(context, 'Could not open maps');
+    }
+  }
+
   Widget _collapsed(BuildContext context, VisitStatus status) {
     final tone = _StopCard._tones[status] ?? AppColors.textSecondaryLight;
     final amount = visit?.amount ?? 0;
@@ -621,9 +671,7 @@ class _StopCardState extends State<_StopCard> {
                     icon: const Icon(Icons.directions, size: 20),
                     color: AppColors.primary,
                     tooltip: 'Directions',
-                    onPressed: () {
-                      // TODO: wire directions intent
-                    },
+                    onPressed: () => _openDirections(context),
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -636,9 +684,7 @@ class _StopCardState extends State<_StopCard> {
                     icon: const Icon(Icons.phone, size: 20),
                     color: AppColors.successDark,
                     tooltip: 'Call',
-                    onPressed: () {
-                      // TODO: wire phone intent
-                    },
+                    onPressed: () => _callCustomer(context),
                   ),
                 ),
                 const SizedBox(width: 8),

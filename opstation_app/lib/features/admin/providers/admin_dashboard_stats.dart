@@ -46,6 +46,9 @@ final adminDashboardStatsProvider =
       orgUsers.where((u) => u.role == UserRole.driver.name).length;
 
   final now = DateTime.now();
+  final todayStart = DateTime(now.year, now.month, now.day);
+  final tomorrowStart = todayStart.add(const Duration(days: 1));
+
   final closedToday = await salesRepo.tripsClosedOnLocalDate(now);
   final activeTrips = <Trip>[];
   for (final u in orgUsers) {
@@ -53,10 +56,22 @@ final adminDashboardStatsProvider =
     if (t != null) activeTrips.add(t);
   }
 
+  // Attribute each collection to the day it was TAKEN (visit.timestamp), not
+  // to the day its trip happened to close. A trip that carried yesterday's
+  // collections but closed today (left open overnight or shut by the cut-off
+  // sweep) must NOT drag those into today's total. This mirrors the web
+  // dashboard, which sums visits by their own timestamp — without it, mobile
+  // over-counts today, which is the web/mobile mismatch. The candidate trip
+  // set (closed-today ∪ active) still contains every trip that can hold a
+  // today-stamped visit, so we only need to filter the visits themselves.
   final shops = <String>{};
   int totalAmount = 0;
   for (final t in [...closedToday, ...activeTrips]) {
     for (final v in t.visits) {
+      if (v.timestamp.isBefore(todayStart) ||
+          !v.timestamp.isBefore(tomorrowStart)) {
+        continue; // visit not in today's local window
+      }
       totalAmount += v.amount;
       if (v.amount > 0) shops.add(v.customerId);
     }

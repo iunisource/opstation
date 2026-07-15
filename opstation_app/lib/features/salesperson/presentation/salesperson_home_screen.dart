@@ -239,6 +239,23 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
     final totalCollected =
         todaysTrips.fold<int>(0, (s, t) => s + t.totalCollected);
 
+    // The stat cards below follow the period selector. "Today" stays live from
+    // trip state (updates the instant a collection is recorded); "This week" /
+    // "This month" come from homePeriodStatsProvider, which folds the same
+    // permissive coverage over the wider window (via the startedAt-bucketed
+    // tripsInRangeForUser). While a wider period is still loading we show 0
+    // rather than briefly flashing today's numbers under a week/month label.
+    double displayScore = score;
+    int displayCollected = totalCollected;
+    if (_period != _Period.today) {
+      final hp = _period == _Period.week
+          ? HomeStatsPeriod.week
+          : HomeStatsPeriod.month;
+      final periodStats = ref.watch(homePeriodStatsProvider(hp)).valueOrNull;
+      displayScore = periodStats?.score ?? 0.0;
+      displayCollected = periodStats?.collected ?? 0;
+    }
+
     return RefreshIndicator(
       // Pull-to-refresh triggers a real Supabase fetch so newly-assigned
       // routes (e.g. assigned via the web admin's team screen) appear
@@ -383,9 +400,9 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
             onChanged: (p) => setState(() => _period = p),
           ),
           const SizedBox(height: 16),
-          _VisitScoreCard(score: score),
+          _VisitScoreCard(score: displayScore),
           const SizedBox(height: 12),
-          _CollectedCard(amount: totalCollected),
+          _CollectedCard(amount: displayCollected),
         ],
       ),
     );

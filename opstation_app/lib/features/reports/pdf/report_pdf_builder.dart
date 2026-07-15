@@ -514,14 +514,6 @@ class ReportPdfBuilder {
 
   static pw.Widget _visitDetailsTable(Trip trip, TripReportContext ctx) {
     final byCustomer = trip.statusByCustomer;
-    Visit? latestFor(String customerId) {
-      Visit? pick;
-      for (final v in trip.visits) {
-        if (v.customerId != customerId) continue;
-        if (pick == null || v.timestamp.isAfter(pick.timestamp)) pick = v;
-      }
-      return pick;
-    }
 
     final headers = [
       '#', 'CODE', 'CUSTOMER', 'STATUS', 'COLLECTED', 'CR#', 'TIME', 'NOTES',
@@ -529,18 +521,44 @@ class ReportPdfBuilder {
     final rows = <List<String>>[];
     for (int i = 0; i < trip.stopSnapshot.length; i++) {
       final c = trip.stopSnapshot[i];
-      final status = byCustomer[c.id] ?? VisitStatus.pending;
-      final v = latestFor(c.id);
-      rows.add([
-        '${i + 1}',
-        c.code,
-        c.shopName,
-        _statusTagWithDistance(status, v),
-        status == VisitStatus.pending ? '-' : '${(v?.amount) ?? 0}',
-        (v?.receiptNumber ?? '').isEmpty ? '-' : v!.receiptNumber!,
-        v == null ? '-' : DateFormat('hh:mm a').format(v.timestamp),
-        _notesFor(status, v),
-      ]);
+
+      // Every visit for this stop, oldest → newest. A customer collected from
+      // more than once in a day (e.g. a morning payment and an evening one)
+      // gets a line PER collection — each with its own amount, receipt and
+      // time — instead of collapsing to just the latest. The stop number and
+      // shop repeat on each line so the grouping survives a page break.
+      final stopVisits = [
+        for (final v in trip.visits)
+          if (v.customerId == c.id) v,
+      ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      if (stopVisits.isEmpty) {
+        final status = byCustomer[c.id] ?? VisitStatus.pending;
+        rows.add([
+          '${i + 1}',
+          c.code,
+          c.shopName,
+          _statusTagWithDistance(status, null),
+          status == VisitStatus.pending ? '-' : '0',
+          '-',
+          '-',
+          _notesFor(status, null),
+        ]);
+        continue;
+      }
+
+      for (final v in stopVisits) {
+        rows.add([
+          '${i + 1}',
+          c.code,
+          c.shopName,
+          _statusTagWithDistance(v.status, v),
+          '${v.amount}',
+          (v.receiptNumber ?? '').isEmpty ? '-' : v.receiptNumber!,
+          DateFormat('hh:mm a').format(v.timestamp),
+          _notesFor(v.status, v),
+        ]);
+      }
     }
 
     return pw.TableHelper.fromTextArray(
