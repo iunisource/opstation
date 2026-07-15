@@ -92,12 +92,27 @@ class AccessControl {
 
   // ---- routing -----------------------------------------------------------
 
+  /// Routes every authenticated user may reach regardless of grants:
+  /// the ERP landing home, the onboarding guide (the one un-gated item in the
+  /// ERP menu), and the no-access page (so a denied route lands there instead
+  /// of looping). Everything else must be explicitly granted.
+  static const Set<String> _alwaysAllowed = {
+    '/erp/home',
+    '/erp/onboarding',
+    '/erp/no-access',
+  };
+
   /// Route-level gate used by the menu and the router. Reachability-based: a
   /// route is open if the user can act on it at any of their branches.
   bool canAccessRoute(String route) {
     if (isAdmin) return true;
+    if (_alwaysAllowed.contains(route)) return true;
     final it = kRouteToPerm[route];
-    if (it == null) return true; // not a gated ERP doc/report
+    // Unregistered route => NOT accessible. This is the security default: a
+    // non-admin sees only what is explicitly granted (plus _alwaysAllowed).
+    // Previously this returned true, which silently exposed every route not
+    // yet in the registry — one grant lit up whole unrelated menus.
+    if (it == null) return false;
     final mod = kRouteToModule[route];
     if (mod != null && !hasModule(mod)) return false;
     return it.kind == PermKind.report

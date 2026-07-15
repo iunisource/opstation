@@ -202,10 +202,17 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             final permScopedReportBuilder = loc == '/intelligence/report-builder';
             if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
-            if (loc == '/erp/no-access') return true;
+            // Always-available to every ERP user regardless of grants: their
+            // landing home, the onboarding guide, and the no-access page (so a
+            // denied route redirects here without looping).
+            if (loc == '/erp/no-access' ||
+                loc == '/erp/home' ||
+                loc == '/erp/onboarding') return true;
             if (access == null) return true;
             final it = kRouteToPerm[loc];
-            if (it == null) return true;
+            // Unregistered ERP-area route => no access. Was `return true`, the
+            // fail-open leak that let one grant expose whole unrelated menus.
+            if (it == null) return false;
             return access.canAccessRoute(loc);
           }
           // admin / masterAdmin — everything except super admin's /orgs
