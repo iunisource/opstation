@@ -6,25 +6,106 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
-/// Inventory Integrity Check — surfaces products at risk of the costing/stock
-/// problems: no cost price, stock<>layers mismatch, negative layers, or
-/// zero-cost positive layers. Backed by rpc_inventory_integrity.
+/// Inventory Integrity Check — two different questions, deliberately separate.
+///
+/// PRODUCTS tab (rpc_inventory_integrity): is the stock DATA sane right now?
+/// Missing cost price, stock<>layers, negative layers, zero-cost layers. This is
+/// a check on STATE.
+///
+/// DOCUMENTS tab (rpc_inventory_gl_reconciliation): did each transaction POST
+/// consistently? For every document that moved stock, does the value the General
+/// Ledger recorded equal the value the inventory cost ledger recorded? This is a
+/// check on FLOW, and it should always be empty.
+///
+/// The distinction matters. On 14 July two bugs cost real money, and BOTH left
+/// every product looking perfectly healthy on the Products tab:
+///
+///   - POS sales posted COGS to the GL twice while consuming inventory once.
+///     Product state: clean. The P&L: overstated by the duplicate.
+///   - Purchase returns moved inventory correctly but posted the offset to an
+///     expense account instead of Accounts Payable. Layers: consistent.
+///     Accounts Payable: overstated by Rs 214,270.
+///
+/// Neither appeared in any total. Both were found only because a human noticed a
+/// single number looked wrong. The Documents tab is the check that should have
+/// caught them.
 class ErpInventoryIntegrityScreen extends ConsumerStatefulWidget {
   const ErpInventoryIntegrityScreen({super.key});
   @override
   ConsumerState<ErpInventoryIntegrityScreen> createState() => _State();
 }
 
-class _State extends ConsumerState<ErpInventoryIntegrityScreen> {
+class _State extends ConsumerState<ErpInventoryIntegrityScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs = TabController(length: 2, vsync: this);
+
   bool _loading = true;
   List<Map<String, dynamic>> _rows = [];
   String _filter = 'ALL';
   String _search = '';
 
+  // Documents tab
+  bool _docLoading = true;
+  List<Map<String, dynamic>> _docRows = [];
+  DateTime _from = DateTime(DateTime.now().year, 1, 1);
+  DateTime _to = DateTime.now();
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _load();
+      _loadDocs();
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  String _d(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  Future<void> _loadDocs() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    setState(() => _docLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'rpc_inventory_gl_reconciliation_active',
+        params: {
+          'p_org_id': orgId,
+          'p_from': _d(_from),
+          'p_to': _d(_to),
+          'p_branch_id': null,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _docRows = List<Map<String, dynamic>>.from(res as List);
+        _docLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _docLoading = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Reconciliation error: $e')));
+    }
+  }
+
+  Future<void> _pickRange() async {
+    final r = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDateRange: DateTimeRange(start: _from, end: _to),
+    );
+    if (r != null && mounted) {
+      setState(() { _from = r.start; _to = r.end; });
+      _loadDocs();
+    }
   }
 
   Future<void> _load() async {
@@ -131,12 +212,175 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen> {
           ])),
           IconButton(icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF',
               onPressed: _rows.isEmpty ? null : _print),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: () { _load(); _loadDocs(); }),
         ])),
-      if (_loading)
-        const Expanded(child: Center(child: CircularProgressIndicator()))
-      else
-        Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(16),
+      Container(
+        color: Colors.white,
+        child: TabBar(
+          controller: _tabs,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelColor: AppTheme.primary,
+          unselectedLabelColor: AppTheme.textSecondary,
+          indicatorColor: AppTheme.primary,
+          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          tabs: [
+            Tab(text: 'Products (${_rows.length})'),
+            Tab(
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Text('Documents'),
+                if (_docRows.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                        color: AppTheme.danger, borderRadius: BorderRadius.circular(8)),
+                    child: Text('${_docRows.length}',
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.white, fontWeight: FontWeight.w800)),
+                  ),
+                ],
+              ]),
+            ),
+          ],
+        ),
+      ),
+      const Divider(height: 1),
+      Expanded(
+        child: TabBarView(controller: _tabs, children: [
+          _productsTab(),
+          _documentsTab(),
+        ]),
+      ),
+    ]);
+  }
+
+  // ── Tab 2: does the GL agree with the inventory ledger, document by document?
+  Widget _documentsTab() {
+    if (_docLoading) return const Center(child: CircularProgressIndicator());
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          OutlinedButton.icon(
+            icon: const Icon(Icons.date_range, size: 16),
+            label: Text('${_d(_from)}  \u2192  ${_d(_to)}',
+                style: const TextStyle(fontSize: 12)),
+            onPressed: _pickRange,
+          ),
+          const Spacer(),
+        ]),
+        const SizedBox(height: 14),
+        if (_docRows.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withOpacity(0.30)),
+            ),
+            child: const Row(children: [
+              Icon(Icons.verified_outlined, color: Colors.green),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('General Ledger and inventory ledger agree',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                  SizedBox(height: 2),
+                  Text(
+                      'Every document that moved stock posted the same value to both. '
+                      'This is what you want to see.',
+                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+              ),
+            ]),
+          )
+        else ...[
+          // Loud on purpose. A control report that is normally empty is a report
+          // nobody opens — and both of the bugs this exists to catch were
+          // invisible precisely because nothing anywhere raised its voice.
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppTheme.danger.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.danger.withOpacity(0.40)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.error_outline, color: AppTheme.danger, size: 26),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(
+                      '${_docRows.length} document${_docRows.length == 1 ? '' : 's'} '
+                      'where the General Ledger and the inventory ledger disagree',
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w800, color: AppTheme.danger)),
+                  const SizedBox(height: 3),
+                  const Text(
+                      'Each of these posted one value to the GL and a different value to the '
+                      'cost ledger. One of your reports is wrong for every row below.',
+                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.border)),
+            child: Column(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: const BoxDecoration(color: Color(0xFFF8F9FA)),
+                child: const Row(children: [
+                  Expanded(flex: 2, child: Text('Document', style: _h)),
+                  Expanded(flex: 2, child: Text('Voucher', style: _h)),
+                  Expanded(flex: 2, child: Text('Date', style: _h)),
+                  Expanded(flex: 2, child: Text('GL value', style: _h, textAlign: TextAlign.right)),
+                  Expanded(flex: 2, child: Text('Ledger value', style: _h, textAlign: TextAlign.right)),
+                  Expanded(flex: 2, child: Text('Difference', style: _h, textAlign: TextAlign.right)),
+                  Expanded(flex: 4, child: Text('What it means', style: _h)),
+                ]),
+              ),
+              const Divider(height: 1),
+              ..._docRows.map((r) {
+                final diff = (r['difference'] as num?)?.toDouble() ?? 0;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(children: [
+                    Expanded(flex: 2, child: Text('${r['doc_type'] ?? '-'}',
+                        style: const TextStyle(fontSize: 12))),
+                    Expanded(flex: 2, child: Text('${r['voucher_no'] ?? '-'}',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+                    Expanded(flex: 2, child: Text('${r['voucher_date'] ?? '-'}',
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text(_fmt(r['gl_value'] as num?),
+                        textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+                    Expanded(flex: 2, child: Text(_fmt(r['ledger_value'] as num?),
+                        textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+                    Expanded(flex: 2, child: Text(_fmt(diff),
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.danger))),
+                    Expanded(flex: 4, child: Text('${r['note'] ?? ''}',
+                        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                  ]),
+                );
+              }),
+            ]),
+          ),
+        ],
+        const SizedBox(height: 24),
+      ]),
+    );
+  }
+
+  Widget _productsTab() {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    return SingleChildScrollView(padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // Summary chips
             Wrap(spacing: 10, runSpacing: 10, children: [
@@ -195,8 +439,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen> {
                 ]),
               ),
             const SizedBox(height: 24),
-          ]))),
-    ]);
+          ]));
   }
 
   static const _h = TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary);
