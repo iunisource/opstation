@@ -231,13 +231,19 @@ class SyncController extends Notifier<SyncStatus> {
           // Same post-push SMS hook as flushPending — covers the case where
           // pushAll syncs leftover offline visits at login (e.g. after the OS
           // killed the backgrounded app and the user reopened it).
+          SmsService.note(
+              'pushAll: visit ${v.id} pushed (amount=${v.amount}, cust=${v.customerId})');
           if (v.amount > 0) {
             Future.microtask(() async {
               try {
                 final customer = await (_db.select(_db.customers)
                       ..where((c) => c.id.equals(v.customerId)))
                     .getSingleOrNull();
-                if (customer == null) return;
+                if (customer == null) {
+                  SmsService.note(
+                      'pushAll: visit ${v.id} customer NOT in local db → SMS skipped');
+                  return;
+                }
                 await ref.read(smsServiceProvider).sendVisitSms(
                   customerPhone: customer.phone,
                   customerName: customer.shopName,
@@ -246,9 +252,12 @@ class SyncController extends Notifier<SyncStatus> {
                   salespersonName: v.userName,
                 );
               } catch (e) {
+                SmsService.note('pushAll: visit ${v.id} SMS threw — $e');
                 print('post-sync SMS failed for visit ${v.id}: $e');
               }
             });
+          } else {
+            SmsService.note('pushAll: visit ${v.id} amount 0 → no SMS');
           }
         } catch (e) {
           print('pushAll pushVisit FAILED for visit ${v.id}: $e');
@@ -355,6 +364,7 @@ class SyncController extends Notifier<SyncStatus> {
       final pending = await (_db.select(_db.visits)
             ..where((v) => v.syncStatus.equals('pending')))
           .get();
+      SmsService.note('flushPending: ${pending.length} pending visit(s) to push');
 
       if (pending.isEmpty) {
         await _refreshCounts();
@@ -405,13 +415,19 @@ class SyncController extends Notifier<SyncStatus> {
           // Fire SMS post-push (fire-and-forget) so offline-created visits also
           // notify the customer. Mirrors the original microtask pattern from
           // trip_controller. Gated on amount > 0, same as before.
+          SmsService.note(
+              'visit ${v.id} pushed (amount=${v.amount}, cust=${v.customerId})');
           if (v.amount > 0) {
             Future.microtask(() async {
               try {
                 final customer = await (_db.select(_db.customers)
                       ..where((c) => c.id.equals(v.customerId)))
                     .getSingleOrNull();
-                if (customer == null) return;
+                if (customer == null) {
+                  SmsService.note(
+                      'visit ${v.id}: customer ${v.customerId} NOT in local db → SMS skipped');
+                  return;
+                }
                 await ref.read(smsServiceProvider).sendVisitSms(
                   customerPhone: customer.phone,
                   customerName: customer.shopName,
@@ -420,9 +436,12 @@ class SyncController extends Notifier<SyncStatus> {
                   salespersonName: v.userName,
                 );
               } catch (e) {
+                SmsService.note('visit ${v.id}: SMS call threw — $e');
                 print('post-sync SMS failed for visit ${v.id}: $e');
               }
             });
+          } else {
+            SmsService.note('visit ${v.id}: amount is 0 → no SMS');
           }
         } catch (e, st) {
           // ignore: avoid_print

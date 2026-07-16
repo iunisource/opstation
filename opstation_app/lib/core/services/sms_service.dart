@@ -35,6 +35,15 @@ class SmsService {
     print('SMSLOG ${ok ? "OK" : "FAIL"} $phone :: $outcome');
   }
 
+  /// Public note for the CALLER (sync_controller) to record why it did or did
+  /// not reach the SMS send — e.g. "no pending visits", "amount 0", "customer
+  /// not in local db". Makes upstream skips visible in the SMS Debug screen.
+  static void note(String msg) {
+    log.insert(0, SmsAttempt('—', msg, false));
+    if (log.length > 30) log.removeLast();
+    print('SMSLOG NOTE :: $msg');
+  }
+
   Future<void> sendVisitSms({
     required String customerPhone,
     required String customerName,
