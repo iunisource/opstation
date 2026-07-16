@@ -152,14 +152,23 @@ class _DashboardStatsState extends State<_DashboardStats> {
       // (gte + lt) so trips that span midnight don't double-count.
       final todayVisits = await client
           .from('visits')
-          .select('amount')
+          .select('amount, customer_id')
           .gte('timestamp', todayStart)
           .lt('timestamp', tomorrowStart);
 
       int totalCollection = 0;
+      // Shops visited — matches the app's admin_dashboard_stats formula:
+      // unique customers collected from today (amount > 0), by visit timestamp.
+      final shopsSet = <String>{};
       for (final v in todayVisits) {
-        totalCollection += (v['amount'] as int? ?? 0);
+        final amt = (v['amount'] as int? ?? 0);
+        totalCollection += amt;
+        if (amt > 0) {
+          final cid = v['customer_id'] as String?;
+          if (cid != null) shopsSet.add(cid);
+        }
       }
+      final shopsVisited = shopsSet.length;
 
       // === Intelligence rollups ===
       final paRows = await client
@@ -194,6 +203,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
           'customers': customerCount.count,
           'routes': routes.length,
           'activeRoutes': activeTrips.length,
+          'shopsVisited': shopsVisited,
           'collection': totalCollection,
           'completedToday': completedTrips.length,
           'auditedShops': auditedShops.length,
@@ -221,12 +231,32 @@ class _DashboardStatsState extends State<_DashboardStats> {
     );
   }
 
+  void _showActiveRoutes() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
+          child: _ActiveRoutesView(orgId: widget.orgId),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final cards = [
-      _StatCard(icon: Icons.directions_walk, label: 'Active Routes', value: '${_stats['activeRoutes'] ?? 0}', color: AppTheme.success),
+      _StatCard(
+        icon: Icons.directions_walk,
+        label: 'Active Routes',
+        value: '${_stats['activeRoutes'] ?? 0}',
+        color: AppTheme.success,
+        onTap: _showActiveRoutes,
+      ),
       _StatCard(icon: Icons.check_circle_outline, label: 'Completed Today', value: '${_stats['completedToday'] ?? 0}', color: AppTheme.primary),
       _StatCard(
         icon: Icons.payments_outlined,
@@ -235,6 +265,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
         color: const Color(0xFF8B5CF6),
         onTap: _showCollectionBreakdown,
       ),
+      _StatCard(icon: Icons.storefront_outlined, label: 'Shops Visited', value: '${_stats['shopsVisited'] ?? 0}', color: const Color(0xFF0EA5E9)),
       _StatCard(icon: Icons.people_outline, label: 'Team Members', value: '${_stats['team'] ?? 0}', color: AppTheme.warning),
       _StatCard(icon: Icons.store_outlined, label: 'Customers', value: '${_stats['customers'] ?? 0}', color: AppTheme.danger),
       _StatCard(icon: Icons.route_outlined, label: 'Total Routes', value: '${_stats['routes'] ?? 0}', color: const Color(0xFF06B6D4)),
@@ -749,4 +780,266 @@ String _fmtNumber(int n) {
     if (count % 3 == 0 && i != 0) buf.write(',');
   }
   return buf.toString().split('').reversed.join();
+}
+
+// ============================================================================
+// Active Routes — drill-down modal
+// ============================================================================
+// Mirrors the mobile "active routes" view: one collapsible card per in-progress
+// trip (ended_at IS NULL), showing route name + rep, expanding to that trip's
+// visits so far (customer, time, status, amount).
+
+class _ActiveRoutesView extends StatefulWidget {
+  final String orgId;
+  const _ActiveRoutesView({required this.orgId});
+
+  @override
+  State<_ActiveRoutesView> createState() => _ActiveRoutesViewState();
+}
+
+class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
+  bool _loading = true;
+  String? _error;
+  List<_ActiveRoute> _routes = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final client = Supabase.instance.client;
+
+      // Active trips = ended_at IS NULL.
+      final tripRows = await client
+          .from('trips')
+          .select('id, route_name, user_name, started_at')
+          .eq('org_id', widget.orgId)
+          .filter('ended_at', 'is', null);
+
+      final trips = (tripRows as List)
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      if (trips.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _routes = const [];
+          _loading = false;
+        });
+        return;
+      }
+
+      final tripIds =
+          trips.map((t) => t['id'] as String).toList(growable: false);
+
+      // All visits for those active trips.
+      final visitRows = await client
+          .from('visits')
+          .select(
+              'trip_id, customer_id, amount, timestamp, status, customers(shop_name)')
+          .inFilter('trip_id', tripIds);
+
+      final byTrip = <String, List<_VisitRow>>{};
+      for (final r in (visitRows as List)) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final tid = (m['trip_id'] as String?) ?? '';
+        final cust = m['customers'] as Map<String, dynamic>?;
+        final customerName =
+            (cust != null ? cust['shop_name'] as String? : null) ??
+                'Unknown shop';
+        final ts = m['timestamp'] != null
+            ? DateTime.parse(m['timestamp'] as String).toLocal()
+            : DateTime.now();
+        byTrip.putIfAbsent(tid, () => []).add(_VisitRow(
+              customerName: customerName,
+              amount: (m['amount'] as int?) ?? 0,
+              timestamp: ts,
+              status: (m['status'] as String?) ?? '',
+            ));
+      }
+
+      final out = trips.map((t) {
+        final id = t['id'] as String;
+        final visits = (byTrip[id] ?? [])
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        final collected = visits.fold<int>(0, (s, v) => s + v.amount);
+        final started = t['started_at'] != null
+            ? DateTime.parse(t['started_at'] as String).toLocal()
+            : null;
+        return _ActiveRoute(
+          routeName: (t['route_name'] as String?) ?? 'Route',
+          userName: (t['user_name'] as String?) ?? 'Unknown',
+          startedAt: started,
+          collected: collected,
+          visits: visits,
+        );
+      }).toList()
+        ..sort((a, b) => b.collected.compareTo(a.collected));
+
+      if (!mounted) return;
+      setState(() {
+        _routes = out;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppTheme.success.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(Icons.directions_walk,
+                    color: AppTheme.success, size: 18),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Active Routes',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 22),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Flexible(
+          child: _loading
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(48),
+                    child: CircularProgressIndicator(),
+                  ),
+                )
+              : _error != null
+                  ? Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Text('Error: $_error',
+                          style: const TextStyle(color: Color(0xFFDC2626))),
+                    )
+                  : _routes.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.all(48),
+                          child: Center(
+                            child: Text(
+                              'No routes are active right now.',
+                              style: TextStyle(
+                                  color: AppTheme.textSecondary, fontSize: 14),
+                            ),
+                          ),
+                        )
+                      : SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (final r in _routes) _ActiveRouteExpansion(r: r),
+                            ],
+                          ),
+                        ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActiveRouteExpansion extends StatelessWidget {
+  final _ActiveRoute r;
+  const _ActiveRouteExpansion({required this.r});
+
+  @override
+  Widget build(BuildContext context) {
+    final visited = r.visits.where((v) => v.status != 'skipped').length;
+    final stopsLabel = '$visited stop${visited == 1 ? "" : "s"}';
+    final sinceLabel =
+        r.startedAt != null ? ' \u00b7 since ${DateFormat('HH:mm').format(r.startedAt!)}' : '';
+    final subtitle = '${r.userName} \u00b7 $stopsLabel$sinceLabel';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          title: Text(
+            r.routeName,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            subtitle,
+            style:
+                const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+          ),
+          trailing: Text(
+            'Rs ${_fmtNumber(r.collected)}',
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.success,
+            ),
+          ),
+          children: [
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            if (r.visits.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text('No stops visited yet.',
+                    style: TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
+              )
+            else
+              for (final v in r.visits) _VisitDetailRow(v: v),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ActiveRoute {
+  final String routeName;
+  final String userName;
+  final DateTime? startedAt;
+  final int collected;
+  final List<_VisitRow> visits;
+  const _ActiveRoute({
+    required this.routeName,
+    required this.userName,
+    required this.startedAt,
+    required this.collected,
+    required this.visits,
+  });
 }
