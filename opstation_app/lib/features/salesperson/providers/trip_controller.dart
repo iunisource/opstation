@@ -310,10 +310,33 @@ class TripController extends AsyncNotifier<TripState> {
       });
     }
 
-    // SMS firing moved to SyncController.flushPending — fires after a
-    // successful pushVisit, so offline-created visits also notify the customer
-    // when they later reach the server. The previous in-creation call silently
-    // dropped SMS for offline visits (the Supabase config fetch failed offline).
+    // Fire the customer SMS HERE, at the real creation/sync point.
+    // insertVisit (above) pushes the visit and marks it 'synced' immediately,
+    // so the visit is no longer 'pending' by the time SyncController.flushPending
+    // runs — which is why the flushPending SMS hook never fired for online
+    // visits (the common case) and no SMS was ever sent. We have the customer
+    // object in hand here, so there is no local-DB lookup and no null risk.
+    // Fire-and-forget so marking the visit is never blocked; _send handles
+    // config/network failures gracefully and logs the outcome to SMS Debug.
+    // The flushPending hook remains as a backstop for visits that stayed
+    // 'pending' because their initial push failed (e.g. offline at creation).
+    if (amount > 0) {
+      SmsService.note(
+          'markVisit: firing SMS for ${customer.id} ${customer.phone} (amount=$amount)');
+      Future.microtask(() async {
+        try {
+          await ref.read(smsServiceProvider).sendVisitSms(
+                customerPhone: customer.phone,
+                customerName: customer.shopName,
+                amount: amount,
+                receiptNo: receiptNumber ?? '',
+                salespersonName: active.userName,
+              );
+        } catch (e) {
+          SmsService.note('markVisit: SMS threw — $e');
+        }
+      });
+    }
 
     ref.read(syncControllerProvider.notifier).noteNewPendingVisit();
     final updated = active.copyWith(visits: [...active.visits, visit]);
