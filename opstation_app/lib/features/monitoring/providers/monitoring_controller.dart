@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../auth/models/user_role.dart';
 import '../../salesperson/data/salesperson_repository.dart';
@@ -182,6 +183,33 @@ final leaderboardProvider = FutureProvider.autoDispose
       break;
   }
 
+  // Per-rep collection, read LIVE from Supabase — the same source the web and
+  // admin dashboards use — so the leaderboard total tracks them instead of
+  // trailing on local Drift. Keyed by user_id, summed over the period by each
+  // visit's own timestamp. If Supabase is unreachable (offline), this stays
+  // null and each rep's collection falls back to the local Drift sum below.
+  Map<String, int>? liveCollected;
+  try {
+    final client = Supabase.instance.client;
+    final startUtc = rangeStart.toUtc().toIso8601String();
+    final endUtc = now.toUtc().toIso8601String();
+    final rows = await client
+        .from('visits')
+        .select('user_id, amount')
+        .gte('timestamp', startUtc)
+        .lte('timestamp', endUtc);
+    final m = <String, int>{};
+    for (final r in (rows as List)) {
+      final rec = Map<String, dynamic>.from(r as Map);
+      final uid = rec['user_id'] as String?;
+      if (uid == null) continue;
+      m[uid] = (m[uid] ?? 0) + ((rec['amount'] as int?) ?? 0);
+    }
+    liveCollected = m;
+  } catch (_) {
+    liveCollected = null; // offline → use local Drift sum per rep
+  }
+
   final result = <LeaderboardEntry>[];
   for (final u in users) {
     final trips =
@@ -234,7 +262,9 @@ final leaderboardProvider = FutureProvider.autoDispose
       visited: visitedSet.length,
       verifiedVisits: verified,
       unverifiedVisits: unverified,
-      collected: collected,
+      // Prefer the live Supabase figure so the total matches the dashboards;
+      // fall back to the local per-visit sum when offline.
+      collected: liveCollected != null ? (liveCollected[u.id] ?? 0) : collected,
     ));
   }
 
