@@ -51,13 +51,26 @@ class SmsService {
     required Map<String, String> placeholders,
   }) async {
     try {
-      // Normalize the number to the bare digit form the gateway accepts, the
-      // same format proven to work in direct testing (923XXXXXXXXX). Customer
-      // records store it as "+923154074223"; the leading "+", spaces and dashes
-      // are stripped. A local "03XXXXXXXXX" is converted to "923XXXXXXXXX".
+      // Normalize to the gateway's required format: 92XXXXXXXXXX (country code,
+      // no "+", no leading 0). Customer numbers are stored inconsistently, so
+      // handle every observed shape:
+      //   "+923214219139" -> strip "+"              -> 923214219139
+      //   "0092..."       -> drop the 00 prefix      -> 92...
+      //   "923214219139"  -> already correct         -> unchanged
+      //   "03214219139"   -> drop 0, prepend 92       -> 923214219139
+      //   "3214219139"    -> bare 10-digit mobile     -> prepend 92 -> 923214219139
+      // The bare-10-digit case is the common one in the data and was previously
+      // sent without a country code, which the gateway rejected.
       phone = phone.replaceAll(RegExp(r'[^0-9]'), '');
-      if (phone.startsWith('0')) {
+      if (phone.startsWith('00')) {
+        phone = phone.substring(2);
+      }
+      if (phone.startsWith('92')) {
+        // already has the country code — leave as is
+      } else if (phone.startsWith('0')) {
         phone = '92' + phone.substring(1);
+      } else if (phone.length == 10 && phone.startsWith('3')) {
+        phone = '92' + phone;
       }
 
       final orgId = _ref.read(orgIdProvider);
