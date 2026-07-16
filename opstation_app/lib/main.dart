@@ -17,7 +17,11 @@ const _supabaseAnonKey = String.fromEnvironment(
   defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhncHRvZGthc215dGRkbWRuYnRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NzA5MjUsImV4cCI6MjA5MjI0NjkyNX0.pc1VsvsvtnkBHyRzuXzzuspSTJRqU_BQgQulMQ9UCac',
 );
 
-const _sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');
+const _sentryDsn = String.fromEnvironment(
+  'SENTRY_DSN',
+  defaultValue:
+      'https://83333a6356790bfc6bcb0a9f8e30271c@o4511405080379392.ingest.us.sentry.io/4511405092372480',
+);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +46,14 @@ Future<void> main() async {
       await Supabase.initialize(
         url: _supabaseUrl,
         anonKey: _supabaseAnonKey,
+      );
+
+      // TEMPORARY — remove after confirming Sentry works. Fires one event on
+      // every launch; if it shows up under opstation-mobile > Issues, Sentry
+      // reporting is live (and the SMS-failure captures will surface too).
+      await Sentry.captureMessage(
+        'SENTRY CONNECTIVITY TEST — Opstation app launched',
+        level: SentryLevel.info,
       );
 
       runApp(const ProviderScope(child: OpstationApp()));
