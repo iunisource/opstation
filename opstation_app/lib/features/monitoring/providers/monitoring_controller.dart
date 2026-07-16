@@ -212,7 +212,19 @@ final leaderboardProvider = FutureProvider.autoDispose
         // Skipped and pending visits don't count toward visited or
         // either count, but their `amount` (if any) still counts toward
         // collected — preserves the prior behavior.
-        collected += v.amount;
+        //
+        // Collection is bucketed by the visit's OWN timestamp within the
+        // period, matching the web + admin dashboards (canonical rule: sum of
+        // visit amounts whose timestamp falls in [rangeStart, now], Karachi
+        // day). Without this filter an active trip that began before the
+        // period start dragged its earlier-day collections into the total,
+        // which is why the leaderboard disagreed with the dashboards. No
+        // today-collection is lost: any visit timestamped in-period belongs to
+        // a trip that either started in-period or is still active — both are in
+        // allTrips.
+        if (!v.timestamp.isBefore(rangeStart) && !v.timestamp.isAfter(now)) {
+          collected += v.amount;
+        }
       }
     }
 
