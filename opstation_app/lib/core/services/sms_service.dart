@@ -5,9 +5,35 @@ import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/providers/auth_controller.dart';
 
+/// One recorded SMS attempt, kept on-device so the outcome is visible in the
+/// app without depending on Sentry, adb, or the network. Read via
+/// [SmsService.log] / [smsDebugLogProvider].
+class SmsAttempt {
+  final DateTime at;
+  final String phone; // normalized
+  final String outcome; // human-readable: what happened
+  final bool ok;
+  SmsAttempt(this.phone, this.outcome, this.ok) : at = DateTime.now();
+
+  String get line {
+    final t =
+        '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}:${at.second.toString().padLeft(2, '0')}';
+    return '[$t] ${ok ? "✓" : "✗"} $phone — $outcome';
+  }
+}
+
 class SmsService {
   final Ref _ref;
   SmsService(this._ref);
+
+  /// Last SMS attempts, newest first. Surfaced in the SMS Debug screen.
+  static final List<SmsAttempt> log = [];
+  static void _record(String phone, String outcome, bool ok) {
+    log.insert(0, SmsAttempt(phone, outcome, ok));
+    if (log.length > 30) log.removeLast();
+    // Also print so `adb logcat | grep SMSLOG` works if ever needed.
+    print('SMSLOG ${ok ? "OK" : "FAIL"} $phone :: $outcome');
+  }
 
   Future<void> sendVisitSms({
     required String customerPhone,
@@ -75,6 +101,7 @@ class SmsService {
 
       final orgId = _ref.read(orgIdProvider);
       if (orgId == null) {
+        _record(phone, 'SKIPPED — orgId is null (no org in session)', false);
         await Sentry.captureMessage('SMS skipped: orgId is null',
             level: SentryLevel.warning);
         return;
@@ -101,8 +128,18 @@ class SmsService {
         cfg[row['key'] as String] = row['value'] as String? ?? '';
       }
 
+      if (cfg.isEmpty) {
+        _record(phone,
+            'SKIPPED — no app_config rows returned for org $orgId (config fetch empty)',
+            false);
+        return;
+      }
+
       print('SMS CONFIG: enabled=' + (cfg['org.sms_enabled'] ?? 'null') + ' url=' + (cfg['org.sms_api_url'] ?? 'null'));
       if (cfg['org.sms_enabled'] != 'true') {
+        _record(phone,
+            'SKIPPED — sms_enabled != true (was "${cfg['org.sms_enabled'] ?? 'null'}")',
+            false);
         await Sentry.captureMessage(
             'SMS skipped: org.sms_enabled != true (was "${cfg['org.sms_enabled'] ?? 'null'}")',
             level: SentryLevel.warning);
@@ -111,6 +148,7 @@ class SmsService {
 
       final apiUrl = cfg['org.sms_api_url'] ?? '';
       if (apiUrl.isEmpty) {
+        _record(phone, 'SKIPPED — sms_api_url is empty', false);
         await Sentry.captureMessage('SMS skipped: org.sms_api_url is empty',
             level: SentryLevel.warning);
         return;
@@ -175,17 +213,27 @@ class SmsService {
       final okStatus = resp.statusCode >= 200 && resp.statusCode < 300;
       final looksSuccessful =
           bodyText.toUpperCase().contains('SUCCESS');
+      final shortBody =
+          bodyText.length > 160 ? bodyText.substring(0, 160) : bodyText;
       if (!okStatus || !looksSuccessful) {
+        _record(phone,
+            'GATEWAY REJECTED — status ${resp.statusCode}: $shortBody', false);
         await Sentry.captureMessage(
           'SMS gateway did not confirm success — status=${resp.statusCode} body=$bodyText',
           level: SentryLevel.error,
         );
+      } else {
+        _record(phone, 'SENT — status ${resp.statusCode}: $shortBody', true);
       }
     } catch (e, st) {
+      _record(phone, 'THREW — $e', false);
       print('SMS ERROR: ' + e.toString());
       await Sentry.captureException(e, stackTrace: st);
     }
   }
 }
+
+/// Exposes the on-device SMS attempt log to the UI.
+final smsDebugLogProvider = Provider<List<SmsAttempt>>((_) => SmsService.log);
 
 final smsServiceProvider = Provider<SmsService>((ref) => SmsService(ref));

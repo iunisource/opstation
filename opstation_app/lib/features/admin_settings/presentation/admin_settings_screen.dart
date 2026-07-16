@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/services/sms_debug_screen.dart';
 import '../../../core/theme/app_colors.dart';
 import '../models/org_settings.dart';
 import '../providers/org_settings_controller.dart';
@@ -77,6 +78,28 @@ class AdminSettingsScreen extends ConsumerWidget {
               }
               return const SizedBox.shrink();
             }),
+            const SizedBox(height: 16),
+            // Diagnostics: view the on-device log of the last SMS attempts —
+            // sent, skipped (with reason), gateway rejection (with the
+            // provider's response), or error. No Sentry/network needed.
+            Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: AppColors.borderLight),
+              ),
+              child: ListTile(
+                leading: const Icon(Icons.sms_outlined),
+                title: const Text('SMS Debug'),
+                subtitle: const Text('View the last SMS send attempts'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const SmsDebugScreen(),
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(height: 32),
           ],
         ),

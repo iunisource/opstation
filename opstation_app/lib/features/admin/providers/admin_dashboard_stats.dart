@@ -62,15 +62,26 @@ final adminDashboardStatsProvider =
   final shops = <String>{};
   int activeRoutesCount = 0;
 
+  // This org's user IDs. `visits` has no org_id column, so RLS cannot scope it
+  // by org — scoping MUST be done explicitly or every org's data leaks in.
+  // orgUsers is already filtered to this org above, so its ids are the org
+  // boundary for both visits and trips (both carry user_id).
+  final orgUserIds = orgUsers.map((u) => u.id).toList();
+
   try {
     final client = Supabase.instance.client;
     final todayStartUtc = todayStart.toUtc().toIso8601String();
     final tomorrowStartUtc = tomorrowStart.toUtc().toIso8601String();
 
-    // RLS scopes these to the signed-in admin's org, same as the web dashboard.
+    if (orgUserIds.isEmpty) throw StateError('no org users');
+
+    // Scoped to THIS org's users. Without inFilter this pulled every org's
+    // visits (visits has no org_id), which mixed other orgs' collections and
+    // reps into this dashboard.
     final visitRows = await client
         .from('visits')
         .select('amount, customer_id')
+        .inFilter('user_id', orgUserIds)
         .gte('timestamp', todayStartUtc)
         .lt('timestamp', tomorrowStartUtc);
     for (final r in (visitRows as List)) {
@@ -86,6 +97,7 @@ final adminDashboardStatsProvider =
     final activeRows = await client
         .from('trips')
         .select('id')
+        .inFilter('user_id', orgUserIds)
         .filter('ended_at', 'is', null);
     activeRoutesCount = (activeRows as List).length;
   } catch (_) {

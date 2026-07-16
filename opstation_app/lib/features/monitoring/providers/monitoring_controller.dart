@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../auth/models/user_role.dart';
+import '../../auth/providers/auth_controller.dart';
 import '../../salesperson/data/salesperson_repository.dart';
 import '../../salesperson/models/trip.dart';
 import '../../team/data/team_repository.dart';
@@ -121,11 +122,16 @@ final liveMonitoringProvider =
     FutureProvider.autoDispose<List<LiveSalespersonSummary>>((ref) async {
   final teamRepo = ref.watch(teamRepositoryProvider);
   final salesRepo = ref.watch(salespersonRepositoryProvider);
+  final orgId = ref.watch(orgIdProvider);
 
+  // Only THIS org's salespersons. Without the org filter, users from other
+  // orgs (whose data happens to be in the shared table) appear in this org's
+  // live list — a cross-org leak.
   final users = (await teamRepo.all(includeInactive: false))
-      .where((u) => u.role == UserRole.salesperson)
+      .where((u) =>
+          u.role == UserRole.salesperson &&
+          (orgId == null || u.orgId == orgId))
       .toList();
-
   final today = DateTime.now();
   final result = <LiveSalespersonSummary>[];
   for (final u in users) {
@@ -160,9 +166,14 @@ final leaderboardProvider = FutureProvider.autoDispose
     .family<List<LeaderboardEntry>, LeaderboardPeriod>((ref, period) async {
   final teamRepo = ref.watch(teamRepositoryProvider);
   final salesRepo = ref.watch(salespersonRepositoryProvider);
+  final orgId = ref.watch(orgIdProvider);
 
+  // Only THIS org's salespersons — otherwise other orgs' reps and their
+  // collections appear on this leaderboard (cross-org leak).
   final users = (await teamRepo.all(includeInactive: false))
-      .where((u) => u.role == UserRole.salesperson)
+      .where((u) =>
+          u.role == UserRole.salesperson &&
+          (orgId == null || u.orgId == orgId))
       .toList();
 
   final now = DateTime.now();
