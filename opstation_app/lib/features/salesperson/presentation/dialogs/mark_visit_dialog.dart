@@ -34,6 +34,9 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
 
   SimulatedFix? _deviceFix;
   bool _fetchingDeviceFix = false;
+  // Last GPS outcome — used to block marking when device location is off or
+  // permission is denied (enforced in _submit). Null until the first fetch.
+  GpsOutcome? _lastGpsOutcome;
 
   @override
   void initState() {
@@ -73,9 +76,11 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
       _fetchingDeviceFix = true;
     }
     final gps = ref.read(deviceGpsServiceProvider);
-    final fix = await gps.getFix();
+    final result = await gps.getFixResult();
+    final fix = result.fix;
     if (!mounted) return;
     setState(() {
+      _lastGpsOutcome = result.outcome;
       final next = fix == null
           ? const SimulatedFix.unavailable()
           : SimulatedFix(lat: fix.lat, lng: fix.lng, accuracyMeters: fix.accuracy);
@@ -141,7 +146,48 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
       return;
     }
     setState(() { _submitting = true; _errorText = null; });
-    final fix = _currentFix;
+
+    // Enforce location before allowing a mark. Blocks only the bypass cases —
+    // device location OFF, or permission denied/blocked. A weak-signal timeout
+    // (permission granted + location on, but no fix yet) is allowed through so
+    // reps inside dense buildings aren't stuck. Re-checks live so a rep can't
+    // grant, open the dialog, then toggle location off before submitting.
+    final gate = await ref.read(deviceGpsServiceProvider).getFixResult();
+    if (!mounted) return;
+    _lastGpsOutcome = gate.outcome;
+    if (gate.outcome == GpsOutcome.serviceDisabled) {
+      setState(() {
+        _submitting = false;
+        _errorText =
+            'Turn on your device location (GPS) to mark a visit, then try again.';
+      });
+      return;
+    }
+    if (gate.outcome == GpsOutcome.permissionBlocked) {
+      setState(() {
+        _submitting = false;
+        _errorText =
+            'Location permission is blocked. Enable it for Opstation in your phone Settings, then try again.';
+      });
+      return;
+    }
+    if (gate.outcome == GpsOutcome.permissionDenied) {
+      setState(() {
+        _submitting = false;
+        _errorText =
+            'Location permission is required to mark a visit. Please allow it and try again.';
+      });
+      return;
+    }
+
+    // Prefer the freshly-captured gate fix if it's better/available; otherwise
+    // keep whatever the polling settled on.
+    final fix = gate.fix != null
+        ? SimulatedFix(
+            lat: gate.fix!.lat,
+            lng: gate.fix!.lng,
+            accuracyMeters: gate.fix!.accuracy)
+        : _currentFix;
     try {
       await ref.read(tripControllerProvider.notifier).markVisit(
         customer: widget.customer,
