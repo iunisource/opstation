@@ -17,6 +17,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   List<Map<String, dynamic>> _trips = [];
   List<Map<String, dynamic>> _users = [];
   bool _loading = true;
+  // Holds the reason a load failed. Previously every error was swallowed by a
+  // bare `catch (_)`, so a timed-out or rejected query looked identical to
+  // "there are genuinely no trips" — which sent us hunting a data bug that
+  // wasn't one. Surface the real cause instead.
+  String? _error;
   DateTimeRange? _range;
   String? _selectedUserId;
   Map<String, List<Map<String, dynamic>>> _visitsByTrip = {};
@@ -31,8 +36,18 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 
   Future<void> _load() async {
     final orgId = ref.read(currentUserProvider)?.orgId;
-    if (orgId == null) return;
-    setState(() => _loading = true);
+    if (orgId == null) {
+      // Bare `return` here used to leave the spinner up forever with no clue.
+      setState(() {
+        _error = 'No organization on the current user session.';
+        _loading = false;
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final client = Supabase.instance.client;
       final users = await client.from('users').select('id, name').eq('org_id', orgId).eq('role', 'salesperson');
@@ -88,7 +103,12 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         _customersById = customersById;
         _loading = false;
       });
-    } catch (_) { setState(() => _loading = false); }
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
   }
 
 
@@ -197,7 +217,32 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
               ),
               const Divider(height: 1),
               Expanded(
-                child: _trips.isEmpty
+                child: _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 32),
+                            const SizedBox(height: 12),
+                            const Text('Could not load reports',
+                                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                            const SizedBox(height: 6),
+                            SelectableText(_error!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Color(0xFFDC2626), fontSize: 12)),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _load,
+                              icon: const Icon(Icons.refresh, size: 16),
+                              label: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _trips.isEmpty
                   ? const Center(child: Text('No trips found for selected filters', style: TextStyle(color: AppTheme.textSecondary)))
                   : ListView.separated(
                     itemCount: _trips.length,
