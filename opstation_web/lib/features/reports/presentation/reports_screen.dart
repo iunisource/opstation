@@ -70,28 +70,54 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       final tripIds = tripList.map((t) => t['id'] as String).toList();
       Map<String, List<Map<String, dynamic>>> visitsByTrip = {};
       Map<String, Map<String, dynamic>> customersById = {};
+
+      // Show the rows we already have before the follow-up fetches. A failure
+      // below used to skip the single setState at the end, blanking the whole
+      // screen — trips AND the salesperson dropdown — which looked like "no
+      // data" rather than "a query failed".
+      if (mounted) {
+        setState(() {
+          _users = List<Map<String, dynamic>>.from(users);
+          _trips = tripList;
+        });
+      }
+
       if (tripIds.isNotEmpty) {
-        final v = await client
-            .from('visits')
-            .select()
-            .inFilter('trip_id', tripIds);
+        // PostgREST puts `in.(...)` in the URL query string, so a long id list
+        // overruns the server's URL limit and comes back as a bare
+        // 400 Bad Request. Once a week held enough trips the whole screen
+        // started failing. Fetch in batches and merge.
+        final v = <Map<String, dynamic>>[];
+        for (var i = 0; i < tripIds.length; i += 40) {
+          final batch = tripIds.sublist(
+              i, i + 40 > tripIds.length ? tripIds.length : i + 40);
+          final rows = await client
+              .from('visits')
+              .select()
+              .inFilter('trip_id', batch);
+          v.addAll(List<Map<String, dynamic>>.from(rows));
+        }
         for (final row in v) {
           final m = Map<String, dynamic>.from(row);
           (visitsByTrip[m['trip_id'] as String] ??= []).add(m);
         }
-        final custIds = (v as List)
+        final custIds = v
             .map((r) => r['customer_id'] as String?)
             .whereType<String>()
             .toSet()
             .toList();
         if (custIds.isNotEmpty) {
-          final c = await client
-              .from('customers')
-              .select('id, shop_name, code')
-              .inFilter('id', custIds);
-          for (final row in c) {
-            final m = Map<String, dynamic>.from(row);
-            customersById[m['id'] as String] = m;
+          for (var i = 0; i < custIds.length; i += 40) {
+            final batch = custIds.sublist(
+                i, i + 40 > custIds.length ? custIds.length : i + 40);
+            final c = await client
+                .from('customers')
+                .select('id, shop_name, code')
+                .inFilter('id', batch);
+            for (final row in c) {
+              final m = Map<String, dynamic>.from(row);
+              customersById[m['id'] as String] = m;
+            }
           }
         }
       }
