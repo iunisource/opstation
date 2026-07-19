@@ -149,8 +149,9 @@ class SyncController extends Notifier<SyncStatus> {
       return;
     }
 
-    int pushed = 0, adopted = 0, failed = 0;
-    for (final t in trips) {
+    int pushed = 0, adopted = 0, failed = 0, repaired = 0;
+    final sessionOrgId = ref.read(orgIdProvider);
+    for (var t in trips) {
       final serverEnd = closedOnServer[t.id];
       if (serverEnd != null && t.endedAt == null) {
         await (_db.update(_db.trips)..where((r) => r.id.equals(t.id))).write(
@@ -162,17 +163,52 @@ class SyncController extends Notifier<SyncStatus> {
         adopted++;
         continue;
       }
+      // A trip written while orgIdProvider was still null carries no org, and
+      // the `Tenant scoped` RLS policy (org_id = current_user_org_id()) then
+      // rejects every push with 42501 — permanently, and silently. The rep
+      // works all day while their route never reaches the server. Stamp the
+      // session's org onto such rows before pushing, and persist the repair.
+      if ((t.orgId == null || t.orgId!.isEmpty) &&
+          sessionOrgId != null &&
+          sessionOrgId.isNotEmpty) {
+        await (_db.update(_db.trips)..where((r) => r.id.equals(t.id)))
+            .write(TripsCompanion(orgId: Value(sessionOrgId)));
+        final fixed = await (_db.select(_db.trips)
+              ..where((r) => r.id.equals(t.id)))
+            .getSingleOrNull();
+        if (fixed != null) {
+          t = fixed;
+          repaired++;
+          SmsService.note('$tag: stamped missing org_id on ${t.id}');
+        }
+      }
       try {
         await _supabase.pushTrip(t);
         pushed++;
       } catch (e) {
         failed++;
-        SmsService.note('$tag: pushTrip FAILED ${t.id} — $e');
+        // Record what the client believed about its own session at the moment
+        // of failure. A 42501 can mean the row's org is wrong, or that the
+        // request carried no user JWT at all — in which case auth.jwt()->>
+        // 'email' is null, current_user_org_id() returns null, and the tenant
+        // policy denies while the restrictive retailer policy still passes.
+        // These look identical from the server, so capture the difference here.
+        String who = 'no-session';
+        try {
+          final sess = Supabase.instance.client.auth.currentSession;
+          final u = Supabase.instance.client.auth.currentUser;
+          who = sess == null
+              ? 'no-session'
+              : 'session email=${u?.email ?? "?"} expired=${sess.isExpired}';
+        } catch (_) {}
+        SmsService.note(
+            '$tag: pushTrip FAILED ${t.id} trip.org=${t.orgId ?? "NULL"} '
+            'session.org=${sessionOrgId ?? "NULL"} $who — $e');
         print('$tag pushTrip FAILED for ${t.id}: $e');
       }
     }
     SmsService.note(
-        '$tag: trips pushed=$pushed adopted-server-close=$adopted failed=$failed');
+        '$tag: trips pushed=$pushed adopted-server-close=$adopted repaired=$repaired failed=$failed');
   }
 
   @override

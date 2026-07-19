@@ -399,8 +399,22 @@ class SalespersonRepository {
   /// that we hit before — without immediate push, stops only synced via
   /// the periodic pushAll cycle, which sometimes never ran.
   Future<Trip> createTrip(Trip trip) async {
+    // A trip written while orgIdProvider is still null gets org_id = NULL, and
+    // the server's `Tenant scoped` RLS policy then rejects every push with
+    // 42501 — silently and permanently, so the rep works a full day that never
+    // reaches the server. Fall back to the trip owner's own org before the
+    // insert rather than relying on the provider having resolved by now.
+    String? orgId = _orgId;
+    if ((orgId == null || orgId.isEmpty) && trip.userId.isNotEmpty) {
+      try {
+        final owner = await (_db.select(_db.users)
+              ..where((u) => u.id.equals(trip.userId)))
+            .getSingleOrNull();
+        orgId = owner?.orgId;
+      } catch (_) {}
+    }
     await _db.batch((b) {
-      b.insert(_db.trips, _tripCompanion(trip));
+      b.insert(_db.trips, _tripCompanion(trip, orgIdOverride: orgId));
       b.insertAll(_db.tripStops, [
         for (int i = 0; i < trip.stopSnapshot.length; i++)
           TripStopsCompanion.insert(
@@ -442,7 +456,7 @@ class SalespersonRepository {
     } catch (_) {}
   }
 
-  TripsCompanion _tripCompanion(Trip t) {
+  TripsCompanion _tripCompanion(Trip t, {String? orgIdOverride}) {
     return TripsCompanion.insert(
       id: t.id,
       routeId: t.routeId,
@@ -458,7 +472,7 @@ class SalespersonRepository {
       userId: Value(t.userId),
       userName: Value(t.userName),
       userRole: Value(t.userRole),
-      orgId: Value(_orgId),
+      orgId: Value(orgIdOverride ?? _orgId),
     );
   }
 
