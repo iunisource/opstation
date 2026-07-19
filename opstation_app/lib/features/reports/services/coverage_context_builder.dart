@@ -111,7 +111,7 @@ class CoverageContextBuilder {
     String? routeIdFilter,
     String? userIdFilter,
   }) async {
-    final teamRepo = _ref.read(teamRepositoryProvider);
+    final teamRepo = _ref.read(scopedTeamRepositoryProvider);
     final salesRepo = _ref.read(salespersonRepositoryProvider);
 
     final users = await teamRepo.all(includeInactive: true);

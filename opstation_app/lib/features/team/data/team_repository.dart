@@ -272,16 +272,37 @@ class TeamRepository {
   }
 }
 
-// NOTE: TeamRepository intentionally has NO org scoping here.
+// NOTE: teamRepositoryProvider below is deliberately UNSCOPED.
 // It is used by MockAuthRepository during login — at that point
 // authControllerProvider has no value yet, so orgIdProvider would
 // return null and, worse, create a circular dependency:
 //   authController → mockAuthRepo → teamRepo → orgIdProvider → authController
 //
-// Team list org-filtering is handled inside TeamListScreen via the
-// auth controller directly, which already knows the current user's org.
+// For anything that DISPLAYS people (dropdowns, reports, monitoring), use
+// scopedTeamRepositoryProvider instead — it applies the org filter. Reading
+// the unscoped provider in a display context is what let users from other
+// orgs appear in a company's salesperson lists.
 final teamRepositoryProvider = Provider<TeamRepository>((ref) {
   final db = ref.watch(appDatabaseProvider);
   final sync = ref.watch(supabaseSyncServiceProvider);
   return TeamRepository(db, sync: sync);
+});
+
+/// Org-scoped TeamRepository for DISPLAY use — dropdowns, reports, monitoring,
+/// anything that lists people. Reads orgIdProvider, so `all()` filters to the
+/// signed-in user's org instead of returning every user in the database, which
+/// is how reps from other orgs appeared in TTC's salesperson lists.
+///
+/// This is a second provider rather than a change to [teamRepositoryProvider]
+/// because that one is used by MockAuthRepository during login, where
+/// authControllerProvider has no value yet and reading orgIdProvider would
+/// create a cycle:
+///   authController → mockAuthRepo → teamRepo → orgIdProvider → authController
+/// Nothing reads this provider until after login, so the cycle can't form.
+/// Use this everywhere EXCEPT the auth path.
+final scopedTeamRepositoryProvider = Provider<TeamRepository>((ref) {
+  final db = ref.watch(appDatabaseProvider);
+  final sync = ref.watch(supabaseSyncServiceProvider);
+  final orgId = ref.watch(orgIdProvider);
+  return TeamRepository(db, orgId: orgId, sync: sync);
 });

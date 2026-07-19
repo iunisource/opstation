@@ -172,7 +172,7 @@ class _TripList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final teamRepo = ref.watch(teamRepositoryProvider);
+    final teamRepo = ref.watch(scopedTeamRepositoryProvider);
     final salesRepo = ref.watch(salespersonRepositoryProvider);
 
     final now = DateTime.now();
@@ -288,7 +288,7 @@ class _UserDropdown extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final teamRepo = ref.watch(teamRepositoryProvider);
+    final teamRepo = ref.watch(scopedTeamRepositoryProvider);
     return FutureBuilder<List<TeamUser>>(
       future: teamRepo.all(includeInactive: false),
       builder: (context, snap) {

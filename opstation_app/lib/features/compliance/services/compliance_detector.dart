@@ -51,7 +51,7 @@ class ComplianceDetector {
   /// Runs detection for every salesperson in the org. Returns them
   /// sorted by lowest score first (worst compliance at the top).
   Future<List<SalespersonCompliance>> forAllSalespersons() async {
-    final teamRepo = _ref.read(teamRepositoryProvider);
+    final teamRepo = _ref.read(scopedTeamRepositoryProvider);
     final users = await teamRepo.all(includeInactive: false);
     final out = <SalespersonCompliance>[];
     for (final u in users) {

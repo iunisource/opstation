@@ -174,7 +174,7 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
   }
 
   Widget _actorDropdown() {
-    final teamRepo = ref.watch(teamRepositoryProvider);
+    final teamRepo = ref.watch(scopedTeamRepositoryProvider);
     return FutureBuilder<List<TeamUser>>(
       future: teamRepo.all(includeInactive: true),
       builder: (context, snap) {

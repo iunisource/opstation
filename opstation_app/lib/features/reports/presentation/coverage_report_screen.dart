@@ -284,7 +284,7 @@ class _CoverageReportScreenState
   }
 
   Widget _userDropdown() {
-    final teamRepo = ref.watch(teamRepositoryProvider);
+    final teamRepo = ref.watch(scopedTeamRepositoryProvider);
     return FutureBuilder<List<TeamUser>>(
       future: teamRepo.all(includeInactive: false),
       builder: (context, snap) {

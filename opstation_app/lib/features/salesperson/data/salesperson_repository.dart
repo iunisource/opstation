@@ -66,7 +66,11 @@ class SalespersonRepository {
       ..where((r) => r.isActive.equals(true))
       ..orderBy([(r) => OrderingTerm.asc(r.name)]);
     if (_orgId != null) {
-      q.where((r) => r.orgId.isNull() | r.orgId.equals(_orgId!));
+      // Exact-org match only. The previous `r.orgId.isNull() |` allowance let
+      // any untagged route surface in EVERY org's route list — the same
+      // cross-org leak already fixed for users in TeamRepository. Untagged
+      // routes now belong to no org rather than to all of them.
+      q.where((r) => r.orgId.equals(_orgId!));
     }
     return _hydrateRoutes(await q.get());
   }
@@ -75,7 +79,7 @@ class SalespersonRepository {
     final q = _db.select(_db.salesRoutesTable)
       ..orderBy([(r) => OrderingTerm.asc(r.name)]);
     if (_orgId != null) {
-      q.where((r) => r.orgId.isNull() | r.orgId.equals(_orgId!));
+      q.where((r) => r.orgId.equals(_orgId!));
     }
     return _hydrateRoutes(await q.get());
   }
@@ -325,7 +329,7 @@ class SalespersonRepository {
           t.endedAt.isSmallerThanValue(dayEnd))
       ..orderBy([(t) => OrderingTerm.asc(t.endedAt)]);
     if (_orgId != null) {
-      q.where((t) => t.orgId.isNull() | t.orgId.equals(_orgId!));
+      q.where((t) => t.orgId.equals(_orgId!));
     }
     return [for (final r in await q.get()) await _tripFromRow(r)];
   }
@@ -341,7 +345,7 @@ class SalespersonRepository {
           t.userId.equals(userId))
       ..orderBy([(t) => OrderingTerm.asc(t.endedAt)]);
     if (_orgId != null) {
-      q.where((t) => t.orgId.isNull() | t.orgId.equals(_orgId!));
+      q.where((t) => t.orgId.equals(_orgId!));
     }
     return [for (final r in await q.get()) await _tripFromRow(r)];
   }
@@ -368,7 +372,7 @@ class SalespersonRepository {
           t.userId.equals(userId))
       ..orderBy([(t) => OrderingTerm.asc(t.startedAt)]);
     if (_orgId != null) {
-      q.where((t) => t.orgId.isNull() | t.orgId.equals(_orgId!));
+      q.where((t) => t.orgId.equals(_orgId!));
     }
     return [for (final r in await q.get()) await _tripFromRow(r)];
   }

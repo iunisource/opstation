@@ -385,7 +385,7 @@ class _DeliveryWizardScreenState
   // ---- Driver picking ------------------------------------------------
 
   Future<void> _pickDriver() async {
-    final users = await ref.read(teamRepositoryProvider).all(includeInactive: false);
+    final users = await ref.read(scopedTeamRepositoryProvider).all(includeInactive: false);
     final drivers =
         users.where((u) => u.role == UserRole.driver && u.isActive).toList();
     if (!mounted) return;

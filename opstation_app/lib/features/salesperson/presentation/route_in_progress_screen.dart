@@ -6,6 +6,7 @@ import '../../orders/presentation/order_create_modal.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/sound_controller.dart';
+import '../../../core/services/device_gps_service.dart';
 import '../../../core/utils/geo_utils.dart';
 import '../../../shared/widgets/status_badge.dart';
 import '../models/customer.dart';
@@ -100,6 +101,42 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
   }
 
   Future<void> _completeTrip() async {
+    // Same gate as marking a visit: a route can't be closed with location
+    // switched off or permission denied, otherwise the end-of-route position
+    // is unverifiable and the geofencing rules are trivially bypassed. A weak
+    // signal (permission granted, location on, no fix yet) is allowed through
+    // so a rep inside a building isn't stranded mid-route.
+    final gate = await ref.read(deviceGpsServiceProvider).getFixResult();
+    if (!mounted) return;
+    String? blockReason;
+    switch (gate.outcome) {
+      case GpsOutcome.serviceDisabled:
+        blockReason =
+            'Turn on your device location (GPS) to complete the route.';
+        break;
+      case GpsOutcome.permissionBlocked:
+        blockReason =
+            'Location permission is blocked. Enable it for Opstation in your phone Settings, then try again.';
+        break;
+      case GpsOutcome.permissionDenied:
+        blockReason =
+            'Location permission is required to complete the route.';
+        break;
+      default:
+        blockReason = null;
+    }
+    if (blockReason != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(blockReason),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFDC2626),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
+
     await ref.read(tripControllerProvider.notifier).completeTrip();
     ref.read(soundControllerProvider.notifier).play(AppSound.routeEnd);
     if (!mounted) return;

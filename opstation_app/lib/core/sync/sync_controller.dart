@@ -51,6 +51,72 @@ class SyncController extends Notifier<SyncStatus> {
   AppDatabase get _db => ref.read(appDatabaseProvider);
   SupabaseSyncService get _supabase => ref.read(supabaseSyncServiceProvider);
 
+  /// Pushes trips without resurrecting ones the server has already closed.
+  ///
+  /// pushTrip is an upsert, so blindly pushing a local row whose `ended_at` is
+  /// still null overwrites a server-side close — which is exactly how a trip
+  /// shut by the 23:00 cut-off cron came back to life as "in progress" the
+  /// next morning. The server is authoritative for cut-off, so when it reports
+  /// a trip closed and the device still thinks it's open, we adopt the close
+  /// locally instead of pushing over it.
+  Future<void> _pushTripsRespectingServerClose(
+    List<TripsData> trips, {
+    String tag = 'sync',
+  }) async {
+    if (trips.isEmpty) return;
+    final ids = trips.map((t) => t.id).toList();
+    final closedOnServer = <String, DateTime>{};
+    try {
+      final client = Supabase.instance.client;
+      // Batched: `in.(...)` rides in the URL, so a long id list 400s.
+      for (var i = 0; i < ids.length; i += 40) {
+        final batch =
+            ids.sublist(i, i + 40 > ids.length ? ids.length : i + 40);
+        final rows = await client
+            .from('trips')
+            .select('id, ended_at')
+            .inFilter('id', batch);
+        for (final r in (rows as List)) {
+          final m = Map<String, dynamic>.from(r as Map);
+          final ended = m['ended_at'] as String?;
+          if (ended != null) {
+            closedOnServer[m['id'] as String] = DateTime.parse(ended);
+          }
+        }
+      }
+    } catch (e) {
+      // Can't tell what the server holds — pushing now risks reopening a
+      // closed trip, so skip this round. The 30s timer retries.
+      SmsService.note('$tag: skipped trip push, server state unreadable — $e');
+      return;
+    }
+
+    int pushed = 0, adopted = 0, failed = 0;
+    for (final t in trips) {
+      final serverEnd = closedOnServer[t.id];
+      if (serverEnd != null && t.endedAt == null) {
+        await (_db.update(_db.trips)..where((r) => r.id.equals(t.id))).write(
+          TripsCompanion(
+            endedAt: Value(serverEnd),
+            closeReason: const Value('cutoff'),
+          ),
+        );
+        adopted++;
+        continue;
+      }
+      try {
+        await _supabase.pushTrip(t);
+        pushed++;
+      } catch (e) {
+        failed++;
+        SmsService.note('$tag: pushTrip FAILED ${t.id} — $e');
+        print('$tag pushTrip FAILED for ${t.id}: $e');
+      }
+    }
+    SmsService.note(
+        '$tag: trips pushed=$pushed adopted-server-close=$adopted failed=$failed');
+  }
+
   @override
   SyncStatus build() {
     _onlineSub = ref
@@ -203,13 +269,7 @@ class SyncController extends Notifier<SyncStatus> {
       final trips = orgId == null
           ? await _db.select(_db.trips).get()
           : await (_db.select(_db.trips)..where((t) => t.orgId.equals(orgId))).get();
-      for (final t in trips) {
-        try {
-          await _supabase.pushTrip(t);
-        } catch (e) {
-          print('pushTrip FAILED: $e');
-        }
-      }
+      await _pushTripsRespectingServerClose(trips, tag: 'pushAll');
 
       final tripStops = await _db.select(_db.tripStops).get();
       for (final s in tripStops) {
@@ -391,20 +451,7 @@ class SyncController extends Notifier<SyncStatus> {
         final recentTrips = (await _db.select(_db.trips).get())
             .where((t) => t.startedAt.isAfter(cutoff))
             .toList();
-        if (recentTrips.isNotEmpty) {
-          int ok = 0;
-          for (final t in recentTrips) {
-            try {
-              await _supabase.pushTrip(t);
-              ok++;
-            } catch (e) {
-              SmsService.note('sync: pushTrip FAILED ${t.id} — $e');
-              print('flushPending recent pushTrip FAILED for ${t.id}: $e');
-            }
-          }
-          SmsService.note(
-              'sync: re-pushed $ok/${recentTrips.length} recent trip(s)');
-        }
+        await _pushTripsRespectingServerClose(recentTrips, tag: 'flushPending');
       } catch (e) {
         SmsService.note('sync: recent-trip re-push block threw — $e');
       }
@@ -429,13 +476,7 @@ class SyncController extends Notifier<SyncStatus> {
         final trips = await (_db.select(_db.trips)
               ..where((t) => t.id.isIn(tripIds.toList())))
             .get();
-        for (final t in trips) {
-          try {
-            await _supabase.pushTrip(t);
-          } catch (e) {
-            print('flushPending pushTrip FAILED for ${t.id}: $e');
-          }
-        }
+        await _pushTripsRespectingServerClose(trips, tag: 'flushPending-parent');
         final tripStops = await (_db.select(_db.tripStops)
               ..where((s) => s.tripId.isIn(tripIds.toList())))
             .get();
