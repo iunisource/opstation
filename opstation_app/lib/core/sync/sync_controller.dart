@@ -78,6 +78,7 @@ class SyncController extends Notifier<SyncStatus> {
 
   void _onConnectivityChanged(bool online) {
     _currentlyOnline = online;
+    SmsService.note('sync: connectivity -> ${online ? "online" : "offline"}');
     if (online) {
       flushPending();
     } else {
@@ -331,7 +332,14 @@ class SyncController extends Notifier<SyncStatus> {
 
   Future<void> flushPending() async {
     print('FLUSH: entry online=$_currentlyOnline flushing=$_flushing');
-    if (!_currentlyOnline) { print('FLUSH: BAIL — offline'); return; }
+    if (!_currentlyOnline) {
+      print('FLUSH: BAIL — offline');
+      // Visible in the debug screen: a device that bails here every cycle
+      // never uploads anything all day, which looks identical (from the
+      // server) to a rep who simply didn't work.
+      SmsService.note('sync: BAIL — connectivity reports offline');
+      return;
+    }
     // Note: no auth check — visits should sync regardless of Supabase session
     if (_flushing) { print('FLUSH: BAIL — already flushing'); return; }
     _flushing = true;
@@ -365,6 +373,41 @@ class SyncController extends Notifier<SyncStatus> {
             ..where((v) => v.syncStatus.equals('pending')))
           .get();
       SmsService.note('flushPending: ${pending.length} pending visit(s) to push');
+
+      // Re-push recent trips on EVERY cycle, before the pending-visits check.
+      //
+      // createTrip pushes best-effort inside a bare catch, and trips carry no
+      // syncStatus flag — so a push that failed at route-start leaves a local
+      // row indistinguishable from a synced one. Previously the only in-day
+      // retry lived below the `pending.isEmpty` early return and only covered
+      // trips referenced by a pending visit, so a device with no pending
+      // visits never retried its trip: the rep stayed invisible in live
+      // monitoring and their collections went unaggregated until the next
+      // login ran pushAll. pushTrip is an upsert, so re-pushing an
+      // already-present trip is a harmless no-op. Scoped to the last 2 days
+      // so this stays a couple of rows, not the device's whole history.
+      try {
+        final cutoff = DateTime.now().subtract(const Duration(days: 2));
+        final recentTrips = (await _db.select(_db.trips).get())
+            .where((t) => t.startedAt.isAfter(cutoff))
+            .toList();
+        if (recentTrips.isNotEmpty) {
+          int ok = 0;
+          for (final t in recentTrips) {
+            try {
+              await _supabase.pushTrip(t);
+              ok++;
+            } catch (e) {
+              SmsService.note('sync: pushTrip FAILED ${t.id} — $e');
+              print('flushPending recent pushTrip FAILED for ${t.id}: $e');
+            }
+          }
+          SmsService.note(
+              'sync: re-pushed $ok/${recentTrips.length} recent trip(s)');
+        }
+      } catch (e) {
+        SmsService.note('sync: recent-trip re-push block threw — $e');
+      }
 
       if (pending.isEmpty) {
         await _refreshCounts();
