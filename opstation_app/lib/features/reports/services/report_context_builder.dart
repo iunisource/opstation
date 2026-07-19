@@ -3,15 +3,30 @@ import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/maps_config.dart';
+import '../../../core/database/app_database_provider.dart';
 import '../../../core/services/google_directions_service.dart';
 import '../../salesperson/models/trip.dart';
 import 'nominatim_client.dart';
+
+/// Name/code for a visited customer that isn't in the trip's route snapshot.
+class ReportCustomerRef {
+  final String code;
+  final String name;
+  const ReportCustomerRef({required this.code, required this.name});
+}
 
 /// Pre-computed data for a trip report: addresses, leg distances, totals.
 class TripReportContext {
   final Trip trip;
   final String? startAddress;
   final String? endAddress;
+
+  /// Customers that were visited but are NOT in `trip.stopSnapshot`, looked up
+  /// from the local customers table. The PDF resolves names from the route
+  /// snapshot, which only holds the stops planned when the trip started — so a
+  /// visit outside the planned route, or a snapshot that synced incompletely
+  /// onto an admin's device, rendered as a blank dash. This is the fallback.
+  final Map<String, ReportCustomerRef> extraCustomers;
 
   /// Verified visits in timestamp order.
   final List<Visit> orderedVerifiedVisits;
@@ -33,6 +48,7 @@ class TripReportContext {
   const TripReportContext({
     required this.trip,
     required this.startAddress,
+    this.extraCustomers = const {},
     required this.endAddress,
     required this.orderedVerifiedVisits,
     required this.distanceKm,
@@ -48,6 +64,29 @@ class ReportContextBuilder {
 
   Future<TripReportContext> build(Trip trip) async {
     final nomi = _ref.read(nominatimClientProvider);
+
+    // 0. Resolve customers that were visited but aren't in the route snapshot.
+    //    Without this the PDF prints a dash for them — which is what produced
+    //    reports where most of the customer column was blank.
+    final snapshotIds = trip.stopSnapshot.map((c) => c.id).toSet();
+    final missingIds = <String>{
+      for (final v in trip.visits)
+        if (!snapshotIds.contains(v.customerId)) v.customerId,
+    };
+    final extras = <String, ReportCustomerRef>{};
+    if (missingIds.isNotEmpty) {
+      try {
+        final db = _ref.read(appDatabaseProvider);
+        final rows = await (db.select(db.customers)
+              ..where((c) => c.id.isIn(missingIds.toList())))
+            .get();
+        for (final r in rows) {
+          extras[r.id] = ReportCustomerRef(code: r.code, name: r.shopName);
+        }
+      } catch (_) {
+        // Best-effort: an empty map just means we fall back to the code.
+      }
+    }
 
     // 1. Addresses — parallelised, best-effort.
     String? startAddr;
@@ -131,6 +170,7 @@ class ReportContextBuilder {
 
     return TripReportContext(
       trip: trip,
+      extraCustomers: extras,
       startAddress: startAddr,
       endAddress: endAddr,
       orderedVerifiedVisits: ordered,

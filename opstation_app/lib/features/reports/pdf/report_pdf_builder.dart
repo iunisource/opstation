@@ -643,11 +643,18 @@ class ReportPdfBuilder {
     for (int i = 0; i < ctx.orderedVerifiedVisits.length; i++) {
       final v = ctx.orderedVerifiedVisits[i];
       final c = customerById(v.customerId);
+      // The route snapshot only holds stops planned at trip start, so an
+      // ad-hoc visit — or an incompletely-synced snapshot on an admin's
+      // device — isn't found there. Fall back to the customers looked up
+      // from the local table before giving up on the name.
+      final extra = ctx.extraCustomers[v.customerId];
+      final code = c?.code ?? extra?.code ?? '-';
+      final name = c?.shopName ?? extra?.name ?? '(customer not on this device)';
       final km = ctx.distanceKm.length > i ? ctx.distanceKm[i] : 0.0;
       rows.add([
         '${i + 1}',
-        c?.code ?? '-',
-        c?.shopName ?? '-',
+        code,
+        name,
         km.toStringAsFixed(2),
         DateFormat('hh:mm a').format(v.timestamp),
       ]);

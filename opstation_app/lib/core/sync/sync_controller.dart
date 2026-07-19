@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/sms_service.dart';
+import '../services/notification_service.dart';
+import '../../features/auth/providers/auth_controller.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -50,6 +52,62 @@ class SyncController extends Notifier<SyncStatus> {
 
   AppDatabase get _db => ref.read(appDatabaseProvider);
   SupabaseSyncService get _supabase => ref.read(supabaseSyncServiceProvider);
+
+  /// When the last nudge fired, so we repeat every 30 min rather than every
+  /// timer tick. Reset when no route is open.
+  DateTime? _lastIdleNudgeAt;
+
+  /// Nudges a rep whose route has been open but untouched for an hour.
+  ///
+  /// Routes left running to the 23:00 cut-off are common — the rep finishes
+  /// their day and simply doesn't close the route, so it stays "in progress"
+  /// in monitoring and the cut-off has to guillotine it. This fires a local
+  /// notification (device-generated, so it works offline) after 60 minutes
+  /// with no visit marked, then every 30 minutes until they act.
+  ///
+  /// Scoped to the signed-in user's own trip: an admin device holds other
+  /// reps' trips too, and nudging an admin about someone else's route would
+  /// be noise.
+  Future<void> _checkIdleRoute() async {
+    try {
+      final userId = ref.read(authControllerProvider).valueOrNull?.id;
+      if (userId == null || userId.isEmpty) return;
+
+      final active = await (_db.select(_db.trips)
+            ..where((t) => t.userId.equals(userId) & t.endedAt.isNull())
+            ..orderBy([(t) => OrderingTerm.desc(t.startedAt)])
+            ..limit(1))
+          .getSingleOrNull();
+      if (active == null) {
+        _lastIdleNudgeAt = null;
+        return;
+      }
+
+      final visits = await (_db.select(_db.visits)
+            ..where((v) => v.tripId.equals(active.id)))
+          .get();
+      var lastActivity = active.startedAt;
+      for (final v in visits) {
+        if (v.timestamp.isAfter(lastActivity)) lastActivity = v.timestamp;
+      }
+
+      final now = DateTime.now();
+      if (now.difference(lastActivity) < const Duration(minutes: 60)) return;
+      if (_lastIdleNudgeAt != null &&
+          now.difference(_lastIdleNudgeAt!) < const Duration(minutes: 30)) {
+        return;
+      }
+      _lastIdleNudgeAt = now;
+
+      await ref.read(notificationServiceProvider).showLocalAlert(
+            id: 90001,
+            title: 'No visit marked in 60 minutes',
+            body: "If you've finished your route, please close it. Thanks.",
+          );
+    } catch (_) {
+      // Never let a reminder break the sync tick.
+    }
+  }
 
   /// Pushes trips without resurrecting ones the server has already closed.
   ///
@@ -126,6 +184,7 @@ class SyncController extends Notifier<SyncStatus> {
 
     _retryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       flushPending();
+      _checkIdleRoute();
     });
 
     ref.onDispose(() {

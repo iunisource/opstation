@@ -130,6 +130,42 @@ class NotificationService {
     );
   }
 
+  /// Shows a device-generated notification — no FCM, no server round-trip.
+  /// Used for on-device reminders such as the idle-route nudge, which must
+  /// work even when the phone has no connectivity.
+  Future<void> showLocalAlert({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    try {
+      if (!_localInitialized) {
+        await _local.initialize(
+          const InitializationSettings(
+            android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          ),
+        );
+        _localInitialized = true;
+      }
+      await _local.show(
+        id,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channel.id,
+            _channel.name,
+            channelDescription: _channel.description,
+            icon: '@mipmap/ic_launcher',
+            importance: Importance.high,
+            priority: Priority.high,
+            enableVibration: true,
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
   /// Send notification to a specific user via Supabase Edge Function.
   Future<void> sendToUser({
     required String targetUserId,
