@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/sound_controller.dart';
+import '../../../core/services/sms_debug_screen.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
 import '../../../shared/widgets/section_label.dart';
@@ -281,9 +282,18 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: [
           const SizedBox(height: 8),
-          Text(
-            'Hi, $firstName',
-            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+          // Long-press the greeting to open the on-device diagnostics log
+          // (sync + SMS outcomes). Hidden rather than a visible menu item:
+          // it's for support, not day-to-day use, but a rep needs to be able
+          // to reach it in the field when their trips aren't showing up.
+          GestureDetector(
+            onLongPress: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SmsDebugScreen()),
+            ),
+            child: Text(
+              'Hi, $firstName',
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+            ),
           ),
           const SizedBox(height: 4),
           Text(

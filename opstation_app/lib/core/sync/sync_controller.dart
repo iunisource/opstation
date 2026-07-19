@@ -506,10 +506,18 @@ class SyncController extends Notifier<SyncStatus> {
       // already-present trip is a harmless no-op. Scoped to the last 2 days
       // so this stays a couple of rows, not the device's whole history.
       try {
+        // Scoped to the signed-in org. An admin device holds other orgs'
+        // trips too, and pushing those is refused by the `Tenant scoped` RLS
+        // policy (42501), so an unscoped re-push failed on every cycle.
+        final orgId = ref.read(orgIdProvider);
         final cutoff = DateTime.now().subtract(const Duration(days: 2));
-        final recentTrips = (await _db.select(_db.trips).get())
-            .where((t) => t.startedAt.isAfter(cutoff))
-            .toList();
+        final localTrips = orgId == null
+            ? await _db.select(_db.trips).get()
+            : await (_db.select(_db.trips)
+                  ..where((t) => t.orgId.equals(orgId)))
+                .get();
+        final recentTrips =
+            localTrips.where((t) => t.startedAt.isAfter(cutoff)).toList();
         await _pushTripsRespectingServerClose(recentTrips, tag: 'flushPending');
       } catch (e) {
         SmsService.note('sync: recent-trip re-push block threw — $e');
