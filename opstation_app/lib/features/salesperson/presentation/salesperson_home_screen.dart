@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/sound_controller.dart';
 import '../../../core/services/sms_debug_screen.dart';
+import '../../../core/services/device_gps_service.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
 import '../../../shared/widgets/section_label.dart';
@@ -125,6 +126,41 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
   Future<void> _startRoute(SalesRoute route) async {
     if (_startingRouteId != null) return;
     setState(() => _startingRouteId = route.id);
+
+    // Same gate as marking a visit and completing a route: no route may begin
+    // with location switched off or permission denied, otherwise every visit
+    // on it is unverifiable. A weak signal is allowed — the rep may be indoors
+    // when they set off.
+    final gate = await ref.read(deviceGpsServiceProvider).getFixResult();
+    if (!mounted) return;
+    String? blockReason;
+    switch (gate.outcome) {
+      case GpsOutcome.serviceDisabled:
+        blockReason = 'Turn on your device location (GPS) to start a route.';
+        break;
+      case GpsOutcome.permissionBlocked:
+        blockReason =
+            'Location permission is blocked. Enable it for Opstation in your phone Settings, then try again.';
+        break;
+      case GpsOutcome.permissionDenied:
+        blockReason = 'Location permission is required to start a route.';
+        break;
+      default:
+        blockReason = null;
+    }
+    if (blockReason != null) {
+      setState(() => _startingRouteId = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(blockReason),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFDC2626),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
+
     try {
       await ref.read(tripControllerProvider.notifier).startTrip(route);
       ref.read(soundControllerProvider.notifier).play(AppSound.routeStart);
