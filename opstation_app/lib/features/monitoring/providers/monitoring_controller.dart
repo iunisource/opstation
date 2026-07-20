@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../../core/supabase/supabase_pull_service.dart';
 import '../../salesperson/data/salesperson_repository.dart';
 import '../../salesperson/models/trip.dart';
 import '../../team/data/team_repository.dart';
@@ -123,6 +124,14 @@ final liveMonitoringProvider =
   final teamRepo = ref.watch(teamRepositoryProvider);
   final salesRepo = ref.watch(salespersonRepositoryProvider);
   final orgId = ref.watch(orgIdProvider);
+
+  // This screen reads local Drift, which only refreshed at login — so an
+  // admin who stayed signed in saw "No activity today" for everyone while the
+  // server held a full day's work. Refresh today's trips and visits first.
+  // Best-effort: offline, it falls back to whatever is already local.
+  if (orgId != null) {
+    await ref.read(supabasePullServiceProvider).pullTodayTripsForOrg(orgId);
+  }
 
   // Only THIS org's salespersons. Without the org filter, users from other
   // orgs (whose data happens to be in the shared table) appear in this org's

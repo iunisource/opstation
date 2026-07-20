@@ -85,6 +85,63 @@ class SupabasePullService {
     await _pullIntelligenceTables(orgId);
   }
 
+  /// Fast targeted pull — today's trips (plus their stops and visits) for one
+  /// org. Team-monitoring reads local Drift, which previously only refreshed
+  /// at login, so an admin's Live tab went stale through the day and showed
+  /// "No activity today" while the server had plenty. Calling this before the
+  /// read keeps the tab current on every refresh without paying for the full
+  /// pullOrgData (customers, routes, catalog, deliveries).
+  Future<void> pullTodayTripsForOrg(String orgId) async {
+    try {
+      final client = Supabase.instance.client;
+      final now = DateTime.now();
+      // Generous lower bound: a trip that began yesterday and is still open
+      // is exactly the case monitoring cares about.
+      final since =
+          DateTime(now.year, now.month, now.day).subtract(const Duration(days: 1));
+
+      final tripRows = await client
+          .from('trips')
+          .select()
+          .eq('org_id', orgId)
+          .gte('started_at', since.toUtc().toIso8601String());
+      final trips = [
+        for (final r in (tripRows as List)) Map<String, dynamic>.from(r as Map)
+      ];
+      if (trips.isEmpty) return;
+
+      final tripIds = trips.map((t) => t['id'] as String).toList();
+      final stops = <Map<String, dynamic>>[];
+      final visits = <Map<String, dynamic>>[];
+      // Batched: `in.(...)` travels in the URL, so a long id list 400s.
+      for (var i = 0; i < tripIds.length; i += 40) {
+        final batch =
+            tripIds.sublist(i, i + 40 > tripIds.length ? tripIds.length : i + 40);
+        final s = await client
+            .from('trip_stops')
+            .select()
+            .inFilter('trip_id', batch);
+        for (final r in (s as List)) {
+          stops.add(Map<String, dynamic>.from(r as Map));
+        }
+        final v =
+            await client.from('visits').select().inFilter('trip_id', batch);
+        for (final r in (v as List)) {
+          visits.add(Map<String, dynamic>.from(r as Map));
+        }
+      }
+
+      await _db.transaction(() async {
+        await _pullTrips(trips);
+        await _pullTripStops(stops);
+        await _pullVisits(visits);
+      });
+    } catch (e) {
+      // Best-effort: monitoring falls back to whatever is already local.
+      print('pullTodayTripsForOrg failed: $e');
+    }
+  }
+
   /// Fast targeted pull — refreshes only one user's route_assignments,
   /// skipping the expensive trips/visits/deliveries pull. Used by the
   /// salesperson home's realtime subscription and the "Retry now" button.
