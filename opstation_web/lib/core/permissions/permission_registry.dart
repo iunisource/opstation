@@ -10,7 +10,15 @@ class PermItem {
   final String label;
   final PermKind kind;
   final String route;
-  const PermItem(this.key, this.label, this.kind, this.route);
+
+  /// Optional owning module, for items that sit in an ungated group but still
+  /// belong to a licensable module. A customer ledger is a Sales artefact and
+  /// an inventory ledger an Inventory one, even though both live under
+  /// "Reports & Ledgers" — without this they showed for every org regardless
+  /// of which modules were switched on.
+  final String? module;
+
+  const PermItem(this.key, this.label, this.kind, this.route, {this.module});
 
   String get addKey => 'doc.$key.add';
   String get editKey => 'doc.$key.edit';
@@ -88,13 +96,15 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('pos_expense', 'Expense Management', PermKind.doc, '/erp/pos-expense-management'),
   ]),
   PermModule('reports', 'Reports & Ledgers', Icons.analytics_outlined, [
-    PermItem('supplier_ledger', 'Supplier Ledger', PermKind.report, '/erp/supplier-ledger'),
-    PermItem('customer_ledger', 'Customer Ledger', PermKind.report, '/erp/customer-ledger'),
-    PermItem('inventory_ledger', 'Inventory Ledger', PermKind.report, '/erp/inventory-ledger'),
-    PermItem('customer_aging', 'Customer Aging', PermKind.report, '/erp/customer-aging'),
-    PermItem('supplier_aging', 'Supplier Aging', PermKind.report, '/erp/supplier-aging'),
-    PermItem('margin_report', 'Margin Report', PermKind.report, '/reports/margin'),
-    PermItem('customer_balance_report', 'Customer Balance Report', PermKind.report, '/reports/customer-balance'),
+    PermItem('supplier_ledger', 'Supplier Ledger', PermKind.report, '/erp/supplier-ledger', module: 'purchase'),
+    PermItem('customer_ledger', 'Customer Ledger', PermKind.report, '/erp/customer-ledger', module: 'sales'),
+    PermItem('inventory_ledger', 'Inventory Ledger', PermKind.report, '/erp/inventory-ledger', module: 'inventory'),
+    PermItem('customer_aging', 'Customer Aging', PermKind.report, '/erp/customer-aging', module: 'sales'),
+    PermItem('supplier_aging', 'Supplier Aging', PermKind.report, '/erp/supplier-aging', module: 'purchase'),
+    PermItem('margin_report', 'Margin Report', PermKind.report, '/reports/margin', module: 'sales'),
+    PermItem('customer_balance_report', 'Customer Balance Report', PermKind.report, '/reports/customer-balance', module: 'sales'),
+    // Report Builder and Files are cross-cutting tools, not tied to a single
+    // licensable module — left permission-gated only.
     PermItem('report_builder', 'Report Builder', PermKind.report, '/intelligence/report-builder'),
     PermItem('shared_files', 'Files', PermKind.report, '/erp/files'),
   ], moduleGated: false),
@@ -136,6 +146,14 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('facility', 'Facility', Icons.cleaning_services_outlined, [
     PermItem('facility', 'Facility Maintenance', PermKind.doc, '/facility'),
   ]),
+  // CRM is licensable in app_modules.dart but had no registry entry, so none
+  // of its routes appeared in kRouteToModule and the menu showed for every
+  // org whether or not the module was switched on.
+  PermModule('crm', 'CRM', Icons.contacts_outlined, [
+    PermItem('crm_customers', 'CRM Customers', PermKind.doc, '/crm/customers'),
+    PermItem('crm_pipeline', 'Pipeline', PermKind.doc, '/crm/pipeline'),
+    PermItem('crm_follow_ups', 'Follow-ups', PermKind.doc, '/crm/follow-ups'),
+  ]),
 ];
 
 /// route -> PermItem (for menu + router gating).
@@ -145,10 +163,18 @@ final Map<String, PermItem> kRouteToPerm = {
 };
 
 /// route -> owning module key (only for groups that map to a real org module).
+///
+/// Built in two passes: the group's own module first, then any per-item
+/// override. Later entries win, so an item that names its own module takes
+/// precedence — which is how reports inside the ungated "Reports & Ledgers"
+/// group still get gated by Sales, Purchase or Inventory.
 final Map<String, String> kRouteToModule = {
   for (final m in kPermissionRegistry)
     if (m.moduleGated)
       for (final it in m.items) it.route: m.key,
+  for (final m in kPermissionRegistry)
+    for (final it in m.items)
+      if (it.module != null) it.route: it.module!,
 };
 
 /// Every valid permission key (used to discard stale legacy keys).
