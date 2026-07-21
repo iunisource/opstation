@@ -45,6 +45,12 @@ class _BulkImportCustomersScreenState
     'latitude',
     'longitude',
     'ntn_gst',
+    // Free-text on `customers` (category, group_name) — no lookup table, so
+    // whatever is in the sheet is written through as-is. Values that don't
+    // match an existing category/group simply won't match the filters until
+    // one is created with the same name in Settings.
+    'category',
+    'group_name',
   ];
 
   String? _fileName;
@@ -273,6 +279,8 @@ class _BulkImportCustomersScreenState
         'latitude': lat,
         'longitude': lng,
         'ntn_gst': ntn,
+        'category': (r['category'] ?? '').isEmpty ? null : r['category'],
+        'group_name': (r['group_name'] ?? '').isEmpty ? null : r['group_name'],
         'org_id': orgId,
         'is_active': true,
         'updated_at': now.toIso8601String(),
@@ -358,7 +366,7 @@ class _BulkImportCustomersScreenState
             Text('  code, shop_name  (contact_person, phone, address optional)'),
             SizedBox(height: 4),
             Text('Optional:', style: TextStyle(fontWeight: FontWeight.w600)),
-            Text('  latitude, longitude, ntn_gst'),
+            Text('  latitude, longitude, ntn_gst, category, group_name'),
             SizedBox(height: 8),
             Text('First row must be the header. Empty cells in optional columns are fine.',
                 style: TextStyle(fontStyle: FontStyle.italic)),
