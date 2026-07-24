@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/permissions/access_control.dart';
 
 class _PComp {
   static int _seq = 0;
@@ -68,6 +69,9 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
+  // Costing visibility: admins always; other users need the 'production_cost'
+  // grant. Hides the cost summary and the cost/amount columns when absent.
+  bool get _canViewCost => ref.read(accessSyncProvider)?.canViewReport('production_cost') ?? false;
   bool get _isDraft => _status != 'posted';
   double get _outQty => double.tryParse(_outputQtyCtrl.text) ?? 0;
 
@@ -468,8 +472,10 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               Expanded(flex: 2, child: _labeled('Notes', TextField(controller: _notesCtrl, enabled: _isDraft,
                 decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))))),
             ]),
-            const SizedBox(height: 20),
-            _summaryCard(),
+            if (_canViewCost) ...[
+              const SizedBox(height: 20),
+              _summaryCard(),
+            ],
             const SizedBox(height: 20),
             _compSection(),
             const SizedBox(height: 20),
@@ -552,14 +558,16 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
           ])),
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: const [
-            SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            Expanded(child: Text('Product', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 12),
-            SizedBox(width: 110, child: Text('Quantity', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 12),
-            SizedBox(width: 120, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 30),
+          child: Row(children: [
+            const SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const Expanded(child: Text('Product', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 12),
+            const SizedBox(width: 110, child: Text('Quantity', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            if (_canViewCost) ...[
+              const SizedBox(width: 12),
+              const SizedBox(width: 120, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            ],
+            const SizedBox(width: 30),
           ])),
         for (var i = 0; i < _components.length; i++)
           Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
@@ -569,10 +577,12 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               Expanded(child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_components[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
               const SizedBox(width: 12),
               SizedBox(width: 110, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
-              const SizedBox(width: 12),
-              SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
-                _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
-                textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))),
+              if (_canViewCost) ...[
+                const SizedBox(width: 12),
+                SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
+                  _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
+                  textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))),
+              ],
               const SizedBox(width: 30),
             ])),
       ]),
@@ -590,18 +600,20 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             const SizedBox(width: 8),
             const Text('Labor & Overhead (absorbed)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            Expanded(child: Text('Total ${_money(_ohTotal)} — added to finished-goods cost.', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            Expanded(child: Text(_canViewCost ? 'Total ${_money(_ohTotal)} — added to finished-goods cost.' : 'Added to finished-goods cost at production.', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           ])),
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: const [
-            SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 130, child: Text('Type', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 12),
-            Expanded(child: Text('Description', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 12),
-            SizedBox(width: 130, child: Text('Amount', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 30),
+          child: Row(children: [
+            const SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 130, child: Text('Type', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 12),
+            const Expanded(child: Text('Description', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            if (_canViewCost) ...[
+              const SizedBox(width: 12),
+              const SizedBox(width: 130, child: Text('Amount', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            ],
+            const SizedBox(width: 30),
           ])),
         for (var i = 0; i < _overheads.length; i++)
           Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -611,8 +623,10 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               SizedBox(width: 130, child: Text(_overheads[i].costType == 'labor' ? 'Labor' : 'Overhead', style: const TextStyle(fontSize: 12))),
               const SizedBox(width: 12),
               Expanded(child: Text(_overheads[i].descCtrl.text, style: const TextStyle(fontSize: 12))),
-              const SizedBox(width: 12),
-              SizedBox(width: 130, child: Text(_money(_overheads[i].amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              if (_canViewCost) ...[
+                const SizedBox(width: 12),
+                SizedBox(width: 130, child: Text(_money(_overheads[i].amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              ],
               const SizedBox(width: 30),
             ])),
       ]),

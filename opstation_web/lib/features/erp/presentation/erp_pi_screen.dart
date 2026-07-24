@@ -5,9 +5,12 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../widgets/voucher_docs_panel.dart';
+import '../widgets/voucher_remarks_panel.dart';
 
 /// Purchase Invoice (PI) — Stage 3 of purchase flow.
 /// Created from a saved GRN. User enters unit cost + discount per line.
@@ -37,6 +40,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   final TextEditingController _descCtrl = TextEditingController();
   bool _listLoading = true;
   bool _detailLoading = false;
+  bool _datesEditable = false;
+  bool _reviewFlow = false; // org.doc_review_flow: support docs + admin review
   String _search = '';
   String _filter = 'all';
 
@@ -51,8 +56,40 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked;
+  // Review-flow state
+  String? get _reviewStatus => _detail['review_status'] as String?;
+  bool get _isPendingReview => _reviewStatus == 'pending';
+  bool get _isRejected => _reviewStatus == 'rejected';
+
+  // The status label/colour for a list row or the current voucher, taking the
+  // review flow into account. Draft only until saved/sent.
+  static ({String label, Color color}) _statusOf({required bool locked, String? review}) {
+    if (locked) return (label: 'Invoiced', color: AppTheme.success);
+    if (review == 'pending') return (label: 'Under Review', color: Colors.blue);
+    if (review == 'rejected') return (label: 'Rejected', color: AppTheme.danger);
+    return (label: 'Draft', color: Colors.orange);
+  }
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  Future<void> _pickDate() async {
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('purchase_invoices')
+          .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', _detail['id']);
+      if (mounted) setState(() => _detail['voucher_date'] = iso);
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to \$iso');
+      _loadList();
+    } catch (e) { _showSnack('Failed: \$e'); }
+  }
+
 
   void _initCtrls() {
     for (final c in _costCtrl.values) c.dispose();
@@ -70,11 +107,16 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_invoices')
-          .select('id,voucher_number,voucher_date,grand_total,is_locked,supplier_id,grn_id,vendor_invoice_no,description,suppliers(name),purchase_grns(voucher_number)')
+          .select('id,voucher_number,voucher_date,grand_total,is_locked,review_status,supplier_id,grn_id,vendor_invoice_no,description,suppliers(name),purchase_grns(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
-      setState(() { _invoices = List<Map<String, dynamic>>.from(r); _listLoading = false; });
+      bool reviewFlow = _reviewFlow;
+      try {
+        final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.doc_review_flow_pi').maybeSingle();
+        reviewFlow = (c?['value'] as String?) == 'true';
+      } catch (_) {}
+      setState(() { _invoices = List<Map<String, dynamic>>.from(r); _reviewFlow = reviewFlow; _listLoading = false; });
     } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
   }
 
@@ -88,11 +130,20 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       final items = await client.from('purchase_invoice_items')
           .select('*,products(name,sku),uoms(abbreviation)').eq('invoice_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: inv['created_by'] as String?);
+      bool datesEd = false; bool reviewFlow = false;
+      try {
+        final cfg = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
+            .inFilter('key', ['org.voucher_dates_editable', 'org.doc_review_flow_pi']);
+        for (final r in cfg as List) {
+          if (r['key'] == 'org.voucher_dates_editable') datesEd = r['value'] == 'true';
+          if (r['key'] == 'org.doc_review_flow_pi') reviewFlow = r['value'] == 'true';
+        }
+      } catch (_) {}
       setState(() {
         _detail = Map<String, dynamic>.from(inv); _items = List<Map<String, dynamic>>.from(items);
         _vendorNoCtrl.text = (inv['vendor_invoice_no'] as String?) ?? '';
         _descCtrl.text = (inv['description'] as String?) ?? '';
-        _meta = meta; _detailLoading = false; _initCtrls();
+        _meta = meta; _detailLoading = false; _datesEditable = datesEd; _reviewFlow = reviewFlow; _initCtrls();
       });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
   }
@@ -216,14 +267,57 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     } catch (_) {}
   }
 
-  Future<void> _saveInvoice() async {
-    if (_items.isEmpty) { _showSnack('No items'); return; }
+  // Persists any edited costs and checks every line has a cost > 0.
+  Future<bool> _prepAndValidate() async {
+    if (_items.isEmpty) { _showSnack('No items'); return false; }
     for (final it in _items) await _saveItemCost(it['id'] as String);
-    // Validate costs > 0
     for (final it in _items) {
       final cost = (it['unit_cost'] as num?)?.toDouble() ?? 0;
-      if (cost <= 0) { _showSnack('Unit cost for "${it['products']?['name'] ?? 'item'}" must be > 0'); return; }
+      if (cost <= 0) { _showSnack('Unit cost for "${it['products']?['name'] ?? 'item'}" must be > 0'); return false; }
     }
+    return true;
+  }
+
+  // The actual post: lock the invoice, mark the GRN invoiced, save header text.
+  // When [approved] is true it also stamps the reviewer (Checked By).
+  Future<void> _postCore({bool approved = false}) async {
+    final userId = ref.read(currentUserProvider)?.id;
+    final piId = _detail['id'] as String;
+    final grnId = _detail['grn_id'] as String?;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final upd = <String, dynamic>{
+      'is_locked': true, 'locked_by': userId, 'locked_at': now,
+      'vendor_invoice_no': _vendorNoCtrl.text.trim().isEmpty ? null : _vendorNoCtrl.text.trim(),
+      'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
+      'updated_at': now,
+    };
+    if (approved) {
+      upd['review_status'] = 'approved';
+      upd['reviewed_by'] = userId;
+      upd['reviewed_by_name'] = ref.read(currentUserProvider)?.name;
+      upd['reviewed_at'] = now;
+      // Snapshot the reviewer's signature + the org stamp at approval time.
+      final c = Supabase.instance.client;
+      try { final u = await c.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle();
+        if (u?['signature_url'] != null) upd['reviewer_signature_url'] = u!['signature_url']; } catch (_) {}
+      try { final s = await c.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle();
+        if (s?['value'] != null) upd['review_stamp_url'] = s!['value']; } catch (_) {}
+    }
+    try {
+      await Supabase.instance.client.from('purchase_invoices').update(upd).eq('id', piId);
+      if (grnId != null) {
+        await Supabase.instance.client.from('purchase_grns').update({'status': 'invoiced', 'updated_at': now}).eq('id', grnId);
+      }
+      await _logAudit(piId, approved ? 'approved' : 'saved', approved ? 'Reviewed & posted' : 'Invoice saved and locked');
+      _showSnack(approved ? 'Approved & posted' : 'Invoice saved and locked');
+      _loadDetail(piId); _loadList();
+      ref.invalidate(piReviewPendingProvider);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Direct save+lock (used when the review flow is OFF).
+  Future<void> _saveInvoice() async {
+    if (!await _prepAndValidate()) return;
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Save & Lock Invoice?'),
       content: const Text('The GRN will be marked as invoiced and this invoice will be locked. Only admins can unlock.'),
@@ -231,22 +325,76 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Save Invoice'))],
     ));
     if (ok != true) return;
-    final userId = ref.read(currentUserProvider)?.id;
+    await _postCore();
+  }
+
+  // Review flow: park the invoice as pending (no posting) and save its edits.
+  Future<void> _sendForReview() async {
+    if (_items.isEmpty) { _showSnack('No items'); return; }
+    for (final it in _items) await _saveItemCost(it['id'] as String);
     final piId = _detail['id'] as String;
-    final grnId = _detail['grn_id'] as String?;
+    final now = DateTime.now().toUtc().toIso8601String();
     try {
       await Supabase.instance.client.from('purchase_invoices').update({
-        'is_locked': true, 'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
+        'review_status': 'pending',
         'vendor_invoice_no': _vendorNoCtrl.text.trim().isEmpty ? null : _vendorNoCtrl.text.trim(),
         'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
+        'updated_at': now,
+      }).eq('id', piId);
+      setState(() => _detail['review_status'] = 'pending');
+      await _logAudit(piId, 'sent_for_review', 'Invoice sent for admin review');
+      _showSnack('Sent for review — an admin will approve and post it');
+      _loadList();
+      ref.invalidate(piReviewPendingProvider);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Review flow: admin approves a pending invoice, which posts it.
+  Future<void> _approveAndPost() async {
+    if (!_isAdmin) { _showSnack('Only admins can approve'); return; }
+    if (!await _prepAndValidate()) return;
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Approve & post invoice?'),
+      content: const Text('This posts the invoice (locks it and marks the GRN invoiced) and records you as the reviewer. This cannot be undone by non-admins.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Approve & Post'))],
+    ));
+    if (ok != true) return;
+    await _postCore(approved: true);
+  }
+
+  // Review flow: admin rejects a pending invoice back to the creator with a reason.
+  Future<void> _reject() async {
+    if (!_isAdmin) { _showSnack('Only admins can reject'); return; }
+    final reasonCtrl = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Reject invoice?'),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('The creator will see it as Rejected and can edit and resend it.', style: TextStyle(fontSize: 12.5)),
+        const SizedBox(height: 10),
+        TextField(controller: reasonCtrl, minLines: 2, maxLines: 4, autofocus: true,
+          decoration: const InputDecoration(labelText: 'Reason (optional)', border: OutlineInputBorder())),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Reject')),
+      ],
+    ));
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+    if (ok != true) return;
+    final piId = _detail['id'] as String;
+    try {
+      await Supabase.instance.client.from('purchase_invoices').update({
+        'review_status': 'rejected',
+        'review_reason': reason.isEmpty ? null : reason,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', piId);
-      if (grnId != null) {
-        await Supabase.instance.client.from('purchase_grns').update({'status': 'invoiced', 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', grnId);
-      }
-      await _logAudit(piId, 'saved', 'Invoice saved and locked');
-      _showSnack('Invoice saved and locked');
-      _loadDetail(piId); _loadList();
+      setState(() { _detail['review_status'] = 'rejected'; _detail['review_reason'] = reason.isEmpty ? null : reason; });
+      await _logAudit(piId, 'rejected', reason.isEmpty ? 'Invoice rejected' : 'Rejected: $reason');
+      _showSnack('Invoice rejected');
+      _loadList();
+      ref.invalidate(piReviewPendingProvider);
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
@@ -323,6 +471,15 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       discountTotal: (_detail['discount_total'] as num?)?.toDouble() ?? 0,
       grandTotal: (_detail['grand_total'] as num?)?.toDouble() ?? 0,
       preparedBy: _meta.preparedBy,
+      createdAt: _detail['created_at'] != null
+          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+          : null,
+      approvedBy: _detail['reviewed_by_name'] as String?,
+      approvedAt: _detail['reviewed_at'] != null
+          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['reviewed_at'] as String).toLocal())
+          : null,
+      approvedSignatureUrl: _detail['reviewer_signature_url'] as String?,
+      stampUrl: _detail['review_stamp_url'] as String?,
       // Description leads the footer, then the org's standard purchase note.
       footerNote: [
         if (vDesc != null && vDesc.isNotEmpty) vDesc,
@@ -356,7 +513,12 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     final filtered = _invoices.where((r) {
       final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) || ((r['purchase_grns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
       final locked = r['is_locked'] as bool? ?? false;
-      final matchFilter = _filter == 'all' || (_filter == 'draft' && !locked) || (_filter == 'invoiced' && locked);
+      final review = r['review_status'] as String?;
+      final matchFilter = _filter == 'all'
+          || (_filter == 'draft' && !locked && review == null)
+          || (_filter == 'review' && review == 'pending')
+          || (_filter == 'rejected' && review == 'rejected')
+          || (_filter == 'invoiced' && locked);
       return matchSearch && matchFilter;
     }).toList();
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
@@ -373,6 +535,12 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         const SizedBox(width: 6),
         _PiFilterTab(label: 'Draft', value: 'draft', current: _filter, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
+        if (_reviewFlow) ...[
+          _PiFilterTab(label: 'Review', value: 'review', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          const SizedBox(width: 6),
+          _PiFilterTab(label: 'Rejected', value: 'rejected', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          const SizedBox(width: 6),
+        ],
         _PiFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
       ])),
       const SizedBox(height: 12),
@@ -382,12 +550,13 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
               itemBuilder: (_, i) {
                 final r = filtered[i]; final sel = r['id'] == _selectedId;
                 final locked = r['is_locked'] as bool? ?? false;
+                final st = _statusOf(locked: locked, review: r['review_status'] as String?);
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                   title: Row(children: [
                     Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null))),
                     Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(color: locked ? AppTheme.success.withOpacity(0.12) : Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                      child: Text(locked ? 'Invoiced' : 'Draft', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: locked ? AppTheme.success : Colors.orange))),
+                      decoration: BoxDecoration(color: st.color.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                      child: Text(st.label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: st.color))),
                   ]),
                   subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                     Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
@@ -403,22 +572,50 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     if (_detailLoading) return const Center(child: CircularProgressIndicator());
     final sup = _detail['suppliers'] as Map?;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(padding: const EdgeInsets.fromLTRB(24, 16, 24, 16), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const Text('Purchase Invoice', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
-          ])),
-          if (_isDraft) ...[
+      Builder(builder: (context) {
+        final mobile = context.isMobile;
+        final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(_detail['voucher_number'] as String? ?? '-', style: TextStyle(fontSize: mobile ? 18 : 22, fontWeight: FontWeight.w700)),
+          const Text('Purchase Invoice', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
+        ]);
+        final actions = <Widget>[
+          if (_isDraft && !_reviewFlow)
             ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 16), label: const Text('Save Invoice'), onPressed: _saveInvoice),
-            const SizedBox(width: 8),
+          if (_isDraft && _reviewFlow && !_isPendingReview)
+            ElevatedButton.icon(icon: const Icon(Icons.send_outlined, size: 16), label: const Text('Send for Review'), onPressed: _sendForReview),
+          if (_isDraft && _reviewFlow && _isPendingReview && _isAdmin) ...[
+            OutlinedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 16), label: const Text('Reject'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)), onPressed: _reject),
+            ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve & Post'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _approveAndPost),
           ],
+          if (_isDraft && _reviewFlow && _isPendingReview && !_isAdmin)
+            Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.hourglass_top, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Pending review', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
+          if (_canEditDate)
+            IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
           if (!_isDraft || _canUnlock)
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
           if (_canDelete) IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), onPressed: _delete),
-        ])),
+        ];
+        return Container(
+          padding: EdgeInsets.fromLTRB(mobile ? 16 : 24, 16, mobile ? 12 : 24, mobile ? 12 : 16),
+          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+          child: mobile
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                titleBlock,
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+              ])
+            : Row(children: [
+                Expanded(child: titleBlock),
+                Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+              ]),
+        );
+      }),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
           _PiChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),
@@ -436,8 +633,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         // Vendor invoice # and description. Editable while draft; once the invoice
         // is locked they become part of the record (shown as chips / on the PDF).
         if (_isDraft)
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(width: 220, child: TextField(
+          Builder(builder: (context) {
+            final vendorField = TextField(
               controller: _vendorNoCtrl,
               decoration: InputDecoration(
                 labelText: "Vendor Invoice # (optional)",
@@ -446,9 +643,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               ),
               style: const TextStyle(fontSize: 13),
-            )),
-            const SizedBox(width: 12),
-            Expanded(child: TextField(
+            );
+            final descField = TextField(
               controller: _descCtrl,
               decoration: InputDecoration(
                 labelText: 'Description (optional)',
@@ -457,8 +653,20 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               ),
               style: const TextStyle(fontSize: 13),
-            )),
-          ]),
+            );
+            if (context.isMobile) {
+              return Column(children: [
+                vendorField,
+                const SizedBox(height: 12),
+                descField,
+              ]);
+            }
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 220, child: vendorField),
+              const SizedBox(width: 12),
+              Expanded(child: descField),
+            ]);
+          }),
         if (_isDraft) const SizedBox(height: 12),
         if (_isLocked && (_detail['description'] as String?)?.isNotEmpty == true)
           Container(
@@ -527,6 +735,49 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
             _piTotalRow('Grand Total', (_detail['grand_total'] as num?)?.toDouble() ?? 0, bold: true),
           ]))),
         const SizedBox(height: 16),
+        if (_reviewFlow) ...[
+          if (_isPendingReview)
+            Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(color: Colors.blue.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.3))),
+              child: Row(children: [
+                const Icon(Icons.hourglass_top, size: 16, color: Colors.blue), const SizedBox(width: 8),
+                Expanded(child: Text(_isAdmin
+                    ? 'Under review. Check the attached documents below, then Approve & Post — or Reject with a reason.'
+                    : 'Sent for review. An admin will check the documents and post it.',
+                    style: const TextStyle(fontSize: 12, color: Colors.blue))),
+              ])),
+          if (_isRejected)
+            Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.danger.withOpacity(0.3))),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.cancel_outlined, size: 16, color: AppTheme.danger), const SizedBox(width: 8),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Rejected — edit if needed and Send for Review again.', style: TextStyle(fontSize: 12, color: AppTheme.danger, fontWeight: FontWeight.w600)),
+                  if ((_detail['review_reason'] as String?)?.isNotEmpty == true) ...[
+                    const SizedBox(height: 2),
+                    Text('Reason: ${_detail['review_reason']}', style: const TextStyle(fontSize: 11.5, color: AppTheme.danger)),
+                  ],
+                ])),
+              ])),
+          VoucherDocsPanel(
+            voucherType: 'PI',
+            voucherId: _detail['id'] as String,
+            voucherNumber: _detail['voucher_number'] as String? ?? '',
+            bucket: 'pi-documents',
+            orgId: _orgId ?? '',
+            userId: ref.read(currentUserProvider)?.id,
+            canWrite: _isDraft,
+          ),
+          const SizedBox(height: 12),
+          VoucherRemarksPanel(
+            voucherType: 'PI',
+            voucherId: _detail['id'] as String,
+            orgId: _orgId ?? '',
+            userId: ref.read(currentUserProvider)?.id,
+            userName: ref.read(currentUserProvider)?.name,
+          ),
+          const SizedBox(height: 16),
+        ],
         _PiAuditTrail(voucherId: _selectedId ?? ''),
       ]))),
     ]);
@@ -593,20 +844,108 @@ class _PiInfoStrip extends StatelessWidget {
   Widget _t(IconData icon, String label, String val) => ConstrainedBox(constraints: const BoxConstraints(maxWidth: 300), child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, size: 16, color: AppTheme.textSecondary), const SizedBox(width: 6), Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)), Text(val, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500))])]));
 }
 
-class _PiAuditTrail extends StatelessWidget {
+// Collapsible, resilient audit trail. Reads `performed_at` (not created_at) and
+// resolves performer names in a second query — no PostgREST embed that can 400
+// and silently blank the panel.
+class _PiAuditTrail extends StatefulWidget {
   final String voucherId; const _PiAuditTrail({required this.voucherId});
-  @override Widget build(BuildContext context) {
-    if (voucherId.isEmpty) return const SizedBox.shrink();
-    return FutureBuilder<List<dynamic>>(
-      future: Supabase.instance.client.from('voucher_audit_log').select('*, users(name)').eq('voucher_id', voucherId).eq('voucher_type', 'PI').order('created_at', ascending: false).limit(20),
+  @override State<_PiAuditTrail> createState() => _PiAuditTrailState();
+}
+
+class _PiAuditTrailState extends State<_PiAuditTrail> {
+  bool _expanded = false;
+  Future<List<Map<String, dynamic>>>? _future;
+
+  @override void initState() { super.initState(); _future = _load(); }
+  @override void didUpdateWidget(covariant _PiAuditTrail old) {
+    super.didUpdateWidget(old);
+    if (old.voucherId != widget.voucherId) _future = _load();
+  }
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    if (widget.voucherId.isEmpty) return [];
+    final sb = Supabase.instance.client;
+    final rows = List<Map<String, dynamic>>.from(await sb.from('voucher_audit_log')
+        .select('action, details, performed_by, performed_at')
+        .eq('voucher_id', widget.voucherId).eq('voucher_type', 'PI')
+        .order('performed_at', ascending: false).limit(30));
+    final ids = rows.map((e) => e['performed_by'] as String?).whereType<String>().toSet().toList();
+    final names = <String, String>{};
+    if (ids.isNotEmpty) {
+      try { final us = await sb.from('users').select('id, name').inFilter('id', ids);
+        for (final u in us as List) names[u['id'] as String] = (u['name'] as String?) ?? '—'; } catch (_) {}
+    }
+    for (final e in rows) e['_by'] = names[e['performed_by'] as String?] ?? '—';
+    return rows;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.voucherId.isEmpty) return const SizedBox.shrink();
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _future,
       builder: (ctx, snap) {
-        if (!snap.hasData || (snap.data as List).isEmpty) return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)), child: const Row(children: [Icon(Icons.history, size: 14, color: AppTheme.textSecondary), SizedBox(width: 8), Text('No activity logged yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))]));
-        final entries = List<Map<String, dynamic>>.from(snap.data!);
-        return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+        final entries = snap.data ?? const <Map<String, dynamic>>[];
+        return Container(
+          margin: const EdgeInsets.only(top: 4),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)), const SizedBox(height: 8),
-            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'saved': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
+            InkWell(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), child: Row(children: [
+                const Icon(Icons.history, size: 15, color: AppTheme.textSecondary), const SizedBox(width: 8),
+                const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+                const SizedBox(width: 6),
+                if (snap.connectionState == ConnectionState.waiting)
+                  const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                else if (entries.isNotEmpty)
+                  Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                    child: Text('${entries.length}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                const Spacer(),
+                Icon(_expanded ? Icons.expand_less : Icons.expand_more, size: 20, color: AppTheme.textSecondary),
+              ])),
+            ),
+            if (_expanded) ...[
+              const Divider(height: 1),
+              if (snap.hasError)
+                Padding(padding: const EdgeInsets.all(12), child: Text("Couldn't load audit trail: ${snap.error}", style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))
+              else if (entries.isEmpty)
+                const Padding(padding: EdgeInsets.all(12), child: Text('No activity logged yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+              else
+                Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  for (final e in entries) _row(e),
+                ])),
+            ],
           ]));
       });
+  }
+
+  Widget _row(Map<String, dynamic> e) {
+    final action = e['action'] as String? ?? '-';
+    final by = e['_by'] as String? ?? '—';
+    final ts = e['performed_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
+    final details = e['details'] as String? ?? '';
+    Color color;
+    switch (action) {
+      case 'created': color = AppTheme.success; break;
+      case 'saved': case 'approved': color = AppTheme.primary; break;
+      case 'sent_for_review': color = Colors.blue; break;
+      case 'rejected': case 'deleted': color = AppTheme.danger; break;
+      case 'locked': case 'unlocked': color = Colors.orange; break;
+      default: color = AppTheme.textSecondary;
+    }
+    return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(Icons.circle, size: 8, color: color), const SizedBox(width: 8),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text(action.replaceAll('_', ' '), style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)),
+          const SizedBox(width: 8),
+          Text('by $by', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          const Spacer(),
+          Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ]),
+        if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ])),
+    ]));
   }
 }

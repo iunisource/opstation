@@ -11,6 +11,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/permissions/access_control.dart';
 import 'package:go_router/go_router.dart';
 import 'running_dot.dart';
 
@@ -553,14 +554,21 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           ]),
           const SizedBox(height: 6),
           Text('Accepted into stock: ${_trim(accepted.toDouble())}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 12),
-          TextField(controller: ohCtrl, keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-            onChanged: (_) => ohManual = true,
-            decoration: InputDecoration(
-              labelText: 'Labor & overhead for this batch', isDense: true,
-              helperText: 'Defaults to pro-rata share of job overhead (${_trim(totalJobOh)} total). Editable.',
-              helperStyle: const TextStyle(fontSize: 10))),
+          if (_canViewCost) ...[
+            const SizedBox(height: 12),
+            TextField(controller: ohCtrl, keyboardType: TextInputType.number,
+              readOnly: !_canEditCost,
+              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+              onChanged: _canEditCost ? (_) => ohManual = true : null,
+              decoration: InputDecoration(
+                labelText: 'Labor & overhead for this batch', isDense: true,
+                filled: !_canEditCost,
+                fillColor: _canEditCost ? null : AppTheme.background,
+                helperText: _canEditCost
+                  ? 'Defaults to pro-rata share of job overhead (${_trim(totalJobOh)} total). Editable.'
+                  : 'Pro-rata share of job overhead. Only a master admin can change this.',
+                helperStyle: const TextStyle(fontSize: 10))),
+          ],
           const SizedBox(height: 16),
           Row(children: [
             const Text('QC Checkpoints', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
@@ -667,6 +675,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final r = ref.read(currentUserProvider)?.role;
     return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
   }
+
+  // Costing visibility: admins always; other users need the 'production_cost'
+  // grant. Editing/adding cost (the per-batch labor & overhead) is restricted
+  // to master admins only.
+  bool get _canViewCost => ref.read(accessSyncProvider)?.canViewReport('production_cost') ?? false;
+  bool get _canEditCost => ref.read(currentUserProvider)?.role == WebUserRole.masterAdmin;
 
   Future<void> _logJobAudit(String action, {String? notes}) async {
     final jid = _current?['id'] as String?;
@@ -1312,7 +1326,7 @@ $runSection
                 contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 11)),
             )),
             const SizedBox(height: 18),
-            if (_materials.isNotEmpty || _overheads.isNotEmpty) ...[
+            if (_canViewCost && (_materials.isNotEmpty || _overheads.isNotEmpty)) ...[
               _costSummary(),
               const SizedBox(height: 14),
             ],
@@ -1370,12 +1384,12 @@ $runSection
           ])),
         if (_materials.isEmpty) const Padding(padding: EdgeInsets.all(14), child: Text('Pick a BOM to load the recipe.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
         if (_materials.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: const [
-            SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            Expanded(child: Text('Component', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 12),
-            SizedBox(width: 80, child: Text('Qty', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 110, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+          child: Row(children: [
+            const SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const Expanded(child: Text('Component', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 12),
+            const SizedBox(width: 80, child: Text('Qty', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            if (_canViewCost) const SizedBox(width: 110, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
           ])),
         for (var i = 0; i < _materials.length; i++)
           Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
@@ -1384,9 +1398,9 @@ $runSection
               Expanded(child: Text(_materials[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
               const SizedBox(width: 12),
               SizedBox(width: 80, child: Text(_trim(_materials[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-              SizedBox(width: 110, child: Text(_money(_materials[i].qty * (_prodCost[_materials[i].productId] ?? 0)), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              if (_canViewCost) SizedBox(width: 110, child: Text(_money(_materials[i].qty * (_prodCost[_materials[i].productId] ?? 0)), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
             ])),
-        if (_materials.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        if (_canViewCost && _materials.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
             const Expanded(child: Text('Components total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700))),
@@ -1407,10 +1421,12 @@ $runSection
                 Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(3)),
                   child: Text(_overheads[i].costType == 'labor' ? 'Labor' : 'Overhead', style: const TextStyle(fontSize: 9, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-                const SizedBox(width: 12),
-                SizedBox(width: 110, child: Text(_money(_overheads[i].amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+                if (_canViewCost) ...[
+                  const SizedBox(width: 12),
+                  SizedBox(width: 110, child: Text(_money(_overheads[i].amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+                ],
               ])),
-          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          if (_canViewCost) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             child: Row(children: [
               const Expanded(child: Text('Labor & overhead total (planned)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700))),
               Text(_money(_overheads.fold(0.0, (s, l) => s + l.amount)), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
@@ -1435,14 +1451,14 @@ $runSection
         // Desktop: the table. Mobile: one card per batch — 424px of fixed columns
         // plus an Expanded date left "Date" as a one-letter-per-line column.
         if (_runs.isNotEmpty && !context.isMobile) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: const [
-            SizedBox(width: 44, child: Text('Batch', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            Expanded(child: Text('Date', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 70, child: Text('Produced', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 70, child: Text('Accepted', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 60, child: Text('Reject', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 100, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 80, child: Text('', style: TextStyle(fontSize: 11))),
+          child: Row(children: [
+            const SizedBox(width: 44, child: Text('Batch', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const Expanded(child: Text('Date', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 70, child: Text('Produced', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 70, child: Text('Accepted', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 60, child: Text('Reject', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            if (_canViewCost) const SizedBox(width: 100, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 80, child: Text('', style: TextStyle(fontSize: 11))),
           ])),
         if (!context.isMobile)
           for (final r in _runs)
@@ -1453,7 +1469,7 @@ $runSection
                 SizedBox(width: 70, child: Text(_trim((r['produced_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
                 SizedBox(width: 70, child: Text(_trim((r['accepted_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.green))),
                 SizedBox(width: 60, child: Text(_trim((r['rejected_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.red))),
-                SizedBox(width: 100, child: Text(_money((r['total_cost'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+                if (_canViewCost) SizedBox(width: 100, child: Text(_money((r['total_cost'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
                 SizedBox(width: 80, child: Align(alignment: Alignment.centerRight, child: r['status'] == 'posted'
                   ? TextButton(onPressed: _busy ? null : () => _voidRun(r), style: TextButton.styleFrom(foregroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero), child: const Text('Void', style: TextStyle(fontSize: 12)))
                   : Text(r['status'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
@@ -1473,7 +1489,7 @@ $runSection
                   Text('R${r['run_no']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
                   const SizedBox(width: 8),
                   Expanded(child: Text('${r['run_date'] ?? ''}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-                  Text(_money((r['total_cost'] as num? ?? 0).toDouble()), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                  if (_canViewCost) Text(_money((r['total_cost'] as num? ?? 0).toDouble()), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
                 ]),
                 const SizedBox(height: 6),
                 Row(children: [
