@@ -37,6 +37,9 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
 
   Map<String, String> _voucherNumbers = {};
   Map<String, String> _voucherSourceTables = {};
+  // Per stock-transfer: {from_branch_id, to_branch_id, notes} — for the ledger
+  // description "Transferred X to <branch>" / "Received X from <branch>".
+  Map<String, Map<String, dynamic>> _transferInfo = {};
 
   static const _availableTypes = [
     'All', 'purchase', 'sale', 'pos', 'pos return', 'sale return',
@@ -175,6 +178,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (r.startsWith('purchase_invoice')) return 'purchase_invoices';
     if (r.startsWith('delivery_order')) return 'delivery_orders';
     if (r.startsWith('grn') || r.startsWith('purchase_grn') || r.startsWith('goods_received')) return 'purchase_grns';
+    if (r.startsWith('stock_transfer')) return 'stock_transfers';
     if (r.startsWith('stock_adjustment')) return 'stock_adjustments';
     if (r == 'damage' || r.startsWith('damage')) return 'damage_vouchers';
     return refType;
@@ -203,11 +207,29 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (t.contains('purchase') && t.contains('return')) return 'Purchase return $qtyStr pcs$at';
     if (t.contains('purchase') || t.contains('grn') || t.contains('goods_received')) return 'Received $qtyStr pcs$at';
     if (t.contains('damage')) return 'Damaged $qtyStr pcs$at';
-    if (t.contains('transfer')) return 'Transferred $qtyStr pcs';
+    if (t.contains('transfer')) {
+      final refId = m['reference_id'] as String?;
+      final info = refId != null ? _transferInfo[refId] : null;
+      final tnotes = (info?['notes'] as String?)?.trim() ?? '';
+      final noteSuffix = tnotes.isNotEmpty ? ' — $tnotes' : '';
+      if (qty < 0) {
+        final to = _branchNameById(info?['to_branch_id'] as String?);
+        return 'Transferred $qtyStr units${to != null ? ' to $to' : ''}$noteSuffix';
+      } else {
+        final from = _branchNameById(info?['from_branch_id'] as String?);
+        return 'Received $qtyStr units${from != null ? ' from $from' : ''}$noteSuffix';
+      }
+    }
     if (t.contains('adjust')) return 'Adjusted $qtyStr pcs$at';
     if (t.contains('opening')) return 'Opening stock $qtyStr pcs$at';
     if (t.contains('production') || t.contains('manufactur') || t.contains('job')) return 'Produced $qtyStr pcs$at';
     return _friendlyRefLabel(m['reference_type'] as String?);
+  }
+
+  String? _branchNameById(String? id) {
+    if (id == null) return null;
+    final b = _branches.firstWhere((e) => e['id'] == id, orElse: () => const {});
+    return b['name'] as String?;
   }
 
   String _friendlyRefLabel(String? refType) {
@@ -244,6 +266,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       idToTable[id] = tbl;
     }
     final vMap = <String, String>{};
+    final transferInfo = <String, Map<String, dynamic>>{};
     for (final entry in byTable.entries) {
       final tbl = entry.key;
       final ids = entry.value.toList();
@@ -256,10 +279,17 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           if (id == null) continue;
           final vno = (r['voucher_number'] ?? r['invoice_number'] ?? r['transaction_number'] ?? '') as String;
           if (vno.isNotEmpty) vMap[id] = vno;
+          if (tbl == 'stock_transfers') {
+            transferInfo[id] = {
+              'from_branch_id': r['from_branch_id'],
+              'to_branch_id': r['to_branch_id'],
+              'notes': r['notes'],
+            };
+          }
         }
       } catch (_) { }
     }
-    setState(() { _voucherNumbers = vMap; _voucherSourceTables = idToTable; });
+    setState(() { _voucherNumbers = vMap; _voucherSourceTables = idToTable; _transferInfo = transferInfo; });
   }
 
   String _displayType(Map m) {
@@ -455,6 +485,15 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           voucher = await client.from('sales_returns').select('*, customers(shop_name, code)').eq('id', refId).maybeSingle();
           if (voucher != null) lines = await client.from('sales_return_items').select('*, products(name, sku)').eq('return_id', refId);
           break;
+        case 'stock_transfers':
+          title = 'Stock Transfer';
+          voucher = await client.from('stock_transfers')
+              .select('*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')
+              .eq('id', refId).maybeSingle();
+          if (voucher != null) {
+            lines = await client.from('stock_transfer_items').select('*, products(name, sku)').eq('transfer_id', refId);
+          }
+          break;
         case 'stock_adjustments':
           title = 'Stock Adjustment';
           voucher = await client.from('stock_adjustments').select('*').eq('id', refId).maybeSingle();
@@ -490,7 +529,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
 
   Widget _buildVoucherDialog(BuildContext ctx, String title, Map<String, dynamic> v, List<dynamic> lines) {
     final vNum = ((v['voucher_number'] ?? v['invoice_number'] ?? v['transaction_number'] ?? '') as String);
-    final dateStr = ((v['voucher_date'] ?? v['invoice_date'] ?? v['transacted_at'] ?? v['created_at'] ?? '') as String);
+    final dateStr = ((v['voucher_date'] ?? v['invoice_date'] ?? v['transacted_at'] ?? v['transfer_date'] ?? v['created_at'] ?? '') as String);
     final dt = DateTime.tryParse(dateStr);
     final dateFmt = dt != null ? DateFormat('d MMM yyyy').format(dt) : '-';
     final cust = v['customers']; final supp = v['suppliers'];
@@ -521,6 +560,11 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                 const Icon(Icons.person, size: 13, color: AppTheme.textSecondary),
                 const SizedBox(width: 5),
                 Text(entityName + (entityCode.isNotEmpty ? ' (' + entityCode + ')' : ''), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ]),
+              if (v['from_branch'] != null || v['to_branch'] != null) Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.swap_horiz, size: 14, color: AppTheme.textSecondary),
+                const SizedBox(width: 5),
+                Text('${v['from_branch']?['name'] ?? '-'} → ${v['to_branch']?['name'] ?? '-'}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               ]),
               if (v['status'] != null) Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
