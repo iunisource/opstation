@@ -2252,6 +2252,18 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                     ),
                     const Divider(height: 1),
                   ])),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: const BoxDecoration(color: AppTheme.background),
+                    child: Row(children: [
+                      const Expanded(flex: 9, child: Text('Total Delivered', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                      Expanded(flex: 2, child: Builder(builder: (_) {
+                        final t = _items.fold<double>(0, (s, it) => s + ((it['qty_delivered'] as num?)?.toDouble() ?? 0));
+                        return Text(t % 1 == 0 ? t.toInt().toString() : t.toStringAsFixed(2),
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.primary));
+                      })),
+                    ]),
+                  ),
                 ]),
               ),
               const SizedBox(height: 16),

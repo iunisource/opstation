@@ -134,7 +134,7 @@ class VoucherPdf {
         padding: const pw.EdgeInsets.only(bottom: 4),
         child: pw.Row(children: [
           pw.SizedBox(width: 110, child: pw.Text(label, style: const pw.TextStyle(fontSize: 9, color: _muted))),
-          pw.Expanded(child: pw.Text('$who${when != null && when.isNotEmpty ? '   •   $when' : ''}', style: const pw.TextStyle(fontSize: 10))),
+          pw.Expanded(child: pw.Text('$who${when != null && when.isNotEmpty ? '    |    $when' : ''}', style: const pw.TextStyle(fontSize: 10))),
         ]),
       );
     }
@@ -519,6 +519,16 @@ class VoucherPdf {
           pw.SizedBox(height: 4),
           _itemsTable(focLines, false),
         ],
+
+        // ── Total quantity (all lines, paid + FOC) ─────────────────────
+        pw.SizedBox(height: 6),
+        pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text(
+            'Total Quantity: ' + _stNum(lines.fold<double>(0, (s, l) => s + l.qty) + (focLines?.fold<double>(0, (s, l) => s + l.qty) ?? 0)),
+            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
+          ),
+        ),
 
         // ── Totals ─────────────────────────────────────────────────────
         if (showTotals) ...[
