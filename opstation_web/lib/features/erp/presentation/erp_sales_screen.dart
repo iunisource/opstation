@@ -1004,6 +1004,23 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                     const Divider(height: 1),
                   ]);
                 }),
+                // Total quantity across all ordered lines
+                if (_items.where((it) => it['is_foc'] != true).isNotEmpty)
+                  Builder(builder: (_) {
+                    final totalQty = _items.where((it) => it['is_foc'] != true)
+                        .fold<double>(0, (s, it) => s + ((it['quantity'] as num?)?.toDouble() ?? 0));
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: const BoxDecoration(color: AppTheme.background),
+                      child: Row(children: [
+                        const Expanded(flex: 5, child: Text('Total Quantity', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                        Expanded(flex: 2, child: Text(
+                            totalQty % 1 == 0 ? totalQty.toInt().toString() : totalQty.toStringAsFixed(2),
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13))),
+                        if (_canEditLines) const SizedBox(width: 40),
+                      ]),
+                    );
+                  }),
                 // Add row
                 if (_canEditLines) Padding(
                   padding: const EdgeInsets.all(12),

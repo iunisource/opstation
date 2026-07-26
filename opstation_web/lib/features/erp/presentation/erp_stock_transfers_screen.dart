@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
+import '../services/voucher_pdf.dart';
 
 String _stStatusLabel(String s) {
   switch (s) {
@@ -305,6 +306,7 @@ class _StockTransferVoucherScreenState
   List<Map<String, dynamic>> _uoms = [];
   bool _loading = true;
   bool _busy = false;
+  Map<String, String> _userNames = {}; // id -> name, for the audit trail
 
   // Header edit state (draft only).
   String? _fromBranchId;
@@ -316,7 +318,6 @@ class _StockTransferVoucherScreenState
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl = TextEditingController(text: '1');
-  final _addCostCtrl = TextEditingController(text: '0');
   final _addQtyFocus = FocusNode();
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -348,7 +349,6 @@ class _StockTransferVoucherScreenState
   void dispose() {
     _notesCtrl.dispose();
     _addQtyCtrl.dispose();
-    _addCostCtrl.dispose();
     _addQtyFocus.dispose();
     super.dispose();
   }
@@ -385,11 +385,24 @@ class _StockTransferVoucherScreenState
             .eq('id', _transfer!['id'])
             .single();
       }
+      // Resolve user names for the audit trail (generated / dispatched / approved).
+      final names = <String, String>{};
+      final ids = <String>{
+        for (final k in ['created_by', 'dispatched_by', 'approved_by'])
+          if (fresh?[k] != null) fresh![k] as String,
+      };
+      if (ids.isNotEmpty) {
+        try {
+          final us = await client.from('users').select('id, name').inFilter('id', ids.toList());
+          for (final u in us as List) { names[u['id'] as String] = (u['name'] as String?) ?? '—'; }
+        } catch (_) {}
+      }
       setState(() {
         _products = List<Map<String, dynamic>>.from(products);
         _uoms = List<Map<String, dynamic>>.from(uoms);
         _items = items;
         if (fresh != null) _transfer = fresh;
+        _userNames = names;
         _loading = false;
       });
     } catch (_) {
@@ -490,7 +503,6 @@ class _StockTransferVoucherScreenState
       _addProductId = p['id'] as String?;
       _addUomId = p['base_uom_id'] as String?;
       _addQtyCtrl.text = '1';
-      _addCostCtrl.text = '0';
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _addQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _addQtyCtrl.text.length);
@@ -511,9 +523,9 @@ class _StockTransferVoucherScreenState
         'product_id': _addProductId,
         'uom_id': _addUomId,
         'quantity': qty,
-        'unit_cost': double.tryParse(_addCostCtrl.text.trim()) ?? 0,
+        'unit_cost': 0,
       });
-      setState(() { _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; _addCostCtrl.text = '0'; });
+      setState(() { _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; });
       await _load();
       return true;
     } catch (e) {
@@ -827,6 +839,73 @@ class _StockTransferVoucherScreenState
 
   String _fmtQty(double q) => q % 1 == 0 ? q.toInt().toString() : q.toString();
 
+  String? _who(String? id) => id == null ? null : _userNames[id];
+  String? _fmtDT(String? iso) {
+    if (iso == null) return null;
+    final d = DateTime.tryParse(iso);
+    return d == null ? null : DateFormat('d MMM yyyy HH:mm').format(d.toLocal());
+  }
+
+  Future<void> _printTransfer() async {
+    final t = _transfer;
+    if (t == null) return;
+    final user = ref.read(currentUserProvider);
+    final items = _items.map((it) => {
+          'product': it['products']?['name'] as String? ?? '',
+          'sku': it['products']?['sku'] as String?,
+          'uom': it['uoms']?['abbreviation'] as String? ?? '',
+          'qty': (it['quantity'] as num?)?.toDouble() ?? 0,
+        }).toList();
+    final date = t['transfer_date'] != null
+        ? DateFormat('d MMM yyyy').format(DateTime.parse(t['transfer_date'] as String))
+        : null;
+    await VoucherPdf.printStockTransfer(
+      voucherNumber: t['voucher_number'] as String? ?? '-',
+      orgName: user?.orgName ?? 'Opstation',
+      fromBranch: _branchName(t['from_branch_id'] as String?),
+      toBranch: _branchName(t['to_branch_id'] as String?),
+      date: date,
+      notes: t['notes'] as String?,
+      status: _stStatusLabel(_status),
+      items: items,
+      generatedBy: _who(t['created_by'] as String?),
+      generatedAt: _fmtDT(t['created_at'] as String?),
+      dispatchedBy: _who(t['dispatched_by'] as String?),
+      dispatchedAt: _fmtDT(t['dispatched_at'] as String?),
+      approvedBy: _who(t['approved_by'] as String?),
+      approvedAt: _fmtDT(t['approved_at'] as String?),
+    );
+  }
+
+  Widget _auditCard() {
+    final t = _transfer;
+    if (t == null) return const SizedBox.shrink();
+    Widget line(IconData ic, Color c, String label, String? who, String? when) {
+      if (who == null || who.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(ic, size: 14, color: c),
+          const SizedBox(width: 8),
+          SizedBox(width: 110, child: Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          Expanded(child: Text('$who${when != null ? '  •  $when' : ''}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))),
+        ]),
+      );
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+        const SizedBox(height: 6),
+        line(Icons.add_circle_outline, AppTheme.success, 'Generated by', _who(t['created_by'] as String?), _fmtDT(t['created_at'] as String?)),
+        line(Icons.local_shipping_outlined, AppTheme.primary, 'Dispatched by', _who(t['dispatched_by'] as String?), _fmtDT(t['dispatched_at'] as String?)),
+        line(Icons.check_circle_outline, AppTheme.success, 'Approved by', _who(t['approved_by'] as String?), _fmtDT(t['approved_at'] as String?)),
+      ]),
+    );
+  }
+
   // ── UI ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -854,6 +933,12 @@ class _StockTransferVoucherScreenState
                   fontWeight: FontWeight.w400)),
         ]),
         actions: [
+          if (!_isNew)
+            IconButton(
+              icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+              tooltip: 'Print / PDF',
+              onPressed: _printTransfer,
+            ),
           if (!_isNew)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -896,6 +981,10 @@ class _StockTransferVoucherScreenState
                     const SizedBox(height: 12),
                     if (editable) _addRow(),
                     Expanded(child: _itemsCard(editable)),
+                    if (!_isNew) ...[
+                      const SizedBox(height: 16),
+                      _auditCard(),
+                    ],
                     const SizedBox(height: 16),
                     _actionBar(canApprove),
                   ]),
@@ -1048,17 +1137,6 @@ class _StockTransferVoucherScreenState
             onSubmitted: (_) => _addItemAndPickNext(),
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          flex: 2,
-          child: TextField(
-            controller: _addCostCtrl,
-            decoration: const InputDecoration(
-                labelText: 'Unit Cost', isDense: true, border: OutlineInputBorder()),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-          ),
-        ),
         const SizedBox(width: 8),
         IconButton(
           icon: const Icon(Icons.add_circle, color: AppTheme.primary),
@@ -1103,13 +1181,6 @@ class _StockTransferVoucherScreenState
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                         color: AppTheme.textSecondary))),
-            Expanded(
-                flex: 2,
-                child: Text('Unit Cost',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color: AppTheme.textSecondary))),
             SizedBox(width: 48),
           ]),
         ),
@@ -1125,7 +1196,6 @@ class _StockTransferVoucherScreenState
                   itemBuilder: (_, i) {
                     final item = _items[i];
                     final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
-                    final cost = (item['unit_cost'] as num?)?.toDouble() ?? 0;
                     return Padding(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 20, vertical: 12),
@@ -1156,7 +1226,6 @@ class _StockTransferVoucherScreenState
                             child: Text(_fmtQty(qty),
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w600))),
-                        Expanded(flex: 2, child: Text(cost.toStringAsFixed(2))),
                         SizedBox(
                             width: 48,
                             child: editable
