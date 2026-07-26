@@ -9,6 +9,7 @@ import '../../features/auth/auth_controller.dart';
 import '../theme/app_theme.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
+import '../notifications/notifications_menu_tile.dart';
 import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
@@ -181,6 +182,27 @@ final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+/// Invoices awaiting admin review (review_status = 'pending'), gated by the
+/// org.doc_review_flow toggle. One provider per invoice type so each menu item
+/// gets its own badge; the parent menu sums them. Invalidated by the invoice
+/// screens on send/approve/reject.
+FutureProvider<int> _reviewPendingProvider(String table, String configKey) => FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', configKey).maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from(table).select('id')
+        .eq('org_id', user.orgId!).eq('review_status', 'pending');
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+final piReviewPendingProvider  = _reviewPendingProvider('purchase_invoices', 'org.doc_review_flow_pi');
+final priReviewPendingProvider = _reviewPendingProvider('purchase_return_invoices', 'org.doc_review_flow_pri');
+final siReviewPendingProvider  = _reviewPendingProvider('sales_invoices', 'org.doc_review_flow_si');
+
 /// Count of field orders awaiting review (status 'submitted') for the org.
 /// Drives the live nav badge on the Field Orders menu item. Invalidated by
 /// erp_field_orders_screen on approve/reject and realtime arrival.
@@ -319,7 +341,11 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
               const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
             ]),
           ),
-          actions: [_userMenu(ref, user, const Offset(0, 8)), const SizedBox(width: 6)],
+          actions: [
+            _searchButton(context, user, _showFn(ref, user)),
+            _userMenu(ref, user, const Offset(0, 8)),
+            const SizedBox(width: 6),
+          ],
         ),
         drawer: Drawer(
           backgroundColor: AppTheme.sidebar,
@@ -352,7 +378,6 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
     final location = GoRouterState.of(context).matchedLocation;
     final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
     final navItems = _buildNavItems(context, ref, user, location);
-    final show = _showFn(ref, user);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if ((user?.orgName ?? '').isNotEmpty)
         Padding(
@@ -379,7 +404,6 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
       Padding(
         padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
         child: Row(children: [
-          _searchButton(context, user, show),
           const Spacer(),
           _userMenu(ref, user, const Offset(0, 8)),
         ]),
@@ -412,6 +436,9 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
+  final piReviewPending = ref.watch(piReviewPendingProvider).valueOrNull ?? 0;
+  final priReviewPending = ref.watch(priReviewPendingProvider).valueOrNull ?? 0;
+  final siReviewPending = ref.watch(siReviewPendingProvider).valueOrNull ?? 0;
   final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
   final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
@@ -450,10 +477,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
         if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
         if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location),
-        if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location),
+        if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending),
         _menuDivider(),
         if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
-        if (show('/erp/purchase-return-vouchers')) _menuItem(context, 'Purchase Return Invoices', Icons.description_outlined,       '/erp/purchase-return-vouchers', location),
+        if (show('/erp/purchase-return-vouchers')) _menuItem(context, 'Purchase Return Invoices', Icons.description_outlined,       '/erp/purchase-return-vouchers', location, badge: priReviewPending),
         _menuDivider(),
         if (show('/erp/supplier-ledger')) _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
         if (show('/erp/supplier-aging')) _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
@@ -469,7 +496,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
         if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
         if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
-        if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location),
+        if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending),
         _menuDivider(),
         if (show('/erp/sales-returns')) _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
         if (show('/erp/sales-return-invoices')) _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location),
@@ -492,6 +519,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/pos-held-bills')) _menuItem(context, 'Bills on Hold',       Icons.pause_circle_outlined,    '/erp/pos-held-bills',          location),
         if (show('/erp/pos-expense-management')) _menuItem(context, 'Expense Management',  Icons.receipt_outlined,          '/erp/pos-expense-management',  location),
       ],
+    ];
+
+    // Reports section items — gated per-user via show() like every other menu.
+    final reportItems = <Widget>[
+      if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
+      if (show('/reports/customer-balance')) _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location),
+      if (show('/intelligence/report-builder')) _menuItem(context, 'Report Builder', Icons.table_chart_outlined, '/intelligence/report-builder', location),
     ];
 
     // Top-level production items (non-voucher)
@@ -568,21 +602,20 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
            '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
            '/erp/supplier-ledger', '/erp/supplier-aging'],
-          _trimDividers(purchaseItems), badge: poPending),
+          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
-          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
-      _navMenu(context, 'Reports', Icons.summarize_outlined, location,
-        ['/reports/margin', '/reports/customer-balance', '/intelligence/report-builder'],
-        [_menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
-         _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location),
-         _menuItem(context, 'Report Builder', Icons.table_chart_outlined, '/intelligence/report-builder', location)]),
+      if (_hasItems(reportItems))
+        _navMenu(context, 'Reports', Icons.summarize_outlined, location,
+          ['/reports/margin', '/reports/customer-balance', '/intelligence/report-builder'],
+          reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
           ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints',
@@ -596,6 +629,19 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave'], _trimDividers(hrItems)),
+      // Management (Assets/Facility) — lives here so ERP users see it too, not
+      // just admin-tier. Self-gated by the /assets and /facility grants.
+      if (show('/assets') || show('/facility'))
+        _navMenu(context, 'Management', Icons.domain_outlined, location,
+          ['/assets', '/facility'],
+          [
+            if (show('/assets'))
+              _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
+            if (show('/facility'))
+              _menuItem(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
+          ],
+          badge: assetsDue + facilityDue,
+        ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
         ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
@@ -659,17 +705,6 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
                 _menuItem(context, 'Performance', Icons.leaderboard_outlined, '/intelligence/performance', location),
             ],
           ),
-          if (show('/assets') || show('/facility'))
-            _navMenu(context, 'Management', Icons.domain_outlined, location,
-              ['/assets', '/facility'],
-              [
-                if (show('/assets'))
-                  _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
-                if (show('/facility'))
-                  _menuItem(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
-              ],
-              badge: assetsDue + facilityDue,
-            ),
           ...splitErpMenus(),
         ],
 
@@ -792,6 +827,12 @@ Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
                 Text(user?.name ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
                 Text(user?.role.name ?? '', style: const TextStyle(color: AppTheme.sidebarText, fontSize: 11)),
               ]),
+            ),
+            const PopupMenuDivider(),
+            PopupMenuItem(
+              enabled: false,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+              child: const NotificationsMenuTile(),
             ),
             const PopupMenuDivider(),
             const PopupMenuItem(

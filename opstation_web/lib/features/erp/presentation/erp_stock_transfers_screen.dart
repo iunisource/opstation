@@ -35,7 +35,8 @@ Color _stStatusColor(String s) {
 }
 
 class ErpStockTransfersScreen extends ConsumerStatefulWidget {
-  const ErpStockTransfersScreen({super.key});
+  const ErpStockTransfersScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpStockTransfersScreen> createState() =>
       _ErpStockTransfersScreenState();
@@ -46,6 +47,7 @@ class _ErpStockTransfersScreenState
   List<Map<String, dynamic>> _transfers = [];
   List<Map<String, dynamic>> _allBranches = [];
   bool _loading = true;
+  bool _focusHandled = false;
 
   @override
   void initState() {
@@ -82,6 +84,16 @@ class _ErpStockTransfersScreenState
         _allBranches = List<Map<String, dynamic>>.from(branches);
         _loading = false;
       });
+      // Deep-link from global search: open the exact transfer once.
+      if (!_focusHandled && widget.focusId != null) {
+        _focusHandled = true;
+        final match = _transfers.where((t) => t['id'] == widget.focusId).toList();
+        if (match.isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _openTransfer(match.first);
+          });
+        }
+      }
     } catch (_) {
       setState(() => _loading = false);
     }
@@ -903,25 +915,13 @@ class _StockTransferVoucherScreenState
         runSpacing: 14,
         crossAxisAlignment: WrapCrossAlignment.end,
         children: [
+          // From Branch is fixed to the branch you're currently in — a transfer
+          // always originates from your own branch, so this is never a dropdown.
           _hField(
               'From Branch',
               SizedBox(
                 width: 220,
-                child: editable
-                    ? DropdownButtonFormField<String>(
-                        value: _fromBranchId,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                            isDense: true, border: OutlineInputBorder()),
-                        items: widget.branches
-                            .map((b) => DropdownMenuItem(
-                                value: b['id'] as String,
-                                child: Text(b['name'] as String,
-                                    overflow: TextOverflow.ellipsis)))
-                            .toList(),
-                        onChanged: (v) => setState(() => _fromBranchId = v),
-                      )
-                    : _readonly(_branchName(_fromBranchId)),
+                child: _readonly(_branchName(_fromBranchId)),
               )),
           _hField(
               'To Branch',

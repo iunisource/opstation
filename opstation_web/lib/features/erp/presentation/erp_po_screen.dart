@@ -12,7 +12,8 @@ import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/product_picker.dart';
 
 class ErpPurchaseScreen extends ConsumerStatefulWidget {
-  const ErpPurchaseScreen({super.key});
+  const ErpPurchaseScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpPurchaseScreen> createState() => _ErpPurchaseScreenState();
 }
@@ -20,6 +21,9 @@ class ErpPurchaseScreen extends ConsumerStatefulWidget {
 class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   List<Map<String, dynamic>> _pos = [];
   List<Map<String, dynamic>> _products = [];
+  Map<String, double> _prodCost = {}; // product_id -> cost_price (for the Rates column)
+  bool _hideGroupsEnabled = false;
+  Map<String, Set<String>> _hiddenByBranch = {};
   List<Map<String, dynamic>> _uoms = [];
   List<Map<String, dynamic>> _suppliers = [];
   String? _selectedId;
@@ -33,6 +37,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool _hasGrn = false; // true if any GRN exists against this PO (cascade lock)
   bool _listLoading = true;
   bool _detailLoading = false;
+  bool _datesEditable = false;
   String _search = '';
   String _filter = 'all';
   String? _addProductId;
@@ -40,18 +45,38 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   final _addQtyCtrl = TextEditingController(text: '1');
   final _addQtyFocus = FocusNode();
   final Map<String, TextEditingController> _lineQtyCtrls = {};
+  final Map<String, TextEditingController> _lineRateCtrls = {};
 
   @override
-  void initState() { super.initState(); _loadList(); _loadLookups(); }
+  void initState() { super.initState(); _loadList(); _loadLookups(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
   @override
   void dispose() {
     for (final c in _lineQtyCtrls.values) { c.dispose(); }
+    for (final c in _lineRateCtrls.values) { c.dispose(); }
     _addQtyCtrl.dispose();
     _addQtyFocus.dispose();
     super.dispose();
   }
 
+  // ── Rates column (per-PO, remembered in purchase_orders.show_rates) ──────
+  bool get _showRates => _detail['show_rates'] as bool? ?? false;
+  double _costOf(String? productId) => _prodCost[productId] ?? 0;
+  // The rate for a line: its saved unit_cost if set, else the product cost price.
+  double _effRate(Map<String, dynamic> it) {
+    final uc = (it['unit_cost'] as num?)?.toDouble() ?? 0;
+    return uc > 0 ? uc : _costOf(it['product_id'] as String?);
+  }
+  double get _grandTotal => _items.fold(0.0, (s, it) =>
+      s + ((it['quantity_ordered'] as num?)?.toDouble() ?? 0) * _effRate(it));
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  List<Map<String, dynamic>> get _visibleProducts {
+    if (!_hideGroupsEnabled) return _products;
+    final bid = ref.read(selectedBranchProvider)?['id'] as String?;
+    final hidden = bid == null ? null : _hiddenByBranch[bid];
+    if (hidden == null || hidden.isEmpty) return _products;
+    return _products.where((p) => !hidden.contains(p['product_main_group'])).toList();
+  }
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
@@ -62,6 +87,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool get _canEditLines => !_hasGrn && !_isVoided;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked && !_isVoided;
   bool get _canApprove {
     final access = ref.read(accessSyncProvider);
     if (access == null) {
@@ -73,11 +100,28 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
+  Future<void> _pickDate() async {
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('purchase_orders')
+          .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', _detail['id']);
+      if (mounted) setState(() => _detail['voucher_date'] = iso);
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to \$iso');
+      _loadList();
+    } catch (e) { _showSnack('Failed: \$e'); }
+  }
+
+
   Future<void> _loadLookups() async {
     final orgId = _orgId; if (orgId == null) return;
     final client = Supabase.instance.client;
     final results = await Future.wait([
-      client.from('products').select('id,name,sku,base_uom_id').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
+      client.from('products').select('id,name,sku,base_uom_id,product_main_group,cost_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
       client.from('uoms').select().eq('org_id', orgId).order('name'),
     ]);
     // Paginated suppliers
@@ -89,7 +133,18 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       if (p.length < 1000) break;
       off += 1000;
     }
-    if (mounted) setState(() { _products = List<Map<String, dynamic>>.from(results[0]); _uoms = List<Map<String, dynamic>>.from(results[1]); _suppliers = sup; });
+    bool hideOn = false; final Map<String, Set<String>> hiddenBy = {};
+    try {
+      final hc = await client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.hide_main_groups_by_branch').maybeSingle();
+      hideOn = (hc?['value'] as String?) == 'true';
+      if (hideOn) {
+        final hr = await client.from('branch_hidden_main_groups').select('branch_id, main_group').eq('org_id', orgId);
+        for (final r in hr as List) { (hiddenBy[r['branch_id'] as String] ??= <String>{}).add(r['main_group'] as String); }
+      }
+    } catch (_) {}
+    final prods = List<Map<String, dynamic>>.from(results[0]);
+    final costMap = {for (final p in prods) p['id'] as String: (p['cost_price'] as num? ?? 0).toDouble()};
+    if (mounted) setState(() { _products = prods; _prodCost = costMap; _uoms = List<Map<String, dynamic>>.from(results[1]); _suppliers = sup; _hideGroupsEnabled = hideOn; _hiddenByBranch = hiddenBy; });
   }
 
   Future<void> _loadList() async {
@@ -120,11 +175,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       final items = await client.from('purchase_order_items').select('*,products(name,sku),uoms(abbreviation)').eq('purchase_order_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: po['created_by'] as String?);
       final cfg = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
-          .inFilter('key', ['org.po_approval_required', 'org.po_show_stock_consumption']);
-      bool approvalReq = false, showSC = false;
+          .inFilter('key', ['org.po_approval_required', 'org.po_show_stock_consumption', 'org.voucher_dates_editable']);
+      bool approvalReq = false, showSC = false, datesEd = false;
       for (final r in cfg as List) {
         if (r['key'] == 'org.po_approval_required') approvalReq = r['value'] == 'true';
         if (r['key'] == 'org.po_show_stock_consumption') showSC = r['value'] == 'true';
+        if (r['key'] == 'org.voucher_dates_editable') datesEd = r['value'] == 'true';
       }
       final itemList = List<Map<String, dynamic>>.from(items);
       Map<String, Map<String, dynamic>> metrics = {};
@@ -150,7 +206,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         hasGrn = (g as List).isNotEmpty;
       } catch (_) {}
       setState(() { _detail = Map<String, dynamic>.from(po); _items = itemList; _meta = meta;
-        _approvalRequired = approvalReq; _showStockConsumption = showSC; _lineMetrics = metrics;
+        _approvalRequired = approvalReq; _showStockConsumption = showSC; _lineMetrics = metrics; _datesEditable = datesEd;
         _hasGrn = hasGrn;
         _syncLineCtrls();
         _detailLoading = false; });
@@ -162,6 +218,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     for (final k in _lineQtyCtrls.keys.where((k) => !ids.contains(k)).toList()) {
       _lineQtyCtrls.remove(k)?.dispose();
     }
+    for (final k in _lineRateCtrls.keys.where((k) => !ids.contains(k)).toList()) {
+      _lineRateCtrls.remove(k)?.dispose();
+    }
     for (final it in _items) {
       final id = it['id'] as String;
       final qty = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
@@ -172,7 +231,43 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       } else if (c.text != txt) {
         c.text = txt;
       }
+      final rate = _effRate(it);
+      final rtxt = rate == 0 ? '' : rate.toStringAsFixed(2);
+      final rc = _lineRateCtrls[id];
+      if (rc == null) {
+        _lineRateCtrls[id] = TextEditingController(text: rtxt);
+      } else if (rc.text != rtxt) {
+        rc.text = rtxt;
+      }
     }
+  }
+
+  // Inline edit of a line's rate (unit_cost). Allowed while lines are editable.
+  Future<void> _updateLineRate(String itemId) async {
+    if (!_canEditLines) return;
+    final c = _lineRateCtrls[itemId];
+    final rate = double.tryParse(c?.text.trim() ?? '') ?? -1;
+    if (rate < 0) { _showSnack('Rate must be 0 or more'); return; }
+    final cur = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['unit_cost'] as num?)?.toDouble() ?? 0;
+    if (cur == rate) return;
+    try {
+      await Supabase.instance.client.from('purchase_order_items')
+          .update({'unit_cost': rate}).eq('id', itemId);
+      setState(() {
+        final idx = _items.indexWhere((i) => i['id'] == itemId);
+        if (idx >= 0) _items[idx]['unit_cost'] = rate;
+      });
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  Future<void> _toggleRates(bool v) async {
+    try {
+      await Supabase.instance.client.from('purchase_orders')
+          .update({'show_rates': v, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', _detail['id']);
+      setState(() { _detail['show_rates'] = v; });
+      _syncLineCtrls();
+    } catch (e) { _showSnack('Failed: $e'); }
   }
 
   // Inline edit of an existing line's ordered qty. Allowed while lines are
@@ -243,14 +338,15 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final uom  = _uoms.firstWhere((u) => u['id'] == _addUomId, orElse: () => {});
     final itemId = 'poi_${DateTime.now().microsecondsSinceEpoch}';
     try {
+      final initialCost = _showRates ? (_prodCost[_addProductId] ?? 0) : 0;
       await Supabase.instance.client.from('purchase_order_items').insert({
         'id': itemId, 'purchase_order_id': _detail['id'],
         'product_id': _addProductId, 'uom_id': _addUomId,
-        'quantity_ordered': qty, 'quantity_received': 0, 'unit_cost': 0,
+        'quantity_ordered': qty, 'quantity_received': 0, 'unit_cost': initialCost,
       });
       setState(() {
         _items.add({'id': itemId, 'product_id': _addProductId, 'uom_id': _addUomId,
-          'quantity_ordered': qty, 'quantity_received': 0,
+          'quantity_ordered': qty, 'quantity_received': 0, 'unit_cost': initialCost,
           'products': {'name': prod['name'], 'sku': prod['sku']}, 'uoms': {'abbreviation': uom['abbreviation']}});
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
         _syncLineCtrls();
@@ -264,7 +360,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   // focus Qty. Shared by the "+ Add product" tap and the Enter loop.
   Future<bool> _pickAddProduct() async {
     if (!_canEditLines) { _showSnack('Cannot add: a GRN exists against this PO. Delete the GRN first.'); return false; }
-    final p = await pickProduct(context, _products, title: 'Add product');
+    final p = await pickProduct(context, _visibleProducts, title: 'Add product');
     if (p == null || p.isEmpty) return false;
     setState(() {
       _addProductId = p['id'] as String?;
@@ -425,12 +521,19 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
 
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
-    final lines = _isDraft ? <VoucherLine>[] : _items.map((it) => VoucherLine(
-      product: it['products']?['name'] as String? ?? '-',
-      sku: it['products']?['sku'] as String?,
-      uom: it['uoms']?['abbreviation'] as String?,
-      qty: (it['quantity_ordered'] as num?)?.toDouble() ?? 0,
-    )).toList();
+    final showRates = _showRates;
+    final lines = _isDraft ? <VoucherLine>[] : _items.map((it) {
+      final qty = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
+      final rate = _effRate(it);
+      return VoucherLine(
+        product: it['products']?['name'] as String? ?? '-',
+        sku: it['products']?['sku'] as String?,
+        uom: it['uoms']?['abbreviation'] as String?,
+        qty: qty,
+        unitPrice: showRates ? rate : null,
+        lineTotal: showRates ? qty * rate : null,
+      );
+    }).toList();
     final sup = _detail['suppliers'] as Map?;
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
@@ -443,7 +546,11 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       customerContact: sup?['contact_person'] as String?,
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
       lines: lines,
+      grandTotal: (showRates && !_isDraft) ? _grandTotal : null,
       preparedBy: _meta.preparedBy,
+      createdAt: _detail['created_at'] != null
+          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+          : null,
       footerNote: _footerWithApproval(_meta.purchaseFooterNote ?? _meta.footerNote),
     );
   }
@@ -542,6 +649,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 onPressed: _approve),
             const SizedBox(width: 8),
           ],
+          if (_canEditDate)
+            IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
           if (!_isDraft || !_isLocked || _canUnlock)
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
@@ -580,16 +689,30 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             decoration: BoxDecoration(color: Colors.blue.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.25))),
             child: const Row(children: [Icon(Icons.info_outline, size: 15, color: Colors.blue), SizedBox(width: 8),
               Expanded(child: Text('Add items, then click "Confirm Order" to lock this PO for GRN creation.', style: TextStyle(fontSize: 12, color: Colors.blue)))])),
+        // Rates toggle (per-PO). Remembered on the document.
+        Padding(padding: const EdgeInsets.only(bottom: 10), child: Row(children: [
+          Transform.scale(scale: 0.85, child: Switch(value: _showRates, onChanged: _detailLoading ? null : (v) => _toggleRates(v))),
+          const SizedBox(width: 4),
+          const Text('Show rates', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 10),
+          if (_showRates) const Expanded(child: Text(
+            'Rate defaults to each product\'s cost price and is editable per line. It prints unit price, amount and grand total on the PO.',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        ])),
         // Items table
         Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(children: [
             Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
-              child: const Row(children: [
-                Expanded(flex: 5, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
-                Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
-                Expanded(flex: 2, child: Text('Qty Ordered', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
-                SizedBox(width: 44),
+              child: Row(children: [
+                const Expanded(flex: 5, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
+                const Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
+                const Expanded(flex: 2, child: Text('Qty Ordered', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+                if (_showRates) ...[
+                  const Expanded(flex: 2, child: Text('Rate', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+                  const Expanded(flex: 2, child: Text('Amount', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
+                ],
+                const SizedBox(width: 44),
               ])),
             const Divider(height: 1),
             if (_items.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20),
@@ -623,9 +746,33 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                         onTapOutside: (_) => _updateLineQty(it['id'] as String),
                       ))
                     : Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
+                  if (_showRates) ...[
+                    Expanded(flex: 2, child: _canEditLines
+                      ? Padding(padding: const EdgeInsets.only(left: 8), child: SizedBox(height: 34, child: TextField(
+                          controller: _lineRateCtrls[it['id'] as String],
+                          textAlign: TextAlign.right,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          style: const TextStyle(fontSize: 13),
+                          decoration: const InputDecoration(isDense: true, prefixText: 'Rs ', contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _updateLineRate(it['id'] as String),
+                          onTapOutside: (_) => _updateLineRate(it['id'] as String),
+                        )))
+                      : Text(_effRate(it).toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+                    Expanded(flex: 2, child: Text((qty * _effRate(it)).toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
+                  ],
                   SizedBox(width: 44, child: _canEditLines ? IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => _deleteItem(it['id'] as String)) : null),
                 ]));
             }),
+            if (_showRates && _items.isNotEmpty) ...[
+              const Divider(height: 1),
+              Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(children: [
+                  const Expanded(flex: 11, child: Text('Grand Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
+                  Expanded(flex: 2, child: Padding(padding: const EdgeInsets.only(left: 8), child: Text('Rs ${_grandTotal.toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: AppTheme.primary)))),
+                  const SizedBox(width: 44),
+                ])),
+            ],
             if (_canEditLines) ...[
               const Divider(height: 1),
               Container(color: AppTheme.background, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -653,6 +800,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: TextField(controller: _addQtyCtrl, focusNode: _addQtyFocus, decoration: const InputDecoration(hintText: 'Qty', isDense: true), textAlign: TextAlign.right,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true), textInputAction: TextInputAction.done, onSubmitted: (_) => _addItemAndPickNext()))),
+                  if (_showRates) ...[
+                    const Expanded(flex: 2, child: SizedBox()),
+                    const Expanded(flex: 2, child: SizedBox()),
+                  ],
                   SizedBox(width: 44, child: IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary), tooltip: 'Add', onPressed: () => _addItem())),
                 ])),
             ],

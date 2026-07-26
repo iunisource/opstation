@@ -10,6 +10,8 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/widgets/product_picker.dart';
+import '../widgets/voucher_docs_panel.dart';
+import '../widgets/voucher_remarks_panel.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -61,7 +63,8 @@ Future<String?> _bankCancelledVoucherNumber({
 // ─── Sales Orders (Master-Detail) ────────────────────────────────────────────
 
 class ErpSalesScreen extends ConsumerStatefulWidget {
-  const ErpSalesScreen({super.key});
+  const ErpSalesScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpSalesScreen> createState() => _ErpSalesScreenState();
 }
@@ -72,11 +75,14 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _products = [];
+  bool _hideGroupsEnabled = false;
+  Map<String, Set<String>> _hiddenByBranch = {};
   List<Map<String, dynamic>> _uoms = [];
   List<Map<String, dynamic>> _customers = [];
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
+  bool _datesEditable = false;
   String _search = '';
   String _statusFilter = 'all';
 
@@ -97,7 +103,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   String? _linkedDoId; // most recent active DO id, for the jump-to-DO button
 
   @override
-  void initState() { super.initState(); _loadList(); _loadMeta(); }
+  void initState() { super.initState(); _loadList(); _loadMeta(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
 
   @override
   void dispose() {
@@ -110,12 +116,19 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  List<Map<String, dynamic>> get _visibleProducts {
+    if (!_hideGroupsEnabled) return _products;
+    final bid = ref.read(selectedBranchProvider)?['id'] as String?;
+    final hidden = bid == null ? null : _hiddenByBranch[bid];
+    if (hidden == null || hidden.isEmpty) return _products;
+    return _products.where((p) => !hidden.contains(p['product_main_group'])).toList();
+  }
 
   Future<void> _loadMeta() async {
     final orgId = _orgId; if (orgId == null) return;
     try {
       final client = Supabase.instance.client;
-      final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
+      final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price, product_main_group').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
       bool focOn = false;
       try {
@@ -123,7 +136,16 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             .eq('org_id', orgId).eq('key', 'org.foc_enabled').maybeSingle();
         focOn = (cfg?['value'] as String?) == 'true';
       } catch (_) {}
-      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _focEnabled = focOn; });
+      bool hideOn = false; final Map<String, Set<String>> hiddenBy = {};
+      try {
+        final hc = await client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.hide_main_groups_by_branch').maybeSingle();
+        hideOn = (hc?['value'] as String?) == 'true';
+        if (hideOn) {
+          final hr = await client.from('branch_hidden_main_groups').select('branch_id, main_group').eq('org_id', orgId);
+          for (final r in hr as List) { (hiddenBy[r['branch_id'] as String] ??= <String>{}).add(r['main_group'] as String); }
+        }
+      } catch (_) {}
+      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _focEnabled = focOn; _hideGroupsEnabled = hideOn; _hiddenByBranch = hiddenBy; });
       _ensureCustomers();
     } catch (_) {}
   }
@@ -181,6 +203,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         customerId: order['customer_id'] as String?,
         createdById: order['created_by'] as String?,
       );
+      bool datesEd = false;
+      try { final cc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (cc?['value'] as String?) == 'true'; } catch (_) {}
       bool hasDo = false;
       List<String> doRefs = [];
       String? linkedDoId;
@@ -198,6 +222,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         _hasDo = hasDo;
         _doRefs = doRefs;
         _linkedDoId = linkedDoId;
+        _datesEditable = datesEd;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -208,9 +233,23 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
+  Future<void> _pickDate() async {
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('sales_orders').update({'voucher_date': iso}).eq('id', _detail['id']);
+      if (mounted) setState(() => _detail['voucher_date'] = iso);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   bool get _isDraft => (_detail['status'] as String? ?? 'draft') == 'draft';
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _canEdit => _isDraft && !_isLocked;
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked;
   // Line items can be added/edited/deleted as long as no Delivery Order exists
   // against this SO (standalone) — even on a confirmed/locked SO, and even for
   // admins once a DO exists they are cascade-locked. Header fields stay on
@@ -261,6 +300,21 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       );
       if (bankErr != null) _showSnack('Bank # failed: $bankErr');
       await _logAudit(_detail['id'] as String, 'SO', 'deleted', 'Voucher $vNum deleted by admin');
+      // Any DO still on this SO is voided (active ones were blocked above). A voided
+      // DO is a dead delivery but its row still holds the so_id FK, so remove it (and
+      // its items / any Sales Invoice raised from it) to free the SO for deletion.
+      final doRows = await Supabase.instance.client.from('delivery_orders').select('id').eq('so_id', _detail['id']);
+      final doIds = [for (final d in doRows as List) d['id'] as String];
+      if (doIds.isNotEmpty) {
+        final siRows = await Supabase.instance.client.from('sales_invoices').select('id').inFilter('do_id', doIds);
+        final siIds = [for (final si in siRows as List) si['id'] as String];
+        if (siIds.isNotEmpty) {
+          await Supabase.instance.client.from('sales_invoice_items').delete().inFilter('invoice_id', siIds);
+          await Supabase.instance.client.from('sales_invoices').delete().inFilter('id', siIds);
+        }
+        await Supabase.instance.client.from('delivery_order_items').delete().inFilter('delivery_order_id', doIds);
+        await Supabase.instance.client.from('delivery_orders').delete().inFilter('id', doIds);
+      }
       await Supabase.instance.client.from('sales_order_items').delete().eq('sales_order_id', _detail['id']);
       await Supabase.instance.client.from('sales_orders').delete().eq('id', _detail['id']);
       _showSnack('Deleted');
@@ -390,7 +444,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   // focus the Qty field. Shared by the "+ Add product" tap and the Enter loop.
   Future<bool> _pickAddProduct() async {
     if (!_canEditLines) { _showSnack('Cannot add: $_doMsg'); return false; }
-    final p = await pickProduct(context, _products, title: 'Add product');
+    final p = await pickProduct(context, _visibleProducts, title: 'Add product');
     if (p == null || p.isEmpty) return false; // × / Esc ends the loop
     setState(() {
       _addProductId = p['id'] as String?;
@@ -507,7 +561,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
               return InkWell(
                 onTap: () async {
-                  final p = await pickProduct(ctx, _products, title: 'Select free product');
+                  final p = await pickProduct(ctx, _visibleProducts, title: 'Select free product');
                   if (p != null && p.isNotEmpty) setState(() {
                     _focProductId = p['id'] as String?;
                     _focUomId = p['base_uom_id'] as String?;
@@ -825,6 +879,12 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               tooltip: 'Go to Delivery Order',
               onPressed: () => context.go('/erp/delivery-orders?focus=$_linkedDoId'),
             ),
+          if (_canEditDate)
+            IconButton(
+              icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary),
+              tooltip: 'Edit date',
+              onPressed: _pickDate,
+            ),
           IconButton(
             icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
             tooltip: 'Print / PDF',
@@ -1037,6 +1097,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
+  bool _datesEditable = false;
   String _search = '';
   String _statusFilter = 'all';
   // inline delivery qty
@@ -1140,12 +1201,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _linkedSiId = linkedSiId;
         _detailLoading = false;
       });
-      // Read the delivery-flow org setting (default ON if unset).
+      // Read the delivery-flow + voucher-date org settings.
       try {
-        final cfg = await client.from('app_config').select('value')
+        final cfg = await client.from('app_config').select('key,value')
             .eq('org_id', _orgId ?? '')
-            .eq('key', 'org.delivery_flow_enabled').maybeSingle();
-        if (mounted) setState(() => _deliveryFlow = (cfg?['value'] as String?) != 'false');
+            .inFilter('key', ['org.delivery_flow_enabled', 'org.voucher_dates_editable']);
+        bool flow = true, datesEd = false;
+        for (final r in cfg as List) {
+          if (r['key'] == 'org.delivery_flow_enabled') flow = r['value'] != 'false';
+          if (r['key'] == 'org.voucher_dates_editable') datesEd = r['value'] == 'true';
+        }
+        if (mounted) setState(() { _deliveryFlow = flow; _datesEditable = datesEd; });
       } catch (_) {}
     } catch (_) { setState(() => _detailLoading = false); }
   }
@@ -1155,8 +1221,22 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
+  Future<void> _pickDate() async {
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('delivery_orders').update({'voucher_date': iso}).eq('id', _detail['id']);
+      if (mounted) setState(() => _detail['voucher_date'] = iso);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isSaved => (_detail['status'] as String? ?? 'saved') == 'saved';
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked && !(_detail['is_voided'] as bool? ?? false);
   bool get _canDelete {
     final role = ref.read(currentUserProvider)?.role;
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
@@ -2030,6 +2110,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             ),
             const SizedBox(width: 8),
           ],
+          if (_canEditDate)
+            IconButton(
+              icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary),
+              tooltip: 'Edit date',
+              onPressed: _pickDate,
+            ),
           if (!isVoided && !isInvoiced)
             IconButton(
               icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
@@ -2251,8 +2337,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
+  bool _datesEditable = false;
+  bool _reviewFlow = false; // org.doc_review_flow_si: support docs + admin review
   String _search = '';
-  String _siStatusFilter = 'all'; // all | draft | posted | voided
+  String _siStatusFilter = 'all'; // all | draft | under_review | rejected | posted | voided
   final Map<String, TextEditingController> _discountCtrl = {};
   final TextEditingController _remarksCtrl = TextEditingController();
 
@@ -2281,7 +2369,9 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final res = await q.order('created_at', ascending: false);
-      setState(() { _invoices = List<Map<String,dynamic>>.from(res); _listLoading = false; });
+      bool reviewFlow = _reviewFlow;
+      try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (c?['value'] as String?) == 'true'; } catch (_) {}
+      setState(() { _invoices = List<Map<String,dynamic>>.from(res); _reviewFlow = reviewFlow; _listLoading = false; });
     } catch (_) { setState(() => _listLoading = false); }
   }
 
@@ -2305,13 +2395,19 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         customerId: custId,
         createdById: inv['created_by'] as String?,
       );
+      bool datesEd = false;
+      try { final cc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (cc?['value'] as String?) == 'true'; } catch (_) {}
+      bool reviewFlow = _reviewFlow;
+      try { final rc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (rc?['value'] as String?) == 'true'; } catch (_) {}
       setState(() {
+        _reviewFlow = reviewFlow;
         _detail = Map<String,dynamic>.from(inv);
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
         final siRemarks = (inv['remarks'] as String?)?.trim() ?? '';
         final soRemarks = (inv['sales_orders']?['remarks'] as String?)?.trim() ?? '';
         _remarksCtrl.text = siRemarks.isNotEmpty ? siRemarks : soRemarks;
+        _datesEditable = datesEd;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -2322,10 +2418,40 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
+  Future<void> _pickDate() async {
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('sales_invoices').update({'voucher_date': iso}).eq('id', _detail['id']);
+      if (mounted) setState(() => _detail['voucher_date'] = iso);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   bool get _isLocked => _detail['is_locked'] as bool? ?? true;
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked && !(_detail['is_voided'] as bool? ?? false);
   bool get _canDelete {
     final role = ref.read(currentUserProvider)?.role;
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+  }
+
+  String? get _reviewStatus => _detail['review_status'] as String?;
+  bool get _isPendingReview => _reviewStatus == 'pending';
+  bool get _isRejected => _reviewStatus == 'rejected';
+
+  // Derives the list/badge status from booleans + review_status.
+  String _siStatus(Map inv) {
+    if (inv['is_voided'] == true) return 'voided';
+    if (inv['is_locked'] == true) return 'posted';
+    if (_reviewFlow) {
+      final rs = inv['review_status'] as String?;
+      if (rs == 'pending') return 'under_review';
+      if (rs == 'rejected') return 'rejected';
+    }
+    return 'draft';
   }
 
   Future<void> _cancelSI() async {
@@ -2443,6 +2569,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       footerNote: _meta.footerNote,
       relatedRefs: refs.isNotEmpty ? refs : null,
       watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
+      approvedBy: _detail['reviewed_by_name'] as String?,
+      approvedAt: _detail['reviewed_at'] != null
+          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['reviewed_at'] as String).toLocal()) : null,
+      approvedSignatureUrl: _detail['reviewer_signature_url'] as String?,
+      stampUrl: _detail['review_stamp_url'] as String?,
     );
   }
 
@@ -2470,19 +2601,27 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     } catch (_) {}
   }
 
+  // Persists each line's discount/line_total and returns (subtotal, discountTotal).
+  Future<(double, double)> _writeItemDiscounts() async {
+    double subtotal = 0, discountTotal = 0;
+    for (final item in _items) {
+      final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
+      final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
+      final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
+      final discAmt = qty * price * discPct / 100;
+      final lineTotal = (qty * price) - discAmt;
+      subtotal += qty * price;
+      discountTotal += discAmt;
+      await Supabase.instance.client.from('sales_invoice_items').update({'discount': discPct, 'line_total': lineTotal}).eq('id', item['id']);
+    }
+    return (subtotal, discountTotal);
+  }
+
+  // Direct save + lock (used when the review flow is OFF). Locking fires the
+  // COGS/GL post trigger (si_cogs_autopost).
   Future<void> _saveDiscounts() async {
     try {
-      double subtotal = 0, discountTotal = 0;
-      for (final item in _items) {
-        final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-        final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
-        final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
-        final discAmt = qty * price * discPct / 100;
-        final lineTotal = (qty * price) - discAmt;
-        subtotal += qty * price;
-        discountTotal += discAmt;
-        await Supabase.instance.client.from('sales_invoice_items').update({'discount': discPct, 'line_total': lineTotal}).eq('id', item['id']);
-      }
+      final (subtotal, discountTotal) = await _writeItemDiscounts();
       await Supabase.instance.client.from('sales_invoices').update({
         'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
         'is_locked': true,
@@ -2497,14 +2636,120 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  // Review flow: save the invoice's numbers but do NOT lock (so nothing posts),
+  // and park it as pending for an admin to review.
+  Future<void> _sendForReview() async {
+    try {
+      final (subtotal, discountTotal) = await _writeItemDiscounts();
+      await Supabase.instance.client.from('sales_invoices').update({
+        'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
+        'review_status': 'pending',
+        'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      setState(() => _detail['review_status'] = 'pending');
+      await _logAudit(_detail['id'] as String, 'sent_for_review', 'Sales Invoice sent for admin review');
+      _showSnack('Sent for review — an admin will approve and post it');
+      await _loadList();
+      _loadDetail(_detail['id'] as String);
+      ref.invalidate(siReviewPendingProvider);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Review flow: admin approves a pending invoice, which locks (posts) it and
+  // records the reviewer + snapshots their signature and the org stamp.
+  Future<void> _approveAndPost() async {
+    if (!_isAdmin) { _showSnack('Only admins can approve'); return; }
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Approve & post invoice?'),
+      content: const Text('This posts the invoice (locks it and books COGS to the ledger) and records you as the reviewer. This cannot be undone by non-admins.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Approve & Post'))],
+    ));
+    if (ok != true) return;
+    try {
+      final userId = ref.read(currentUserProvider)?.id;
+      final now = DateTime.now().toUtc().toIso8601String();
+      final (subtotal, discountTotal) = await _writeItemDiscounts();
+      final upd = <String, dynamic>{
+        'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
+        'is_locked': true, 'locked_by': userId, 'locked_at': now,
+        'review_status': 'approved', 'reviewed_by': userId,
+        'reviewed_by_name': ref.read(currentUserProvider)?.name, 'reviewed_at': now,
+      };
+      final c = Supabase.instance.client;
+      try { final u = await c.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle();
+        if (u?['signature_url'] != null) upd['reviewer_signature_url'] = u!['signature_url']; } catch (_) {}
+      try { final s = await c.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle();
+        if (s?['value'] != null) upd['review_stamp_url'] = s!['value']; } catch (_) {}
+      await c.from('sales_invoices').update(upd).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'approved', 'Reviewed & posted');
+      _showSnack('Approved & posted');
+      await _loadList();
+      _loadDetail(_detail['id'] as String);
+      ref.invalidate(siReviewPendingProvider);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Review flow: admin rejects a pending invoice back to the creator with a reason.
+  Future<void> _reject() async {
+    if (!_isAdmin) { _showSnack('Only admins can reject'); return; }
+    final reasonCtrl = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Reject invoice?'),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('The creator will see it as Rejected and can edit and resend it.', style: TextStyle(fontSize: 12.5)),
+        const SizedBox(height: 10),
+        TextField(controller: reasonCtrl, minLines: 2, maxLines: 4, autofocus: true,
+          decoration: const InputDecoration(labelText: 'Reason (optional)', border: OutlineInputBorder())),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Reject')),
+      ],
+    ));
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('sales_invoices').update({
+        'review_status': 'rejected',
+        'review_reason': reason.isEmpty ? null : reason,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      setState(() { _detail['review_status'] = 'rejected'; _detail['review_reason'] = reason.isEmpty ? null : reason; });
+      await _logAudit(_detail['id'] as String, 'rejected', reason.isEmpty ? 'Invoice rejected' : 'Rejected: $reason');
+      _showSnack('Invoice rejected');
+      await _loadList();
+      _loadDetail(_detail['id'] as String);
+      ref.invalidate(siReviewPendingProvider);
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   int _siStatusCount(String st) {
     if (st == 'all') return _invoices.length;
-    return _invoices.where((i) {
-      final voided = i['is_voided'] as bool? ?? false;
-      final locked = i['is_locked'] as bool? ?? false;
-      final s = voided ? 'voided' : (locked ? 'posted' : 'draft');
-      return s == st;
-    }).length;
+    return _invoices.where((i) => _siStatus(i) == st).length;
+  }
+
+  Widget _siListBadge(Map inv) {
+    final st = _siStatus(inv);
+    late final Color color; late final IconData icon; late final String label;
+    switch (st) {
+      case 'voided':       color = AppTheme.danger;  icon = Icons.block;             label = 'Voided'; break;
+      case 'posted':       color = AppTheme.success;  icon = Icons.check_circle;      label = 'Processed'; break;
+      case 'under_review': color = Colors.blue;       icon = Icons.hourglass_top;     label = 'Under Review'; break;
+      case 'rejected':     color = AppTheme.danger;   icon = Icons.cancel_outlined;   label = 'Rejected'; break;
+      default:             color = Colors.orange;     icon = Icons.pending_outlined;  label = 'Pending';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 10, color: color),
+        const SizedBox(width: 3),
+        Text(label, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w700)),
+      ]),
+    );
   }
 
   Widget _siFilterChip(String value, String label) {
@@ -2529,11 +2774,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   }
 
   List<Map<String, dynamic>> get _filteredInvoices => _invoices.where((i) {
-    // Status filter (derived from is_voided / is_locked booleans)
-    final voided = i['is_voided'] as bool? ?? false;
-    final locked = i['is_locked'] as bool? ?? false;
-    final st = voided ? 'voided' : (locked ? 'posted' : 'draft');
-    if (_siStatusFilter != 'all' && st != _siStatusFilter) return false;
+    // Status filter (derived from is_voided / is_locked / review_status)
+    if (_siStatusFilter != 'all' && _siStatus(i) != _siStatusFilter) return false;
     final q = _search.toLowerCase();
     return q.isEmpty ||
         (i['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
@@ -2568,6 +2810,12 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                     _siFilterChip('all', 'All'),
                     const SizedBox(width: 6),
                     _siFilterChip('draft', 'Draft'),
+                    if (_reviewFlow) ...[
+                      const SizedBox(width: 6),
+                      _siFilterChip('under_review', 'Under Review'),
+                      const SizedBox(width: 6),
+                      _siFilterChip('rejected', 'Rejected'),
+                    ],
                     const SizedBox(width: 6),
                     _siFilterChip('posted', 'Posted'),
                     const SizedBox(width: 6),
@@ -2588,8 +2836,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                           itemBuilder: (_, i) {
                             final inv = _filteredInvoices[i];
                             final isSelected = inv['id'] == _selectedId;
-                            final isLocked = inv['is_locked'] as bool? ?? false;
-                            final isVoided = inv['is_voided'] as bool? ?? false;
                             return InkWell(
                               onTap: () => _loadDetail(inv['id'] as String),
                               child: Container(
@@ -2600,32 +2846,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                     Text(inv['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
-                                    isVoided
-                                        ? Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                                              Icon(Icons.block, size: 10, color: AppTheme.danger),
-                                              SizedBox(width: 3),
-                                              Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 9, fontWeight: FontWeight.w700)),
-                                            ]))
-                                        : isLocked
-                                        ? Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                                              Icon(Icons.check_circle, size: 10, color: AppTheme.success),
-                                              SizedBox(width: 3),
-                                              Text('Processed', style: TextStyle(color: AppTheme.success, fontSize: 9, fontWeight: FontWeight.w700)),
-                                            ]))
-                                        : Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
-                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                                              Icon(Icons.pending_outlined, size: 10, color: Colors.orange),
-                                              SizedBox(width: 3),
-                                              Text('Pending', style: TextStyle(color: Colors.orange, fontSize: 9, fontWeight: FontWeight.w700)),
-                                            ])),
+                                    _siListBadge(inv),
                                   ]),
                                   Text('SO: ${inv['sales_orders']?['voucher_number'] ?? '-'} · DO: ${inv['delivery_orders']?['voucher_number'] ?? '-'}',
                                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
@@ -2669,15 +2890,44 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           const SizedBox(width: 12),
           if (_isLocked) const _LockedBadge(),
           const Spacer(),
-          if (!_isLocked) ...[
-            ElevatedButton(onPressed: _saveDiscounts, child: const Text('Save')),
-            const SizedBox(width: 8),
+          if (!_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
+            if (!_reviewFlow) ...[
+              ElevatedButton(onPressed: _saveDiscounts, child: const Text('Save')),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && !_isPendingReview) ...[
+              ElevatedButton.icon(icon: const Icon(Icons.send_outlined, size: 16), label: const Text('Send for Review'), onPressed: _sendForReview),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && _isPendingReview && _isAdmin) ...[
+              OutlinedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 16), label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)), onPressed: _reject),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve & Post'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _approveAndPost),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && _isPendingReview && !_isAdmin) ...[
+              Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.hourglass_top, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Pending review', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
+              const SizedBox(width: 8),
+            ],
           ],
-          IconButton(
-            icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-            tooltip: _isLocked ? 'Unlock' : 'Lock',
-            onPressed: _toggleLock,
-          ),
+          if (_canEditDate)
+            IconButton(
+              icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary),
+              tooltip: 'Edit date',
+              onPressed: _pickDate,
+            ),
+          // Hide the manual lock toggle while an unlocked invoice is under the
+          // review flow — posting must go through Approve. Unlock stays available.
+          if (_isLocked || !_reviewFlow)
+            IconButton(
+              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+              tooltip: _isLocked ? 'Unlock' : 'Lock',
+              onPressed: _toggleLock,
+            ),
           IconButton(
             icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
             tooltip: 'Print / PDF',
@@ -2848,6 +3098,49 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   : null,
             ),
             const SizedBox(height: 16),
+            if (_reviewFlow) ...[
+              if (_isPendingReview)
+                Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(color: Colors.blue.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.3))),
+                  child: Row(children: [
+                    const Icon(Icons.hourglass_top, size: 16, color: Colors.blue), const SizedBox(width: 8),
+                    Expanded(child: Text(_isAdmin
+                        ? 'Under review. Check the attached documents below, then Approve & Post — or Reject with a reason.'
+                        : 'Sent for review. An admin will check the documents and post it.',
+                        style: const TextStyle(fontSize: 12, color: Colors.blue))),
+                  ])),
+              if (_isRejected)
+                Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.danger.withOpacity(0.3))),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Icon(Icons.cancel_outlined, size: 16, color: AppTheme.danger), const SizedBox(width: 8),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('Rejected — edit if needed and Send for Review again.', style: TextStyle(fontSize: 12, color: AppTheme.danger, fontWeight: FontWeight.w600)),
+                      if ((_detail['review_reason'] as String?)?.isNotEmpty == true) ...[
+                        const SizedBox(height: 2),
+                        Text('Reason: ${_detail['review_reason']}', style: const TextStyle(fontSize: 11.5, color: AppTheme.danger)),
+                      ],
+                    ])),
+                  ])),
+              VoucherDocsPanel(
+                voucherType: 'SI',
+                voucherId: _detail['id'] as String,
+                voucherNumber: _detail['voucher_number'] as String? ?? '',
+                bucket: 'si-documents',
+                orgId: _orgId ?? '',
+                userId: ref.read(currentUserProvider)?.id,
+                canWrite: !_isLocked,
+              ),
+              const SizedBox(height: 12),
+              VoucherRemarksPanel(
+                voucherType: 'SI',
+                voucherId: _detail['id'] as String,
+                orgId: _orgId ?? '',
+                userId: ref.read(currentUserProvider)?.id,
+                userName: ref.read(currentUserProvider)?.name,
+              ),
+              const SizedBox(height: 16),
+            ],
             _AuditTrailList(voucherId: _detail['id'] as String, voucherType: 'SI'),
           ]),
         ),

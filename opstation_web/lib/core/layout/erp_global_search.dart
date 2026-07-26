@@ -94,38 +94,27 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
         (e['voucher_number'] ?? '').toString(),
         e['voucher_date']?.toString(), '$nav?focus=${e['id']}', Icons.receipt_long_outlined)).toList();
     }),
-    _Cat('GL Entries', Icons.account_balance_outlined,
-        const ['/financials/account-activity', '/financials/journal-vouchers', '/financials/trial-balance'], (q, nav) async {
-      final r = await _c.from('journal_entries').select('id,entry_number,reference_number,reference_type,reference_id,description,entry_date')
-          .eq('org_id', widget.orgId).eq('status', 'posted')
-          .or('entry_number.ilike.%$q%,reference_number.ilike.%$q%,description.ilike.%$q%')
-          .order('entry_date', ascending: false).limit(6);
-      return (r as List).map((e) => _Hit(
-        (e['entry_number'] ?? e['reference_number'] ?? '').toString(),
-        (e['description'] ?? '').toString().isEmpty ? null : (e['description']).toString(),
-        _glRoute(e, nav), Icons.account_balance_outlined)).toList();
-    }),
+    _voucherCat('Sales Orders', Icons.request_quote_outlined, '/erp/sales', 'sales_orders'),
+    _voucherCat('Delivery Orders', Icons.local_shipping_outlined, '/erp/delivery-orders', 'delivery_orders'),
+    _voucherCat('Purchase Orders', Icons.shopping_cart_outlined, '/erp/purchase', 'purchase_orders'),
+    _voucherCat('GRNs', Icons.move_to_inbox_outlined, '/erp/grn', 'purchase_grns'),
+    _voucherCat('Purchase Returns', Icons.assignment_return_outlined, '/erp/purchase-return-vouchers', 'purchase_return_invoices'),
+    _voucherCat('Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', 'stock_transfers', dateCol: 'transfer_date'),
+    _voucherCat('Production', Icons.precision_manufacturing_outlined, '/manufacturing/production-voucher', 'production_vouchers'),
   ];
 
-  /// Route a GL entry to its SOURCE voucher when identifiable, else fall back
-  /// to the GL nav (account-activity). Uses reference_type + reference_id that
-  /// every posting writes onto journal_entries.
-  String _glRoute(Map e, String fallbackNav) {
-    final t = (e['reference_type'] ?? '').toString().toLowerCase();
-    final id = (e['reference_id'] ?? '').toString();
-    if (id.isEmpty) return fallbackNav;
-    switch (t) {
-      case 'si':
-        return '/erp/sales-invoices?focus=$id';
-      case 'pi':
-        return '/erp/purchase-invoices?focus=$id';
-      case 'grn':
-        return '/erp/grn?focus=$id';
-      case 'jv':
-        return '/financials/journal-vouchers?focus=$id';
-      default:
-        return fallbackNav; // account-activity / trial-balance (permitted)
-    }
+  /// Voucher categories all share the same shape: match voucher_number, newest
+  /// first, deep-link with ?focus=<id>.
+  _Cat _voucherCat(String label, IconData icon, String route, String table,
+      {String dateCol = 'voucher_date'}) {
+    return _Cat(label, icon, [route], (q, nav) async {
+      final r = await _c.from(table).select('id,voucher_number,$dateCol')
+          .eq('org_id', widget.orgId).ilike('voucher_number', '%$q%')
+          .order(dateCol, ascending: false).limit(6);
+      return (r as List).map((e) => _Hit(
+        (e['voucher_number'] ?? '').toString(),
+        e[dateCol]?.toString(), '$nav?focus=${e['id']}', icon)).toList();
+    });
   }
 
   String _navFor(_Cat cat) => cat.permRoutes.firstWhere(widget.can, orElse: () => cat.permRoutes.first);

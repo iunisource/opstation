@@ -16,7 +16,8 @@ import '../services/voucher_meta.dart';
 /// Stock is NOT moved here — that happens at the PRN stage. Issuing posts the
 /// invoice to the ledger (via the pri_autopost trigger).
 class ErpPurchaseReturnVouchersScreen extends ConsumerStatefulWidget {
-  const ErpPurchaseReturnVouchersScreen({super.key});
+  const ErpPurchaseReturnVouchersScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpPurchaseReturnVouchersScreen> createState() => _ErpPurchaseReturnVouchersScreenState();
 }
@@ -39,7 +40,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   bool _priceEditable = false;
 
   @override
-  void initState() { super.initState(); _loadPriceSetting(); _loadList(); }
+  void initState() { super.initState(); _loadPriceSetting(); _loadList(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
 
   Future<void> _loadPriceSetting() async {
     final orgId = _orgId; if (orgId == null) return;

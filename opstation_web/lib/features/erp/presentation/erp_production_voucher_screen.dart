@@ -30,7 +30,8 @@ class _POh {
 }
 
 class ErpProductionVoucherScreen extends ConsumerStatefulWidget {
-  const ErpProductionVoucherScreen({super.key});
+  const ErpProductionVoucherScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpProductionVoucherScreen> createState() => _State();
 }
@@ -78,8 +79,16 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadProducts(); _loadBoms(); _loadVouchers();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _loadProducts(); _loadBoms(); await _loadVouchers();
+      final fid = widget.focusId;
+      if (fid != null) {
+        try {
+          final v = await Supabase.instance.client
+              .from('production_vouchers').select().eq('id', fid).maybeSingle();
+          if (v != null && mounted) _loadVoucher(Map<String, dynamic>.from(v));
+        } catch (_) {}
+      }
     });
   }
 
@@ -466,8 +475,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               SizedBox(width: 130, child: _labeled('Output Qty *', _outputQtyField())),
             ]),
             const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: _labeled('Finished Product', _readonlyBox(_fgLabel.isEmpty ? 'Select a BOM' : _fgLabel))),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(child: _labeled('Finished Product', _readonlyBox(_fgLabel.isEmpty ? 'Select a BOM' : _fgLabel, maxLines: 3))),
               const SizedBox(width: 16),
               Expanded(flex: 2, child: _labeled('Notes', TextField(controller: _notesCtrl, enabled: _isDraft,
                 decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))))),
@@ -491,10 +500,10 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     const SizedBox(height: 4), child,
   ]);
 
-  Widget _readonlyBox(String text) => Container(width: double.infinity,
+  Widget _readonlyBox(String text, {int maxLines = 1}) => Container(width: double.infinity,
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
     decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
-    child: Text(text, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis));
+    child: Text(text, style: const TextStyle(fontSize: 12), softWrap: true, maxLines: maxLines, overflow: TextOverflow.ellipsis));
 
   Widget _dateField() => InkWell(
     onTap: _isDraft ? () async {
