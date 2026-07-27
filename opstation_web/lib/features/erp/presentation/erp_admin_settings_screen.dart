@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../widgets/signature_stamp_settings.dart';
 
 /// An optional numeric parameter attached to a toggle. Shown (and saved) only
 /// while the parent toggle is ON. Stored in `app_config` as a string.
@@ -37,7 +38,9 @@ class _AdminToggle {
   final String subtitle;
   final _NumberField? number; // optional numeric companion
   final _TextSetting? text; // optional free-text companion
-  const _AdminToggle(this.key, this.title, this.subtitle, {this.number, this.text});
+  final bool defaultOn; // value used when no app_config row exists yet
+  const _AdminToggle(this.key, this.title, this.subtitle,
+      {this.number, this.text, this.defaultOn = false});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -76,6 +79,14 @@ const List<_AdminToggle> _toggles = [
     'Collection columns on Customer Balance Report',
     'Show blank "Receipt #" and "Amount Collected" columns in the Customer '
         'Balance Report print/PDF — for recording collections during a route run.',
+  ),
+
+  _AdminToggle(
+    'org.si_price_editable',
+    'Editable prices on Sales Invoices',
+    'When ON, the unit price on a Sales Invoice can be edited before it is saved/posted '
+        '(in addition to the discount). When OFF (default), the price is fixed from the '
+        'order and only the discount is adjustable.',
   ),
 
   _AdminToggle(
@@ -204,6 +215,59 @@ const List<_AdminToggle> _toggles = [
         'enough images to be worth it: switching it on with an empty catalogue '
         'shows a wall of placeholders and makes the app look broken.',
   ),
+
+  _AdminToggle(
+    'org.hide_main_groups_by_branch',
+    'Hide product groups by branch',
+    'When ON, choose per branch which product Main Groups to hide. A product in a '
+        'hidden main group does not appear in the Products list while that branch '
+        'is selected. Stock, ledgers and reports are unaffected. Set the '
+        'branch/group selection in the panel below.',
+  ),
+  _AdminToggle(
+    'org.voucher_dates_editable',
+    'Allow editing dates on vouchers',
+    'When ON, users can change the document date on Sales Orders, Delivery '
+        'Orders, Purchase Orders, GRNs, and Purchase / Sales Invoices instead of '
+        'it being fixed to the creation date. Admins can always edit dates.',
+  ),
+
+  _AdminToggle(
+    'org.show_org_name_sales',
+    'Show company name on sale vouchers',
+    'When ON (default), your organization name prints in the header of Sales '
+        'Orders, Delivery Orders and Sales Invoices. Turn OFF to hide it — e.g. '
+        'when printing on pre-printed letterhead. The branch name is unaffected.',
+    defaultOn: true,
+  ),
+  _AdminToggle(
+    'org.show_org_name_purchase',
+    'Show company name on purchase vouchers',
+    'When ON (default), your organization name prints in the header of Purchase '
+        'Orders, GRNs and Purchase Invoices. Turn OFF to hide it — e.g. when '
+        'printing on pre-printed letterhead. The branch name is unaffected.',
+    defaultOn: true,
+  ),
+
+  // Support documents & admin review — isolated per invoice type, since each
+  // has a different scenario. When ON, that invoice gains a Support Documents
+  // panel; saving sends it for review and an admin approves to post (recording
+  // signature + stamp). When OFF, that invoice type posts exactly as today.
+  _AdminToggle(
+    'org.doc_review_flow_si',
+    'Support docs & admin review — Sales Invoices',
+    'Applies only to Sales Invoices. Independent of the other invoice types.',
+  ),
+  _AdminToggle(
+    'org.doc_review_flow_pi',
+    'Support docs & admin review — Purchase Invoices',
+    'Applies only to Purchase Invoices. Independent of the other invoice types.',
+  ),
+  _AdminToggle(
+    'org.doc_review_flow_pri',
+    'Support docs & admin review — Purchase Return Invoices',
+    'Applies only to Purchase Return Invoices. Independent of the other invoice types.',
+  ),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
@@ -266,7 +330,8 @@ class _ErpAdminSettingsScreenState
       }
       setState(() {
         for (final t in _toggles) {
-          _values[t.key] = cfg[t.key] == 'true';
+          _values[t.key] =
+              cfg.containsKey(t.key) ? cfg[t.key] == 'true' : t.defaultOn;
           final n = t.number;
           if (n != null) {
             final stored = cfg[n.key];
@@ -566,6 +631,16 @@ class _ErpAdminSettingsScreenState
                       ],
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  SignatureStampSettings(
+                    orgId: ref.read(currentUserProvider)?.orgId ?? '',
+                    userId: ref.read(currentUserProvider)?.id,
+                  ),
+                  if (_values['org.hide_main_groups_by_branch'] ?? false) ...[
+                    const SizedBox(height: 16),
+                    _HiddenGroupsPanel(
+                        orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                  ],
                   if (_values['org.backup_enabled'] ?? false) ...[
                     const SizedBox(height: 16),
                     Container(
@@ -617,6 +692,202 @@ class _ErpAdminSettingsScreenState
                 ],
               ),
             ),
+    );
+  }
+}
+
+
+/// Custom panel for the 'org.hide_main_groups_by_branch' toggle: pick a branch,
+/// tick the Main Groups to hide for it. Rows are stored in
+/// branch_hidden_main_groups (org_id, branch_id, main_group).
+class _HiddenGroupsPanel extends StatefulWidget {
+  final String orgId;
+  const _HiddenGroupsPanel({required this.orgId});
+  @override
+  State<_HiddenGroupsPanel> createState() => _HiddenGroupsPanelState();
+}
+
+class _HiddenGroupsPanelState extends State<_HiddenGroupsPanel> {
+  List<Map<String, dynamic>> _branches = [];
+  List<String> _groups = [];
+  final Map<String, Set<String>> _hidden = {}; // branchId -> hidden main_groups
+  String? _branchId;
+  bool _loading = true;
+  final Set<String> _busy = {}; // "branchId|group" keys currently saving
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (widget.orgId.isEmpty) {
+      setState(() => _loading = false);
+      return;
+    }
+    final client = Supabase.instance.client;
+    try {
+      final branches = await client
+          .from('branches')
+          .select('id, name')
+          .eq('org_id', widget.orgId)
+          .eq('is_active', true)
+          .order('name');
+      final prods = await client
+          .from('products')
+          .select('product_main_group')
+          .eq('org_id', widget.orgId);
+      final hidden = await client
+          .from('branch_hidden_main_groups')
+          .select('branch_id, main_group')
+          .eq('org_id', widget.orgId);
+      final groups = <String>{};
+      for (final pr in prods as List) {
+        final g = (pr['product_main_group'] as String?)?.trim();
+        if (g != null && g.isNotEmpty) groups.add(g);
+      }
+      _hidden.clear();
+      for (final h in hidden as List) {
+        (_hidden[h['branch_id'] as String] ??= <String>{})
+            .add(h['main_group'] as String);
+      }
+      if (!mounted) return;
+      setState(() {
+        _branches = List<Map<String, dynamic>>.from(branches);
+        _groups = groups.toList()..sort();
+        _branchId =
+            _branches.isNotEmpty ? _branches.first['id'] as String : null;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _setHidden(String branchId, String group, bool hide) async {
+    final k = '$branchId|$group';
+    setState(() {
+      _busy.add(k);
+      if (hide) {
+        (_hidden[branchId] ??= <String>{}).add(group);
+      } else {
+        _hidden[branchId]?.remove(group);
+      }
+    });
+    final client = Supabase.instance.client;
+    try {
+      if (hide) {
+        await client.from('branch_hidden_main_groups').upsert({
+          'org_id': widget.orgId,
+          'branch_id': branchId,
+          'main_group': group,
+        }, onConflict: 'org_id,branch_id,main_group');
+      } else {
+        await client
+            .from('branch_hidden_main_groups')
+            .delete()
+            .eq('org_id', widget.orgId)
+            .eq('branch_id', branchId)
+            .eq('main_group', group);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          if (hide) {
+            _hidden[branchId]?.remove(group);
+          } else {
+            (_hidden[branchId] ??= <String>{}).add(group);
+          }
+        });
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy.remove(k));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hidden = _branchId == null
+        ? const <String>{}
+        : (_hidden[_branchId] ?? const <String>{});
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 760),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Hidden product groups by branch',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          const Text(
+            'Pick a branch, then tick the Main Groups to hide from the Products '
+            'list while that branch is selected.',
+            style: TextStyle(
+                fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_branches.isEmpty)
+            const Text('No branches found.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))
+          else if (_groups.isEmpty)
+            const Text('No product main groups found.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))
+          else ...[
+            Row(
+              children: [
+                const Text('Branch',
+                    style: TextStyle(
+                        fontSize: 12.5, color: AppTheme.textSecondary)),
+                const SizedBox(width: 12),
+                DropdownButton<String>(
+                  value: _branchId,
+                  onChanged: (v) => setState(() => _branchId = v),
+                  items: [
+                    for (final b in _branches)
+                      DropdownMenuItem(
+                        value: b['id'] as String,
+                        child: Text(b['name'] as String? ?? '-',
+                            style: const TextStyle(fontSize: 13)),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            for (final g in _groups)
+              CheckboxListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: AppTheme.primary,
+                title: Text(g, style: const TextStyle(fontSize: 13)),
+                secondary: _busy.contains('$_branchId|$g')
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : null,
+                value: hidden.contains(g),
+                onChanged: _branchId == null
+                    ? null
+                    : (v) => _setHidden(_branchId!, g, v ?? false),
+              ),
+          ],
+        ],
+      ),
     );
   }
 }

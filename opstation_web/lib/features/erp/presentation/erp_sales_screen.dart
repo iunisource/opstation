@@ -2075,94 +2075,79 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     return Column(children: [
       // AppBar
       Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        padding: EdgeInsets.symmetric(horizontal: MediaQuery.of(context).size.width < 700 ? 14 : 24, vertical: 12),
         decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: Builder(builder: (context) {
+          final mobile = MediaQuery.of(context).size.width < 700;
+          final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
             const Text('Delivery Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          ]),
-          const SizedBox(width: 12),
-          if (_deliveryFlow) ...[
-            _StatusChip(
-              status: status == 'invoiced' ? 'Invoiced' : 'Invoice Pending',
-              color: status == 'invoiced' ? AppTheme.success : Colors.orange,
-            ),
-            if (_detail['delivered_at'] != null) ...[
-              const SizedBox(width: 6),
-              const _StatusChip(status: 'Delivered', color: AppTheme.success),
+          ]);
+          final statusChildren = <Widget>[
+            if (_deliveryFlow) ...[
+              _StatusChip(status: status == 'invoiced' ? 'Invoiced' : 'Invoice Pending', color: status == 'invoiced' ? AppTheme.success : Colors.orange),
+              if (_detail['delivered_at'] != null) const _StatusChip(status: 'Delivered', color: AppTheme.success),
+            ] else
+              _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
+            if (_isLocked) const _LockedBadge(),
+            if ((_detail['collect_amount'] as num?) != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                child: Text('Collect: Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
+                    style: const TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w700)),
+              ),
+            if (isVoided)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w700)),
+              ),
+          ];
+          final actionChildren = <Widget>[
+            if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
+              _collectToggle(),
+              ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
             ],
-          ] else
-            _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
-          if (_isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
-          if ((_detail['collect_amount'] as num?) != null) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-              child: Text('Collect: Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
-                  style: const TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w700)),
-            ),
-          ],
-          if (isVoided) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w700)),
-            ),
-          ],
-          const Spacer(),
-          if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
-            _collectToggle(),
-            const SizedBox(width: 10),
-            ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
-            const SizedBox(width: 8),
-          ],
-          if (!isVoided && !isInvoiced && _items.isNotEmpty) ...[
-            ElevatedButton(
-              onPressed: _createInvoice,
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-              child: const Text('Create Invoice'),
-            ),
-            const SizedBox(width: 8),
-          ],
-          if (_canEditDate)
-            IconButton(
-              icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary),
-              tooltip: 'Edit date',
-              onPressed: _pickDate,
-            ),
-          if (!isVoided && !isInvoiced)
-            IconButton(
-              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-              tooltip: _isLocked ? 'Unlock' : 'Lock',
-              onPressed: _toggleLock,
-            ),
-          if (_linkedSiId != null)
-            IconButton(
-              icon: const Icon(Icons.receipt_long_outlined, color: AppTheme.primary),
-              tooltip: 'Go to Sales Invoice',
-              onPressed: () => context.go('/erp/sales-invoices?focus=$_linkedSiId'),
-            ),
-          if (_deliveryFlow && !isVoided && _detail['delivered_at'] == null)
-            IconButton(
-              icon: const Icon(Icons.check_circle_outline, color: AppTheme.success),
-              tooltip: 'Mark Delivered (self-pickup / manual)',
-              onPressed: _markDelivered,
-            ),
-          IconButton(
-            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
-            tooltip: 'Print / PDF',
-            onPressed: _printDO,
-          ),
-          if (_canDelete && !isVoided)
-            IconButton(
-              icon: const Icon(Icons.block, color: AppTheme.danger),
-              tooltip: 'Void',
-              onPressed: _deleteDO,
-            ),
-        ]),
+            if (!isVoided && !isInvoiced && _items.isNotEmpty)
+              ElevatedButton(
+                onPressed: _createInvoice,
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+                child: const Text('Create Invoice'),
+              ),
+            if (_canEditDate)
+              IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
+            if (!isVoided && !isInvoiced)
+              IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+                  tooltip: _isLocked ? 'Unlock' : 'Lock', onPressed: _toggleLock),
+            if (_linkedSiId != null)
+              IconButton(icon: const Icon(Icons.receipt_long_outlined, color: AppTheme.primary), tooltip: 'Go to Sales Invoice',
+                  onPressed: () => context.go('/erp/sales-invoices?focus=$_linkedSiId')),
+            if (_deliveryFlow && !isVoided && _detail['delivered_at'] == null)
+              IconButton(icon: const Icon(Icons.check_circle_outline, color: AppTheme.success), tooltip: 'Mark Delivered (self-pickup / manual)', onPressed: _markDelivered),
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _printDO),
+            if (_canDelete && !isVoided)
+              IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _deleteDO),
+          ];
+          if (mobile) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              titleBlock,
+              if (statusChildren.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: statusChildren),
+              ],
+              const SizedBox(height: 8),
+              Wrap(spacing: 4, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: actionChildren),
+            ]);
+          }
+          return Row(children: [
+            titleBlock,
+            const SizedBox(width: 12),
+            Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: statusChildren),
+            const Spacer(),
+            Wrap(spacing: 4, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: actionChildren),
+          ]);
+        }),
       ),
 
       Expanded(
@@ -2177,19 +2162,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
               ),
-              child: Row(children: [
-                const Icon(Icons.link, size: 16, color: AppTheme.primary),
-                const SizedBox(width: 8),
-                Text('Sales Order: ', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-                Text(_linkedSo['voucher_number'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary)),
-                const SizedBox(width: 16),
+              child: Wrap(spacing: 14, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.link, size: 16, color: AppTheme.primary),
+                  const SizedBox(width: 8),
+                  const Text('Sales Order: ', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  Text(_linkedSo['voucher_number'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                ]),
                 Text(_linkedSo['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                if (_linkedSo['voucher_date'] != null) ...[
-                  const SizedBox(width: 16),
+                if (_linkedSo['voucher_date'] != null)
                   Text(DateFormat('d MMM yyyy').format(DateTime.parse(_linkedSo['voucher_date'] as String)),
                       style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                ],
-                const SizedBox(width: 16),
                 _StatusChip(
                   status: (_linkedSo['status'] as String? ?? '').replaceAll('_', ' '),
                   color: _statusColor(_linkedSo['status'] as String? ?? ''),
@@ -2318,12 +2301,29 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                             controller: ctrl,
                             decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            onChanged: (_) => setState(() {}),
                           )) : const SizedBox.shrink()),
                         ]),
                       ),
                       const Divider(height: 1),
                     ]);
                   }),
+                  // Realtime total of quantities being entered
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(color: Colors.orange.withOpacity(0.06)),
+                    child: Row(children: [
+                      const Expanded(flex: 9, child: Text('Total to Deliver', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+                      Expanded(flex: 2, child: Builder(builder: (_) {
+                        double t = 0;
+                        for (final it in pendingSoItems) {
+                          t += double.tryParse(_deliverQtyCtrl[it['id'] as String]?.text ?? '') ?? 0;
+                        }
+                        return Text(t % 1 == 0 ? t.toInt().toString() : t.toStringAsFixed(2),
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.primary));
+                      })),
+                    ]),
+                  ),
                 ]),
               ),
             ],
@@ -2371,6 +2371,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   String _search = '';
   String _siStatusFilter = 'all'; // all | draft | under_review | rejected | posted | voided
   final Map<String, TextEditingController> _discountCtrl = {};
+  final Map<String, TextEditingController> _priceCtrl = {};
+  bool _priceEditable = false; // org.si_price_editable
   final TextEditingController _remarksCtrl = TextEditingController();
 
   @override
@@ -2383,6 +2385,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   @override
   void dispose() {
     for (final c in _discountCtrl.values) c.dispose();
+    for (final c in _priceCtrl.values) c.dispose();
     _remarksCtrl.dispose();
     super.dispose();
   }
@@ -2414,8 +2417,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       final items = await client.from('sales_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', id);
       _discountCtrl.clear();
+      _priceCtrl.clear();
       for (final item in items as List) {
         _discountCtrl[item['id'] as String] = TextEditingController(text: (item['discount'] as num?)?.toStringAsFixed(2) ?? '0');
+        _priceCtrl[item['id'] as String] = TextEditingController(text: (item['unit_price'] as num?)?.toStringAsFixed(2) ?? '0');
       }
       // Resolve customer id (direct on SI or via SO)
       final custId = (inv['customer_id'] as String?) ?? (inv['sales_orders']?['customer_id'] as String?);
@@ -2428,8 +2433,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       try { final cc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (cc?['value'] as String?) == 'true'; } catch (_) {}
       bool reviewFlow = _reviewFlow;
       try { final rc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (rc?['value'] as String?) == 'true'; } catch (_) {}
+      bool priceEditable = _priceEditable;
+      try { final pc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.si_price_editable').maybeSingle(); priceEditable = (pc?['value'] as String?) == 'true'; } catch (_) {}
       setState(() {
         _reviewFlow = reviewFlow;
+        _priceEditable = priceEditable;
         _detail = Map<String,dynamic>.from(inv);
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
@@ -2631,17 +2639,28 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   }
 
   // Persists each line's discount/line_total and returns (subtotal, discountTotal).
+  // Effective unit price: the edited value when SI prices are editable
+  // (org.si_price_editable) and the invoice is unlocked and the line isn't FOC;
+  // otherwise the stored unit price.
+  double _siPrice(Map<String, dynamic> item) {
+    if (_priceEditable && !_isLocked && item['is_foc'] != true) {
+      return double.tryParse(_priceCtrl[item['id'] as String]?.text ?? '') ??
+          (item['unit_price'] as num?)?.toDouble() ?? 0;
+    }
+    return (item['unit_price'] as num?)?.toDouble() ?? 0;
+  }
+
   Future<(double, double)> _writeItemDiscounts() async {
     double subtotal = 0, discountTotal = 0;
     for (final item in _items) {
       final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-      final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
+      final price = _siPrice(item);
       final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
       final discAmt = qty * price * discPct / 100;
       final lineTotal = (qty * price) - discAmt;
       subtotal += qty * price;
       discountTotal += discAmt;
-      await Supabase.instance.client.from('sales_invoice_items').update({'discount': discPct, 'line_total': lineTotal}).eq('id', item['id']);
+      await Supabase.instance.client.from('sales_invoice_items').update({'unit_price': price, 'discount': discPct, 'line_total': lineTotal}).eq('id', item['id']);
     }
     return (subtotal, discountTotal);
   }
@@ -2900,7 +2919,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     double subtotal = 0, discountTotal = 0;
     for (final item in _items) {
       final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-      final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
+      final price = _siPrice(item);
       final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
       subtotal += qty * price;
       discountTotal += qty * price * discPct / 100;
@@ -3048,7 +3067,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 const Divider(height: 1),
                 ..._items.map((item) {
                   final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-                  final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
+                  final price = _siPrice(item);
                   final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
                   final discAmt = qty * price * discPct / 100;
                   final lineTotal = (qty * price) - discAmt;
@@ -3074,7 +3093,14 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                         Expanded(flex: 2, child: Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
                         Expanded(flex: 2, child: item['is_foc'] == true
                             ? const Text('Free', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.w600))
-                            : Text(price.toStringAsFixed(2))),
+                            : (_priceEditable && !_isLocked)
+                                ? SizedBox(height: 32, child: TextField(
+                                    controller: _priceCtrl[item['id'] as String],
+                                    decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    onChanged: (_) => setState(() {}),
+                                  ))
+                                : Text(price.toStringAsFixed(2))),
                         Expanded(flex: 2, child: _isLocked
                             ? Text('${discPct.toStringAsFixed(2)} %', style: const TextStyle(color: AppTheme.textSecondary))
                             : SizedBox(height: 32, child: TextField(
