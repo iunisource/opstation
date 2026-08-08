@@ -856,6 +856,22 @@ class _StockTransferVoucherScreenState
 
     setState(() => _busy = true);
     try {
+      // Preferred: atomic server-side dispatch — decrements source stock, writes
+      // the dated ledger movement, and flips status to in_transit in ONE
+      // transaction, so a mid-loop failure can't half-move stock and a re-click
+      // can't double-decrement. Falls back to the legacy client loop only if the
+      // RPC isn't deployed (PGRST202).
+      var serverDone = false;
+      try {
+        await client.rpc('dispatch_stock_transfer', params: {
+          'p_transfer_id': _transfer!['id'],
+          'p_user_id': _userId,
+        });
+        serverDone = true;
+      } on PostgrestException catch (e) {
+        if (e.code != 'PGRST202') rethrow;
+      }
+      if (!serverDone) {
       final now = DateTime.now().toUtc().toIso8601String();
       for (var i = 0; i < _items.length; i++) {
         final item = _items[i];
@@ -904,6 +920,7 @@ class _StockTransferVoucherScreenState
         'dispatched_at': now,
         'updated_at': now,
       }).eq('id', _transfer!['id']);
+      }
       _snack('Dispatched — awaiting approval at destination');
       widget.onUpdated();
       await _load();
