@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "opstation-f06c7"
-  }
+    "default": "opstation-f06c7",
+    "prod": "opstation-f06c7"
+  },
+  "targets": {},
+  "etags": {}
 }

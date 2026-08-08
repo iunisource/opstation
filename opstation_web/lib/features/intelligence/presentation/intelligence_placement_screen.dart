@@ -3,9 +3,11 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
+import '../widgets/searchable_dropdown.dart';
 
 class IntelligencePlacementScreen extends ConsumerStatefulWidget {
   const IntelligencePlacementScreen({super.key});
@@ -272,10 +274,11 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
 
   void _showChart() {
     final orgId = ref.read(currentUserProvider)?.orgId ?? '';
+    final isMobile = context.isMobile;
     showDialog(
       context: context,
       builder: (_) => Dialog(
-        insetPadding: const EdgeInsets.all(24),
+        insetPadding: EdgeInsets.all(isMobile ? 8 : 24),
         child: ConstrainedBox(
           constraints: BoxConstraints(
             maxWidth: 1400,
@@ -283,8 +286,10 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           ),
           child: Stack(children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
-              child: SizedBox(height: 520, child: _PlacementTrendChart(orgId: orgId)),
+              padding: EdgeInsets.all(isMobile ? 12 : 24),
+              child: SizedBox(
+                  height: isMobile ? MediaQuery.of(context).size.height * 0.6 : 520,
+                  child: _PlacementTrendChart(orgId: orgId)),
             ),
             Positioned(top: 4, right: 4, child: IconButton(
               icon: const Icon(Icons.close),
@@ -320,64 +325,85 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = context.isMobile;
+    final spDropdown = SearchableDropdown(
+      label: 'Salesperson',
+      value: _selectedSalespersonId,
+      allLabel: 'All salespeople',
+      options: [
+        for (final s in _salespeople)
+          MapEntry(s['id'] as String?, s['name'] as String),
+      ],
+      onChanged: (v) => setState(() => _selectedSalespersonId = v),
+    );
+    final routeDropdown = SearchableDropdown(
+      label: 'Route',
+      value: _selectedRouteId,
+      allLabel: 'All routes',
+      options: [
+        for (final r in _routes)
+          MapEntry(r['id'] as String?, r['name'] as String),
+      ],
+      onChanged: (v) => setState(() => _selectedRouteId = v),
+    );
+    final shopSearch = TextField(
+      controller: _customerSearchCtrl,
+      decoration: const InputDecoration(hintText: 'Filter shops...', prefixIcon: Icon(Icons.search), isDense: true),
+      onChanged: (_) => setState(() {}),
+    );
+    final productSearch = TextField(
+      controller: _productSearchCtrl,
+      decoration: const InputDecoration(hintText: 'Filter products...', prefixIcon: Icon(Icons.search), isDense: true),
+      onChanged: (_) => setState(() {}),
+    );
+    final chartBtn = TextButton.icon(
+      onPressed: _showChart,
+      icon: const Icon(Icons.show_chart, size: 18),
+      label: Text(isMobile ? 'Chart' : 'Visual chart'),
+    );
+    final pdfBtn = OutlinedButton.icon(
+      onPressed: _exportPdf,
+      icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+      label: Text(isMobile ? 'PDF' : 'Export PDF'),
+    );
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(isMobile ? 12 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Placement Audit', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+        Text('Placement Audit', style: TextStyle(fontSize: isMobile ? 22 : 28, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
         Text(
           '${_filteredCustomers.length} shops audited × ${_filteredProducts.length} products. Green = displayed, red = not displayed, dash = never audited. Click a cell for details.',
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
         const SizedBox(height: 16),
-        Row(children: [
-          Expanded(child: DropdownButtonFormField<String?>(
-            value: _selectedSalespersonId,
-            decoration: const InputDecoration(labelText: 'Salesperson', isDense: true, border: OutlineInputBorder()),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All salespeople')),
-              ..._salespeople.map((s) => DropdownMenuItem<String?>(value: s['id'] as String, child: Text(s['name'] as String))),
-            ],
-            onChanged: (v) => setState(() => _selectedSalespersonId = v),
-          )),
-          const SizedBox(width: 12),
-          Expanded(child: DropdownButtonFormField<String?>(
-            value: _selectedRouteId,
-            decoration: const InputDecoration(labelText: 'Route', isDense: true, border: OutlineInputBorder()),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All routes')),
-              ..._routes.map((r) => DropdownMenuItem<String?>(value: r['id'] as String, child: Text(r['name'] as String))),
-            ],
-            onChanged: (v) => setState(() => _selectedRouteId = v),
-          )),
-        ]),
-        const SizedBox(height: 12),
-        Row(children: [
-          Expanded(child: TextField(
-            controller: _customerSearchCtrl,
-            decoration: const InputDecoration(hintText: 'Filter shops...', prefixIcon: Icon(Icons.search)),
-            onChanged: (_) => setState(() {}),
-          )),
-          const SizedBox(width: 12),
-          Expanded(child: TextField(
-            controller: _productSearchCtrl,
-            decoration: const InputDecoration(hintText: 'Filter products...', prefixIcon: Icon(Icons.search)),
-            onChanged: (_) => setState(() {}),
-          )),
-          const SizedBox(width: 12),
-          TextButton.icon(
-            onPressed: _showChart,
-            icon: const Icon(Icons.show_chart, size: 18),
-            label: const Text('Visual chart'),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: _exportPdf,
-            icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-            label: const Text('Export PDF'),
-          ),
-        ]),
+        if (isMobile) ...[
+          spDropdown,
+          const SizedBox(height: 10),
+          routeDropdown,
+          const SizedBox(height: 10),
+          shopSearch,
+          const SizedBox(height: 10),
+          productSearch,
+          const SizedBox(height: 6),
+          Wrap(spacing: 4, children: [chartBtn, pdfBtn]),
+        ] else ...[
+          Row(children: [
+            Expanded(child: spDropdown),
+            const SizedBox(width: 12),
+            Expanded(child: routeDropdown),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: shopSearch),
+            const SizedBox(width: 12),
+            Expanded(child: productSearch),
+            const SizedBox(width: 12),
+            chartBtn,
+            const SizedBox(width: 8),
+            pdfBtn,
+          ]),
+        ],
         const SizedBox(height: 16),
         if (_loading)
           const Expanded(child: Center(child: CircularProgressIndicator()))
@@ -397,15 +423,16 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                 scrollDirection: Axis.horizontal,
                 child: SingleChildScrollView(
                   child: DataTable(
-                    columnSpacing: 8,
+                    columnSpacing: isMobile ? 4 : 8,
+                    horizontalMargin: isMobile ? 8 : 24,
                     headingRowHeight: 60,
                     dataRowMinHeight: 44,
                     dataRowMaxHeight: 44,
                     columns: [
-                      const DataColumn(label: SizedBox(width: 200, child: Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
+                      DataColumn(label: SizedBox(width: isMobile ? 130 : 200, child: const Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
                       ..._filteredProducts.map((p) => DataColumn(
                         label: SizedBox(
-                          width: 100,
+                          width: isMobile ? 80 : 100,
                           child: Text(p['name'] as String,
                             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                             maxLines: 2,
@@ -418,7 +445,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                       final cid = c['id'] as String;
                       return DataRow(cells: [
                         DataCell(SizedBox(
-                          width: 200,
+                          width: isMobile ? 130 : 200,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -435,7 +462,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                             InkWell(
                               onTap: () => _showCellDetail(c, p, audit),
                               child: SizedBox(
-                                width: 100,
+                                width: isMobile ? 80 : 100,
                                 child: Center(
                                   child: audit == null
                                       ? const Text('—', style: TextStyle(color: AppTheme.textSecondary))
@@ -514,13 +541,19 @@ class _PlacementTrendChartState extends State<_PlacementTrendChart> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Text('Shops Audited (Last 30 Days)', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-            const Spacer(),
-            const _LegendDot(color: Color(0xFF14B8A6)),
-            const SizedBox(width: 4),
-            const Text('Distinct shops/day', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-          ]),
+          const Wrap(
+            spacing: 10,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text('Shops Audited (Last 30 Days)', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                _LegendDot(color: Color(0xFF14B8A6)),
+                SizedBox(width: 4),
+                Text('Distinct shops/day', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              ]),
+            ],
+          ),
           const SizedBox(height: 12),
           Expanded(
             child: _loading ? const Center(child: CircularProgressIndicator())

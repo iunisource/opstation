@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -14,6 +15,19 @@ import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
+
+/// Timestamp for inventory movements: the VOUCHER's date (so the inventory
+/// ledger posts on the date the voucher carries, not the running date),
+/// combined with the current local time-of-day so same-day entries keep
+/// their true ordering. Falls back to now if the voucher has no date.
+String movedAtForVoucher(String? voucherDate) {
+  final nowL = DateTime.now();
+  final d = voucherDate == null ? null : DateTime.tryParse(voucherDate);
+  if (d == null) return nowL.toUtc().toIso8601String();
+  return DateTime(d.year, d.month, d.day, nowL.hour, nowL.minute, nowL.second)
+      .toUtc()
+      .toIso8601String();
+}
 
 /// Returns null on success OR when there's nothing meaningful to bank (e.g.
 /// legacy numeric-only voucher numbers from before the TYPE-YYYY-NNNN scheme).
@@ -61,6 +75,23 @@ Future<String?> _bankCancelledVoucherNumber({
 }
 
 // ─── Sales Orders (Master-Detail) ────────────────────────────────────────────
+
+
+// Up to 4 decimals, trailing zeros trimmed, with thousands separators — for
+// read-only display of quantities, unit prices and totals on vouchers.
+final NumberFormat _num4 = NumberFormat('#,##0.####');
+String _n4(num? v) => _num4.format((v ?? 0).toDouble());
+// Plain (no grouping) up-to-4-decimal string for editable field values, so the
+// text parses straight back with double.tryParse.
+String _plain4(num? v) {
+  final d = (v ?? 0).toDouble();
+  var s = d.toStringAsFixed(4);
+  if (s.contains('.')) {
+    while (s.endsWith('0')) { s = s.substring(0, s.length - 1); }
+    if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  }
+  return s;
+}
 
 class ErpSalesScreen extends ConsumerStatefulWidget {
   const ErpSalesScreen({super.key, this.focusId});
@@ -196,7 +227,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final items = await client.from('sales_order_items').select('*, products(name, sku), uoms(name, abbreviation)').eq('sales_order_id', id);
       _qtyControllers.clear();
       for (final item in items as List) {
-        _qtyControllers[item['id'] as String] = TextEditingController(text: (item['quantity'] as num?)?.toStringAsFixed(0) ?? '1');
+        _qtyControllers[item['id'] as String] = TextEditingController(text: _plain4((item['quantity'] as num?) ?? 1));
       }
       final meta = await VoucherMeta.fetch(
         orgId: _orgId ?? '',
@@ -255,6 +286,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   // admins once a DO exists they are cascade-locked. Header fields stay on
   // _canEdit (draft only). Whole-SO delete has the same DO guard.
   bool get _canEditLines => !_hasDo && !_isLocked;
+  // The customer (party) can be changed as long as no Delivery Order is linked
+  // — even on a confirmed/locked SO — instead of forcing delete + recreate.
+  bool get _canEditParty => !_hasDo;
   // Human-readable DO reference(s) for cascade-lock messages.
   String get _doMsg => _doRefs.isEmpty
       ? 'a Delivery Order exists against this SO. Delete it first.'
@@ -355,7 +389,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       focLines: focLines.isEmpty ? null : focLines,
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
-      footerNote: _meta.footerNote,
+      footerNote: _meta.soFooter,
     );
   }
 
@@ -423,7 +457,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'product_id': _addProductId, 'uom_id': _addUomId,
         'quantity': qty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
       });
-      _qtyControllers[itemId] = TextEditingController(text: qty.toStringAsFixed(0));
+      _qtyControllers[itemId] = TextEditingController(text: _plain4(qty));
       setState(() {
         _items.add({
           'id': itemId,
@@ -542,7 +576,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                           _loadDetail(_detail['id'] as String);
                         },
                       ))
-                    : Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), style: const TextStyle(fontWeight: FontWeight.w600))),
+                    : Text(_n4(qty), style: const TextStyle(fontWeight: FontWeight.w600))),
                 if (_canEditLines) SizedBox(width: 40, child: IconButton(
                   icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
                   onPressed: () => _deleteItem(item['id'] as String),
@@ -624,7 +658,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'quantity': qty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
         'is_foc': true,
       });
-      _qtyControllers[itemId] = TextEditingController(text: qty.toStringAsFixed(0));
+      _qtyControllers[itemId] = TextEditingController(text: _plain4(qty));
       setState(() {
         _items.add({
           'id': itemId,
@@ -918,7 +952,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 ]),
                 const SizedBox(height: 12),
                 Row(children: [
-                  Expanded(flex: 2, child: _canEdit
+                  Expanded(flex: 2, child: _canEditParty
                       ? _CustomerSelect(
                           customers: _customers,
                           selectedId: custId,
@@ -994,7 +1028,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                   _loadDetail(_detail['id'] as String);
                                 },
                               ))
-                            : Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), style: const TextStyle(fontWeight: FontWeight.w600))),
+                            : Text(_n4(qty), style: const TextStyle(fontWeight: FontWeight.w600))),
                         if (_canEditLines) SizedBox(width: 40, child: IconButton(
                           icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
                           onPressed: () => _deleteItem(item['id'] as String),
@@ -1015,7 +1049,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                       child: Row(children: [
                         const Expanded(flex: 5, child: Text('Total Quantity', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
                         Expanded(flex: 2, child: Text(
-                            totalQty % 1 == 0 ? totalQty.toInt().toString() : totalQty.toStringAsFixed(2),
+                            _n4(totalQty),
                             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13))),
                         if (_canEditLines) const SizedBox(width: 40),
                       ]),
@@ -1188,7 +1222,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         final delivered = (soItem['qty_delivered'] as num?)?.toDouble() ?? 0;
         final pending = ordered - delivered;
         if (!existingSoItemIds.contains(soItem['id'] as String) && pending > 0) {
-          _deliverQtyCtrl[soItem['id'] as String] = TextEditingController(text: pending.toStringAsFixed(0));
+          _deliverQtyCtrl[soItem['id'] as String] = TextEditingController(text: _plain4(pending));
         }
       }
 
@@ -1286,68 +1320,15 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     final userId = ref.read(currentUserProvider)?.id;
 
     try {
-      // Void the DO -> DB trigger reverses the transit GL (Cr 1320 / Dr 1330)
-      // and restores the consumed cost layers. Operational restores follow.
-      await Supabase.instance.client.from('delivery_orders').update({
-        'is_voided': true,
-        'voided_at': DateTime.now().toUtc().toIso8601String(),
-        'voided_by': userId,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-
-      // Restore legacy on-hand + SO qty_delivered for each line
-      for (final item in _items) {
-        final pid = item['product_id'] as String;
-        final delivered = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
-        if (delivered <= 0) continue;
-
-        // Add stock back
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock != null) {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((stock['quantity'] as num).toDouble()) + delivered,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
-        }
-
-        // Inventory movement reversal — recorded as a positive 'adjustment'
-        // since 'sale_reversal' isn't in the movement_type CHECK constraint.
-        // The semantic context lives on reference_type below.
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'uom_id': item['uom_id'],
-          'quantity': delivered, 'movement_type': 'adjustment',
-          'reference_id': _detail['id'], 'reference_type': 'delivery_order_voided',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-
-        // Restore SO item qty_delivered
-        final soItemId = item['so_item_id'] as String?;
-        if (soItemId != null) {
-          final soItem = await Supabase.instance.client.from('sales_order_items')
-              .select('qty_delivered').eq('id', soItemId).single();
-          await Supabase.instance.client.from('sales_order_items').update({
-            'qty_delivered': ((soItem['qty_delivered'] as num?)?.toDouble() ?? 0) - delivered,
-          }).eq('id', soItemId);
-        }
-      }
-
-      // Re-evaluate SO status
-      final soId = _detail['so_id'] as String?;
-      if (soId != null) {
-        final soItemsRecheck = await Supabase.instance.client.from('sales_order_items')
-            .select('quantity, qty_delivered').eq('sales_order_id', soId);
-        bool allDel = true; bool anyDel = false;
-        for (final si in soItemsRecheck as List) {
-          if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) > 0) anyDel = true;
-          if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) < ((si['quantity'] as num?)?.toDouble() ?? 0)) allDel = false;
-        }
-        await Supabase.instance.client.from('sales_orders').update({
-          'status': allDel ? 'delivered' : (anyDel ? 'partially_delivered' : 'confirmed'),
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', soId);
-      }
+      // Atomic: void_delivery_order flips is_voided (firing the existing GL /
+      // cost-layer reversal trigger), restores stock + SO qty_delivered, and
+      // recalculates the SO status in ONE transaction. p_moved_at preserves the
+      // voucher-date posting. Errors cleanly if already voided or an active SI exists.
+      await Supabase.instance.client.rpc('void_delivery_order', params: {
+        'p_do_id': _detail['id'],
+        'p_user_id': userId,
+        'p_moved_at': movedAtForVoucher(_detail['voucher_date'] as String?),
+      });
 
       // Bank voucher number — surface failures.
       final vNum = _detail['voucher_number'] as String? ?? '';
@@ -1425,7 +1406,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       focLines: focLines.isEmpty ? null : focLines,
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
-      footerNote: _meta.footerNote,
+      footerNote: _meta.doFooter,
       relatedRefs: pdfRefs.isEmpty ? null : pdfRefs,
       watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
     );
@@ -1743,29 +1724,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   }
 
   Future<void> _saveDeliveryOrder() async {
-    // Capture collect state BEFORE _saveDelivery() — it ends by reloading
-    // _detail, which resets these from the DB (still null at that point).
-    final bool collectOn = _collectEnabled;
-    final num? collectAmt = _collectAmount;
-    await _saveDelivery();
-    // Persist collect amount while the DO is still unlocked — the lock update
-    // below can't change other columns once is_locked flips (locked-DO rule).
+    // Persist collect amount BEFORE _saveDelivery() — save_delivery_order locks
+    // the DO as its idempotency claim, and a locked DO can't change other
+    // columns (locked-DO rule), so this must happen while it's still unlocked.
     try {
       await Supabase.instance.client.from('delivery_orders').update({
-        'collect_amount': collectOn ? collectAmt : null,
+        'collect_amount': _collectEnabled ? _collectAmount : null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
     } catch (_) {}
-    // Lock the DO after saving
-    try {
-      await Supabase.instance.client.from('delivery_orders').update({
-        'is_locked': true,
-        'locked_by': ref.read(currentUserProvider)?.id,
-        'locked_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved');
-    } catch (_) {}
+    await _saveDelivery(); // posts lines + locks atomically via the DB function
+    try { await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved'); } catch (_) {}
     // Reload so the collect-amount chip and lock state reflect what was saved.
     // (Invoice is NOT auto-created — use the explicit "Create Invoice" button.)
     await _loadDetail(_detail['id'] as String);
@@ -1786,70 +1755,49 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       final ordered = (soItem['quantity'] as num?)?.toDouble() ?? 0;
       final alreadyDelivered = (soItem['qty_delivered'] as num?)?.toDouble() ?? 0;
       final pending = ordered - alreadyDelivered;
-      if (deliverQty > pending) { _showSnack('${soItem['products']?['name']}: qty exceeds pending (${pending.toStringAsFixed(0)})'); return; }
+      if (deliverQty > pending) { _showSnack('${soItem['products']?['name']}: qty exceeds pending (${_n4(pending)})'); return; }
       // Check stock
       final stock = await Supabase.instance.client.from('inventory_stock').select('quantity')
           .eq('org_id', orgId!).eq('product_id', soItem['product_id'] as String)
           .eq('branch_id', branchId).maybeSingle();
       final available = (stock?['quantity'] as num?)?.toDouble() ?? 0;
-      if (deliverQty > available) { _showSnack('${soItem['products']?['name']}: insufficient stock (${available.toStringAsFixed(0)} available)'); return; }
+      if (deliverQty > available) { _showSnack('${soItem['products']?['name']}: insufficient stock (${_n4(available)} available)'); return; }
     }
 
+    // Build the delivery lines from the validated controllers.
+    final lines = <Map<String, dynamic>>[];
+    for (final entry in _deliverQtyCtrl.entries) {
+      final soItemId = entry.key;
+      final deliverQty = double.tryParse(entry.value.text.trim()) ?? 0;
+      if (deliverQty <= 0) continue;
+      final soItem = _soItems.firstWhere((i) => i['id'] == soItemId, orElse: () => {});
+      if (soItem.isEmpty) continue;
+      final ordered = (soItem['quantity'] as num?)?.toDouble() ?? 0;
+      final stock = await Supabase.instance.client.from('inventory_stock').select('quantity')
+          .eq('org_id', orgId!).eq('product_id', soItem['product_id'] as String)
+          .eq('branch_id', branchId).maybeSingle();
+      lines.add({
+        'so_item_id': soItemId,
+        'product_id': soItem['product_id'],
+        'uom_id': soItem['uom_id'],
+        'qty_ordered': ordered,
+        'qty_available': (stock?['quantity'] as num?)?.toDouble() ?? 0,
+        'qty_delivered': deliverQty,
+        'is_foc': soItem['is_foc'] == true,
+      });
+    }
+    if (lines.isEmpty) { _showSnack('No items to save'); return; }
     try {
-      for (final entry in _deliverQtyCtrl.entries) {
-        final soItemId = entry.key;
-        final deliverQty = double.tryParse(entry.value.text.trim()) ?? 0;
-        if (deliverQty <= 0) continue;
-        final soItem = _soItems.firstWhere((i) => i['id'] == soItemId, orElse: () => {});
-        if (soItem.isEmpty) continue;
-        final ordered = (soItem['quantity'] as num?)?.toDouble() ?? 0;
-        final stock = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId!).eq('product_id', soItem['product_id'] as String)
-            .eq('branch_id', branchId).maybeSingle();
-
-        await Supabase.instance.client.from('delivery_order_items').insert({
-          'id': 'doi_${DateTime.now().millisecondsSinceEpoch}_${soItemId.substring(0, 4)}',
-          'delivery_order_id': _detail['id'],
-          'so_item_id': soItemId,
-          'product_id': soItem['product_id'],
-          'uom_id': soItem['uom_id'],
-          'qty_ordered': ordered,
-          'qty_available': (stock?['quantity'] as num?)?.toDouble() ?? 0,
-          'qty_delivered': deliverQty,
-          'is_foc': soItem['is_foc'] == true,
-        });
-        if (stock != null) {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': (stock['quantity'] as num).toDouble() - deliverQty,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', stock['id']);
-        }
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().millisecondsSinceEpoch}_${soItemId.substring(0, 4)}',
-          'org_id': orgId, 'product_id': soItem['product_id'],
-          'branch_id': branchId, 'uom_id': soItem['uom_id'],
-          'quantity': -deliverQty, 'movement_type': 'sale',
-          'reference_id': _detail['id'], 'reference_type': 'delivery_order',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-        final soItemRes = await Supabase.instance.client.from('sales_order_items').select('qty_delivered').eq('id', soItemId).single();
-        await Supabase.instance.client.from('sales_order_items').update({
-          'qty_delivered': ((soItemRes['qty_delivered'] as num?)?.toDouble() ?? 0) + deliverQty,
-        }).eq('id', soItemId);
-      }
-      // Update SO status
-      final allSoItems = await Supabase.instance.client.from('sales_order_items')
-          .select('quantity, qty_delivered').eq('sales_order_id', _detail['so_id'] as String);
-      bool allDel = true; bool anyDel = false;
-      for (final si in allSoItems as List) {
-        if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) > 0) anyDel = true;
-        if (((si['qty_delivered'] as num?)?.toDouble() ?? 0) < ((si['quantity'] as num?)?.toDouble() ?? 0)) allDel = false;
-      }
-      await Supabase.instance.client.from('sales_orders').update({
-        'status': allDel ? 'delivered' : (anyDel ? 'partially_delivered' : 'confirmed'),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['so_id'] as String);
-
+      // Atomic + idempotent: the DB function locks the DO (its claim guard),
+      // inserts the lines, posts movements + stock, and updates SO progress and
+      // status in ONE transaction. p_moved_at carries the voucher-date posting
+      // (movedAtForVoucher) so the ledger date is preserved. Double-click errors cleanly.
+      await Supabase.instance.client.rpc('save_delivery_order', params: {
+        'p_do_id': _detail['id'],
+        'p_user_id': userId,
+        'p_lines': lines,
+        'p_moved_at': movedAtForVoucher(_detail['voucher_date'] as String?),
+      });
       _showSnack('Delivery saved — stock deducted');
       await _loadList();
       await _loadDetail(_detail['id'] as String);
@@ -2226,10 +2174,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                           if (item['products']?['sku'] != null) Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                         ])),
                         Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-                        Expanded(flex: 2, child: Text((item['qty_ordered'] as num?)?.toStringAsFixed(0) ?? '-', style: const TextStyle(fontWeight: FontWeight.w600))),
-                        Expanded(flex: 2, child: Text((item['qty_available'] as num?)?.toStringAsFixed(0) ?? '-',
+                        Expanded(flex: 2, child: Text(item['qty_ordered'] != null ? _n4(item['qty_ordered'] as num) : '-', style: const TextStyle(fontWeight: FontWeight.w600))),
+                        Expanded(flex: 2, child: Text(item['qty_available'] != null ? _n4(item['qty_available'] as num) : '-',
                             style: TextStyle(color: ((item['qty_available'] as num?)?.toDouble() ?? 0) > 0 ? AppTheme.success : AppTheme.danger, fontWeight: FontWeight.w600))),
-                        Expanded(flex: 2, child: Text((item['qty_delivered'] as num?)?.toStringAsFixed(0) ?? '-',
+                        Expanded(flex: 2, child: Text(item['qty_delivered'] != null ? _n4(item['qty_delivered'] as num) : '-',
                             style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
                       ]),
                     ),
@@ -2242,7 +2190,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                       const Expanded(flex: 9, child: Text('Total Delivered', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
                       Expanded(flex: 2, child: Builder(builder: (_) {
                         final t = _items.fold<double>(0, (s, it) => s + ((it['qty_delivered'] as num?)?.toDouble() ?? 0));
-                        return Text(t % 1 == 0 ? t.toInt().toString() : t.toStringAsFixed(2),
+                        return Text(_n4(t),
                             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.primary));
                       })),
                     ]),
@@ -2294,8 +2242,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                             if (item['products']?['sku'] != null) Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                           ])),
                           Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-                          Expanded(flex: 2, child: Text(pending.toStringAsFixed(0), style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600))),
-                          Expanded(flex: 2, child: Text(available.toStringAsFixed(0),
+                          Expanded(flex: 2, child: Text(_n4(pending), style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600))),
+                          Expanded(flex: 2, child: Text(_n4(available),
                               style: TextStyle(color: available >= pending ? AppTheme.success : AppTheme.danger, fontWeight: FontWeight.w600))),
                           Expanded(flex: 2, child: ctrl != null ? SizedBox(height: 32, child: TextField(
                             controller: ctrl,
@@ -2319,7 +2267,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                         for (final it in pendingSoItems) {
                           t += double.tryParse(_deliverQtyCtrl[it['id'] as String]?.text ?? '') ?? 0;
                         }
-                        return Text(t % 1 == 0 ? t.toInt().toString() : t.toStringAsFixed(2),
+                        return Text(_n4(t),
                             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppTheme.primary));
                       })),
                     ]),
@@ -2419,8 +2367,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       _discountCtrl.clear();
       _priceCtrl.clear();
       for (final item in items as List) {
-        _discountCtrl[item['id'] as String] = TextEditingController(text: (item['discount'] as num?)?.toStringAsFixed(2) ?? '0');
-        _priceCtrl[item['id'] as String] = TextEditingController(text: (item['unit_price'] as num?)?.toStringAsFixed(2) ?? '0');
+        _discountCtrl[item['id'] as String] = TextEditingController(text: _plain4(item['discount'] as num?));
+        _priceCtrl[item['id'] as String] = TextEditingController(text: _plain4(item['unit_price'] as num?));
       }
       // Resolve customer id (direct on SI or via SO)
       final custId = (inv['customer_id'] as String?) ?? (inv['sales_orders']?['customer_id'] as String?);
@@ -2603,7 +2551,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       grandTotal: subtotal - discountTotal,
       preparedBy: _meta.preparedBy,
       createdAt: createdAt,
-      footerNote: _meta.footerNote,
+      footerNote: _meta.siFooter,
       relatedRefs: refs.isNotEmpty ? refs : null,
       watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
       approvedBy: _detail['reviewed_by_name'] as String?,
@@ -2677,7 +2625,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         'locked_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'saved',
-          'Discount: ${discountTotal.toStringAsFixed(2)} · Total: ${(subtotal - discountTotal).toStringAsFixed(2)}');
+          'Discount: ${money(discountTotal)} · Total: ${money(subtotal - discountTotal)}');
       _showSnack('Saved & locked');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -2899,7 +2847,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                   Text('SO: ${inv['sales_orders']?['voucher_number'] ?? '-'} · DO: ${inv['delivery_orders']?['voucher_number'] ?? '-'}',
                                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                                   Text(inv['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                                  Text('Total: ${(inv['grand_total'] as num?)?.toStringAsFixed(2) ?? '0'}',
+                                  Text('Total: ${_n4(inv['grand_total'] as num?)}',
                                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.primary)),
                                 ]),
                               ),
@@ -3061,6 +3009,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                     Expanded(flex: 2, child: Text('Qty', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Unit Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Discount %', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text('Disc. Price/Unit', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text('Line Total', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                   ]),
                 ),
@@ -3090,7 +3039,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                           if (item['products']?['sku'] != null) Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                         ])),
                         Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-                        Expanded(flex: 2, child: Text(qty.toStringAsFixed(0), style: const TextStyle(fontWeight: FontWeight.w600))),
+                        Expanded(flex: 2, child: Text(_n4(qty), style: const TextStyle(fontWeight: FontWeight.w600))),
                         Expanded(flex: 2, child: item['is_foc'] == true
                             ? const Text('Free', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.w600))
                             : (_priceEditable && !_isLocked)
@@ -3100,7 +3049,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                     onChanged: (_) => setState(() {}),
                                   ))
-                                : Text(price.toStringAsFixed(2))),
+                                : Text(_n4(price))),
                         Expanded(flex: 2, child: _isLocked
                             ? Text('${discPct.toStringAsFixed(2)} %', style: const TextStyle(color: AppTheme.textSecondary))
                             : SizedBox(height: 32, child: TextField(
@@ -3121,7 +3070,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                   setState(() {});
                                 },
                               ))),
-                        Expanded(flex: 2, child: Text(lineTotal.toStringAsFixed(2), style: const TextStyle(fontWeight: FontWeight.w700))),
+                        Expanded(flex: 2, child: item['is_foc'] == true
+                            ? const Text('Free', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.w600))
+                            : Text(_n4(price * (1 - discPct / 100)), style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary))),
+                        Expanded(flex: 2, child: Text(_n4(lineTotal), style: const TextStyle(fontWeight: FontWeight.w700))),
                       ]),
                     ),
                     const Divider(height: 1),
@@ -3131,10 +3083,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    _TotalsRow(label: 'Subtotal', value: subtotal.toStringAsFixed(2)),
-                    _TotalsRow(label: 'Discount', value: '- ${discountTotal.toStringAsFixed(2)}', color: Colors.orange),
+                    _TotalsRow(label: 'Subtotal', value: _n4(subtotal)),
+                    _TotalsRow(label: 'Discount', value: '- ${_n4(discountTotal)}', color: Colors.orange),
                     const Divider(),
-                    _TotalsRow(label: 'Grand Total', value: grandTotal.toStringAsFixed(2), bold: true),
+                    _TotalsRow(label: 'Grand Total', value: _n4(grandTotal), bold: true),
                   ]),
                 ),
               ]),

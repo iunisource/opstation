@@ -16,6 +16,23 @@ import '../widgets/voucher_remarks_panel.dart';
 /// Created from a saved GRN. User enters unit cost + discount per line.
 /// Auto-locks on "Save Invoice". Only admins can unlock.
 /// Marks source GRN as 'invoiced' on save.
+
+// Up to 4 decimals, trailing zeros trimmed, with thousands separators — for
+// read-only display of quantities, unit prices and totals on vouchers.
+final NumberFormat _num4 = NumberFormat('#,##0.####');
+String _n4(num? v) => _num4.format((v ?? 0).toDouble());
+// Plain (no grouping) up-to-4-decimal string for editable field values, so the
+// text parses straight back with double.tryParse.
+String _plain4(num? v) {
+  final d = (v ?? 0).toDouble();
+  var s = d.toStringAsFixed(4);
+  if (s.contains('.')) {
+    while (s.endsWith('0')) { s = s.substring(0, s.length - 1); }
+    if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  }
+  return s;
+}
+
 class ErpPurchaseInvoicesScreen extends ConsumerStatefulWidget {
   const ErpPurchaseInvoicesScreen({super.key, this.focusId});
   final String? focusId;
@@ -97,8 +114,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     _costCtrl = {}; _discCtrl = {};
     for (final it in _items) {
       final id = it['id'] as String;
-      _costCtrl[id] = TextEditingController(text: ((it['unit_cost'] as num?)?.toStringAsFixed(2) ?? '0.00'));
-      _discCtrl[id]  = TextEditingController(text: ((it['discount'] as num?)?.toStringAsFixed(2) ?? '0.00'));
+      _costCtrl[id] = TextEditingController(text: _plain4(it['unit_cost'] as num?));
+      _discCtrl[id]  = TextEditingController(text: _plain4(it['discount'] as num?));
     }
   }
 
@@ -246,6 +263,23 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         await _logAudit(_detail['id'] as String, 'edited', '$pname cost: ${oldCost.toStringAsFixed(2)} -> ${cost.toStringAsFixed(2)}, disc: ${oldDisc.toStringAsFixed(0)}% -> ${disc.toStringAsFixed(0)}%');
       }
     } catch (e) { _showSnack('Save error: $e'); }
+  }
+
+  /// Live totals computed straight from the edit fields (draft only) so the
+  /// screen updates as you type, before anything is saved.
+  /// Returns [subtotal, discount, grand].
+  List<double> _liveTotals() {
+    double subtotal = 0, discount = 0;
+    for (final it in _items) {
+      final id = it['id'] as String;
+      final qty = (it['qty_received'] as num?)?.toDouble() ?? 0;
+      final cost = double.tryParse(_costCtrl[id]?.text ?? '') ?? 0;
+      final disc =
+          (double.tryParse(_discCtrl[id]?.text ?? '') ?? 0).clamp(0.0, 100.0);
+      subtotal += qty * cost;
+      discount += qty * cost * (disc / 100);
+    }
+    return [subtotal, discount, subtotal - discount];
   }
 
   Future<void> _recalcTotals() async {
@@ -562,7 +596,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
                     Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
                     if (r['purchase_grns']?['voucher_number'] != null) Text('← ${r['purchase_grns']['voucher_number']}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                   ]),
-                  trailing: Text(((r['grand_total'] as num?)?.toStringAsFixed(2)) ?? '0.00', style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                  trailing: Text(_n4(r['grand_total'] as num?), style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary)),
                   onTap: () => _loadDetail(r['id'] as String));
               })),
     ]));
@@ -704,9 +738,19 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
             ..._items.map((it) {
               final id = it['id'] as String;
               final qty  = (it['qty_received'] as num?)?.toDouble() ?? 0;
-              final cost = (it['unit_cost']   as num?)?.toDouble() ?? 0;
-              final disc = (it['discount']    as num?)?.toDouble() ?? 0;
-              final lt   = (it['line_total']  as num?)?.toDouble() ?? qty * cost * (1 - disc / 100);
+              // In draft, read cost/disc live from the edit fields so the line
+              // total updates as you type; once locked, use the saved values.
+              final cost = _isDraft
+                  ? (double.tryParse(_costCtrl[id]?.text ?? '') ?? 0)
+                  : ((it['unit_cost'] as num?)?.toDouble() ?? 0);
+              final disc = _isDraft
+                  ? (double.tryParse(_discCtrl[id]?.text ?? '') ?? 0)
+                      .clamp(0.0, 100.0)
+                      .toDouble()
+                  : ((it['discount'] as num?)?.toDouble() ?? 0);
+              final lt   = _isDraft
+                  ? qty * cost * (1 - disc / 100)
+                  : ((it['line_total'] as num?)?.toDouble() ?? qty * cost * (1 - disc / 100));
               return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Row(children: [
                   Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -714,14 +758,14 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
                     if (it['products']?['sku'] != null) Text(it['products']!['sku'] as String, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                   ])),
                   Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                  Expanded(flex: 1, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
+                  Expanded(flex: 1, child: Text(_n4(qty), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
                   Expanded(flex: 2, child: _isDraft
-                      ? TextField(controller: _costCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemCost(id))
-                      : Text(cost.toStringAsFixed(2), textAlign: TextAlign.right)),
+                      ? TextField(controller: _costCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onChanged: (_) => setState(() {}), onSubmitted: (_) => _saveItemCost(id))
+                      : Text(_n4(cost), textAlign: TextAlign.right)),
                   Expanded(flex: 1, child: _isDraft
-                      ? TextField(controller: _discCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemCost(id))
-                      : Text('${disc.toStringAsFixed(0)}%', textAlign: TextAlign.right)),
-                  Expanded(flex: 2, child: Text(lt.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                      ? TextField(controller: _discCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onChanged: (_) => setState(() {}), onSubmitted: (_) => _saveItemCost(id))
+                      : Text('${_n4(disc)}%', textAlign: TextAlign.right)),
+                  Expanded(flex: 2, child: Text(_n4(lt), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
                 ]));
             }),
           ])),
@@ -729,10 +773,10 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         Align(alignment: Alignment.centerRight, child: Container(padding: const EdgeInsets.all(12), width: 280,
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            _piTotalRow('Subtotal', (_detail['subtotal'] as num?)?.toDouble() ?? 0),
-            _piTotalRow('Discount', (_detail['discount_total'] as num?)?.toDouble() ?? 0, color: AppTheme.warning),
+            _piTotalRow('Subtotal', _isDraft ? _liveTotals()[0] : (_detail['subtotal'] as num?)?.toDouble() ?? 0),
+            _piTotalRow('Discount', _isDraft ? _liveTotals()[1] : (_detail['discount_total'] as num?)?.toDouble() ?? 0, color: AppTheme.warning),
             const Divider(height: 8),
-            _piTotalRow('Grand Total', (_detail['grand_total'] as num?)?.toDouble() ?? 0, bold: true),
+            _piTotalRow('Grand Total', _isDraft ? _liveTotals()[2] : (_detail['grand_total'] as num?)?.toDouble() ?? 0, bold: true),
           ]))),
         const SizedBox(height: 16),
         if (_reviewFlow) ...[
@@ -786,7 +830,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   Widget _piTotalRow(String label, double v, {bool bold = false, Color? color}) => Padding(padding: const EdgeInsets.symmetric(vertical: 2),
     child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
       Text(label, style: TextStyle(color: color ?? AppTheme.textSecondary, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, fontSize: bold ? 14 : 12)),
-      Text(v.toStringAsFixed(2), style: TextStyle(color: color ?? (bold ? AppTheme.primary : null), fontWeight: bold ? FontWeight.w700 : FontWeight.w600, fontSize: bold ? 15 : 13)),
+      Text(_n4(v), style: TextStyle(color: color ?? (bold ? AppTheme.primary : null), fontWeight: bold ? FontWeight.w700 : FontWeight.w600, fontSize: bold ? 15 : 13)),
     ]));
 }
 

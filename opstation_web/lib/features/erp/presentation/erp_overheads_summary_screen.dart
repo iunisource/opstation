@@ -3,6 +3,7 @@ import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/skeleton_loader.dart';
 import '../../../core/layout/main_layout.dart';
@@ -65,18 +66,7 @@ class _ErpOverheadsSummaryScreenState extends ConsumerState<ErpOverheadsSummaryS
   double get _totalOverhead => _rows.fold(0.0, (s, r) => s + _n(r, 'overhead'));
   double get _grandTotal => _totalLabor + _totalOverhead;
 
-  String _money(double v) {
-    final s = v.toStringAsFixed(2);
-    final parts = s.split('.');
-    final neg = parts[0].startsWith('-');
-    final digits = neg ? parts[0].substring(1) : parts[0];
-    final buf = StringBuffer();
-    for (int i = 0; i < digits.length; i++) {
-      if (i > 0 && (digits.length - i) % 3 == 0) buf.write(',');
-      buf.write(digits[i]);
-    }
-    return '${neg ? '-' : ''}$buf.${parts[1]}';
-  }
+  String _money(double v) => money(v);
 
   String _fmtDate(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';

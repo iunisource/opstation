@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:js_util' as js_util;
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -32,7 +33,7 @@ class _ErpRetailerOrdersScreenState
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
   final _client = Supabase.instance.client;
-  final _money = NumberFormat('#,##0.00');
+  final MoneyFmt _money = const MoneyFmt();
   final _df = DateFormat('d MMM yyyy');
 
   String _filter = 'submitted';

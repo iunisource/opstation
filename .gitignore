@@ -40,3 +40,4 @@
 .vscode/
 *.iml
 **/node_modules/
+.firebase/

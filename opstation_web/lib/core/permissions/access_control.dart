@@ -119,6 +119,23 @@ class AccessControl {
         ? canViewReport(it.key)
         : canSeeDoc(it.key);
   }
+
+  /// Branch-scoped route gate: like [canAccessRoute] but only counts grants
+  /// valid AT the given branch (global grants and admin roles always pass).
+  /// A null branch falls back to reachability, so nothing flickers while the
+  /// branch selection is still restoring after a page refresh.
+  bool canAccessRouteAt(String route, String? branchId) {
+    if (branchId == null) return canAccessRoute(route);
+    if (isAdmin) return true;
+    if (_alwaysAllowed.contains(route)) return true;
+    final it = kRouteToPerm[route];
+    if (it == null) return false;
+    final mod = kRouteToModule[route];
+    if (mod != null && !hasModule(mod)) return false;
+    return it.kind == PermKind.report
+        ? canViewReportAt(it.key, branchId)
+        : canSeeDocAt(it.key, branchId);
+  }
 }
 
 final accessProvider = FutureProvider<AccessControl>((ref) async {

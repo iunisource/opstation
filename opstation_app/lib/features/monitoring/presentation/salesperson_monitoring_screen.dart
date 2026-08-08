@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/initial_avatar.dart';
 import '../../../shared/widgets/status_badge.dart';
+import '../../auth/providers/auth_controller.dart';
+import '../../../core/supabase/supabase_pull_service.dart';
 import '../../salesperson/data/salesperson_repository.dart';
 import '../../salesperson/models/customer.dart';
 import '../../salesperson/models/trip.dart';
@@ -63,6 +65,15 @@ final _salespersonDayProvider =
     FutureProvider.autoDispose.family<_DayData, String>((ref, userId) async {
   final teamRepo = ref.watch(teamRepositoryProvider);
   final salesRepo = ref.watch(salespersonRepositoryProvider);
+  final orgId = ref.watch(orgIdProvider);
+
+  // The reads below come from local Drift, which only refreshed at login.
+  // Pull today's trips first so the drill-down (and its refresh button)
+  // shows live server data. Best-effort: offline, it falls back to local.
+  if (orgId != null) {
+    await ref.read(supabasePullServiceProvider).pullTodayTripsForOrg(orgId);
+  }
+
   final user = await teamRepo.byId(userId);
   final active = await salesRepo.activeTripForUser(userId);
   final completed =

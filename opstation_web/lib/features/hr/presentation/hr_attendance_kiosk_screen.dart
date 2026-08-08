@@ -292,8 +292,14 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
     setState(() => _busy = true);
     try {
       final client = Supabase.instance.client;
-      final emp = await client.from('hr_employees')
-          .select('id, full_name, employee_code, branch_id, photo_url, is_voided')
+      // RFID readers emit the numeric card UID; the printed QR / manual entry
+      // emit the employee_code. Match on card_uid first, then fall back to
+      // employee_code, so cards, QR badges and typed codes all work.
+      var emp = await client.from('hr_employees')
+          .select('id, full_name, employee_code, card_uid, branch_id, photo_url, is_voided')
+          .eq('org_id', orgId).eq('card_uid', code).maybeSingle();
+      emp ??= await client.from('hr_employees')
+          .select('id, full_name, employee_code, card_uid, branch_id, photo_url, is_voided')
           .eq('org_id', orgId).ilike('employee_code', code).maybeSingle();
       if (emp == null) {
         _show(_Result(_Outcome.error, 'Card not recognized', message: 'No employee for code "$code"'));

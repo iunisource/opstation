@@ -257,13 +257,24 @@ class SyncController extends Notifier<SyncStatus> {
     final pendingCustomers = await (_db.select(_db.customers)
           ..where((c) => c.syncStatus.equals('pending')))
         .get();
+    // Surveyor intel rows were previously NOT counted, so a device with
+    // 100 stranded audits showed "Synced / Pending 0". Count them.
+    final pendingSpot = await (_db.select(_db.competitorSpottings)
+          ..where((s) => s.syncStatus.equals('pending')))
+        .get();
+    final pendingAudit = await (_db.select(_db.placementAudits)
+          ..where((p) => p.syncStatus.equals('pending')))
+        .get();
 
     SyncState s;
     if (!_currentlyOnline) {
       s = SyncState.offline;
     } else if (rejected.isNotEmpty) {
       s = SyncState.error;
-    } else if (pending.isNotEmpty || pendingCustomers.isNotEmpty) {
+    } else if (pending.isNotEmpty ||
+        pendingCustomers.isNotEmpty ||
+        pendingSpot.isNotEmpty ||
+        pendingAudit.isNotEmpty) {
       s = SyncState.syncing;
     } else {
       s = SyncState.synced;
@@ -271,7 +282,10 @@ class SyncController extends Notifier<SyncStatus> {
 
     state = state.copyWith(
       state: s,
-      pendingCount: pending.length + pendingCustomers.length,
+      pendingCount: pending.length +
+          pendingCustomers.length +
+          pendingSpot.length +
+          pendingAudit.length,
       rejectedCount: rejected.length,
     );
   }
@@ -296,12 +310,17 @@ class SyncController extends Notifier<SyncStatus> {
         try {
           // If user has null org_id but we have an orgId context,
           // fix it locally and in Supabase before pushing
+          // Never push is_active from the bulk loop — otherwise a phone with a
+          // stale cached is_active re-activates admin-deactivated users on
+          // every full sync (the Kaleem-resurrection bug). Activation is a
+          // web-admin action; the server stays authoritative.
           if (u.orgId == null && orgId != null && u.role != 'superAdmin') {
             await (_db.update(_db.users)..where((t) => t.id.equals(u.id)))
                 .write(UsersCompanion(orgId: Value(orgId)));
-            await _supabase.pushUser(u.copyWith(orgId: Value(orgId)));
+            await _supabase.pushUser(u.copyWith(orgId: Value(orgId)),
+                includeActive: false);
           } else if (u.orgId != null || u.role == 'superAdmin') {
-            await _supabase.pushUser(u);
+            await _supabase.pushUser(u, includeActive: false);
           }
         } catch (_) {}
       }
@@ -495,7 +514,23 @@ class SyncController extends Notifier<SyncStatus> {
       SmsService.note('sync: BAIL — connectivity reports offline');
       return;
     }
-    // Note: no auth check — visits should sync regardless of Supabase session
+    // Surface a dead server session — the one failure mode that lets a
+    // device work all day while RLS rejects every upload.
+    try {
+      final auth = Supabase.instance.client.auth;
+      var s = auth.currentSession;
+      if (s == null || s.isExpired) {
+        try {
+          s = (await auth.refreshSession()).session;
+        } on AuthException {
+          s = null;
+        } catch (_) {}
+        if (s == null) {
+          SmsService.note(
+              'sync: SUPABASE SESSION DEAD — sign out and sign in again');
+        }
+      }
+    } catch (_) {}
     if (_flushing) { print('FLUSH: BAIL — already flushing'); return; }
     _flushing = true;
     try {
@@ -847,7 +882,7 @@ class SyncController extends Notifier<SyncStatus> {
         }).toList();
         await Supabase.instance.client
             .from('competitor_spotting')
-            .insert(payload);
+            .upsert(payload);
         final ids = pendingSpottings.map((cs) => cs.id).toList();
         await (_db.update(_db.competitorSpottings)
               ..where((t) => t.id.isIn(ids)))
@@ -857,6 +892,7 @@ class SyncController extends Notifier<SyncStatus> {
         print('Pushed ${pendingSpottings.length} competitor_spotting rows');
       } catch (e, st) {
         print('pushCompetitorSpotting batch FAILED: $e');
+        SmsService.note('sync: competitor_spotting push FAILED — $e');
         await Sentry.captureException(e, stackTrace: st);
       }
     }
@@ -880,7 +916,7 @@ class SyncController extends Notifier<SyncStatus> {
         }).toList();
         await Supabase.instance.client
             .from('placement_audit')
-            .insert(payload);
+            .upsert(payload);
         final ids = pendingAudits.map((pa) => pa.id).toList();
         await (_db.update(_db.placementAudits)
               ..where((t) => t.id.isIn(ids)))
@@ -890,6 +926,7 @@ class SyncController extends Notifier<SyncStatus> {
         print('Pushed ${pendingAudits.length} placement_audit rows');
       } catch (e, st) {
         print('pushPlacementAudit batch FAILED: $e');
+        SmsService.note('sync: placement_audit push FAILED — $e');
         await Sentry.captureException(e, stackTrace: st);
       }
     }

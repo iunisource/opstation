@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/money.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
@@ -74,7 +75,6 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
-  String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
 
   Future<void> _loadSuppliers() async {
     final orgId = _orgId; if (orgId == null) { setState(() => _loadingCustomers = false); return; }
@@ -141,7 +141,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   }
 
   Future<void> _loadLedger(String supplierId) async {
-    final orgId = _orgId; final branchId = _branchId;
+    // Supplier ledgers are intentionally CROSS-BRANCH: a supplier account is
+    // common to the whole org, so no voucher is ever filtered out by the
+    // currently-selected branch. (Payments/receipts/journals were already
+    // branch-agnostic; purchase invoices & returns used to be branch-filtered,
+    // which silently hid entries when the user switched branches.)
+    final orgId = _orgId;
     if (orgId == null) return;
     setState(() { _loading = true; _entries = []; _errors = []; });
     final client = Supabase.instance.client;
@@ -163,9 +168,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
 
     // 1. Purchase Invoices -> Credit (increases what we owe the supplier)
     try {
-      var siQ = client.from('purchase_invoices').select('*')
+      final siQ = client.from('purchase_invoices').select('*')
           .eq('org_id', orgId).eq('supplier_id', supplierId);
-      if (branchId != null) siQ = siQ.eq('branch_id', branchId);
       final sis = await siQ;
       for (final si in sis as List) {
         final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;
@@ -199,9 +203,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     // 3. Purchase Return Invoices -> Debit (reduces what we owe)
     for (final tbl in const ['purchase_return_invoices', 'sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
-        var q = client.from(tbl).select('*')
+        final q = client.from(tbl).select('*')
             .eq('org_id', orgId).eq('supplier_id', supplierId);
-        if (branchId != null) q = q.eq('branch_id', branchId);
         final rows = await q;
         for (final sr in rows) {
           final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount'] ?? sr['net_amount'] ?? sr['return_total'] ?? sr['refund_amount'] ?? sr['value'] ?? sr['subtotal']) as num?)?.toDouble() ?? 0;
@@ -300,9 +303,10 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
 
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
-    // Supplier is a payable (credit-normal): balance = credit - debit, so an
-    // amount owed to the supplier shows as a positive balance.
-    for (final e in entries) { bal += (e['credit'] as double) - (e['debit'] as double); e['balance'] = bal; }
+    // Sign convention: balance = debit - credit, so a PAYABLE (we owe the
+    // supplier) shows NEGATIVE and an ADVANCE (we prepaid) shows POSITIVE —
+    // matching the old ERP / how the team reconciles.
+    for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
     setState(() { _entries = entries; _loading = false; _errors = errors; });
   }
 
@@ -325,16 +329,15 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     }).toList();
     // Recalculate running balance for filtered view
     double rb = 0;
-    return list.map((e) { rb += (e['credit'] as double) - (e['debit'] as double); return {...e, 'display_balance': rb}; }).toList();
+    return list.map((e) { rb += (e['debit'] as double) - (e['credit'] as double); return {...e, 'display_balance': rb}; }).toList();
   }
 
   @override
   Widget build(BuildContext context) {
-    final branch = ref.watch(selectedBranchProvider);
     final display = _displayEntries;
     double totalDebit = 0, totalCredit = 0;
     for (final e in display) { totalDebit += e['debit'] as double; totalCredit += e['credit'] as double; }
-    final netBal = totalCredit - totalDebit;
+    final netBal = totalDebit - totalCredit; // payable negative, advance positive
     final maxDrop = _filteredSuppliers.length.clamp(0, 10);
 
     return GestureDetector(
@@ -349,8 +352,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           // own line with the actions wrapping beneath it.
           if (context.isMobile) ...[
             const Text('Supplier Ledger', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-            Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
-                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            const Text('All Branches',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
             if (_selectedSupplier != null && _entries.isNotEmpty) ...[
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
@@ -374,8 +377,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Supplier Ledger', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-                Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
-                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                const Text('All Branches',
+                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
               ]),
               const Spacer(),
               if (_selectedSupplier != null && _entries.isNotEmpty)
@@ -485,9 +488,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           const SizedBox(height: 12),
           if (_selectedSupplier != null && _entries.isNotEmpty) ...[
             AdaptiveKpiRow(children: [
-              _Stat(label: 'Total Debit', value: 'Rs. ${totalDebit.toStringAsFixed(2)}', color: AppTheme.primary),
-              _Stat(label: 'Total Credit', value: 'Rs. ${totalCredit.toStringAsFixed(2)}', color: Colors.green.shade700),
-              _Stat(label: netBal >= 0 ? 'Net Payable' : 'Net Advance', value: 'Rs. ${netBal.abs().toStringAsFixed(2)}', color: netBal > 0 ? AppTheme.danger : Colors.green.shade700),
+              _Stat(label: 'Total Debit', value: 'Rs. ${money(totalDebit)}', color: AppTheme.primary),
+              _Stat(label: 'Total Credit', value: 'Rs. ${money(totalCredit)}', color: Colors.green.shade700),
+              _Stat(label: netBal <= 0 ? 'Net Payable' : 'Net Advance', value: 'Rs. ${money(netBal)}', color: netBal < 0 ? AppTheme.danger : Colors.green.shade700),
             ]),
             const SizedBox(height: 10),
             Row(children: [
@@ -553,7 +556,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                 label: 'Debit', width: 110, align: TextAlign.right,
                 cell: (e) {
                   final d = e['debit'] as double;
-                  return Text(d > 0 ? 'Rs. ${d.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right,
+                  return Text(d > 0 ? 'Rs. ${money(d)}' : '-', textAlign: TextAlign.right,
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: d > 0 ? AppTheme.primary : Colors.black26));
                 },
               ),
@@ -561,7 +564,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                 label: 'Credit', width: 110, align: TextAlign.right,
                 cell: (e) {
                   final c = e['credit'] as double;
-                  return Text(c > 0 ? 'Rs. ${c.toStringAsFixed(2)}' : '-', textAlign: TextAlign.right,
+                  return Text(c > 0 ? 'Rs. ${money(c)}' : '-', textAlign: TextAlign.right,
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c > 0 ? Colors.green.shade700 : Colors.black26));
                 },
               ),
@@ -569,8 +572,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                 label: 'Balance', width: 110, align: TextAlign.right, isTrailing: true,
                 cell: (e) {
                   final b = e['display_balance'] as double;
-                  return Text('Rs. ${b.toStringAsFixed(2)}', textAlign: TextAlign.right,
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: b > 0 ? AppTheme.danger : Colors.green.shade700));
+                  return Text('Rs. ${money(b)}', textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: b < 0 ? AppTheme.danger : Colors.green.shade700));
                 },
               ),
             ],
@@ -583,8 +586,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               ),
               child: Row(children: [
                 Expanded(child: Text('${display.length} entries', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-                Text('Rs. ${netBal.toStringAsFixed(2)}',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: netBal > 0 ? AppTheme.danger : Colors.green.shade700)),
+                Text('Rs. ${money(netBal)}',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: netBal < 0 ? AppTheme.danger : Colors.green.shade700)),
               ]),
             ),
           )),
@@ -607,14 +610,13 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   void _exportCsv() {
     final display = _displayEntries;
     if (display.isEmpty || _selectedSupplier == null) return;
-    final branch = ref.read(selectedBranchProvider);
     final buf = StringBuffer();
     String esc(String s) => '"' + s.replaceAll('"', '""') + '"';
     final cust = _selectedSupplier!;
     final custLabel = '${cust['name']}${cust['code'] != null ? ' (${cust['code']})' : ''}';
     buf.writeln('Supplier Ledger');
     buf.writeln('Supplier,' + esc(custLabel));
-    buf.writeln('Branch,' + esc((branch?['name'] as String?) ?? 'All Branches'));
+    buf.writeln('Branch,' + esc('All Branches'));
     if (_dateFrom != null) buf.writeln('From,' + DateFormat('yyyy-MM-dd').format(_dateFrom!));
     if (_dateTo != null) buf.writeln('To,' + DateFormat('yyyy-MM-dd').format(_dateTo!));
     buf.writeln('Generated,' + DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()));
@@ -627,7 +629,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       td += e['debit'] as double; tc += e['credit'] as double;
       buf.writeln([date, esc(e['voucher'] as String? ?? ''), esc(e['description'] as String), esc(e['type'] as String), (e['debit'] as double).toStringAsFixed(2), (e['credit'] as double).toStringAsFixed(2), (e['display_balance'] as double).toStringAsFixed(2)].join(','));
     }
-    buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (tc - td).toStringAsFixed(2));
+    buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (td - tc).toStringAsFixed(2));
     final csvContent = String.fromCharCode(0xFEFF) + buf.toString();
     final blob = html.Blob([csvContent], 'text/csv;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
@@ -637,6 +639,65 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     html.document.body!.append(anchor);
     anchor.click();
     Future.delayed(const Duration(seconds: 5), () { anchor.remove(); html.Url.revokeObjectUrl(url); });
+  }
+
+  // Purchase-return line items live in a child table whose name / foreign-key
+  // column varies by schema generation. The old code hard-coded
+  // `purchase_return_invoice_items.invoice_id`, which resolved to nothing on
+  // this org (header loaded fine, but the modal showed "No lines"). Mirror the
+  // defensive resolution used for the return *header*: probe candidate child
+  // tables, discover which FK column they actually expose by sampling one row,
+  // then query by the header id. First non-empty result wins.
+  Future<List<dynamic>> _loadReturnLines(SupabaseClient client, String returnId) async {
+    const tables = [
+      'purchase_return_invoice_items',
+      'purchase_return_items',
+      'purchase_return_lines',
+      'pri_items',
+      'pri_lines',
+    ];
+    const fkCandidates = [
+      'invoice_id',
+      'return_invoice_id',
+      'purchase_return_invoice_id',
+      'purchase_return_id',
+      'return_id',
+      'pri_id',
+      'header_id',
+      'parent_id',
+    ];
+    for (final tbl in tables) {
+      Map<String, dynamic>? sample;
+      try {
+        final probe = await client.from(tbl).select('*').limit(1);
+        if (probe is List && probe.isNotEmpty) {
+          sample = Map<String, dynamic>.from(probe.first as Map);
+        } else {
+          // Table exists but is globally empty — nothing to key on; skip it.
+          continue;
+        }
+      } catch (_) {
+        // Table doesn't exist in this schema — try the next candidate.
+        continue;
+      }
+      final fks = fkCandidates.where(sample.containsKey).toList();
+      final hasProduct = sample.containsKey('product_id');
+      for (final fk in fks) {
+        try {
+          final sel = hasProduct ? '*, products(name, sku)' : '*';
+          final rows = await client.from(tbl).select(sel).eq(fk, returnId);
+          if (rows is List && rows.isNotEmpty) return rows;
+        } catch (_) {
+          // The products() embed may not be declared as a relationship on this
+          // table; retry the same key without the join before giving up.
+          try {
+            final rows = await client.from(tbl).select('*').eq(fk, returnId);
+            if (rows is List && rows.isNotEmpty) return rows;
+          } catch (_) {}
+        }
+      }
+    }
+    return const [];
   }
 
   Future<void> _openVoucher(Map<String, dynamic> entry) async {
@@ -665,7 +726,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           break;
         case 'Purchase Return':
           voucher = await client.from('purchase_return_invoices').select('*, suppliers(name)').eq('id', id).maybeSingle();
-          if (voucher != null) lines = await client.from('purchase_return_invoice_items').select('*, products(name, sku)').eq('invoice_id', id);
+          if (voucher != null) lines = await _loadReturnLines(client, id);
           break;
         case 'Receipt (CRV)':
           voucher = await client.from('crv_vouchers').select('*').eq('id', id).maybeSingle();
@@ -798,9 +859,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                       ]),
                     );
                 return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-                  if (showBreakdown) ln('Subtotal:', subtotal.toStringAsFixed(2)),
-                  if (showBreakdown) ln('Discount:', '-' + discount.toStringAsFixed(2)),
-                  ln('Total:', total.toStringAsFixed(2), strong: true),
+                  if (showBreakdown) ln('Subtotal:', money(subtotal)),
+                  if (showBreakdown) ln('Discount:', '-' + money(discount)),
+                  ln('Total:', money(total), strong: true),
                 ]);
               }),
             ],
@@ -826,7 +887,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           child: Row(children: [
             Expanded(flex: 3, child: Text((line['account_name'] as String?) ?? '', style: const TextStyle(fontSize: 12))),
             Expanded(flex: 3, child: Text((line['description'] as String?) ?? '', style: const TextStyle(fontSize: 12))),
-            Expanded(flex: 2, child: Text('Rs. ' + amount.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+            Expanded(flex: 2, child: Text('Rs. ' + money(amount), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
           ]),
         );
       }),
@@ -866,8 +927,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             Expanded(flex: 4, child: Text(prodName, style: const TextStyle(fontSize: 12))),
             Expanded(flex: 1, child: Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
             Expanded(flex: 2, child: Text('Rs. ' + price.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-            Expanded(flex: 2, child: Text(lineDisc.abs() < 0.01 ? '—' : 'Rs. ' + lineDisc.toStringAsFixed(2), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: lineDisc.abs() < 0.01 ? AppTheme.textSecondary : AppTheme.danger))),
-            Expanded(flex: 2, child: Text('Rs. ' + lineTotal.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+            Expanded(flex: 2, child: Text(lineDisc.abs() < 0.01 ? '—' : 'Rs. ' + money(lineDisc), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: lineDisc.abs() < 0.01 ? AppTheme.textSecondary : AppTheme.danger))),
+            Expanded(flex: 2, child: Text('Rs. ' + money(lineTotal), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
           ]),
         );
       }),
@@ -878,20 +939,19 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     try {
       final display = _displayEntries;
       if (display.isEmpty || _selectedSupplier == null) return;
-      final branch = ref.read(selectedBranchProvider);
       double td = 0, tc = 0;
       for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
-      final netBal = tc - td;
+      final netBal = td - tc; // payable negative, advance positive
       final cust = _selectedSupplier!;
       final supplierName = (cust['name'] as String?) ?? '';
       final supplierCode = (cust['code'] as String?) ?? '';
-      final branchName = (branch?['name'] as String?) ?? 'All Branches';
+      const branchName = 'All Branches';
       final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
       final codeStr = supplierCode.isNotEmpty ? ' (' + supplierCode + ')' : '';
       final periodStr = (_dateFrom != null || _dateTo != null)
         ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
         : '';
-      final balColor = netBal > 0 ? '#c62828' : '#2e7d32';
+      final balColor = netBal < 0 ? '#c62828' : '#2e7d32';
 
       final rowsBuf = StringBuffer();
       for (final e in display) {
@@ -901,9 +961,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         final debit = e['debit'] as double;
         final credit = e['credit'] as double;
         final bal = e['display_balance'] as double;
-        final dStr = debit > 0 ? 'Rs. ' + debit.toStringAsFixed(2) : '-';
-        final cStr = credit > 0 ? 'Rs. ' + credit.toStringAsFixed(2) : '-';
-        rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num">' + dStr + '</td><td class="num">' + cStr + '</td><td class="num bold">Rs. ' + bal.toStringAsFixed(2) + '</td></tr>');
+        final dStr = debit > 0 ? 'Rs. ' + money(debit) : '-';
+        final cStr = credit > 0 ? 'Rs. ' + money(credit) : '-';
+        rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num">' + dStr + '</td><td class="num">' + cStr + '</td><td class="num bold">Rs. ' + money(bal) + '</td></tr>');
       }
 
       final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Supplier Ledger - ' + supplierName + '</title>'
@@ -932,13 +992,13 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         + (periodStr.isNotEmpty ? '<div class="info"><strong>Period:</strong> ' + periodStr + '</div>' : '') +
         '</div><div style="text-align: right;"><div class="info">Generated: ' + genTime + '</div></div></div>'
         '<div class="stats">'
-        '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + td.toStringAsFixed(2) + '</div></div>'
-        '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + tc.toStringAsFixed(2) + '</div></div>'
-        '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal">Rs. ' + netBal.toStringAsFixed(2) + '</div></div>'
+        '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + money(td) + '</div></div>'
+        '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + money(tc) + '</div></div>'
+        '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal">Rs. ' + money(netBal) + '</div></div>'
         '</div><table>'
         '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
         '<tbody>' + rowsBuf.toString() + '</tbody>'
-        '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + td.toStringAsFixed(2) + '</td><td class="num credit">Rs. ' + tc.toStringAsFixed(2) + '</td><td class="num bal">Rs. ' + netBal.toStringAsFixed(2) + '</td></tr></tfoot>'
+        '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + money(td) + '</td><td class="num credit">Rs. ' + money(tc) + '</td><td class="num bal">Rs. ' + money(netBal) + '</td></tr></tfoot>'
         '</table></body></html>';
 
       // Original method used across vouchers: blob URL in new tab

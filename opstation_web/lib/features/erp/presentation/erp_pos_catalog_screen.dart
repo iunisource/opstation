@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -483,7 +484,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                                   style: const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
                               Expanded(flex: 2, child: Text(item['category'] as String? ?? '-',
                                   style: const TextStyle(color: AppTheme.textSecondary))),
-                              Expanded(flex: 2, child: Text((item['price'] as num?)?.toStringAsFixed(2) ?? '0',
+                              Expanded(flex: 2, child: Text(money(item['price'] as num?),
                                   style: const TextStyle(fontWeight: FontWeight.w700))),
                               Expanded(flex: 1, child: Builder(builder: (_) {
                                 final pid = item['product_id'] as String?;

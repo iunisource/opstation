@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -78,14 +79,14 @@ class _ErpPosExpenseHistoryScreenState extends ConsumerState<ErpPosExpenseHistor
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Total Expenses', style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
               const SizedBox(height: 4),
-              Text('Rs. ${total.toStringAsFixed(2)}', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.red.shade700)),
+              Text('Rs. ${money(total)}', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.red.shade700)),
             ])),
           const SizedBox(height: 16),
           const Text('By Category', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.5)),
           const SizedBox(height: 8),
           ...byCat.entries.map((e) => Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [
             Expanded(child: Text(e.key, style: const TextStyle(fontSize: 12))),
-            Text('Rs. ${e.value.toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.red.shade700)),
+            Text('Rs. ${money(e.value)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.red.shade700)),
           ]))),
         ])),
         const Divider(height: 1),
@@ -144,7 +145,7 @@ class _ErpPosExpenseHistoryScreenState extends ConsumerState<ErpPosExpenseHistor
                     Expanded(flex: 3, child: Text(note, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
                     Expanded(flex: 2, child: Text(branch, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 1, child: Text(cashier, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-                    Expanded(flex: 1, child: Text('Rs. ${amt.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700))),
+                    Expanded(flex: 1, child: Text('Rs. ${money(amt)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700))),
                   ]));
                 }))),
       ])),

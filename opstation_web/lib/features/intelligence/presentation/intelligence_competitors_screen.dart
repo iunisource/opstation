@@ -3,9 +3,11 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
+import '../widgets/searchable_dropdown.dart';
 
 class IntelligenceCompetitorsScreen extends ConsumerStatefulWidget {
   const IntelligenceCompetitorsScreen({super.key});
@@ -235,10 +237,12 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
 
   void _showChart() {
     final orgId = ref.read(currentUserProvider)?.orgId ?? '';
+    final isMobile = context.isMobile;
+    final pad = isMobile ? 12.0 : 24.0;
     showDialog(
       context: context,
       builder: (_) => Dialog(
-        insetPadding: const EdgeInsets.all(24),
+        insetPadding: EdgeInsets.all(isMobile ? 8 : 24),
         child: ConstrainedBox(
           constraints: BoxConstraints(
             maxWidth: 1400,
@@ -246,9 +250,11 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           ),
           child: Stack(children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+              padding: EdgeInsets.all(pad),
               child: SizedBox(
-                height: 520,
+                height: isMobile
+                    ? MediaQuery.of(context).size.height * 0.75
+                    : 520,
                 child: _CompetitorTrendChart(
                   orgId: orgId,
                   customerIds: _filteredCustomers.map((c) => c['id'] as String).toList(),
@@ -300,77 +306,95 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = context.isMobile;
+    final allSelected = _filteredCustomers.isNotEmpty &&
+        _filteredCustomers.every((c) => _selectedIds.contains(c['id']));
+    final spDropdown = SearchableDropdown(
+      label: 'Salesperson',
+      value: _selectedSalespersonId,
+      allLabel: 'All salespeople',
+      options: [
+        for (final s in _salespeople)
+          MapEntry(s['id'] as String?, s['name'] as String),
+      ],
+      onChanged: (v) => setState(() => _selectedSalespersonId = v),
+    );
+    final routeDropdown = SearchableDropdown(
+      label: 'Route',
+      value: _selectedRouteId,
+      allLabel: 'All routes',
+      options: [
+        for (final r in _routes)
+          MapEntry(r['id'] as String?, r['name'] as String),
+      ],
+      onChanged: (v) => setState(() => _selectedRouteId = v),
+    );
+    final searchField = TextField(
+      controller: _customerSearchCtrl,
+      decoration: const InputDecoration(hintText: 'Filter shops...', prefixIcon: Icon(Icons.search), isDense: true),
+      onChanged: (_) => setState(() {}),
+    );
+    final chartBtn = TextButton.icon(
+      onPressed: _showChart,
+      icon: const Icon(Icons.show_chart, size: 18),
+      label: Text(isMobile ? 'Chart' : 'Visual chart'),
+    );
+    final selectBtn = TextButton.icon(
+      onPressed: () => setState(() {
+        if (allSelected) {
+          _selectedIds.clear();
+        } else {
+          _selectedIds.addAll(_filteredCustomers.map((c) => c['id'] as String));
+        }
+      }),
+      icon: const Icon(Icons.checklist, size: 18),
+      label: Text(allSelected ? (isMobile ? 'Clear' : 'Clear selection') : 'Select all'),
+    );
+    final pdfBtn = OutlinedButton.icon(
+      onPressed: _exportPdf,
+      icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+      label: Text(isMobile
+          ? (_selectedIds.isEmpty ? 'PDF (${_filteredCustomers.length})' : 'PDF (${_selectedIds.length})')
+          : (_selectedIds.isEmpty
+              ? 'Export PDF (all ${_filteredCustomers.length})'
+              : 'Export PDF (${_selectedIds.length} selected)')),
+    );
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(isMobile ? 12 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Competitor Spotting', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+        Text('Competitor Spotting', style: TextStyle(fontSize: isMobile ? 22 : 28, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
         Text(
           '${_filteredCustomers.length} shops × ${_categories.length} categories tracked. Each cell shows the latest known competitor brand. Click for price + specs.',
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
         const SizedBox(height: 16),
-        Row(children: [
-          Expanded(child: DropdownButtonFormField<String?>(
-            value: _selectedSalespersonId,
-            decoration: const InputDecoration(labelText: 'Salesperson', isDense: true, border: OutlineInputBorder()),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All salespeople')),
-              ..._salespeople.map((s) => DropdownMenuItem<String?>(value: s['id'] as String, child: Text(s['name'] as String))),
-            ],
-            onChanged: (v) => setState(() => _selectedSalespersonId = v),
-          )),
-          const SizedBox(width: 12),
-          Expanded(child: DropdownButtonFormField<String?>(
-            value: _selectedRouteId,
-            decoration: const InputDecoration(labelText: 'Route', isDense: true, border: OutlineInputBorder()),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All routes')),
-              ..._routes.map((r) => DropdownMenuItem<String?>(value: r['id'] as String, child: Text(r['name'] as String))),
-            ],
-            onChanged: (v) => setState(() => _selectedRouteId = v),
-          )),
-        ]),
-        const SizedBox(height: 12),
-        Row(children: [
-          Expanded(child: TextField(
-            controller: _customerSearchCtrl,
-            decoration: const InputDecoration(hintText: 'Filter shops...', prefixIcon: Icon(Icons.search)),
-            onChanged: (_) => setState(() {}),
-          )),
-          const SizedBox(width: 12),
-          TextButton.icon(
-            onPressed: _showChart,
-            icon: const Icon(Icons.show_chart, size: 18),
-            label: const Text('Visual chart'),
-          ),
-          const SizedBox(width: 8),
-          TextButton.icon(
-            onPressed: () => setState(() {
-              final allSelected = _filteredCustomers.isNotEmpty &&
-                  _filteredCustomers.every((c) => _selectedIds.contains(c['id']));
-              if (allSelected) {
-                _selectedIds.clear();
-              } else {
-                _selectedIds.addAll(_filteredCustomers.map((c) => c['id'] as String));
-              }
-            }),
-            icon: const Icon(Icons.checklist, size: 18),
-            label: Text(_filteredCustomers.isNotEmpty &&
-                    _filteredCustomers.every((c) => _selectedIds.contains(c['id']))
-                ? 'Clear selection'
-                : 'Select all'),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: _exportPdf,
-            icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-            label: Text(_selectedIds.isEmpty
-                ? 'Export PDF (all ${_filteredCustomers.length})'
-                : 'Export PDF (${_selectedIds.length} selected)'),
-          ),
-        ]),
+        if (isMobile) ...[
+          spDropdown,
+          const SizedBox(height: 10),
+          routeDropdown,
+          const SizedBox(height: 10),
+          searchField,
+          const SizedBox(height: 6),
+          Wrap(spacing: 4, runSpacing: 0, children: [chartBtn, selectBtn, pdfBtn]),
+        ] else ...[
+          Row(children: [
+            Expanded(child: spDropdown),
+            const SizedBox(width: 12),
+            Expanded(child: routeDropdown),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: searchField),
+            const SizedBox(width: 12),
+            chartBtn,
+            const SizedBox(width: 8),
+            selectBtn,
+            const SizedBox(width: 8),
+            pdfBtn,
+          ]),
+        ],
         const SizedBox(height: 16),
         if (_loading)
           const Expanded(child: Center(child: CircularProgressIndicator()))
@@ -390,7 +414,8 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                 scrollDirection: Axis.horizontal,
                 child: SingleChildScrollView(
                   child: DataTable(
-                    columnSpacing: 8,
+                    columnSpacing: isMobile ? 4 : 8,
+                    horizontalMargin: isMobile ? 8 : 24,
                     headingRowHeight: 60,
                     dataRowMinHeight: 48,
                     dataRowMaxHeight: 48,
@@ -406,10 +431,10 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                           }
                         }),
                       ))),
-                      const DataColumn(label: SizedBox(width: 200, child: Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
+                      DataColumn(label: SizedBox(width: isMobile ? 130 : 200, child: const Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
                       ..._categories.map((cat) => DataColumn(
                         label: SizedBox(
-                          width: 140,
+                          width: isMobile ? 110 : 140,
                           child: Text(cat['name'] as String,
                             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                             maxLines: 2,
@@ -429,7 +454,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                           }),
                         ))),
                         DataCell(SizedBox(
-                          width: 200,
+                          width: isMobile ? 130 : 200,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -443,13 +468,13 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                           final catId = cat['id'] as String;
                           final spotting = _latest[cid]?[catId];
                           if (spotting == null) {
-                            return const DataCell(SizedBox(width: 140, child: Center(child: Text('—', style: TextStyle(color: AppTheme.textSecondary)))));
+                            return DataCell(SizedBox(width: isMobile ? 110 : 140, child: const Center(child: Text('—', style: TextStyle(color: AppTheme.textSecondary)))));
                           }
                           return DataCell(
                             InkWell(
                               onTap: () => _showCellDetail(c, cat, spotting),
                               child: SizedBox(
-                                width: 140,
+                                width: isMobile ? 110 : 140,
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                                   decoration: BoxDecoration(
@@ -720,33 +745,31 @@ class _CompetitorTrendChartState extends State<_CompetitorTrendChart> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Text('Competitor Brand Trend',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-            const Spacer(),
-            _windowSegment('7d'),
-            _windowSegment('30d'),
-            _windowSegment('6m'),
-          ]),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text('Competitor Brand Trend',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                _windowSegment('7d'),
+                _windowSegment('30d'),
+                _windowSegment('6m'),
+              ]),
+            ],
+          ),
           const SizedBox(height: 10),
           if (_categories.isNotEmpty)
             SizedBox(
-              width: 320,
-              child: DropdownButtonFormField<String>(
+              width: context.isMobile ? double.infinity : 320,
+              child: SearchableDropdown(
+                label: 'Category',
                 value: _selectedCategoryId,
-                isDense: true,
-                decoration: const InputDecoration(
-                  labelText: 'Category',
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  border: OutlineInputBorder(),
-                ),
-                items: _categories
-                    .map((c) => DropdownMenuItem(
-                          value: c.id,
-                          child: Text('${c.name}  (${c.count})'),
-                        ))
-                    .toList(),
+                options: [
+                  for (final c in _categories)
+                    MapEntry(c.id as String?, '${c.name}  (${c.count})'),
+                ],
                 onChanged: (v) {
                   if (v == null || v == _selectedCategoryId) return;
                   setState(() => _selectedCategoryId = v);

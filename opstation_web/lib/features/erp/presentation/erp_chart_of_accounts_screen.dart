@@ -180,20 +180,34 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     }
 
     String? newGroup = level == 1 ? (acc['account_group'] as String?) : findTopGroup();
-    String? sel1Id, sel2Id;
+    String? sel1Id, sel2Id, sel3Id;
 
-    if (level == 2) {
-      sel1Id = acc['parent_id'] as String?;
-    } else if (level >= 3) {
-      sel2Id = acc['parent_id'] as String?;
-      final l2 = _accounts.firstWhere((a) => a['id'] == sel2Id, orElse: () => {});
-      sel1Id = l2.isNotEmpty ? l2['parent_id'] as String? : null;
+    // Walk the full parent chain and bucket each ancestor by its OWN level, so
+    // the pre-selected parent at every tier is correct regardless of how deep
+    // this account sits. The old code assumed a 3-level tree and mislabelled a
+    // Level-4 account's parents (immediate parent is L3, not L2), leaving both
+    // dropdowns blank. This supports L2, L3 and L4 accounts.
+    {
+      var pid = acc['parent_id'] as String?;
+      while (pid != null) {
+        final p = _accounts.firstWhere((a) => a['id'] == pid, orElse: () => {});
+        if (p.isEmpty) break;
+        switch (p['level'] as int?) {
+          case 1: sel1Id = p['id'] as String?; break;
+          case 2: sel2Id = p['id'] as String?; break;
+          case 3: sel3Id = p['id'] as String?; break;
+        }
+        pid = p['parent_id'] as String?;
+      }
     }
 
     final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
       final l1Items = _accounts.where((a) => a['level'] == 1 && a['account_group'] == newGroup).toList();
       final l2Items = sel1Id != null
           ? _accounts.where((a) => a['level'] == 2 && a['parent_id'] == sel1Id).toList()
+          : <Map<String, dynamic>>[];
+      final l3Items = sel2Id != null
+          ? _accounts.where((a) => a['level'] == 3 && a['parent_id'] == sel2Id).toList()
           : <Map<String, dynamic>>[];
 
       return AlertDialog(
@@ -209,7 +223,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
             decoration: const InputDecoration(labelText: 'Account Group'),
             items: ['Assets','Capital','Liability','Income','Expense']
                 .map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-            onChanged: (v) => setS(() { newGroup = v; sel1Id = null; sel2Id = null; }),
+            onChanged: (v) => setS(() { newGroup = v; sel1Id = null; sel2Id = null; sel3Id = null; }),
           ) else Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(color: Colors.grey.shade50,
@@ -221,7 +235,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
             ]),
           ),
 
-          // Level 1 parent picker (for L2 and L3 accounts)
+          // Level 1 parent picker (for L2, L3 and L4 accounts)
           if (level >= 2) ...[
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
@@ -231,11 +245,11 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
                 value: a['id'] as String,
                 child: Text('${a["code"] ?? ""} — ${a["name"] ?? ""}'),
               )).toList(),
-              onChanged: (v) => setS(() { sel1Id = v; sel2Id = null; }),
+              onChanged: (v) => setS(() { sel1Id = v; sel2Id = null; sel3Id = null; }),
             ),
           ],
 
-          // Level 2 parent picker (for L3 accounts only)
+          // Level 2 parent picker (for L3 and L4 accounts)
           if (level >= 3) ...[
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
@@ -245,7 +259,21 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
                 value: a['id'] as String,
                 child: Text('${a["code"] ?? ""} — ${a["name"] ?? ""}'),
               )).toList(),
-              onChanged: (v) => setS(() => sel2Id = v),
+              onChanged: (v) => setS(() { sel2Id = v; sel3Id = null; }),
+            ),
+          ],
+
+          // Level 3 parent picker (for L4 accounts only)
+          if (level >= 4) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String?>(
+              value: l3Items.any((a) => a['id'] == sel3Id) ? sel3Id : null,
+              decoration: const InputDecoration(labelText: 'Level 3 Parent'),
+              items: l3Items.map((a) => DropdownMenuItem(
+                value: a['id'] as String,
+                child: Text('${a["code"] ?? ""} — ${a["name"] ?? ""}'),
+              )).toList(),
+              onChanged: (v) => setS(() => sel3Id = v),
             ),
           ],
 
@@ -283,7 +311,12 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     }));
 
     if (ok != true || !mounted) return;
-    final newParentId = level == 1 ? null : level == 2 ? sel1Id : sel2Id;
+    // Immediate parent for the account being edited is the ancestor exactly one
+    // level up: L2->L1, L3->L2, L4->L3.
+    final newParentId = level == 1 ? null
+        : level == 2 ? sel1Id
+        : level == 3 ? sel2Id
+        : sel3Id;
     try {
       final updates = <String, dynamic>{'name': nameCtrl.text.trim(), 'account_type': selectedType};
       if (level == 1) updates['account_group'] = newGroup;

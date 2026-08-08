@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -106,7 +107,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
       final sess = e['pos_sessions']?['session_number'] as String? ?? '-';
       final cashier = e['users']?['name'] as String? ?? '-';
       final ts = e['created_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
-      return '<tr><td>$ts</td><td>$sess</td><td>$branch</td><td><span class="cat">$cat</span></td><td>$note</td><td>$cashier</td><td class="amt">Rs. ${amt.toStringAsFixed(2)}</td></tr>';
+      return '<tr><td>$ts</td><td>$sess</td><td>$branch</td><td><span class="cat">$cat</span></td><td>$note</td><td>$cashier</td><td class="amt">Rs. ${money(amt)}</td></tr>';
     }).join();
 
     // Category summary
@@ -130,7 +131,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
 </div>
 <h3 style="font-size:13px;margin-bottom:8px">Expense Details</h3>
 <table><thead><tr><th>Date & Time</th><th>Session</th><th>Branch</th><th>Category</th><th>Note</th><th>Cashier</th><th>Amount</th></tr></thead>
-<tbody>$rows<tr class="total-row"><td colspan="6">TOTAL</td><td class="amt">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table>
+<tbody>$rows<tr class="total-row"><td colspan="6">TOTAL</td><td class="amt">Rs. ${money(total)}</td></tr></tbody></table>
 ${print ? '<script>window.print()</script>' : ''}
 </body></html>''';
 
@@ -155,12 +156,12 @@ ${print ? '<script>window.print()</script>' : ''}
             Text('All POS session expenses', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           ])),
           // Stats chips
-          _StatChip(label: 'Total', value: 'Rs. ${_filteredTotal.toStringAsFixed(2)}', color: Colors.red.shade700),
+          _StatChip(label: 'Total', value: 'Rs. ${money(_filteredTotal)}', color: Colors.red.shade700),
           const SizedBox(width: 12),
           _StatChip(label: 'Entries', value: '${filtered.length}', color: AppTheme.primary),
           if (_selected.isNotEmpty) ...[
             const SizedBox(width: 12),
-            _StatChip(label: 'Selected', value: 'Rs. ${_selectedTotal.toStringAsFixed(2)}', color: Colors.orange.shade700),
+            _StatChip(label: 'Selected', value: 'Rs. ${money(_selectedTotal)}', color: Colors.orange.shade700),
           ],
           const SizedBox(width: 20),
           OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: Text(_selected.isEmpty ? 'Print All' : 'Print (${_selected.length})'), onPressed: _printSelected),
@@ -226,7 +227,7 @@ ${print ? '<script>window.print()</script>' : ''}
                     const Expanded(flex: 2, child: SizedBox()),
                     const Expanded(flex: 3, child: SizedBox()),
                     const Expanded(flex: 1, child: Text('TOTAL', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-                    Expanded(flex: 1, child: Text('Rs. ${_filteredTotal.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Colors.red.shade700))),
+                    Expanded(flex: 1, child: Text('Rs. ${money(_filteredTotal)}', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Colors.red.shade700))),
                   ]));
               }
               final e = filtered[i];
@@ -250,7 +251,7 @@ ${print ? '<script>window.print()</script>' : ''}
                     Expanded(flex: 2, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.orange.shade100)), child: Text(cat, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.orange.shade800)))),
                     Expanded(flex: 3, child: Text(note == '-' ? '' : note, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
                     Expanded(flex: 1, child: Text(cashier, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-                    Expanded(flex: 1, child: Text('Rs. ${amt.toStringAsFixed(2)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700))),
+                    Expanded(flex: 1, child: Text('Rs. ${money(amt)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700))),
                   ])));
             })),
     ]));

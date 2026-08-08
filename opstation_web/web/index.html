@@ -1,46 +1,93 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
-
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
-
+  <meta name="description" content="Opstation ERP">
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="opstation_web">
+  <meta name="apple-mobile-web-app-title" content="Opstation">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
-
-  <title>opstation_web</title>
+  <title>Opstation</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- ── Web Push helpers (native JS; called from Dart) ───────────────────── -->
+  <script>
+    (function () {
+      function urlB64ToUint8(base64String) {
+        var padding = '='.repeat((4 - base64String.length % 4) % 4);
+        var b64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        var raw = atob(b64);
+        var arr = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+        return arr;
+      }
+
+      async function getActiveReg() {
+        var reg = await navigator.serviceWorker.register('/push/push_sw.js', { scope: '/push/' });
+        for (var i = 0; i < 50 && !(reg && reg.active); i++) {
+          await new Promise(function (r) { setTimeout(r, 100); });
+          reg = (await navigator.serviceWorker.getRegistration('/push/')) || reg;
+        }
+        return reg;
+      }
+
+      // Register early so the worker is active by the time the user toggles.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/push/push_sw.js', { scope: '/push/' })
+          .catch(function (e) { console.warn('push sw register failed', e); });
+      }
+
+      window.opstationPushSupported = function () {
+        return ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window);
+      };
+
+      window.opstationPushStatus = async function () {
+        try {
+          if (!window.opstationPushSupported()) return false;
+          var reg = await navigator.serviceWorker.getRegistration('/push/');
+          if (!reg) return false;
+          var sub = await reg.pushManager.getSubscription();
+          return !!sub;
+        } catch (e) { return false; }
+      };
+
+      window.opstationPushSubscribe = async function (vapidPublic) {
+        if (!window.opstationPushSupported()) throw 'unsupported';
+        var perm = await Notification.requestPermission();
+        if (perm !== 'granted') throw 'denied';
+        var reg = await getActiveReg();
+        var sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlB64ToUint8(vapidPublic)
+          });
+        }
+        var j = sub.toJSON();
+        return JSON.stringify({
+          endpoint: sub.endpoint,
+          p256dh: j.keys.p256dh,
+          auth: j.keys.auth
+        });
+      };
+
+      window.opstationPushUnsubscribe = async function () {
+        try {
+          var reg = await navigator.serviceWorker.getRegistration('/push/');
+          var sub = reg && await reg.pushManager.getSubscription();
+          if (sub) { var ep = sub.endpoint; await sub.unsubscribe(); return ep; }
+        } catch (e) {}
+        return '';
+      };
+    })();
+  </script>
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
-
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -6,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import 'erp_customer_360_screen.dart';
+import 'erp_supplier_360_screen.dart';
 
 /// CRM Follow-ups cockpit — every open follow-up across all shops, with
 /// assignee + due filters. Reads `customer_activities` (due_date not null,
@@ -21,6 +24,7 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
   bool _loading = true;
   List<Map<String, dynamic>> _rows = [];
   final Map<String, Map<String, dynamic>> _custById = {};
+  final Map<String, Map<String, dynamic>> _suppById = {};
   final Map<String, String> _userNames = {};
   List<Map<String, dynamic>> _orgUsers = [];
 
@@ -50,11 +54,12 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
     }
     try {
       final client = Supabase.instance.client;
+      // Both customer- AND supplier-linked follow-ups (either party set).
       final rows = await client
           .from('customer_activities')
           .select()
           .eq('org_id', orgId)
-          .not('customer_id', 'is', null)
+          .or('customer_id.not.is.null,supplier_id.not.is.null')
           .inFilter('status', ['open', 'in_progress', 'done'])
           .not('due_date', 'is', null)
           .order('due_date', ascending: true);
@@ -84,6 +89,22 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
         }
       }
 
+      final sids = list
+          .map((e) => e['supplier_id'] as String?)
+          .whereType<String>()
+          .toSet()
+          .toList();
+      final supp = <String, Map<String, dynamic>>{};
+      if (sids.isNotEmpty) {
+        final ss = await client
+            .from('suppliers')
+            .select('id, name, phone, email, address, contact_person, ntn, credit_limit')
+            .inFilter('id', sids);
+        for (final s in ss) {
+          supp[s['id'] as String] = Map<String, dynamic>.from(s);
+        }
+      }
+
       if (!mounted) return;
       setState(() {
         _rows = list;
@@ -94,6 +115,9 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
         _custById
           ..clear()
           ..addAll(cust);
+        _suppById
+          ..clear()
+          ..addAll(supp);
         _loading = false;
       });
     } catch (_) {
@@ -161,9 +185,11 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
       }
       if (q.isNotEmpty) {
         final c = _custById[a['customer_id']];
-        final name = (c?['shop_name'] as String? ?? '').toLowerCase();
+        final s = _suppById[a['supplier_id']];
+        final name = (c?['shop_name'] as String? ?? s?['name'] as String? ?? '').toLowerCase();
         final code = (c?['code'] as String? ?? '').toLowerCase();
-        if (!name.contains(q) && !code.contains(q)) return false;
+        final note = (a['note'] as String? ?? '').toLowerCase();
+        if (!name.contains(q) && !code.contains(q) && !note.contains(q)) return false;
       }
       return true;
     }).toList();
@@ -197,13 +223,21 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
             const Text('Follow-ups',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const Spacer(),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.print_outlined, size: 16),
+              label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
+              onPressed: _print,
+              style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+            ),
+            const SizedBox(width: 8),
             IconButton(
                 onPressed: _load,
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Refresh'),
           ]),
           const SizedBox(height: 4),
-          const Text('Open tasks across all shops',
+          const Text('Open tasks across customers & suppliers',
               style: TextStyle(color: AppTheme.textSecondary)),
           const SizedBox(height: 16),
           Row(children: [
@@ -326,15 +360,21 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
     final due = DateTime.tryParse('${a['due_date']}');
     final overdue = _isOverdue(due);
     final c = _custById[a['customer_id']];
-    final shop = c?['shop_name'] as String? ?? '(unknown shop)';
+    final s = _suppById[a['supplier_id']];
+    final isSupplier = a['supplier_id'] != null && s != null;
     final code = c?['code'] as String?;
+    // Title line: customer "code · shop", or supplier name.
+    final title = isSupplier
+        ? (s['name'] as String? ?? '(unknown supplier)')
+        : (c == null
+            ? '(unknown shop)'
+            : (code != null && code.isNotEmpty
+                ? '$code · ${c['shop_name'] ?? ''}'
+                : (c['shop_name'] as String? ?? '')));
     final asg = a['assigned_to'] as String?;
     final type = (a['type'] as String?) ?? 'note';
     return InkWell(
-      onTap: c == null
-          ? null
-          : () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => Customer360Screen(customer: c))),
+      onTap: () => _editDialog(a),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(children: [
@@ -354,13 +394,27 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                    code != null && code.isNotEmpty ? '$code · $shop' : shop,
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w700),
-                    overflow: TextOverflow.ellipsis),
+                // Party name opens the profile; the rest of the row opens the editor.
+                GestureDetector(
+                  onTap: () => _openProfile(c, s, isSupplier),
+                  child: Row(children: [
+                    Icon(isSupplier ? Icons.local_shipping_outlined : Icons.store_outlined,
+                        size: 13, color: AppTheme.primary),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(title,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary,
+                              decoration: TextDecoration.underline),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                  ]),
+                ),
                 const SizedBox(height: 2),
-                Text(a['note'] as String? ?? '',
+                Text(
+                    ((a['title'] as String?)?.trim().isNotEmpty == true
+                        ? a['title'] as String
+                        : a['note'] as String? ?? ''),
                     style: const TextStyle(
                         fontSize: 12, color: AppTheme.textSecondary),
                     maxLines: 1,
@@ -387,6 +441,15 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
                     overflow: TextOverflow.ellipsis),
               ),
             ]),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.open_in_new, size: 14),
+            label: const Text('View', style: TextStyle(fontSize: 12)),
+            onPressed: () => _editDialog(a),
+            style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
           ),
           if (overdue)
             Container(
@@ -435,6 +498,92 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
     );
   }
 
+  void _openProfile(Map<String, dynamic>? c, Map<String, dynamic>? s, bool isSupplier) {
+    if (isSupplier && s != null) {
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => Scaffold(body: ErpSupplier360Screen(initialSupplier: s))));
+    } else if (c != null) {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => Customer360Screen(customer: c)));
+    }
+  }
+
+  Future<void> _editDialog(Map<String, dynamic> a) async {
+    final titleCtrl = TextEditingController(text: (a['title'] as String?) ?? '');
+    final noteCtrl = TextEditingController(text: (a['note'] as String?) ?? '');
+    String type = (a['type'] as String?) ?? 'call';
+    const types = ['note', 'call', 'visit', 'collection', 'task', 'other'];
+    if (!types.contains(type)) type = 'other';
+    DateTime? due = DateTime.tryParse('${a['due_date']}');
+    String? assignee = a['assigned_to'] as String?;
+    String status = (a['status'] as String?) ?? 'open';
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        title: const Text('Edit follow-up'),
+        content: SizedBox(width: 460, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: titleCtrl, textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Title', isDense: true)),
+          const SizedBox(height: 12),
+          TextField(controller: noteCtrl, maxLines: 3, textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Note', isDense: true, alignLabelWithHint: true)),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: InkWell(
+              onTap: () async {
+                final p = await showDatePicker(context: ctx, initialDate: due ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
+                if (p != null) setS(() => due = p);
+              },
+              child: InputDecorator(decoration: const InputDecoration(labelText: 'Due date', isDense: true),
+                  child: Text(due == null ? 'None' : DateFormat('d MMM yyyy').format(due!), style: const TextStyle(fontSize: 14))),
+            )),
+            if (due != null) IconButton(icon: const Icon(Icons.clear, size: 18), onPressed: () => setS(() => due = null)),
+            const SizedBox(width: 8),
+            Expanded(child: DropdownButtonFormField<String>(value: type, decoration: const InputDecoration(labelText: 'Type', isDense: true),
+              items: const [
+                DropdownMenuItem(value: 'note', child: Text('Note')),
+                DropdownMenuItem(value: 'call', child: Text('Call')),
+                DropdownMenuItem(value: 'visit', child: Text('Visit')),
+                DropdownMenuItem(value: 'collection', child: Text('Collection')),
+                DropdownMenuItem(value: 'task', child: Text('Task')),
+                DropdownMenuItem(value: 'other', child: Text('Other')),
+              ], onChanged: (v) => setS(() => type = v ?? type))),
+          ]),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String?>(value: assignee, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Assignee', isDense: true),
+            items: [const DropdownMenuItem(value: null, child: Text('Unassigned')),
+              for (final u in _orgUsers) DropdownMenuItem(value: u['id'] as String, child: Text('${u['name'] ?? 'Unknown'}'))],
+            onChanged: (v) => setS(() => assignee = v)),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(value: status, decoration: const InputDecoration(labelText: 'Status', isDense: true),
+            items: const [DropdownMenuItem(value: 'open', child: Text('Open')), DropdownMenuItem(value: 'in_progress', child: Text('In progress')), DropdownMenuItem(value: 'done', child: Text('Done'))],
+            onChanged: (v) => setS(() => status = v ?? 'open')),
+        ]))),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () async {
+            try {
+              await Supabase.instance.client.from('customer_activities').update({
+                'title': titleCtrl.text.trim().isEmpty ? null : titleCtrl.text.trim(),
+                'note': noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+                'type': type,
+                'due_date': due != null ? DateFormat('yyyy-MM-dd').format(due!) : null,
+                'assigned_to': assignee,
+                'status': status,
+                'completed_at': status == 'done' ? DateTime.now().toIso8601String() : null,
+                'updated_at': DateTime.now().toIso8601String(),
+              }).eq('id', a['id']);
+              if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+              _load();
+            } catch (e) {
+              if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: ${e.toString().split('\n').first}')));
+            }
+          }, child: const Text('Save')),
+        ],
+      )),
+    );
+  }
+
   Widget _chip(String type) {
     final t = type.isEmpty ? 'note' : type;
     final label = t[0].toUpperCase() + t.substring(1);
@@ -450,5 +599,90 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
               fontWeight: FontWeight.w700,
               color: AppTheme.primary)),
     );
+  }
+
+  // Party label for a row: "code · shop" (customer) or supplier name.
+  String _partyLabel(Map<String, dynamic> a) {
+    if (a['supplier_id'] != null) {
+      return _suppById[a['supplier_id']]?['name'] as String? ?? '(supplier)';
+    }
+    final c = _custById[a['customer_id']];
+    final shop = c?['shop_name'] as String? ?? '(unknown)';
+    final code = c?['code'] as String?;
+    return (code != null && code.isNotEmpty) ? '$code · $shop' : shop;
+  }
+
+  void _print() {
+    try {
+      final rows = _filtered;
+      final assigneeLabel = _assignee == 'all'
+          ? 'All assignees'
+          : _assignee == 'unassigned'
+              ? 'Unassigned'
+              : (_userNames[_assignee] ?? 'Unknown');
+      const dueLabels = {
+        'all': 'All open',
+        'overdue': 'Overdue',
+        'today': 'Due today',
+        'week': 'Next 7 days',
+        'completed': 'Completed',
+      };
+      final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+      String esc(String s) => s
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+
+      final body = StringBuffer();
+      for (final a in rows) {
+        final due = DateTime.tryParse('${a['due_date']}');
+        final overdue = _active(a['status'] as String?) && _isOverdue(due);
+        final dateStr = due == null ? '-' : DateFormat('d MMM yy').format(due);
+        final isSupp = a['supplier_id'] != null;
+        final party = esc(_partyLabel(a));
+        // Description: show both the title and the note so nothing is hidden.
+        final titleTxt = (a['title'] as String?)?.trim() ?? '';
+        final noteTxt = (a['note'] as String?)?.trim() ?? '';
+        final desc = esc([
+          if (titleTxt.isNotEmpty) titleTxt,
+          if (noteTxt.isNotEmpty) noteTxt,
+        ].join(' — '));
+        final asg = a['assigned_to'] as String?;
+        final asgName = esc(asg == null ? 'Unassigned' : (_userNames[asg] ?? 'Unknown'));
+        final status = esc((a['status'] as String? ?? 'open'));
+        body.write('<tr' + (overdue ? ' class="od"' : '') + '><td>' + dateStr +
+            '</td><td>' + (isSupp ? 'Supplier' : 'Customer') + '</td><td>' + party +
+            '</td><td>' + desc + '</td><td>' + asgName + '</td><td>' + status + '</td></tr>');
+      }
+
+      final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Follow-ups</title><style>'
+          '@page { margin: 0.6cm; } '
+          'body { font-family: Arial, sans-serif; padding: 16px; font-size: 11px; color: #000; margin: 0; } '
+          'h1 { font-size: 18px; margin: 0 0 4px 0; } '
+          '.info { font-size: 10px; color: #555; margin: 2px 0; } '
+          'table { width: 100%; border-collapse: collapse; margin-top: 10px; } '
+          'th, td { padding: 5px 7px; border-bottom: 1px solid #ddd; text-align: left; font-size: 10px; } '
+          'th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; } '
+          'tr.od td { color: #c62828; } '
+          '</style></head><body>'
+          '<h1>Follow-ups</h1>'
+          '<div class="info"><strong>Assignee:</strong> ' + esc(assigneeLabel) + '</div>'
+          '<div class="info"><strong>Filter:</strong> ' + (dueLabels[_due] ?? _due) + '</div>'
+          '<div class="info"><strong>Overdue:</strong> ' + _overdueCount.toString() +
+          '  ·  <strong>Due today:</strong> ' + _todayCount.toString() +
+          '  ·  <strong>Upcoming:</strong> ' + _upcomingCount.toString() + '</div>'
+          '<div class="info">Generated: ' + gen + '  ·  ' + rows.length.toString() + ' item(s)</div>'
+          '<table><thead><tr><th>Due</th><th>Type</th><th>Party</th><th>Task / Note</th><th>Assignee</th><th>Status</th></tr></thead>'
+          '<tbody>' + body.toString() + '</tbody></table></body></html>';
+
+      final blob = html.Blob([doc], 'text/html;charset=utf-8');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.window.open(url, '_blank');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Print error: $e')));
+      }
+    }
   }
 }

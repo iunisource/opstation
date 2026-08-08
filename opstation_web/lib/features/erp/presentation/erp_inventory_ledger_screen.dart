@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -80,12 +81,18 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
   }
 
   Future<void> _loadBranches() async {
-    final orgId = _orgId;
-    if (orgId == null) return;
+    // Only the branches this user is allocated to (userBranchesProvider
+    // already returns ALL branches for admin tiers and only the allocated
+    // ones for ERP users). "All Branches" and Multi-select thus never expose
+    // branches the user has no access to.
     try {
-      final branches = await Supabase.instance.client
-          .from('branches').select('id, name').eq('org_id', orgId).order('name');
-      setState(() { _branches = List<Map<String, dynamic>>.from(branches); });
+      final rows = await ref.read(userBranchesProvider.future);
+      final list = rows
+          .map((b) => {'id': b['id'], 'name': b['name']})
+          .toList()
+        ..sort((a, b) =>
+            (a['name'] as String? ?? '').compareTo(b['name'] as String? ?? ''));
+      setState(() { _branches = List<Map<String, dynamic>>.from(list); });
     } catch (_) { }
   }
 
@@ -151,10 +158,18 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       final movements = await query.order('moved_at', ascending: true);
 
       double runningQty = 0;
+      final perBranch = <String, double>{};
       final entries = (movements as List).map((m) {
         final qty = (m['quantity'] as num?)?.toDouble() ?? 0;
         runningQty += qty;
-        return {...Map<String, dynamic>.from(m), 'running_qty': runningQty};
+        final bid = m['branch_id'] as String? ?? '';
+        final br = (perBranch[bid] ?? 0) + qty;
+        perBranch[bid] = br;
+        return {
+          ...Map<String, dynamic>.from(m),
+          'running_qty': runningQty,
+          'branch_running': br, // per-branch running balance
+        };
       }).toList();
 
       await _fetchVoucherNumbers(entries);
@@ -181,6 +196,8 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (r.startsWith('stock_transfer')) return 'stock_transfers';
     if (r.startsWith('stock_adjustment')) return 'stock_adjustments';
     if (r == 'damage' || r.startsWith('damage')) return 'damage_vouchers';
+    if (r.startsWith('production')) return 'production_vouchers';
+    if (r.startsWith('job')) return 'job_card_runs'; // job_run movements
     return refType;
   }
 
@@ -250,6 +267,8 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (r.startsWith('purchase_invoice')) return 'Purchase Invoice';
     if (r.startsWith('sales_invoice')) return 'Sales Invoice';
     if (r.startsWith('pos')) return 'POS';
+    if (r.startsWith('production')) return 'Production Voucher';
+    if (r.startsWith('job')) return 'Job Run';
     return r.split('_').map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
   }
 
@@ -272,12 +291,18 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       final ids = entry.value.toList();
       try {
         final rows = await client.from(tbl)
-            .select('*')
+            // Job runs have no voucher_number of their own — the number is
+            // built from the parent job card (JOB-xxxx-R<run_no>).
+            .select(tbl == 'job_card_runs' ? '*, job_cards(job_number)' : '*')
             .inFilter('id', ids);
         for (final r in rows as List) {
           final id = r['id'] as String?;
           if (id == null) continue;
-          final vno = (r['voucher_number'] ?? r['invoice_number'] ?? r['transaction_number'] ?? '') as String;
+          String vno = (r['voucher_number'] ?? r['invoice_number'] ?? r['transaction_number'] ?? '') as String;
+          if (tbl == 'job_card_runs' && vno.isEmpty) {
+            final jn = (r['job_cards'] is Map ? r['job_cards']['job_number'] as String? : null) ?? 'JOB';
+            vno = '$jn-R${r['run_no'] ?? ''}';
+          }
           if (vno.isNotEmpty) vMap[id] = vno;
           if (tbl == 'stock_transfers') {
             transferInfo[id] = {
@@ -513,6 +538,25 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             }
           }
           break;
+        case 'production_vouchers':
+          title = 'Production Voucher';
+          voucher = await client.from('production_vouchers').select('*').eq('id', refId).maybeSingle();
+          if (voucher != null) {
+            try { lines = await client.from('production_voucher_components').select('*, products(name, sku)').eq('voucher_id', refId); } catch (_) { }
+          }
+          break;
+        case 'job_card_runs':
+          title = 'Job Run';
+          voucher = await client.from('job_card_runs').select('*, job_cards(job_number)').eq('id', refId).maybeSingle();
+          if (voucher != null) {
+            final jn = (voucher['job_cards'] is Map ? voucher['job_cards']['job_number'] as String? : null) ?? 'JOB';
+            voucher['voucher_number'] = '$jn-R${voucher['run_no'] ?? ''}';
+            final jobId = voucher['job_card_id'] as String?;
+            if (jobId != null) {
+              try { lines = await client.from('job_card_materials').select('*, products(name, sku)').eq('job_card_id', jobId); } catch (_) { }
+            }
+          }
+          break;
         default:
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Unknown reference: ' + refType)));
           return;
@@ -529,14 +573,14 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
 
   Widget _buildVoucherDialog(BuildContext ctx, String title, Map<String, dynamic> v, List<dynamic> lines) {
     final vNum = ((v['voucher_number'] ?? v['invoice_number'] ?? v['transaction_number'] ?? '') as String);
-    final dateStr = ((v['voucher_date'] ?? v['invoice_date'] ?? v['transacted_at'] ?? v['transfer_date'] ?? v['created_at'] ?? '') as String);
+    final dateStr = ((v['voucher_date'] ?? v['invoice_date'] ?? v['transacted_at'] ?? v['transfer_date'] ?? v['run_date'] ?? v['created_at'] ?? '') as String);
     final dt = DateTime.tryParse(dateStr);
     final dateFmt = dt != null ? DateFormat('d MMM yyyy').format(dt) : '-';
     final cust = v['customers']; final supp = v['suppliers'];
     final entityName = (cust is Map ? (cust['shop_name'] ?? cust['name']) as String? : null)
                     ?? (supp is Map ? (supp['name'] ?? supp['shop_name']) as String? : null) ?? '';
     final entityCode = (cust is Map ? cust['code'] as String? : null) ?? '';
-    final total = ((v['grand_total'] ?? v['total'] ?? v['total_amount'] ?? v['net_amount']) as num?)?.toDouble() ?? 0;
+    final total = ((v['grand_total'] ?? v['total'] ?? v['total_amount'] ?? v['net_amount'] ?? v['total_cost']) as num?)?.toDouble() ?? 0;
     return Dialog(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 800, maxHeight: 700),
@@ -594,7 +638,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             const SizedBox(height: 8),
             if (total > 0) Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               const Text('Total: ', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-              Text('Rs. ' + total.toStringAsFixed(2), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+              Text('Rs. ' + money(total), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
             ]),
           ]),
         ),
@@ -612,9 +656,9 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         Expanded(flex: 2, child: Text('Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
       ])),
       ...lines.map((line) {
-        final qty = ((line['quantity'] ?? line['qty'] ?? line['qty_delivered'] ?? line['qty_received']) as num?)?.toDouble() ?? 0;
-        final price = ((line['unit_price'] ?? line['price']) as num?)?.toDouble() ?? 0;
-        final lineTotal = ((line['line_total'] ?? line['total'] ?? line['amount']) as num?)?.toDouble() ?? (qty * price);
+        final qty = ((line['quantity'] ?? line['qty'] ?? line['qty_delivered'] ?? line['qty_received'] ?? line['planned_qty'] ?? line['issued_qty']) as num?)?.toDouble() ?? 0;
+        final price = ((line['unit_price'] ?? line['price'] ?? line['unit_cost']) as num?)?.toDouble() ?? 0;
+        final lineTotal = ((line['line_total'] ?? line['total'] ?? line['amount'] ?? line['line_cost']) as num?)?.toDouble() ?? (qty * price);
         final prod = line['products'];
         final prodName = (prod is Map ? prod['name'] as String? : null) ?? (line['product_name'] as String?) ?? '';
         return Container(
@@ -623,8 +667,8 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           child: Row(children: [
             Expanded(flex: 4, child: Text(prodName, style: const TextStyle(fontSize: 12))),
             Expanded(flex: 1, child: Text(qty % 1 == 0 ? qty.toInt().toString() : qty.toString(), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-            Expanded(flex: 2, child: Text(price > 0 ? 'Rs. ' + price.toStringAsFixed(2) : '-', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-            Expanded(flex: 2, child: Text(lineTotal > 0 ? 'Rs. ' + lineTotal.toStringAsFixed(2) : '-', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+            Expanded(flex: 2, child: Text(price > 0 ? 'Rs. ' + money(price) : '-', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: Text(lineTotal > 0 ? 'Rs. ' + money(lineTotal) : '-', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
           ]),
         );
       }),
@@ -657,10 +701,16 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         final vno = refId != null ? (_voucherNumbers[refId] ?? _friendlyRefLabel(m['reference_type'] as String?)) : (m['notes'] as String? ?? '-');
         final inStr = qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
         final outStr = qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-';
-        final balStr = runQty.toStringAsFixed(runQty % 1 == 0 ? 0 : 2) + ' ' + entryUom;
+        final printBal = _branchMode != 'current'
+            ? ((m['branch_running'] as double?) ?? 0)
+            : runQty;
+        final balStr = printBal.toStringAsFixed(printBal % 1 == 0 ? 0 : 2) + ' ' + entryUom;
+        final brCell = _branchMode != 'current'
+            ? '<td>' + (_branchNameById(m['branch_id'] as String?) ?? '-') + '</td>'
+            : '';
         final descRaw = _movementDescription(m);
         final desc = descRaw.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-        rowsBuf.write('<tr><td>' + date + '</td><td><span class="badge">' + type + '</span></td><td>' + vno + '</td><td>' + desc + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
+        rowsBuf.write('<tr><td>' + date + '</td>' + brCell + '<td><span class="badge">' + type + '</span></td><td>' + vno + '</td><td>' + desc + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
       }
       final productName = (p['name'] as String?) ?? '';
       final sku = (p['sku'] as String?) ?? '';
@@ -697,7 +747,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         '<div class="stat"><div class="stat-label">Total Out</div><div class="stat-value red">-' + totalOut.toStringAsFixed(totalOut % 1 == 0 ? 0 : 2) + ' ' + uomAbbr + '</div></div>'
         '<div class="stat"><div class="stat-label">Entries</div><div class="stat-value">' + _filteredMovements.length.toString() + '</div></div>'
         '</div><table>'
-        '<thead><tr><th>Date</th><th>Type</th><th>Voucher / Notes</th><th>Description</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th></tr></thead>'
+        '<thead><tr><th>Date</th>' + (_branchMode != 'current' ? '<th>Branch</th>' : '') + '<th>Type</th><th>Voucher / Notes</th><th>Description</th><th class="num">In</th><th class="num">Out</th><th class="num">' + (_branchMode != 'current' ? 'Branch Bal.' : 'Balance') + '</th></tr></thead>'
         '<tbody>' + rowsBuf.toString() + '</tbody>'
         '</table>'
         '<div class="footer">Generated by ' + genBy + ' &middot; ' + genTime + '</div>'
@@ -851,6 +901,17 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     final p = _selectedProduct!;
     final uomAbbr = p['uoms']?['abbreviation'] as String? ?? '';
     final currentStock = _movements.isNotEmpty ? (_movements.last['running_qty'] as double) : 0.0;
+    // Multi-branch view: bifurcate. Final per-branch balances for the header,
+    // and a Branch column + per-branch running balance in the table.
+    final multiBranch = _branchMode != 'current';
+    final branchTotals = <String, double>{};
+    if (multiBranch) {
+      for (final m in _movements) {
+        branchTotals[m['branch_id'] as String? ?? ''] =
+            (m['branch_running'] as double?) ?? 0;
+      }
+    }
+    String fmtQ(double q) => q % 1 == 0 ? q.toInt().toString() : q.toString();
     return Expanded(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -881,6 +942,15 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                 const Text('Current Stock', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                 Text((currentStock % 1 == 0 ? currentStock.toInt().toString() : currentStock.toString()) + ' ' + uomAbbr,
                     style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: currentStock > 0 ? AppTheme.success : AppTheme.danger)),
+                if (multiBranch && branchTotals.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                        branchTotals.entries
+                            .map((e) => '${_branchNameById(e.key) ?? '—'}: ${fmtQ(e.value)}')
+                            .join('  ·  '),
+                        style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+                  ),
               ]),
             ),
             const SizedBox(width: 12),
@@ -952,14 +1022,16 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-                  child: const Row(children: [
-                    Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 3, child: Text('Voucher / Notes', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 3, child: Text('Description', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('In', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Balance', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                  child: Row(children: [
+                    const Expanded(flex: 2, child: Text('Date', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    if (multiBranch)
+                      const Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    const Expanded(flex: 2, child: Text('Type', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    const Expanded(flex: 3, child: Text('Voucher / Notes', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    Expanded(flex: multiBranch ? 2 : 3, child: const Text('Description', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    const Expanded(flex: 2, child: Text('In', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    const Expanded(flex: 2, child: Text('Out', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    Expanded(flex: 2, child: Text(multiBranch ? 'Branch Bal.' : 'Balance', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                   ]),
                 ),
                 const Divider(height: 1),
@@ -986,6 +1058,11 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                               child: Row(children: [
                                 Expanded(flex: 2, child: Text(date, style: const TextStyle(fontSize: 12))),
+                                if (multiBranch)
+                                  Expanded(flex: 2, child: Text(
+                                      _branchNameById(m['branch_id'] as String?) ?? '—',
+                                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
                                 Expanded(flex: 2, child: Align(
                                   alignment: Alignment.centerLeft,
                                   child: Container(
@@ -1003,15 +1080,22 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                                         ),
                                       )
                                     : Text(displayRef, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                                Expanded(flex: 3, child: Text(_movementDescription(m),
+                                Expanded(flex: multiBranch ? 2 : 3, child: Text(_movementDescription(m),
                                     maxLines: 2, overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                                 Expanded(flex: 2, child: Text(qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-',
                                     style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.success))),
                                 Expanded(flex: 2, child: Text(qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '-',
                                     style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.danger))),
-                                Expanded(flex: 2, child: Text(runQty.toStringAsFixed(runQty % 1 == 0 ? 0 : 2) + ' ' + entryUom,
-                                    style: TextStyle(fontWeight: FontWeight.w700, color: runQty > 0 ? AppTheme.success : AppTheme.danger))),
+                                Expanded(flex: 2, child: Builder(builder: (_) {
+                                  // Multi-branch: show that BRANCH's running
+                                  // balance (bifurcated); single: combined.
+                                  final bal = multiBranch
+                                      ? ((m['branch_running'] as double?) ?? 0)
+                                      : runQty;
+                                  return Text(bal.toStringAsFixed(bal % 1 == 0 ? 0 : 2) + ' ' + entryUom,
+                                      style: TextStyle(fontWeight: FontWeight.w700, color: bal > 0 ? AppTheme.success : AppTheme.danger));
+                                })),
                               ]),
                             );
                           }),

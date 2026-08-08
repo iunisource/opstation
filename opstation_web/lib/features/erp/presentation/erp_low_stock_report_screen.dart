@@ -3,6 +3,7 @@ import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -20,6 +21,7 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   String? _branchId;
   String? _fMain, _fGroup, _fClass, _fMov;
+  final Set<String> _selected = {}; // product ids selected for a bulk PO
 
   @override
   void initState() {
@@ -64,6 +66,7 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
           final qty = (s['quantity'] as num?)?.toDouble() ?? 0;
           if (qty > limit) continue;                // above threshold → fine
           rows.add({
+            'id': pid,
             'name': p['name'], 'sku': p['sku'],
             'main': p['product_main_group'], 'group': p['product_group'],
             'class': p['product_class'], 'mov': p['product_movement_category'],
@@ -166,6 +169,43 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
     Future.delayed(const Duration(seconds: 4), () => html.Url.revokeObjectUrl(url));
   }
 
+  // Jump to the Purchase Order screen seeded with this product + shortfall qty
+  // and the branch this report is scoped to, so a new PO opens ready to add.
+  void _makePo(Map<String, dynamic> r) {
+    final pid = r['id'] as String?;
+    if (pid == null) return;
+    final short = (r['short'] as double?) ?? 0;
+    final qty = short > 0 ? short : ((r['limit'] as double?) ?? 1);
+    final params = {
+      'seedProduct': pid,
+      'seedQty': qty % 1 == 0 ? qty.toStringAsFixed(0) : qty.toStringAsFixed(2),
+      if (_branchId != null) 'seedBranch': _branchId!,
+    };
+    final qs = params.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&');
+    context.go('/erp/purchase?$qs');
+  }
+
+  // Bulk "Make PO" — seed one PO with every selected shortfall line.
+  void _makePoBulk() {
+    final chosen = _filtered.where((r) => _selected.contains(r['id'])).toList();
+    if (chosen.isEmpty) return;
+    final ids = <String>[]; final qtys = <String>[];
+    for (final r in chosen) {
+      final pid = r['id'] as String?; if (pid == null) continue;
+      final short = (r['short'] as double?) ?? 0;
+      final q = short > 0 ? short : ((r['limit'] as double?) ?? 1);
+      ids.add(pid);
+      qtys.add(q % 1 == 0 ? q.toStringAsFixed(0) : q.toStringAsFixed(2));
+    }
+    final params = {
+      'seedProduct': ids.join(','),
+      'seedQty': qtys.join(','),
+      if (_branchId != null) 'seedBranch': _branchId!,
+    };
+    final qs = params.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&');
+    context.go('/erp/purchase?$qs');
+  }
+
   @override
   Widget build(BuildContext context) {
     final list = _filtered;
@@ -176,6 +216,15 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
         Row(children: [
           const Text('Low Stock Report', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const Spacer(),
+          if (_selected.isNotEmpty) ...[
+            ElevatedButton.icon(
+              onPressed: _makePoBulk,
+              icon: const Icon(Icons.add_shopping_cart, size: 16),
+              label: Text('Make PO (${_selected.length})'),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            ),
+            const SizedBox(width: 10),
+          ],
           OutlinedButton.icon(onPressed: list.isEmpty ? null : _print, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
         ]),
         const SizedBox(height: 4),
@@ -207,14 +256,25 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-                    child: const Row(children: [
-                      Expanded(flex: 3, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                    child: Row(children: [
+                      SizedBox(width: 40, child: Checkbox(
+                        value: list.isNotEmpty && list.every((r) => _selected.contains(r['id'])),
+                        tristate: true,
+                        onChanged: (v) => setState(() {
+                          final allSel = list.every((r) => _selected.contains(r['id']));
+                          if (allSel) { _selected.clear(); }
+                          else { _selected.addAll(list.map((r) => r['id'] as String)); }
+                        }),
+                        visualDensity: VisualDensity.compact,
+                      )),
+                      const Expanded(flex: 3, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('Class', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('On Hand', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('Limit', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('Short', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      SizedBox(width: 108, child: Text('', textAlign: TextAlign.right)),
                     ]),
                   ),
                   Expanded(child: list.isEmpty
@@ -226,8 +286,16 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
                             final r = list[i];
                             final qty = (r['qty'] as double); final lim = (r['limit'] as double); final sh = (r['short'] as double);
                             return Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
                               child: Row(children: [
+                                SizedBox(width: 40, child: Checkbox(
+                                  value: _selected.contains(r['id']),
+                                  onChanged: (v) => setState(() {
+                                    if (v == true) { _selected.add(r['id'] as String); }
+                                    else { _selected.remove(r['id']); }
+                                  }),
+                                  visualDensity: VisualDensity.compact,
+                                )),
                                 Expanded(flex: 3, child: Text(r['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
                                 Expanded(flex: 2, child: Text(r['sku'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                                 Expanded(flex: 2, child: Text(r['group'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
@@ -235,6 +303,18 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
                                 Expanded(flex: 1, child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
                                 Expanded(flex: 1, child: Text(lim.toStringAsFixed(0), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                                 Expanded(flex: 1, child: Text(sh.toStringAsFixed(0), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.danger))),
+                                SizedBox(width: 108, child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () => _makePo(r),
+                                    icon: const Icon(Icons.add_shopping_cart, size: 14),
+                                    label: const Text('Make PO', style: TextStyle(fontSize: 12)),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      visualDensity: VisualDensity.compact,
+                                      minimumSize: const Size(0, 32)),
+                                  ),
+                                )),
                               ]),
                             );
                           },

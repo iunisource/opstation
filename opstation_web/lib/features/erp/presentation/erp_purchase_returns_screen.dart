@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -311,55 +312,20 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (_) {}
   }
 
-  // Move stock for every line. sign = -1 moves stock OUT (returned to supplier),
-  // sign = +1 reverses it. Mirrors the GRN confirm/reverse pattern.
-  Future<void> _applyStock(double sign, String refType) async {
-    final orgId = _orgId;
-    final branchId = _detail['branch_id'] as String?;
-    final userId = ref.read(currentUserProvider)?.id;
-    if (orgId == null || branchId == null) return;
-    for (final it in _items) {
-      final pid = it['product_id'] as String;
-      final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-      if (qty <= 0) continue;
-      final delta = sign * qty;
-      final stock = await Supabase.instance.client.from('inventory_stock').select()
-          .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-      if (stock == null) {
-        await Supabase.instance.client.from('inventory_stock').insert({
-          'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'quantity': delta, 'uom_id': it['uom_id'],
-        });
-      } else {
-        await Supabase.instance.client.from('inventory_stock').update({
-          'quantity': ((stock['quantity'] as num).toDouble()) + delta,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', stock['id']);
-      }
-      await Supabase.instance.client.from('inventory_movements').insert({
-        'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-        'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-        'uom_id': it['uom_id'], 'quantity': delta,
-        'movement_type': 'adjustment',
-        'reference_id': _detail['id'], 'reference_type': refType,
-        'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-      });
-    }
-  }
+  // Stock posting now lives in atomic DB functions (save_purchase_return /
+  // reverse_purchase_return / delete_purchase_return) — one transaction each,
+  // status-guarded so retries and double-clicks cannot double-post.
 
   Future<void> _toggleLock() async {
     final newLocked = !_isLocked;
     final isSaved = (_detail['status'] as String? ?? '') == 'saved';
     try {
       if (!newLocked && isSaved) {
-        // Unlocking a saved note reverses its stock and returns it to draft for editing.
-        await _applyStock(1.0, 'purchase_return_reversed');
-        await Supabase.instance.client.from('purchase_returns').update({
-          'status': 'draft', 'is_locked': false, 'locked_by': null, 'locked_at': null,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', _detail['id']);
-        await _logAudit(_detail['id'] as String, 'unlocked', 'Reverted to draft, stock restored');
+        // Atomic: reverses the stock and reverts to draft in ONE transaction.
+        await Supabase.instance.client.rpc('reverse_purchase_return', params: {
+          'p_id': _detail['id'],
+          'p_user_id': ref.read(currentUserProvider)?.id,
+        });
         _showSnack('Unlocked — reverted to draft, stock restored');
       } else {
         await Supabase.instance.client.from('purchase_returns').update({
@@ -396,19 +362,14 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     if (_items.isEmpty) { _showSnack('Add at least one item before saving'); return; }
     final bad = await _insufficientItem();
     if (bad != null) { _showSnack('Cannot save — "$bad" exceeds available stock at this branch'); return; }
-    final userId = ref.read(currentUserProvider)?.id;
     try {
-      // Saving confirms the physical return: stock moves OUT (back to supplier) and
-      // the note locks. The financial side is posted later by the Return Invoice.
-      await _applyStock(-1.0, 'purchase_return');
-      await Supabase.instance.client.from('purchase_returns').update({
-        'status': 'saved',
-        'is_locked': true,
-        'locked_by': userId,
-        'locked_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'saved', 'Stock returned to supplier');
+      // Atomic + idempotent: the DB function claims the draft (status guard),
+      // re-checks stock, posts movements + stock updates and the audit row in
+      // ONE transaction. The financial side is posted later by the Return Invoice.
+      await Supabase.instance.client.rpc('save_purchase_return', params: {
+        'p_id': _detail['id'],
+        'p_user_id': ref.read(currentUserProvider)?.id,
+      });
       _showSnack('Saved — stock returned to supplier');
       _loadDetail(_detail['id'] as String);
       _loadList();
@@ -526,14 +487,12 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     ));
     if (confirm != true) return;
     try {
-      final vNum = _detail['voucher_number'] as String? ?? '';
-      // If the note was saved, stock was moved out — put it back before deleting.
-      if ((_detail['status'] as String? ?? 'draft') != 'draft') {
-        await _applyStock(1.0, 'purchase_return_reversed');
-      }
-      await _logAudit(_detail['id'] as String, 'deleted', 'Voucher $vNum deleted by admin');
-      await Supabase.instance.client.from('purchase_return_items').delete().eq('return_id', _detail['id']);
-      await Supabase.instance.client.from('purchase_returns').delete().eq('id', _detail['id']);
+      // Atomic: reverses stock (if saved), writes the audit row, and deletes
+      // the note + items in ONE transaction. Re-checks the PRI block server-side.
+      await Supabase.instance.client.rpc('delete_purchase_return', params: {
+        'p_id': _detail['id'],
+        'p_user_id': ref.read(currentUserProvider)?.id,
+      });
       _showSnack('Deleted');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       await _loadList();
@@ -661,7 +620,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                           subtitle: Text(r['suppliers']?['name'] as String? ?? 'Cash Supplier',
                               style: const TextStyle(fontSize: 11)),
                           trailing: Text(
-                            ((r['grand_total'] as num?)?.toStringAsFixed(2)) ?? '0',
+                            money(r['grand_total'] as num?),
                             style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary),
                           ),
                           onTap: () => _loadDetail(r['id'] as String),
@@ -859,7 +818,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         Text(label, style: TextStyle(color: color ?? AppTheme.textSecondary, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, fontSize: bold ? 14 : 12)),
-        Text(v.toStringAsFixed(2), style: TextStyle(color: color ?? (bold ? AppTheme.primary : null), fontWeight: bold ? FontWeight.w700 : FontWeight.w600, fontSize: bold ? 15 : 13)),
+        Text(money(v), style: TextStyle(color: color ?? (bold ? AppTheme.primary : null), fontWeight: bold ? FontWeight.w700 : FontWeight.w600, fontSize: bold ? 15 : 13)),
       ]),
     );
   }

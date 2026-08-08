@@ -8,6 +8,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../../../core/widgets/product_picker.dart';
 
 /// Sales Return Note (SRN) — Intent only, like SO.
 /// Items: Product | UOM | Qty ONLY. No prices, no stock movement.
@@ -28,14 +29,16 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
+  bool _datesEditable = false;
   String _search = '';
   String? _addProductId;
   String? _addUomId;
   int _addRowKey = 0;
   final _addQtyCtrl = TextEditingController(text: '1');
+  final _addQtyFocus = FocusNode();
 
   @override void initState() { super.initState(); _loadList(); _loadLookups(); }
-  @override void dispose() { _addQtyCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _addQtyCtrl.dispose(); _addQtyFocus.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -44,6 +47,10 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  // Date is editable when the admin toggle (org.srn_date_editable) is on, or the
+  // user is an admin — and only while the note is still an open, un-voided draft.
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked && !_isVoided;
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -51,11 +58,29 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     final orgId = _orgId; if (orgId == null) return;
     final client = Supabase.instance.client;
     final results = await Future.wait([
-      client.from('products').select('id,name,sku,base_uom_id,selling_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
+      client.from('products').select('id,name,sku,base_uom_id,selling_price,product_main_group').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
       client.from('uoms').select().eq('org_id', orgId).order('name'),
     ]);
     if (mounted) setState(() { _products = List<Map<String, dynamic>>.from(results[0]); _uoms = List<Map<String, dynamic>>.from(results[1]); });
+    try {
+      final cfg = await client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.srn_date_editable').maybeSingle();
+      if (mounted) setState(() => _datesEditable = (cfg?['value'] as String?) == 'true');
+    } catch (_) {}
     _ensureCustomers();
+  }
+
+  Future<void> _pickDate() async {
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('sales_returns')
+          .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
+      if (mounted) setState(() { _detail['voucher_date'] = iso; final i = _returns.indexWhere((r) => r['id'] == _detail['id']); if (i >= 0) _returns[i]['voucher_date'] = iso; });
+    } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void>? _customersFuture;
@@ -145,6 +170,31 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
   }
 
+  // Same full-screen searchable picker used on PO / SO (core/widgets/product_picker.dart).
+  Future<void> _pickAddProduct() async {
+    final p = await pickProduct(context, _products, title: 'Add product');
+    if (p == null || p.isEmpty) return;
+    setState(() {
+      _addProductId = p['id'] as String?;
+      _addUomId = p['base_uom_id'] as String?;
+      _addQtyCtrl.text = '1';
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addQtyCtrl.selection = TextSelection(baseOffset: 0, extentOffset: _addQtyCtrl.text.length);
+      _addQtyFocus.requestFocus();
+    });
+  }
+
+  // Enter on Qty: add the line, then reopen the picker for the next product.
+  Future<void> _addItemAndPickNext() async {
+    final before = _items.length;
+    await _addItem();
+    if (!mounted || _items.length == before) return; // add failed / duplicate — keep focus
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+    await _pickAddProduct();
+  }
+
   Future<void> _addItem() async {
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return; }
     if (_items.any((i) => i['product_id'] == _addProductId)) { _showSnack('Already added'); return; }
@@ -176,42 +226,9 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  /// Moves stock for every line by sign*qty. A sales return brings goods back
-  /// IN to inventory, so confirming uses sign +1; reversing uses -1.
-  Future<void> _applyStock(double sign, String refType) async {
-    final orgId = _orgId;
-    final branchId = _detail['branch_id'] as String?;
-    final userId = ref.read(currentUserProvider)?.id;
-    if (orgId == null || branchId == null) return;
-    for (final it in _items) {
-      final pid = it['product_id'] as String;
-      final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-      if (qty <= 0) continue;
-      final delta = sign * qty;
-      final stock = await Supabase.instance.client.from('inventory_stock').select()
-          .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-      if (stock == null) {
-        await Supabase.instance.client.from('inventory_stock').insert({
-          'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'quantity': delta, 'uom_id': it['uom_id'],
-        });
-      } else {
-        await Supabase.instance.client.from('inventory_stock').update({
-          'quantity': ((stock['quantity'] as num).toDouble()) + delta,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', stock['id']);
-      }
-      await Supabase.instance.client.from('inventory_movements').insert({
-        'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-        'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-        'uom_id': it['uom_id'], 'quantity': delta,
-        'movement_type': 'adjustment',
-        'reference_id': _detail['id'], 'reference_type': refType,
-        'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-      });
-    }
-  }
+  // Stock posting now lives in atomic DB functions (confirm_sales_return /
+  // reverse_sales_return / void_sales_return) — one transaction each,
+  // status-guarded so retries and double-clicks cannot double-post.
 
   Future<void> _confirmReturn() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before confirming'); return; }
@@ -220,17 +237,14 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       final existing = await Supabase.instance.client.from('sales_return_invoices').select('id,voucher_number').eq('srn_id', _detail['id'] as String);
       if ((existing as List).isNotEmpty) { _showSnack('Invoice ${existing.first['voucher_number']} already exists. Cannot re-confirm.'); return; }
     } catch (_) {}
-    final userId = ref.read(currentUserProvider)?.id;
     try {
-      // Confirming records the physical return: stock comes back IN to inventory
-      // and the note locks. The financial side is posted later by the Return Invoice.
-      await _applyStock(1.0, 'sales_return');
-      await Supabase.instance.client.from('sales_returns').update({
-        'status': 'saved', 'is_locked': true,
-        'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'confirmed', 'Stock returned to inventory');
+      // Atomic + idempotent: the DB function claims the draft (lock guard),
+      // posts stock IN + movements and the audit row in ONE transaction.
+      // The financial side is posted later by the Return Invoice.
+      await Supabase.instance.client.rpc('confirm_sales_return', params: {
+        'p_id': _detail['id'],
+        'p_user_id': ref.read(currentUserProvider)?.id,
+      });
       _showSnack('Confirmed — stock returned to inventory; ready to generate the Sales Return Invoice');
       _loadDetail(_detail['id'] as String); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -302,13 +316,12 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         if (active.isNotEmpty) { _showSnack('Cannot unlock: SRI ${active.first['voucher_number']} exists. Void the invoice first.'); return; }
       }
       if (!newLocked && isSaved) {
-        // Unlocking a saved note reverses its stock and returns it to draft for editing.
-        await _applyStock(-1.0, 'sales_return_reversed');
-        await Supabase.instance.client.from('sales_returns').update({
-          'status': 'draft', 'is_locked': false, 'locked_by': null, 'locked_at': null,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', _detail['id']);
-        await _logAudit(_detail['id'] as String, 'unlocked', 'Reverted to draft, stock reversed');
+        // Atomic: reverses the stock and reverts to draft in ONE transaction
+        // (re-checks the SRI block server-side).
+        await Supabase.instance.client.rpc('reverse_sales_return', params: {
+          'p_id': _detail['id'],
+          'p_user_id': userId,
+        });
         _showSnack('Unlocked — reverted to draft, stock reversed');
       } else {
         await Supabase.instance.client.from('sales_returns').update({
@@ -340,15 +353,13 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void'))],
     ));
     if (ok != true) return;
-    final userId = ref.read(currentUserProvider)?.id;
     try {
-      // If the note was confirmed, stock came in — reverse it before voiding.
-      if (wasSaved) await _applyStock(-1.0, 'sales_return_void');
-      await Supabase.instance.client.from('sales_returns').update({
-        'is_voided': true, 'voided_at': DateTime.now().toUtc().toIso8601String(), 'voided_by': userId,
-        'is_locked': true, 'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'voided', 'SRN ${_detail['voucher_number']} voided${wasSaved ? "; stock reversed" : ""}');
+      // Atomic: reverses stock (if confirmed), voids, and writes the audit row
+      // in ONE transaction. Re-checks the SRI block server-side.
+      await Supabase.instance.client.rpc('void_sales_return', params: {
+        'p_id': _detail['id'],
+        'p_user_id': ref.read(currentUserProvider)?.id,
+      });
       _showSnack('Voided');
       _loadDetail(_detail['id'] as String); _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
@@ -444,6 +455,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _generateInvoice),
             const SizedBox(width: 8),
           ],
+          if (_canEditDate) IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
           if (_canDelete && !_isVoided) IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _void),
         ])),
@@ -495,44 +507,48 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
               const Divider(height: 1),
               Container(color: AppTheme.background, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(children: [
-                  Expanded(flex: 5, child: Autocomplete<Map<String, dynamic>>(
-                    key: ValueKey('srn_prodpick_$_addRowKey'),
-                    displayStringForOption: (p) => '${p['name']}${p['sku'] != null ? " · ${p['sku']}" : ""}',
-                    optionsBuilder: (TextEditingValue tev) {
-                      final query = tev.text.toLowerCase().trim();
-                      if (query.isEmpty) return _products.take(50);
-                      return _products.where((p) =>
-                        (p['name'] as String? ?? '').toLowerCase().contains(query) ||
-                        (p['sku'] as String? ?? '').toLowerCase().contains(query)).take(50);
-                    },
-                    onSelected: (p) => setState(() {
-                      _addProductId = p['id'] as String?;
-                      _addUomId = p['base_uom_id'] as String?;
-                    }),
-                    fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                      return TextField(
-                        controller: controller,
-                        focusNode: focusNode,
-                        style: const TextStyle(fontSize: 12),
-                        decoration: const InputDecoration(hintText: 'Search product…', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
-                        onSubmitted: (_) => onFieldSubmitted(),
-                      );
-                    },
-                  )),
+                  Expanded(flex: 5, child: Builder(builder: (ctx) {
+                    final sel = _addProductId == null ? null : _products.firstWhere((x) => x['id'] == _addProductId, orElse: () => <String, dynamic>{});
+                    final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
+                    return InkWell(
+                      onTap: _pickAddProduct,
+                      child: InputDecorator(
+                        decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder()),
+                        child: Row(children: [
+                          Expanded(child: Text(name ?? 'Pick product', maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 12.5, color: name == null ? AppTheme.textSecondary : Colors.black87))),
+                          const Icon(Icons.arrow_drop_down, size: 20, color: AppTheme.textSecondary),
+                        ]),
+                      ),
+                    );
+                  })),
                   Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: DropdownButtonFormField<String>(value: _addUomId, isDense: true, isExpanded: true,
                       decoration: const InputDecoration(hintText: 'UOM', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 6)),
                       items: _uoms.map((u) => DropdownMenuItem<String>(value: u['id'] as String, child: Text(u['abbreviation'] as String? ?? '', style: const TextStyle(fontSize: 12)))).toList(),
                       onChanged: (v) => setState(() => _addUomId = v)))),
                   Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: TextField(controller: _addQtyCtrl, decoration: const InputDecoration(hintText: 'Qty', isDense: true), textAlign: TextAlign.right,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true), textInputAction: TextInputAction.done, onSubmitted: (_) => _addItem()))),
+                    child: TextField(controller: _addQtyCtrl, focusNode: _addQtyFocus, decoration: const InputDecoration(hintText: 'Qty', isDense: true), textAlign: TextAlign.right,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true), textInputAction: TextInputAction.done, onSubmitted: (_) => _addItemAndPickNext()))),
                   SizedBox(width: 44, child: IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary), tooltip: 'Add', onPressed: _addItem)),
                 ])),
             ],
           ])),
         const SizedBox(height: 8),
-        Align(alignment: Alignment.centerRight, child: Text('${_items.length} item(s)', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+        Align(alignment: Alignment.centerRight, child: Builder(builder: (_) {
+          final totalQty = _items.fold<double>(0, (s, it) => s + ((it['quantity'] as num?)?.toDouble() ?? 0));
+          final tq = totalQty == totalQty.roundToDouble() ? totalQty.toStringAsFixed(0) : totalQty.toStringAsFixed(2);
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('${_items.length} item(s)', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const SizedBox(width: 14),
+              const Text('Total Qty: ', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              Text(tq, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+            ]),
+          );
+        })),
         const SizedBox(height: 16),
         _SrnAuditTrail(voucherId: _selectedId ?? ''),
       ]))),

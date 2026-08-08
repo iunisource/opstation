@@ -177,6 +177,14 @@ final leaderboardProvider = FutureProvider.autoDispose
   final salesRepo = ref.watch(salespersonRepositoryProvider);
   final orgId = ref.watch(orgIdProvider);
 
+  // Same staleness fix as the live tab: the trip/visit reads below come from
+  // local Drift, which only refreshed at login. Pull today's trips first so an
+  // admin who stayed signed in overnight sees the new day's activity without
+  // logging out. Best-effort: offline, it falls back to local data.
+  if (orgId != null) {
+    await ref.read(supabasePullServiceProvider).pullTodayTripsForOrg(orgId);
+  }
+
   // Only THIS org's salespersons — otherwise other orgs' reps and their
   // collections appear on this leaderboard (cross-org leak).
   final users = (await teamRepo.all(includeInactive: false))

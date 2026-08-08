@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -181,7 +182,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
               style: const TextStyle(color: AppTheme.textSecondary)),
           if (_vouchers.isNotEmpty) ...[
             const SizedBox(width: 16),
-            Text('Total Paid: ${totalPaid.toStringAsFixed(2)}',
+            Text('Total Paid: ${money(totalPaid)}',
                 style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.danger)),
           ],
         ]),
@@ -223,7 +224,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
                               Expanded(flex: 3, child: Text(v['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600))),
                               Expanded(flex: 2, child: Text(v['payment_method'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                               Expanded(flex: 2, child: Text(v['reference'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
-                              Expanded(flex: 2, child: Text(amount.toStringAsFixed(2), style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.danger))),
+                              Expanded(flex: 2, child: Text(money(amount), style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.danger))),
                               SizedBox(width: 48, child: IconButton(
                                   icon: const Icon(Icons.edit_outlined, size: 18),
                                   onPressed: () => _showDialog(context, v))),

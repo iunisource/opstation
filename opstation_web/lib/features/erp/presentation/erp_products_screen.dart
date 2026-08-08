@@ -4,9 +4,11 @@ import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart';
 
 class ErpProductsScreen extends ConsumerStatefulWidget {
   const ErpProductsScreen({super.key, this.focusId});
@@ -29,6 +31,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   Map<String, Set<String>> _posByBranch = {};   // branch_id -> product_ids in that branch (drives the duplicate check)
   String _posFilter = 'all';         // all | in | out
   String? _fSub;                     // product_sub_group filter (null = all)
+  bool _hideGroupsEnabled = false;                 // org.hide_main_groups_by_branch
+  Map<String, Set<String>> _hiddenByBranch = {};   // branchId -> hidden main_groups
 
   bool get _canDelete {
     final r = ref.read(currentUserProvider)?.role.name;
@@ -105,6 +109,21 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             .eq('org_id', orgId).eq('key', 'org.consignment_enabled').maybeSingle();
         consignmentOn = (cfg?['value'] as String?) == 'true';
       } catch (_) {}
+      bool hideGroupsOn = false;
+      final Map<String, Set<String>> hiddenByBranch = {};
+      try {
+        final hg = await client.from('app_config').select('value')
+            .eq('org_id', orgId).eq('key', 'org.hide_main_groups_by_branch').maybeSingle();
+        hideGroupsOn = (hg?['value'] as String?) == 'true';
+        if (hideGroupsOn) {
+          final hrows = await client.from('branch_hidden_main_groups')
+              .select('branch_id, main_group').eq('org_id', orgId);
+          for (final r in hrows as List) {
+            (hiddenByBranch[r['branch_id'] as String] ??= <String>{})
+                .add(r['main_group'] as String);
+          }
+        }
+      } catch (_) {}
       final Map<String, List<Map<String, dynamic>>> grouped = {};
       for (final t in taxonomies as List) {
         final type = t['taxonomy_type'] as String;
@@ -115,6 +134,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         _posProductIds = posIds;
         _posByBranch = posByBranch;
         _products = List<Map<String, dynamic>>.from(products);
+        _hideGroupsEnabled = hideGroupsOn;
+        _hiddenByBranch = hiddenByBranch;
         _filtered = _filterList(List<Map<String, dynamic>>.from(products),
             _searchCtrl.text.toLowerCase(), _posFilter, posIds);
         _taxonomies = grouped;
@@ -130,6 +151,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   List<Map<String, dynamic>> _filterList(
       List<Map<String, dynamic>> src, String q, String posFilter, Set<String> posIds) {
     return src.where((p) {
+      if (_hideGroupsEnabled) {
+        final bid = ref.read(selectedBranchProvider)?['id'] as String?;
+        if (bid != null &&
+            (_hiddenByBranch[bid]?.contains(p['product_main_group']) ?? false)) {
+          return false;
+        }
+      }
       if (posFilter == 'in' && !posIds.contains(p['id'])) return false;
       if (posFilter == 'out' && posIds.contains(p['id'])) return false;
       if (_fSub != null && p['product_sub_group'] != _fSub) return false;
@@ -505,7 +533,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         }
         // Post: this RPC books the GL exactly like the manual Opening Stock screen.
         await client.rpc('post_opening_stock_voucher', params: {'p_id': vId});
-        openingMsg = ' — opening stock $vnum posted (${openingLines.length} item${openingLines.length == 1 ? "" : "s"}, value ${total.toStringAsFixed(2)})';
+        openingMsg = ' — opening stock $vnum posted (${openingLines.length} item${openingLines.length == 1 ? "" : "s"}, value ${money(total)})';
       } catch (e) {
         openingMsg = ' — opening stock FAILED: ${e.toString().split("\n").first}';
       }
@@ -556,6 +584,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     String? productClass = product?['product_class'] as String?;
     String? movementCategory = product?['product_movement_category'] as String?;
     bool isConsignment = product?['is_consignment'] == true;
+    bool freeText = product?['is_free_text'] == true;
     // Optional. Nullable by design — thousands of products exist with no image,
     // and every surface must render cleanly without one.
     String? imageUrl = product?['image_url'] as String?;
@@ -759,6 +788,17 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                         style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   ),
                 ],
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  value: freeText,
+                  onChanged: (v) => setS(() => freeText = v ?? false),
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  title: const Text('Free-text item (custom description on PO)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  subtitle: const Text('When added to a Purchase Order, a free-text description field unlocks so the buyer can type exactly what is being ordered. Use for miscellaneous, one-off, or service purchases.',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                ),
                 const SizedBox(height: 16),
                 const Align(alignment: Alignment.centerLeft, child: Text('Branch Allocation', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 4),
@@ -825,6 +865,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'cost_price': isConsignment ? 0 : (double.tryParse(costPriceCtrl.text.trim()) ?? 0),
                   'low_stock_limit': double.tryParse(lowStockCtrl.text.trim()) ?? 0,
                   'is_consignment': isConsignment,
+                  'is_free_text': freeText,
                   'image_url': imageUrl,
                   'updated_at': DateTime.now().toUtc().toIso8601String(),
                 };
@@ -883,6 +924,9 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(selectedBranchProvider, (_, __) {
+      if (mounted) _runFilter();
+    });
     return Container(
       color: AppTheme.background,
       padding: const EdgeInsets.all(32),

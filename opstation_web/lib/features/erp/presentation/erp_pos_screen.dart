@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
@@ -470,7 +471,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                                         style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                                     Expanded(flex: 2, child: Text(closedAt,
                                         style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
-                                    Expanded(flex: 2, child: Text('Rs. ${(_sessionTotals[sid] ?? 0).toStringAsFixed(2)}',
+                                    Expanded(flex: 2, child: Text('Rs. ${money(_sessionTotals[sid] ?? 0)}',
                                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary))),
                                     Expanded(flex: 1, child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -496,7 +497,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                               if (expanded) Container(color: const Color(0xFFF9FAFB), padding: const EdgeInsets.only(bottom: 4), child: Column(children: [
                                 if (!_sessionTxns.containsKey(sid)) const Padding(padding: EdgeInsets.all(12), child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
                                 else if (filteredTxns.isEmpty) const Padding(padding: EdgeInsets.fromLTRB(52,8,20,8), child: Text('No invoices', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-                                else ...filteredTxns.map((t) { final isRet = t['transaction_type'] == 'return'; final tot = (t['total'] as num?)?.toDouble() ?? 0; final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String); final ph = t['pos_customers']?['phone'] as String? ?? ''; final tr = t['transaction_number'] as String? ?? ''; final ti = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : ''; return InkWell(onTap: () async { try { final ti2 = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String); final ci2 = (ti2 as List).map((i) => {'name': i['products']?['name'] ?? '-', 'quantity': (i['quantity'] as num?)?.toDouble() ?? 0.0, 'unit_price': (i['unit_price'] as num?)?.toDouble() ?? 0.0, 'discount': (i['discount'] as num?)?.toDouble() ?? 0.0, 'discount_type': i['discount_type'] as String? ?? 'fixed'}).toList(); if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: ci2, orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: s['branches']?['name'] as String? ?? '', cashierName: '', footerNote: null)); } catch (_) {} }, child: Padding(padding: const EdgeInsets.fromLTRB(48,7,20,7), child: Row(children: [Icon(isRet ? Icons.reply : Icons.receipt_outlined, size: 13, color: isRet ? Colors.orange : AppTheme.primary), const SizedBox(width: 8), Expanded(child: Wrap(spacing: 8, children: [Text(cu, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)), if (ph.isNotEmpty) Text(ph, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), if (tr.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal:5,vertical:1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(tr, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))), Text(ti, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))])), Text('${isRet ? '-' : ''}Rs. ${tot.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isRet ? Colors.orange : AppTheme.primary))])));  }),
+                                else ...filteredTxns.map((t) { final isRet = t['transaction_type'] == 'return'; final tot = (t['total'] as num?)?.toDouble() ?? 0; final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String); final ph = t['pos_customers']?['phone'] as String? ?? ''; final tr = t['transaction_number'] as String? ?? ''; final ti = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : ''; return InkWell(onTap: () async { try { final ti2 = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String); final ci2 = (ti2 as List).map((i) => {'name': i['products']?['name'] ?? '-', 'quantity': (i['quantity'] as num?)?.toDouble() ?? 0.0, 'unit_price': (i['unit_price'] as num?)?.toDouble() ?? 0.0, 'discount': (i['discount'] as num?)?.toDouble() ?? 0.0, 'discount_type': i['discount_type'] as String? ?? 'fixed'}).toList(); if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: ci2, orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: s['branches']?['name'] as String? ?? '', cashierName: '', footerNote: null)); } catch (_) {} }, child: Padding(padding: const EdgeInsets.fromLTRB(48,7,20,7), child: Row(children: [Icon(isRet ? Icons.reply : Icons.receipt_outlined, size: 13, color: isRet ? Colors.orange : AppTheme.primary), const SizedBox(width: 8), Expanded(child: Wrap(spacing: 8, children: [Text(cu, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)), if (ph.isNotEmpty) Text(ph, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), if (tr.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal:5,vertical:1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(tr, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))), Text(ti, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))])), Text('${isRet ? '-' : ''}Rs. ${money(tot.abs())}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isRet ? Colors.orange : AppTheme.primary))])));  }),
                               ])),
                               ]);
                             });
@@ -974,18 +975,18 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
                       final dt = it['discount_type'] as String? ?? 'fixed';
                       final da = dt == 'percent' ? price * qty * d / 100 : d;
                       final lineTotal = price * qty - da;
-                      final discLabel = d > 0 ? (dt == 'percent' ? '  (-${d.toStringAsFixed(0)}%)' : '  (-${d.toStringAsFixed(2)})') : '';
+                      final discLabel = d > 0 ? (dt == 'percent' ? '  (-${d.toStringAsFixed(0)}%)' : '  (-${money(d)})') : '';
                       return InkWell(
                         onTap: _isOpen ? () { Navigator.of(dctx).pop(); _stageProduct(it, cartIndex: idx); } : null,
                         child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Row(children: [
                           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             Text(it['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                             const SizedBox(height: 2),
-                            Text('${qty.toStringAsFixed(qty == qty.roundToDouble() ? 0 : 2)} x Rs. ${price.toStringAsFixed(2)}$discLabel',
+                            Text('${qty.toStringAsFixed(qty == qty.roundToDouble() ? 0 : 2)} x Rs. ${money(price)}$discLabel',
                                 style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                           ])),
                           const SizedBox(width: 10),
-                          Text('Rs. ${lineTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                          Text('Rs. ${money(lineTotal)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                           const SizedBox(width: 4),
                           IconButton(
                             icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
@@ -1008,7 +1009,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
               Padding(padding: const EdgeInsets.fromLTRB(18, 12, 18, 16), child: Row(children: [
                 const Text('Total', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
                 const Spacer(),
-                Text('Rs. ${billTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+                Text('Rs. ${money(billTotal)}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppTheme.primary)),
               ])),
             ]),
           ),
@@ -1058,7 +1059,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           ])
         else
-          Text('Rs. ' + price.toStringAsFixed(2) + '   ' + (stock >= 0 ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock')), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          Text('Rs. ' + money(price) + '   ' + (stock >= 0 ? 'Stock: ' + stock.toStringAsFixed(0) : (_allowNoStock ? 'Stock not tracked' : 'No stock')), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         const SizedBox(height: 14),
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1099,7 +1100,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         ]),
         const SizedBox(height: 14),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('Rs. ' + total.toStringAsFixed(2), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          Text('Rs. ' + money(total), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppTheme.primary)),
           Row(children: [
             TextButton(onPressed: _clearStaged, child: const Text('Cancel')),
             const SizedBox(width: 8),
@@ -1407,7 +1408,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
 
   Future<void> _checkout() async {
     if (_checkingOut) return;
-    _checkingOut = true;
+    // Guards run BEFORE claiming the flag — the old order set _checkingOut=true
+    // then could early-return (empty cart / stock short), leaving it stuck true
+    // and bricking the checkout button until the screen reloaded.
     if (_cart.isEmpty) { _showSnack('Cart is empty'); return; }
     if (_cart.any((i) => i['product_id'] == null)) { _showSnack('Some items have no product link — remove and re-add'); return; }
     // Stock check
@@ -1416,6 +1419,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final stock = (item['stock_qty'] as num?)?.toDouble() ?? 0;
       if (!_allowNoStock && (stock <= 0 || qty > stock)) { _showSnack('Insufficient stock for "${item['name']}": ${(stock < 0 ? 0 : stock).toStringAsFixed(0)} available'); return; }
     }
+    _checkingOut = true;
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final branchId = _session['branch_id'] as String;
     try {
@@ -1455,52 +1459,36 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       }
       final balanceChange = -netAr;                          // +ve credit added, -ve balance due
       final primaryMethod = tenders.length == 1 ? (tenders.first['label'] as String) : (tenders.isEmpty ? 'Cash' : 'Split');
-      await client.from('pos_transactions').insert({
-        'id': txnId, 'transaction_number': txnNumber, 'org_id': orgId, 'session_id': _session['id'],
-        'customer_id': _selectedCustomer?['id'],
-        'pos_customer_id': _selectedPosCustomer?['id'],
-        'promoter_id': _selectedPromoter?['id'],
-        'total': totalAmt, 'discount': discountAmt,
-        'payment_method': primaryMethod,
-        'payment_details': tenders,
-        'amount_paid': collected,
-        'balance_change': balanceChange,
-        'transaction_type': 'sale',
-        'created_by': userId, 'transacted_at': now,
+      // Atomic + idempotent: ONE DB transaction inserts the transaction, its
+      // items, the stock movements and the stock updates. A retry with the same
+      // txnId hits the primary key and errors instead of double-posting.
+      await client.rpc('post_pos_transaction', params: {
+        'p_txn': {
+          'id': txnId, 'transaction_number': txnNumber, 'org_id': orgId, 'session_id': _session['id'],
+          'customer_id': _selectedCustomer?['id'],
+          'pos_customer_id': _selectedPosCustomer?['id'],
+          'promoter_id': _selectedPromoter?['id'],
+          'total': totalAmt, 'discount': discountAmt,
+          'payment_method': primaryMethod,
+          'payment_details': tenders,
+          'amount_paid': collected,
+          'balance_change': balanceChange,
+          'transaction_type': 'sale',
+          'created_by': userId, 'transacted_at': now,
+        },
+        'p_lines': [
+          for (final item in cartSnapshot)
+            {
+              'product_id': item['product_id'],
+              'uom_id': item['uom_id'],
+              'quantity': item['quantity'],
+              'unit_price': item['unit_price'],
+              'discount': item['discount'],
+              'discount_type': item['discount_type'] as String? ?? 'fixed',
+            },
+        ],
+        'p_branch_id': branchId,
       });
-      for (final item in cartSnapshot) {
-        final qty = item['quantity'] as double;
-        final pid = item['product_id'] as String;
-        await client.from('pos_transaction_items').insert({
-          'id': 'posti_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'transaction_id': txnId, 'product_id': pid,
-          'uom_id': item['uom_id'], 'quantity': qty,
-          'unit_price': item['unit_price'], 'discount': item['discount'], 'discount_type': item['discount_type'] as String? ?? 'fixed',
-        });
-        final existing = await client.from('inventory_stock').select()
-            .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (existing != null) {
-          await client.from('inventory_stock').update({
-            'quantity': (existing['quantity'] as num).toDouble() - qty,
-            'updated_at': now,
-          }).eq('id', existing['id']);
-        } else {
-          // No stock row yet (never-stocked product): create it going negative,
-          // carrying uom_id so the not-null constraint is satisfied.
-          await client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().microsecondsSinceEpoch}',
-            'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-            'quantity': -qty, 'uom_id': item['uom_id'], 'updated_at': now,
-          });
-        }
-        await client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'uom_id': item['uom_id'], 'quantity': -qty, 'movement_type': 'pos',
-          'reference_id': txnId, 'reference_type': 'pos_transaction',
-          'moved_at': now, 'created_by': userId,
-        });
-      }
       // Customer balances are GL-computed (via the sale's AR posting under
       // customer_id) — no separate balance column to maintain.
       setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _selectedPromoter = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes(); }); _playSuccessSound();
@@ -1527,41 +1515,31 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final retId = 'posr_${DateTime.now().millisecondsSinceEpoch}';
       final now = DateTime.now().toUtc().toIso8601String();
       double returnTotal = returnItems.fold(0, (s, i) { final qty = i['return_qty'] as double; final price = (i['unit_price'] as num?)?.toDouble() ?? 0; final disc = (i['discount'] as num?)?.toDouble() ?? 0; final discType = i['discount_type'] as String? ?? 'fixed'; final origQty = (i['quantity'] as num?)?.toDouble() ?? 1; final da = discType == 'percent' ? price * origQty * (disc/100) : disc; return s + qty * (price - (origQty > 0 ? da/origQty : 0)); });
-      await client.from('pos_transactions').insert({
-        'id': retId, 'org_id': orgId, 'session_id': _session['id'],
-        'customer_id': originalTxn['customer_id'],
-        'total': -returnTotal, 'discount': 0,
-        'payment_method': originalTxn['payment_method'] ?? 'cash',
-        'transaction_type': 'return',
-        'reference_transaction_id': originalTxn['id'],
-        'created_by': userId, 'transacted_at': now,
+      // Atomic + idempotent — same RPC as checkout; a 'return' transaction
+      // stores negative item qtys and adds the stock back, all in one txn.
+      await client.rpc('post_pos_transaction', params: {
+        'p_txn': {
+          'id': retId, 'org_id': orgId, 'session_id': _session['id'],
+          'customer_id': originalTxn['customer_id'],
+          'total': -returnTotal, 'discount': 0,
+          'payment_method': originalTxn['payment_method'] ?? 'cash',
+          'transaction_type': 'return',
+          'reference_transaction_id': originalTxn['id'],
+          'created_by': userId, 'transacted_at': now,
+        },
+        'p_lines': [
+          for (final item in returnItems)
+            {
+              'product_id': item['product_id'],
+              'uom_id': item['uom_id'],
+              'quantity': item['return_qty'],
+              'unit_price': item['unit_price'],
+              'discount': 0,
+            },
+        ],
+        'p_branch_id': branchId,
       });
-      for (final item in returnItems) {
-        final qty = item['return_qty'] as double;
-        final pid = item['product_id'] as String;
-        await client.from('pos_transaction_items').insert({
-          'id': 'posti_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'transaction_id': retId, 'product_id': pid,
-          'uom_id': item['uom_id'], 'quantity': -qty,
-          'unit_price': item['unit_price'], 'discount': 0,
-        });
-        // Add stock back
-        final stock = await client.from('inventory_stock').select()
-            .eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (stock != null) {
-          await client.from('inventory_stock').update({'quantity': (stock['quantity'] as num).toDouble() + qty, 'updated_at': now}).eq('id', stock['id']);
-        } else {
-          await client.from('inventory_stock').insert({'id': 'is_${DateTime.now().microsecondsSinceEpoch}', 'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': qty, 'uom_id': item['uom_id'], 'updated_at': now});
-        }
-        await client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'uom_id': item['uom_id'], 'quantity': qty, 'movement_type': 'adjustment',
-          'reference_id': retId, 'reference_type': 'pos_return',
-          'moved_at': now, 'created_by': userId,
-        });
-      }
-      _showSnack('Return processed — Rs. ${returnTotal.toStringAsFixed(2)} refunded');
+      _showSnack('Return processed — Rs. ${money(returnTotal)} refunded');
       await _loadData();
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -1646,7 +1624,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       padding: const EdgeInsets.symmetric(vertical: 1.5),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         Text(label, style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w400, color: bold ? AppTheme.textPrimary : AppTheme.textSecondary)),
-        Text('Rs. ${(val == 0 ? 0.0 : val).toStringAsFixed(2)}', style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, color: bold ? AppTheme.primary : AppTheme.textPrimary)),
+        Text('Rs. ${money(val == 0 ? 0.0 : val)}', style: TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, color: bold ? AppTheme.primary : AppTheme.textPrimary)),
       ]),
     );
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
@@ -1700,13 +1678,40 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
       }).eq('id', _session['id']);
       await _loadData();
-      _exportSummary();
+      _exportSummary(combined: false); // auto-print on close keeps the bill-wise format
       widget.onUpdated();
       if (mounted) Navigator.of(context).pop();
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
-  Future<void> _exportSummary() async {
+  /// Asks whether the product breakdown should be per-transaction (bill-wise,
+  /// the current format) or merged into one row per product (combined).
+  /// Returns true=combined, false=bill-wise, null=cancelled.
+  Future<bool?> _askSummaryMode() async {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Export summary'),
+        content: const Text(
+          'How should the product breakdown appear?\n\n'
+          '• Bill-wise — one row per transaction (current format).\n'
+          '• Combined — all bills merged, one row per product with total quantity.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          OutlinedButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Bill-wise')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Combined')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportSummary({bool? combined}) async {
+    // When not told explicitly (e.g. the manual Summary buttons), ask the user.
+    if (combined == null) {
+      combined = await _askSummaryMode();
+      if (combined == null) return; // cancelled
+    }
     final orgId = _orgId; if (orgId == null) return;
     final client = Supabase.instance.client;
     // The printed summary reads closing_cash / closed_at from _session. If the
@@ -1750,14 +1755,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final breakdown = _sessionBreakdown();
     String breakdownRows = '';
     breakdown.forEach((k, v) {
-      breakdownRows += '<tr><td>$k</td><td style="text-align:right;font-weight:600">${v.toStringAsFixed(2)}</td></tr>';
+      breakdownRows += '<tr><td>$k</td><td style="text-align:right;font-weight:600">${money(v)}</td></tr>';
     });
     final custDetail = _customerAccountDetail();
     String custRows = '';
     custDetail.forEach((name, m) {
       final owed = m['owed'] ?? 0; final adv = m['advance'] ?? 0;
-      if (owed != 0) custRows += '<tr><td>$name</td><td style="text-align:right;font-weight:600">${owed.toStringAsFixed(2)}</td></tr>';
-      if (adv != 0) custRows += '<tr><td>$name <span style="color:#27ae60">(advance / credit)</span></td><td style="text-align:right;font-weight:600;color:#27ae60">${adv.toStringAsFixed(2)}</td></tr>';
+      if (owed != 0) custRows += '<tr><td>$name</td><td style="text-align:right;font-weight:600">${money(owed)}</td></tr>';
+      if (adv != 0) custRows += '<tr><td>$name <span style="color:#27ae60">(advance / credit)</span></td><td style="text-align:right;font-weight:600;color:#27ae60">${money(adv)}</td></tr>';
     });
     final openingCash = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
     final closingCash = (_session['closing_cash'] as num?)?.toDouble() ?? 0;
@@ -1766,7 +1771,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final ea = (e['amount'] as num?)?.toDouble() ?? 0; totalExpenses += ea;
       final ec = e['category'] as String? ?? '-'; final en = e['note'] as String? ?? '';
       final et = e['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
-      expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>${en}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${ea.toStringAsFixed(2)}</td></tr>';
+      expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>${en}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(ea)}</td></tr>';
     }
     double cashSales = 0;
     for (final t in sales) { cashSales += _posCashCollected(t); }
@@ -1780,14 +1785,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final plines = (p['cpv_voucher_lines'] as List?) ?? const [];
       if (plines.isEmpty) {
         final pn = p['notes'] as String? ?? '';
-        payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${pa.toStringAsFixed(2)}</td></tr>';
+        payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(pa)}</td></tr>';
       } else {
         for (final l in plines) {
           final la = (l['amount'] as num?)?.toDouble() ?? 0;
           final name = (l['account_name'] as String?) ?? '-';
           final ldesc = (l['description'] as String?) ?? '';
           final label = ldesc.isNotEmpty ? '$name — $ldesc' : name;
-          payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>$label</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${la.toStringAsFixed(2)}</td></tr>';
+          payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>$label</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(la)}</td></tr>';
         }
       }
     }
@@ -1805,14 +1810,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final plines = (p['crv_voucher_lines'] as List?) ?? const [];
       if (plines.isEmpty) {
         final pn = p['notes'] as String? ?? '';
-        rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${pa.toStringAsFixed(2)}</td></tr>';
+        rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${money(pa)}</td></tr>';
       } else {
         for (final l in plines) {
           final la = (l['amount'] as num?)?.toDouble() ?? 0;
           final name = (l['account_name'] as String?) ?? '-';
           final ldesc = (l['description'] as String?) ?? '';
           final label = ldesc.isNotEmpty ? '$name — $ldesc' : name;
-          rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>$label</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${la.toStringAsFixed(2)}</td></tr>';
+          rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>$label</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${money(la)}</td></tr>';
         }
       }
     }
@@ -1824,18 +1829,76 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final openedAt = _session['opened_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_session['opened_at'] as String).toLocal()) : '-';
     final closedAt = _session['closed_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_session['closed_at'] as String).toLocal()) : 'Open';
 
+    // Renders a discount table cell: the amount with its % (of gross) beneath.
+    String discCell(double amount, double gross) {
+      if (amount <= 0) return '<td>-</td>';
+      final pct = gross > 0 ? (amount / gross * 100) : 0;
+      return '<td style="color:#e67e22">-${money(amount)}'
+          '<div style="font-size:10px;color:#c98b57">(${pct.toStringAsFixed(1)}%)</div></td>';
+    }
+
+    // ── Bill-wise rows (one per transaction) ──────────────────────────────
     String txnRows = '';
     for (final t in sales) {
       final tid = t['id'] as String;
       final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
       final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
       final method = t['payment_method'] as String? ?? '';
-      final total = (t['total'] as num?)?.toStringAsFixed(2) ?? '0.00';
+      final totalNum = (t['total'] as num?)?.toDouble() ?? 0;
+      final total = money(totalNum);
       final disc = (t['discount'] as num?)?.toDouble() ?? 0;
       final items = itemsByTxn[tid] ?? [];
-      final itemStr = items.map((i) { final q = (i['quantity'] as num?)?.toDouble() ?? 0; final p = (i['unit_price'] as num?)?.toDouble() ?? 0; final d = (i['discount'] as num?)?.toDouble() ?? 0; final n = i['products']?['name'] as String? ?? '-'; return '$n × ${q.toStringAsFixed(0)} @ ${p.toStringAsFixed(2)}${d > 0 ? ' (-${d.toStringAsFixed(2)})' : ''}'; }).join('<br>');
-      txnRows += '<tr><td>$time</td><td style="font-size:11px;color:#666">${tid.substring(0, 10)}…</td><td>$customer</td><td style="font-size:11px">$itemStr</td><td>$method</td>${disc > 0 ? '<td style="color:#e67e22">-${disc.toStringAsFixed(2)}</td>' : '<td>-</td>'}<td style="text-align:right;font-weight:bold">$total</td></tr>';
+      final itemStr = items.map((i) { final q = (i['quantity'] as num?)?.toDouble() ?? 0; final p = (i['unit_price'] as num?)?.toDouble() ?? 0; final d = (i['discount'] as num?)?.toDouble() ?? 0; final n = i['products']?['name'] as String? ?? '-'; return '$n × ${q.toStringAsFixed(0)} @ ${money(p)}${d > 0 ? ' (-${money(d)})' : ''}'; }).join('<br>');
+      txnRows += '<tr><td>$time</td><td style="font-size:11px;color:#666">${tid.substring(0, 10)}…</td><td>$customer</td><td style="font-size:11px">$itemStr</td><td>$method</td>${discCell(disc, totalNum + disc)}<td style="text-align:right;font-weight:bold">$total</td></tr>';
     }
+
+    // ── Combined rows (one per product, merged across every bill) ──────────
+    final Map<String, Map<String, dynamic>> combinedMap = {};
+    for (final t in sales) {
+      final tid = t['id'] as String;
+      for (final i in (itemsByTxn[tid] ?? const [])) {
+        final n = i['products']?['name'] as String? ?? '-';
+        final sku = i['products']?['sku'] as String? ?? '';
+        final key = '$n|$sku';
+        final q = (i['quantity'] as num?)?.toDouble() ?? 0;
+        final p = (i['unit_price'] as num?)?.toDouble() ?? 0;
+        final d = (i['discount'] as num?)?.toDouble() ?? 0;
+        final e = combinedMap.putIfAbsent(key, () => {'name': n, 'sku': sku, 'qty': 0.0, 'gross': 0.0, 'disc': 0.0});
+        e['qty'] = (e['qty'] as double) + q;
+        e['gross'] = (e['gross'] as double) + q * p;
+        e['disc'] = (e['disc'] as double) + d;
+      }
+    }
+    final combinedEntries = combinedMap.values.toList()
+      ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+    String combinedRows = '';
+    double combQty = 0, combDisc = 0, combNet = 0;
+    for (final e in combinedEntries) {
+      final q = e['qty'] as double; final g = e['gross'] as double; final d = e['disc'] as double;
+      final net = g - d;
+      combQty += q; combDisc += d; combNet += net;
+      final sku = e['sku'] as String;
+      combinedRows += '<tr><td>${e['name']}'
+          '${sku.isNotEmpty ? ' <span style="color:#999;font-size:11px">$sku</span>' : ''}</td>'
+          '<td style="text-align:right">${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 2)}</td>'
+          '${discCell(d, g)}'
+          '<td style="text-align:right;font-weight:bold">${money(net)}</td></tr>';
+    }
+    final String productSection = combined
+        ? (combinedRows.isNotEmpty ? '''<h2>Products Sold (Combined)</h2>
+<table><thead><tr><th>Product</th><th style="text-align:right">Qty</th><th>Discount</th><th style="text-align:right">Total</th></tr></thead>
+<tbody>$combinedRows
+<tr class="total-row"><td>TOTAL</td><td style="text-align:right">${combQty.toStringAsFixed(combQty == combQty.roundToDouble() ? 0 : 2)}</td>${discCell(combDisc, combNet + combDisc)}<td style="text-align:right">${money(combNet)}</td></tr>
+</tbody></table>''' : '')
+        : (txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
+<table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
+<tbody>$txnRows
+<tr class="total-row"><td colspan="6">TOTAL SALES</td><td style="text-align:right">${money(totalSales)}</td></tr>
+</tbody></table>''' : '');
+    final sessDateStr = _session['opened_at'] != null
+        ? DateFormat('yyyy-MM-dd').format(DateTime.parse(_session['opened_at'] as String).toLocal())
+        : DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final fileTitle = 'POS_Summary_$sessDateStr';
     final Map<String, String> origNumbers = {};
     final refIds = returns.map((t) => t['reference_transaction_id'] as String?).whereType<String>().toSet().toList();
     if (refIds.isNotEmpty) {
@@ -1849,12 +1912,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
       final refId = t['reference_transaction_id'] as String? ?? '';
       final refNum = (origNumbers[refId]?.isNotEmpty == true) ? origNumbers[refId]! : (refId.isEmpty ? '-' : refId);
-      final total = ((t['total'] as num?)?.toDouble() ?? 0).abs().toStringAsFixed(2);
+      final total = money(((t['total'] as num?)?.toDouble() ?? 0).abs());
       final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
       retRows += '<tr style="background:#fff5f5"><td>$time</td><td>$customer</td><td style="font-size:12px;color:#666">← $refNum</td><td style="text-align:right;color:#e74c3c;font-weight:bold">-$total</td></tr>';
     }
 
-    final htmlContent = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>POS Session Summary</title>
+    final htmlContent = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>$fileTitle</title>
 <style>
 *{box-sizing:border-box}body{font-family:Arial,sans-serif;padding:32px;color:#333;max-width:900px;margin:0 auto}
 h1{font-size:24px;margin:0 0 4px}h2{font-size:16px;margin:24px 0 10px;color:#555;border-bottom:2px solid #eee;padding-bottom:6px}
@@ -1877,13 +1940,13 @@ tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;
 <div class="stats">
   <div class="stat"><div class="sl">Transactions</div><div class="sv blue">${sales.length}</div></div>
   <div class="stat"><div class="sl">Returns</div><div class="sv red">${returns.length}</div></div>
-  <div class="stat"><div class="sl">Total Sales</div><div class="sv green">${totalSales.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Total Refunds</div><div class="sv red">${totalReturns.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Net Sales</div><div class="sv">${(totalSales - totalReturns).toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Customer Account Sale</div><div class="sv blue">${customerAccountSale.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${openingCash.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${closingCash.toStringAsFixed(2)}</div></div>
-  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${cashDiff.abs().toStringAsFixed(2)}</div></div>
+  <div class="stat"><div class="sl">Total Sales</div><div class="sv green">${money(totalSales)}</div></div>
+  <div class="stat"><div class="sl">Total Refunds</div><div class="sv red">${money(totalReturns)}</div></div>
+  <div class="stat"><div class="sl">Net Sales</div><div class="sv">${money(totalSales - totalReturns)}</div></div>
+  <div class="stat"><div class="sl">Customer Account Sale</div><div class="sv blue">${money(customerAccountSale)}</div></div>
+  <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${money(openingCash)}</div></div>
+  <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${money(closingCash)}</div></div>
+  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${money(cashDiff.abs())}</div></div>
 </div>
 ${breakdownRows.isNotEmpty ? '''<h2>Payment Breakdown</h2>
 <table><thead><tr><th>Account / Mode</th><th style="text-align:right">Collected</th></tr></thead>
@@ -1891,30 +1954,26 @@ ${breakdownRows.isNotEmpty ? '''<h2>Payment Breakdown</h2>
 ${custRows.isNotEmpty ? '''<h2>Customer Account Detail</h2>
 <table><thead><tr><th>Customer</th><th style="text-align:right">Amount</th></tr></thead>
 <tbody>$custRows</tbody></table>''' : ''}
-${txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
-<table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
-<tbody>$txnRows
-<tr class="total-row"><td colspan="6">TOTAL SALES</td><td style="text-align:right">${totalSales.toStringAsFixed(2)}</td></tr>
-</tbody></table>''' : ''}
+$productSection
 ${expRows.isNotEmpty ? '''<h2>Expenses</h2>
 <table><thead><tr><th>Time</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>
 <tbody>$expRows
-<tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:#c0392b">-${totalExpenses.toStringAsFixed(2)}</td></tr>
+<tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:#c0392b">-${money(totalExpenses)}</td></tr>
 </tbody></table>''' : ''}
 ${payRows.isNotEmpty ? '''<h2>Supplier / Expense Payments (from till)</h2>
 <table><thead><tr><th>Time</th><th>CPV Ref.</th><th>Paid To / Description</th><th>Amount</th></tr></thead>
 <tbody>$payRows
-<tr class="total-row"><td colspan="3">TOTAL PAYMENTS</td><td style="text-align:right;color:#c0392b">-${totalPayments.toStringAsFixed(2)}</td></tr>
+<tr class="total-row"><td colspan="3">TOTAL PAYMENTS</td><td style="text-align:right;color:#c0392b">-${money(totalPayments)}</td></tr>
 </tbody></table>''' : ''}
 ${rcvRows.isNotEmpty ? '''<h2>Customer Receipts (into till)</h2>
 <table><thead><tr><th>Time</th><th>CRV Ref.</th><th>Received From / Description</th><th>Amount</th></tr></thead>
 <tbody>$rcvRows
-<tr class="total-row"><td colspan="3">TOTAL RECEIPTS</td><td style="text-align:right;color:#1e7e34">+${totalReceipts.toStringAsFixed(2)}</td></tr>
+<tr class="total-row"><td colspan="3">TOTAL RECEIPTS</td><td style="text-align:right;color:#1e7e34">+${money(totalReceipts)}</td></tr>
 </tbody></table>''' : ''}
 ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
 <table><thead><tr><th>Time</th><th>Customer</th><th>Original Txn</th><th>Refund</th></tr></thead>
 <tbody>$retRows
-<tr class="total-row"><td colspan="3">TOTAL REFUNDS</td><td style="text-align:right;color:#e74c3c">-${totalReturns.toStringAsFixed(2)}</td></tr>
+<tr class="total-row"><td colspan="3">TOTAL REFUNDS</td><td style="text-align:right;color:#e74c3c">-${money(totalReturns)}</td></tr>
 </tbody></table>''' : ''}
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
@@ -1960,11 +2019,11 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
             TextButton.icon(icon: const Icon(Icons.payments_outlined, size: 18), label: const Text('Payment'), onPressed: _addPayment, style: TextButton.styleFrom(foregroundColor: Colors.red.shade700)),
             TextButton.icon(icon: const Icon(Icons.savings_outlined, size: 18), label: const Text('Receipt'), onPressed: _addReceipt, style: TextButton.styleFrom(foregroundColor: Colors.green.shade700)),
             const SizedBox(width: 4),
-            TextButton.icon(icon: const Icon(Icons.summarize_outlined, size: 18), label: const Text('Summary'), onPressed: _exportSummary),
+            TextButton.icon(icon: const Icon(Icons.summarize_outlined, size: 18), label: const Text('Summary'), onPressed: () => _exportSummary()),
             const SizedBox(width: 4),
             ElevatedButton.icon(icon: const Icon(Icons.power_settings_new, size: 16), label: const Text('Close Session'), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: _closeSession),
           ] else ...[
-            TextButton.icon(icon: const Icon(Icons.summarize_outlined, size: 18), label: const Text('Export Summary'), onPressed: _exportSummary),
+            TextButton.icon(icon: const Icon(Icons.summarize_outlined, size: 18), label: const Text('Export Summary'), onPressed: () => _exportSummary()),
           ],
           const SizedBox(width: 12),
         ],
@@ -2044,7 +2103,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                               Text(p['name'] as String? ?? '-',
                                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                                       color: blocked ? Colors.grey : AppTheme.textPrimary)),
-                              Text('Rs. ' + price.toStringAsFixed(2) + '  |  ' + stockLabel,
+                              Text('Rs. ' + money(price) + '  |  ' + stockLabel,
                                   style: TextStyle(fontSize: 11,
                                       color: blocked ? Colors.red.shade300 : AppTheme.textSecondary)),
                             ])),
@@ -2219,13 +2278,13 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                                       color: editing ? AppTheme.primary : AppTheme.textPrimary)),
                               Builder(builder: (_) {
                                 final discStr = da > 0
-                                    ? (discType == 'percent' ? '  (-${disc.toStringAsFixed(0)}%)' : '  (-${da.toStringAsFixed(2)})')
+                                    ? (discType == 'percent' ? '  (-${disc.toStringAsFixed(0)}%)' : '  (-${money(da)})')
                                     : '';
-                                return Text(qty.toStringAsFixed(0) + ' x Rs. ' + price.toStringAsFixed(2) + discStr,
+                                return Text(qty.toStringAsFixed(0) + ' x Rs. ' + money(price) + discStr,
                                     style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary));
                               }),
                             ])),
-                            Text('Rs. ' + lineTotal.toStringAsFixed(2),
+                            Text('Rs. ' + money(lineTotal),
                                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                             if (_isOpen)
                               IconButton(
@@ -2357,7 +2416,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       return Row(children: [
                         const Icon(Icons.check_circle, size: 14, color: AppTheme.success),
                         const SizedBox(width: 4),
-                        Expanded(child: Text(owed > 0 ? 'Balanced — Rs. ${owed.toStringAsFixed(2)} on customer account' : 'Balanced', style: const TextStyle(fontSize: 12, color: AppTheme.success))),
+                        Expanded(child: Text(owed > 0 ? 'Balanced — Rs. ${money(owed)} on customer account' : 'Balanced', style: const TextStyle(fontSize: 12, color: AppTheme.success))),
                         if (owed > 0 && !hasCust) const Text('Select customer', style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.w700)),
                       ]);
                     }
@@ -2367,7 +2426,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                         child: Row(children: [
                           Icon(Icons.savings_outlined, size: 16, color: Colors.green.shade700),
                           const SizedBox(width: 6),
-                          Expanded(child: Text('Credit Rs. ${diff.toStringAsFixed(2)} added to customer account', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w600))),
+                          Expanded(child: Text('Credit Rs. ${money(diff)} added to customer account', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w600))),
                           if (!hasCust) const Text('Select customer', style: TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.w700)),
                         ]));
                     }
@@ -2375,7 +2434,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                       child: Row(children: [
                         Icon(Icons.error_outline, size: 16, color: Colors.red.shade700),
                         const SizedBox(width: 6),
-                        Expanded(child: Text('Short by Rs. ${(-diff).toStringAsFixed(2)} — collect more or put the rest on Customer Account', style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600))),
+                        Expanded(child: Text('Short by Rs. ${money(-diff)} — collect more or put the rest on Customer Account', style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600))),
                       ]));
                   }),
                 ],
@@ -2383,12 +2442,12 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 // Totals
                 if (_totalDiscount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   const Text('Discount', style: TextStyle(fontSize: 12, color: Colors.orange)),
-                  Text('- ${_totalDiscount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.w600)),
+                  Text('- ${money(_totalDiscount)}', style: const TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.w600)),
                 ]),
                 const SizedBox(height: 4),
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   const Text('Total', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                  Text('Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+                  Text('Rs. ${money(_cartTotal)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primary)),
                 ]),
                 const SizedBox(height: 6),
                 if (_isOpen && _cart.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: SizedBox(width: double.infinity, height: 36, child: OutlinedButton.icon(
@@ -2401,7 +2460,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   child: SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(
                     focusNode: FocusNode(),
                     icon: const Icon(Icons.check_circle_outline, size: 20),
-                    label: Builder(builder: (_) { final entered = _buildTenders(_cartTotal); final collected = _collectedNonCredit(entered); final owed = _creditPortion(entered); final advance = collected - (_cartTotal - owed); if (advance > 0.01) return Text('Complete Sale (Credit: Rs. ${advance.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); if (owed > 0.01) return Text('Complete Sale (On a/c: Rs. ${owed.toStringAsFixed(2)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); return Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${_cartTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
+                    label: Builder(builder: (_) { final entered = _buildTenders(_cartTotal); final collected = _collectedNonCredit(entered); final owed = _creditPortion(entered); final advance = collected - (_cartTotal - owed); if (advance > 0.01) return Text('Complete Sale (Credit: Rs. ${money(advance)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); if (owed > 0.01) return Text('Complete Sale (On a/c: Rs. ${money(owed)})', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)); return Text(_cart.isEmpty ? 'Add items to checkout' : 'Complete Sale — Rs. ${money(_cartTotal)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)); }),
                     style: ElevatedButton.styleFrom(backgroundColor: _cart.isNotEmpty && _isOpen ? AppTheme.primary : Colors.grey, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                     onPressed: _cart.isNotEmpty && _isOpen && _paymentValid() ? _checkout : null,
                   ))),
@@ -2433,15 +2492,15 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 ]),
                 const SizedBox(height: 8),
                 Row(children: [
-                  Expanded(child: _SessionStat(label: 'Sales Total', value: _transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'sale').fold(0.0, (s, t) => s + ((t['total'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2), color: AppTheme.success)),
+                  Expanded(child: _SessionStat(label: 'Sales Total', value: money(_transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'sale').fold<double>(0.0, (s, t) => s + ((t['total'] as num?)?.toDouble() ?? 0))), color: AppTheme.success)),
                   const SizedBox(width: 8),
-                  Expanded(child: _SessionStat(label: 'Opening Cash', value: (_session['opening_cash'] as num?)?.toStringAsFixed(2) ?? '0', color: AppTheme.textSecondary)),
+                  Expanded(child: _SessionStat(label: 'Opening Cash', value: money(_session['opening_cash'] as num?), color: AppTheme.textSecondary)),
                 ]),
                 const SizedBox(height: 8),
                 Row(children: [
                   Expanded(child: _SessionStat(label: 'Expenses', value: '${_expenses.length}', color: Colors.red.shade700)),
                   const SizedBox(width: 8),
-                  Expanded(child: _SessionStat(label: 'Exp. Total', value: _expenses.fold(0.0, (s, e) => s + ((e['amount'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2), color: Colors.red.shade700)),
+                  Expanded(child: _SessionStat(label: 'Exp. Total', value: money(_expenses.fold<double>(0.0, (s, e) => s + ((e['amount'] as num?)?.toDouble() ?? 0))), color: Colors.red.shade700)),
                 ]),
                 const SizedBox(height: 8),
                 Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2485,7 +2544,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                                 if (note.isNotEmpty) Text(note, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
                                 Text(time, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                               ])),
-                              Text('-${amt.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700)),
+                              Text('-${money(amt)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700)),
                             ]));
                         }))
                   : (_transactions.isEmpty
@@ -2519,7 +2578,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                               Text(customer, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
                               Text(time, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                             ])),
-                            Text('${isReturn ? '-' : ''}${total.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: isReturn ? Colors.red : AppTheme.primary)),
+                            Text('${isReturn ? '-' : ''}${money(total.abs())}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: isReturn ? Colors.red : AppTheme.primary)),
                             if (!isReturn) const Icon(Icons.chevron_right, size: 14, color: AppTheme.textSecondary),
                           ])));
                       }))),
@@ -2607,7 +2666,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
           const Divider(),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             const Text('Total', style: TextStyle(fontWeight: FontWeight.w700)),
-            Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w800, color: AppTheme.primary)),
+            Text('Rs. ${money(total)}', style: const TextStyle(fontWeight: FontWeight.w800, color: AppTheme.primary)),
           ]),
         ])),
         actions: [
@@ -2656,7 +2715,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         });
       }
       await client.rpc('post_cpv', params: {'p_voucher_id': vid});
-      _showSnack('Payment posted: $vNum • Rs. ${total.toStringAsFixed(2)}');
+      _showSnack('Payment posted: $vNum • Rs. ${money(total)}');
       _loadData();
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -2736,7 +2795,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
           const Divider(),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             const Text('Total', style: TextStyle(fontWeight: FontWeight.w700)),
-            Text('Rs. ${total.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w800, color: Colors.green.shade700)),
+            Text('Rs. ${money(total)}', style: TextStyle(fontWeight: FontWeight.w800, color: Colors.green.shade700)),
           ]),
         ])),
         actions: [
@@ -2783,7 +2842,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         });
       }
       await client.rpc('post_crv', params: {'p_voucher_id': vid});
-      _showSnack('Receipt posted: $vNum • Rs. ${total.toStringAsFixed(2)}');
+      _showSnack('Receipt posted: $vNum • Rs. ${money(total)}');
       _loadData();
     } catch (e) { _showSnack('Failed: $e'); }
   }
@@ -3002,28 +3061,28 @@ class _ReceiptDialog extends StatelessWidget {
           return Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5), child: Row(children: [
             Expanded(flex: 4, child: Text(it['name'] as String? ?? '-', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
             Expanded(flex: 1, child: Text('x${qty.toStringAsFixed(0)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-            Expanded(flex: 2, child: Text(price.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-            Expanded(flex: 2, child: discAmt > 0 ? Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [Text('-Rs.${discAmt.toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.orange)), if (discType == 'percent') Text('(${disc.toStringAsFixed(0)}%)', textAlign: TextAlign.right, style: const TextStyle(fontSize: 9, color: AppTheme.textSecondary))]) : const Text('-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-            Expanded(flex: 2, child: Text(lt.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+            Expanded(flex: 2, child: Text(money(price), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+            Expanded(flex: 2, child: discAmt > 0 ? Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [Text('-Rs.${money(discAmt)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.orange)), if (discType == 'percent') Text('(${disc.toStringAsFixed(0)}%)', textAlign: TextAlign.right, style: const TextStyle(fontSize: 9, color: AppTheme.textSecondary))]) : const Text('-', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+            Expanded(flex: 2, child: Text(money(lt), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
           ]));
         }),
       ])),
       const Divider(),
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         const Text('Subtotal', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-        Text(subtotal.toStringAsFixed(2), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+        Text(money(subtotal), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
       ]),
       if (discount > 0) ...[
         const SizedBox(height: 2),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           const Text('Total Discount', style: TextStyle(fontSize: 13, color: Colors.orange)),
-          Text('- ${discount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, color: Colors.orange, fontWeight: FontWeight.w600)),
+          Text('- ${money(discount)}', style: const TextStyle(fontSize: 13, color: Colors.orange, fontWeight: FontWeight.w600)),
         ]),
       ],
       const SizedBox(height: 6),
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         const Text('TOTAL', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-        Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+        Text('Rs. ${money(total)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppTheme.primary)),
       ]),
       const SizedBox(height: 4),
       Text('Payment: $method', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -3048,12 +3107,12 @@ class _ReceiptDialog extends StatelessWidget {
           final posFooter = posConfig['pos.footer_note']?.isNotEmpty == true ? posConfig['pos.footer_note']! : (footerNote ?? '');
           final posTerms = posConfig['pos.terms'] ?? '';
           final posLogo = posConfig['pos.logo'] ?? '';
-          final amountPaid = (transaction['amount_paid'] as num?)?.toDouble()?.toStringAsFixed(2) ?? '0';
-          final balanceChange = (transaction['balance_change'] as num?)?.toDouble()?.toStringAsFixed(2) ?? '0';
-          final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? (dt == 'percent' ? "-Rs.${da.toStringAsFixed(2)} <small style='color:#aaa'>(${d.toStringAsFixed(0)}%)</small>" : "-Rs.${da.toStringAsFixed(2)}") : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>'; }).join();
-          final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${discount.toStringAsFixed(2)}</td></tr>' : '';
+          final amountPaid = money(transaction['amount_paid'] as num?);
+          final balanceChange = money(transaction['balance_change'] as num?);
+          final rows = items.map((i) { final q = i['quantity'] as double; final p = i['unit_price'] as double; final d = i['discount'] as double; final dt = i['discount_type'] as String? ?? 'fixed'; final da = dt == 'percent' ? p * q * (d / 100) : d; final lt = q * p - da; final n = i['name'] as String? ?? '-'; return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${money(p)}</td><td style="text-align:right;color:${da > 0 ? "#e67e22" : "#999"}">${da > 0 ? (dt == 'percent' ? "-Rs.${money(da)} <small style='color:#aaa'>(${d.toStringAsFixed(0)}%)</small>" : "-Rs.${money(da)}") : "-"}</td><td style="text-align:right;font-weight:bold">${money(lt)}</td></tr>'; }).join();
+          final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${money(discount)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
-          final content = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2>$posBranchLine${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>$splitHtml${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + (-bc).toStringAsFixed(2) : 'Credit Added: Rs. ' + bc.toStringAsFixed(2)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
+          final content = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2>$posBranchLine${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${money(subtotal)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${money(total)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>$splitHtml${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + money(-bc) : 'Credit Added: Rs. ' + money(bc)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
           final blob = html.Blob([content], 'text/html;charset=utf-8'); final url = html.Url.createObjectUrlFromBlob(blob); html.window.open(url, '_blank');
         })),
         const SizedBox(width: 12),
@@ -3185,7 +3244,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.08),
                   title: Row(children: [
                     Expanded(child: Text(custName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
-                    Text('Rs. ${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                    Text('Rs. ${money(total)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
                   ]),
                   subtitle: Row(children: [
                     Expanded(child: Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
@@ -3210,7 +3269,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
                       return CheckboxListTile(dense: true, value: _selected[id] ?? false, onChanged: (v) => setState(() => _selected[id] = v ?? false),
                         title: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                        subtitle: Builder(builder: (_) { final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final discLabel = disc > 0 ? (discType == 'percent' ? ' -${disc.toStringAsFixed(0)}%' : ' -Rs.${discAmt.toStringAsFixed(2)}') : ''; final net = origQty * price - discAmt; return Text('${origQty.toStringAsFixed(0)} × Rs. ${price.toStringAsFixed(2)}$discLabel = Rs. ${net.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11)); }),
+                        subtitle: Builder(builder: (_) { final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final discLabel = disc > 0 ? (discType == 'percent' ? ' -${disc.toStringAsFixed(0)}%' : ' -Rs.${money(discAmt)}') : ''; final net = origQty * price - discAmt; return Text('${origQty.toStringAsFixed(0)} × Rs. ${money(price)}$discLabel = Rs. ${money(net)}', style: const TextStyle(fontSize: 11)); }),
                         secondary: SizedBox(width: 72, child: TextField(
                           controller: _qtyCtrls[id],
                           decoration: InputDecoration(labelText: 'Return qty', isDense: true, filled: true, fillColor: _selected[id] == true ? Colors.orange.withOpacity(0.08) : Colors.grey.withOpacity(0.05)),
@@ -3220,7 +3279,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                         )));
                     }).toList())),
                 if (selectedItems.isNotEmpty) Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
-                  child: Row(children: [const Text('Refund Total: ', style: TextStyle(fontWeight: FontWeight.w600)), const Spacer(), Text('Rs. ${returnTotal.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.red, fontSize: 15))])),
+                  child: Row(children: [const Text('Refund Total: ', style: TextStyle(fontWeight: FontWeight.w600)), const Spacer(), Text('Rs. ${money(returnTotal)}', style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.red, fontSize: 15))])),
               ])),
       ])),
       const SizedBox(height: 12),
@@ -3229,7 +3288,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
         const SizedBox(width: 8),
         ElevatedButton.icon(
           icon: const Icon(Icons.reply, size: 16),
-          label: Text('Process Return${selectedItems.isNotEmpty ? ' — Rs. ${returnTotal.toStringAsFixed(2)}' : ''}'),
+          label: Text('Process Return${selectedItems.isNotEmpty ? ' — Rs. ${money(returnTotal)}' : ''}'),
           style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
           onPressed: selectedItems.isEmpty ? null : () async {
             final retItems = selectedItems.map((it) { final qty = double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0; return {...it, 'return_qty': qty}; }).toList();
@@ -3267,7 +3326,7 @@ class _ProductCard extends StatelessWidget {
         if (product['sku'] != null) Text(product['sku'] as String, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
         const Spacer(),
         Row(children: [
-          Expanded(child: Text('Rs. ${price.toStringAsFixed(2)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: inCart ? AppTheme.primary : AppTheme.textPrimary))),
+          Expanded(child: Text('Rs. ${money(price)}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: inCart ? AppTheme.primary : AppTheme.textPrimary))),
           _StockBadge(stockQty: stockQty),
         ]),
         if (!isOpen) const Text('Session closed', style: TextStyle(fontSize: 9, color: AppTheme.textSecondary)),
@@ -3302,7 +3361,7 @@ class _CartItemTileState extends State<_CartItemTile> {
       child: Column(children: [
         Row(children: [
           Expanded(child: Text(widget.item['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
-          Text('Rs. ${widget.lineTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          Text('Rs. ${money(widget.lineTotal)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.primary)),
           const SizedBox(width: 4),
           if (widget.isOpen) GestureDetector(onTap: widget.onRemove, child: const Icon(Icons.close, size: 16, color: AppTheme.textSecondary)),
         ]),

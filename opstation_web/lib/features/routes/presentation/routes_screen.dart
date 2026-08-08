@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 
 class RoutesScreen extends ConsumerStatefulWidget {
@@ -227,17 +228,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
 
   /// Whole-rupee formatting with thousands separators (no decimals; sales
   /// targets and invoice totals are tracked as whole rupees here).
-  String _money(num v) {
-    final n = v.round();
-    final neg = n < 0;
-    final digits = n.abs().toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < digits.length; i++) {
-      if (i > 0 && (digits.length - i) % 3 == 0) buf.write(',');
-      buf.write(digits[i]);
-    }
-    return '${neg ? '-' : ''}$buf';
-  }
+  String _money(num v) => money(v);
 
   @override
   Widget build(BuildContext context) {

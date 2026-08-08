@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -26,7 +27,7 @@ class ErpBankReceiptVoucherScreen extends ConsumerStatefulWidget {
 
 class _ErpBankReceiptVoucherScreenState
     extends ConsumerState<ErpBankReceiptVoucherScreen> {
-  final _fmt = NumberFormat('#,##0.00');
+  final MoneyFmt _fmt = const MoneyFmt();
 
   // List pane
   List<Map<String, dynamic>> _vouchers = [];
@@ -1115,7 +1116,7 @@ class _ChequeLine {
 class _ChequeLineRow extends StatelessWidget {
   final _ChequeLine line;
   final int lineNum;
-  final NumberFormat fmt;
+  final MoneyFmt fmt;
   final VoidCallback onPickDate;
   final VoidCallback onAmountSubmitted;
   final VoidCallback onRemove;

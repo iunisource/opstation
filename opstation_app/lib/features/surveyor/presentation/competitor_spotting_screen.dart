@@ -92,6 +92,40 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
     });
   }
 
+  /// Guard against accidental double-saves: if this shop + category was
+  /// spotted within the last 15 minutes, ask before writing another row.
+  Future<bool> _confirmRecentSave() async {
+    final db = ref.read(appDatabaseProvider);
+    final recent = await (db.select(db.competitorSpottings)
+          ..where((cs) => cs.customerId.equals(_selectedCustomer!.id))
+          ..where((cs) => cs.categoryId.equals(_selectedCategory!.id))
+          ..orderBy([(cs) => OrderingTerm.desc(cs.surveyedAt)])
+          ..limit(1))
+        .getSingleOrNull();
+    if (recent == null) return true;
+    final mins = DateTime.now().difference(recent.surveyedAt).inMinutes;
+    if (mins >= 15) return true;
+    if (!mounted) return false;
+    final ago = mins <= 0 ? 'less than a minute' : '$mins min';
+    final res = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Spotted recently'),
+        content: Text(
+            '${_selectedCategory!.name} at this shop was already recorded $ago ago. Save a new spotting anyway?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save anyway')),
+        ],
+      ),
+    );
+    return res ?? false;
+  }
+
   Future<void> _save() async {
     if (_selectedCustomer == null || _selectedCategory == null) return;
     if (_brandCtrl.text.trim().isEmpty) {
@@ -100,6 +134,8 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
       );
       return;
     }
+    if (!await _confirmRecentSave()) return;
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       final db = ref.read(appDatabaseProvider);

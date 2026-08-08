@@ -103,6 +103,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('supplier_aging', 'Supplier Aging', PermKind.report, '/erp/supplier-aging', module: 'purchase'),
     PermItem('margin_report', 'Margin Report', PermKind.report, '/reports/margin', module: 'sales'),
     PermItem('customer_balance_report', 'Customer Balance Report', PermKind.report, '/reports/customer-balance', module: 'sales'),
+    PermItem('supplier_balance_report', 'Supplier Balance Report', PermKind.report, '/reports/supplier-balance', module: 'purchase'),
     // Report Builder and Files are cross-cutting tools, not tied to a single
     // licensable module — left permission-gated only.
     PermItem('report_builder', 'Report Builder', PermKind.report, '/intelligence/report-builder'),
@@ -115,6 +116,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('production', 'Production Voucher', PermKind.doc, '/manufacturing/production-voucher'),
     PermItem('job_card', 'Job Card', PermKind.doc, '/manufacturing/job-card'),
     PermItem('qc_checkpoints', 'QC Checkpoints', PermKind.doc, '/manufacturing/qc-checkpoints'),
+    PermItem('qc_station', 'QC Station', PermKind.report, '/manufacturing/qc-station'),
     PermItem('production_inverse', 'Production Inverse Voucher', PermKind.doc, '/manufacturing/production-inverse-voucher'),
     PermItem('damage_stock', 'Damage Stock Voucher', PermKind.doc, '/manufacturing/damage-stock-voucher'),
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
@@ -141,6 +143,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('pdc', 'PDC Voucher', PermKind.doc, '/erp/pdc-voucher'),
     PermItem('trial_balance', 'Trial Balance', PermKind.report, '/financials/trial-balance'),
     PermItem('account_activity', 'Account Activity', PermKind.report, '/financials/account-activity'),
+    PermItem('cash_book', 'Cash Book Report', PermKind.report, '/financials/cash-book'),
     PermItem('profit_loss', 'Profit & Loss', PermKind.report, '/financials/profit-loss'),
     PermItem('balance_sheet', 'Balance Sheet', PermKind.report, '/financials/balance-sheet'),
   ]),
@@ -157,6 +160,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('crm_customers', 'CRM Customers', PermKind.doc, '/crm/customers'),
     PermItem('crm_pipeline', 'Pipeline', PermKind.doc, '/crm/pipeline'),
     PermItem('crm_follow_ups', 'Follow-ups', PermKind.doc, '/crm/follow-ups'),
+    PermItem('crm_supplier_profile', 'Suppliers', PermKind.doc, '/crm/supplier-profile'),
   ]),
 ];
 

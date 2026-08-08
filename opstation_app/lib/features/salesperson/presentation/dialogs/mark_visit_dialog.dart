@@ -12,6 +12,7 @@ import '../../../../core/services/sound_controller.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/geo_utils.dart';
 import '../../models/customer.dart';
+import '../../models/trip.dart';
 import '../../providers/mock_gps_service.dart';
 import '../../providers/trip_controller.dart';
 
@@ -41,10 +42,42 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
   @override
   void initState() {
     super.initState();
+    _prefillReceipt();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _refreshDeviceFix();
       _startGpsPolling();
     });
+  }
+
+  /// Pre-fill CR# with the next number in sequence — the highest numeric
+  /// receipt this salesperson has entered today (across the active trip and
+  /// any trips already closed today) plus one. Fully editable: a new receipt
+  /// book or a non-sequential slip can be typed over. When nothing has been
+  /// entered yet (fresh book / first collection of the day) the field is left
+  /// blank so we never invent a starting number. This makes a skipped receipt
+  /// obvious the moment the next one is auto-filled.
+  void _prefillReceipt() {
+    final s = ref.read(tripControllerProvider).valueOrNull;
+    if (s == null) return;
+    int? maxNum;
+    void scan(Iterable<Visit> visits) {
+      for (final v in visits) {
+        final r = v.receiptNumber;
+        if (r == null) continue;
+        // Combined entries ("32371 & 32372") carry more than one slip — take
+        // the highest so the next auto-fill continues past the last slip used.
+        for (final m in RegExp(r'\d+').allMatches(r)) {
+          final n = int.tryParse(m.group(0)!);
+          if (n != null && (maxNum == null || n > maxNum!)) maxNum = n;
+        }
+      }
+    }
+
+    if (s.active != null) scan(s.active!.visits);
+    for (final t in s.completedToday) {
+      scan(t.visits);
+    }
+    if (maxNum != null) _crCtrl.text = '${maxNum! + 1}';
   }
 
   @override

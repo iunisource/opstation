@@ -7,6 +7,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/format/money.dart';
 import '../../../core/reports/branch_scope.dart';
 import '../../auth/auth_controller.dart';
 
@@ -74,7 +75,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
     final branch = ref.read(selectedBranchProvider);
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4.landscape,
@@ -135,7 +136,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     final branch = ref.watch(selectedBranchProvider);
     final scope = ref.watch(branchScopeProvider).valueOrNull ??
         const BranchScope(restricted: false, allowed: []);
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     double tDr = _rows.fold(0.0, (s, r) => s + (r['closing_dr'] as num? ?? 0));
     double tCr = _rows.fold(0.0, (s, r) => s + (r['closing_cr'] as num? ?? 0));
     final balanced = (tDr - tCr).abs() < 0.01;
@@ -241,7 +242,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     ]),
   );
 
-  Widget _line(NumberFormat fmt, _Line ln) {
+  Widget _line(MoneyFmt fmt, _Line ln) {
     final r = ln.row;
     if (ln.isChild) {
       return Container(
@@ -289,7 +290,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     );
   }
 
-  Widget _totals(NumberFormat fmt, double dr, double cr) => Container(
+  Widget _totals(MoneyFmt fmt, double dr, double cr) => Container(
     color: AppTheme.background,
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
     child: Row(children: [
@@ -308,7 +309,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     ]),
   );
 
-  Widget _amt(NumberFormat fmt, dynamic v) {
+  Widget _amt(MoneyFmt fmt, dynamic v) {
     final d = (v as num? ?? 0).toDouble();
     return Text(d > 0.005 ? fmt.format(d) : '-', textAlign: TextAlign.right, style: const TextStyle(fontSize: 11));
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -19,19 +21,47 @@ class MonitoringScreen extends ConsumerStatefulWidget {
 }
 
 class _MonitoringScreenState extends ConsumerState<MonitoringScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final TabController _tabs;
+  Timer? _autoRefresh;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
+    WidgetsBinding.instance.addObserver(this);
+    // Keep the admin picture live while the screen stays open — the
+    // providers pull from Supabase on each rebuild, so this re-pull every
+    // couple of minutes replaces the old logout/login dance.
+    _autoRefresh = Timer.periodic(
+      const Duration(minutes: 2),
+      (_) => _refreshAll(),
+    );
   }
 
   @override
   void dispose() {
+    _autoRefresh?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _tabs.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Admin returns to an app left open overnight → refresh immediately.
+    if (state == AppLifecycleState.resumed && mounted) {
+      _refreshAll();
+    }
+  }
+
+  void _refreshAll() {
+    if (!mounted) return;
+    ref.invalidate(liveMonitoringProvider);
+    ref.invalidate(leaderboardProvider);
+    try {
+      ref.read(deliveryMonitoringProvider.notifier).refresh();
+    } catch (_) {}
   }
 
   @override
@@ -45,10 +75,7 @@ class _MonitoringScreenState extends ConsumerState<MonitoringScreen>
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh',
-            onPressed: () {
-              ref.invalidate(liveMonitoringProvider);
-              ref.invalidate(leaderboardProvider);
-            },
+            onPressed: _refreshAll,
           ),
         ],
         bottom: TabBar(

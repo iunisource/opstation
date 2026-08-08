@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -12,8 +13,11 @@ import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/product_picker.dart';
 
 class ErpPurchaseScreen extends ConsumerStatefulWidget {
-  const ErpPurchaseScreen({super.key, this.focusId});
+  const ErpPurchaseScreen({super.key, this.focusId, this.seedProductId, this.seedQty, this.seedBranchId});
   final String? focusId;
+  final String? seedProductId; // from Low Stock "Make PO" — seed a new PO line
+  final String? seedQty;
+  final String? seedBranchId;
   @override
   ConsumerState<ErpPurchaseScreen> createState() => _ErpPurchaseScreenState();
 }
@@ -37,6 +41,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool _hasGrn = false; // true if any GRN exists against this PO (cascade lock)
   bool _listLoading = true;
   bool _detailLoading = false;
+  int _auditRefresh = 0; // bump to force the audit trail to reload
   bool _datesEditable = false;
   String _search = '';
   String _filter = 'all';
@@ -46,13 +51,45 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   final _addQtyFocus = FocusNode();
   final Map<String, TextEditingController> _lineQtyCtrls = {};
   final Map<String, TextEditingController> _lineRateCtrls = {};
+  final Map<String, TextEditingController> _lineDescCtrls = {}; // free-text item descriptions
 
   @override
-  void initState() { super.initState(); _loadList(); _loadLookups(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
+  void initState() {
+    super.initState();
+    _loadList();
+    _loadLookups();
+    if (widget.focusId != null) _loadDetail(widget.focusId!);
+    if (widget.seedProductId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _seedNewPo());
+    }
+  }
+
+  // Seed a brand-new PO from the Low Stock report's "Make PO": pick a supplier,
+  // create the draft, then auto-add the shortfall product line.
+  Future<void> _seedNewPo() async {
+    if (_suppliers.isEmpty || _products.isEmpty) { await _loadLookups(); }
+    await _createNew(); // supplier pick + create + load detail
+    final poId = _detail['id'] as String?;
+    if (poId == null) return; // user cancelled the supplier picker
+    // seedProductId / seedQty may be comma-separated for a bulk "Make PO".
+    final ids = (widget.seedProductId ?? '').split(',').where((e) => e.trim().isNotEmpty).toList();
+    final qtys = (widget.seedQty ?? '').split(',');
+    for (var i = 0; i < ids.length; i++) {
+      final pid = ids[i].trim();
+      final prod = _products.firstWhere((p) => p['id'] == pid, orElse: () => {});
+      if (prod.isEmpty) continue;
+      _addProductId = pid;
+      _addUomId = prod['base_uom_id'] as String?;
+      _addQtyCtrl.text = (i < qtys.length && qtys[i].trim().isNotEmpty) ? qtys[i].trim() : '1';
+      await _addItem();
+    }
+    if (mounted) setState(() {});
+  }
   @override
   void dispose() {
     for (final c in _lineQtyCtrls.values) { c.dispose(); }
     for (final c in _lineRateCtrls.values) { c.dispose(); }
+    for (final c in _lineDescCtrls.values) { c.dispose(); }
     _addQtyCtrl.dispose();
     _addQtyFocus.dispose();
     super.dispose();
@@ -68,6 +105,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
   double get _grandTotal => _items.fold(0.0, (s, it) =>
       s + ((it['quantity_ordered'] as num?)?.toDouble() ?? 0) * _effRate(it));
+  double get _totalQty => _items.fold(0.0, (s, it) =>
+      s + ((it['quantity_ordered'] as num?)?.toDouble() ?? 0));
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   List<Map<String, dynamic>> get _visibleProducts {
@@ -121,7 +160,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final orgId = _orgId; if (orgId == null) return;
     final client = Supabase.instance.client;
     final results = await Future.wait([
-      client.from('products').select('id,name,sku,base_uom_id,product_main_group,cost_price').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
+      client.from('products').select('id,name,sku,base_uom_id,product_main_group,cost_price,is_free_text').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
       client.from('uoms').select().eq('org_id', orgId).order('name'),
     ]);
     // Paginated suppliers
@@ -239,7 +278,38 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       } else if (rc.text != rtxt) {
         rc.text = rtxt;
       }
+      final dtxt = (it['description'] as String?) ?? '';
+      final dc = _lineDescCtrls[id];
+      if (dc == null) {
+        _lineDescCtrls[id] = TextEditingController(text: dtxt);
+      } else if (dc.text != dtxt && !dc.selection.isValid) {
+        dc.text = dtxt;
+      }
     }
+    for (final k in _lineDescCtrls.keys.where((k) => !ids.contains(k)).toList()) {
+      _lineDescCtrls.remove(k)?.dispose();
+    }
+  }
+
+  bool _isFreeText(Map<String, dynamic> it) {
+    final p = _products.firstWhere((p) => p['id'] == it['product_id'], orElse: () => const {});
+    return p['is_free_text'] == true;
+  }
+
+  // Save a free-text line's custom description.
+  Future<void> _updateLineDesc(String itemId) async {
+    if (!_canEditLines) return;
+    final c = _lineDescCtrls[itemId];
+    final txt = c?.text.trim() ?? '';
+    final cur = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['description'] as String?) ?? '';
+    if (cur == txt) return;
+    try {
+      await Supabase.instance.client.from('purchase_order_items')
+          .update({'description': txt.isEmpty ? null : txt}).eq('id', itemId);
+      final idx = _items.indexWhere((i) => i['id'] == itemId);
+      if (idx >= 0) _items[idx]['description'] = txt.isEmpty ? null : txt;
+      await _resetApprovalIfNeeded();
+    } catch (e) { _showSnack('Failed to save description: $e'); }
   }
 
   // Inline edit of a line's rate (unit_cost). Allowed while lines are editable.
@@ -298,9 +368,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Future<void> _logAudit(String id, String action, String? details) async {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
+        'id': 'val_${DateTime.now().microsecondsSinceEpoch}',
         'org_id': _orgId, 'voucher_id': id, 'voucher_type': 'PO',
         'action': action, 'details': details, 'performed_by': ref.read(currentUserProvider)?.id,
+        'performed_at': DateTime.now().toUtc().toIso8601String(),
       });
+      if (mounted) setState(() => _auditRefresh++);
     } catch (e) { print('[Audit PO] $e'); }
   }
 
@@ -510,6 +583,76 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  // Outstanding = ordered minus received across all lines. Drives the
+  // short-close affordance.
+  double get _outstandingQty {
+    double o = 0;
+    for (final it in _items) {
+      final ord = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
+      final rec = (it['quantity_received'] as num?)?.toDouble() ?? 0;
+      if (ord > rec) o += ord - rec;
+    }
+    return o;
+  }
+
+  // Change the supplier on an open PO (no GRN, not voided) instead of forcing
+  // delete + recreate. Clears approval if the PO was already approved.
+  Future<void> _changeSupplier() async {
+    if (!_canEditLines) {
+      _showSnack('Cannot change supplier: a GRN exists against this PO. Delete the GRN first.');
+      return;
+    }
+    final picked = await showDialog<Map<String, dynamic>?>(
+        context: context, builder: (_) => _SupplierPickDialog(suppliers: _suppliers));
+    if (picked == null) return;
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'supplier_id': picked['id'],
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'supplier_changed',
+          'Supplier changed to ${picked['name']}');
+      _showSnack('Supplier updated to ${picked['name']}');
+      await _resetApprovalIfNeeded();
+      _loadDetail(_detail['id'] as String);
+      _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  // Short-close: the vendor order is finished but less arrived than ordered.
+  // Marks the PO received (closed) so the outstanding qty stops hanging in the
+  // pending/open views. No inventory effect — only GRNs move stock.
+  Future<void> _shortClose() async {
+    final out = _outstandingQty;
+    if (out <= 0) { _showSnack('Nothing outstanding to close.'); return; }
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Close remaining quantity?'),
+      content: Text('${_trimQty(out)} unit(s) ordered but not received will be '
+          'closed off — ${_detail['voucher_number']} will be marked fully received '
+          'and the pending qty will no longer show. This does not affect stock.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade800),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Close remaining')),
+      ],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'status': 'received',
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'short_closed',
+          'Short-closed: ${_trimQty(out)} outstanding unit(s) dropped');
+      _showSnack('PO closed — remaining qty dropped');
+      ref.invalidate(poPendingApprovalCountProvider);
+      _loadDetail(_detail['id'] as String);
+      _loadList();
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
+  String _trimQty(double q) => q % 1 == 0 ? q.toStringAsFixed(0) : q.toStringAsFixed(2);
+
   String? _footerWithApproval(String? base) {
     final name = _detail['approved_by_name'] as String?;
     final at = _detail['approved_at'] != null
@@ -525,8 +668,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final lines = _isDraft ? <VoucherLine>[] : _items.map((it) {
       final qty = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
       final rate = _effRate(it);
+      final desc = (it['description'] as String?)?.trim();
+      final baseName = it['products']?['name'] as String? ?? '-';
       return VoucherLine(
-        product: it['products']?['name'] as String? ?? '-',
+        product: (desc != null && desc.isNotEmpty) ? '$baseName — $desc' : baseName,
         sku: it['products']?['sku'] as String?,
         uom: it['uoms']?['abbreviation'] as String?,
         qty: qty,
@@ -571,13 +716,13 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final q = _search.toLowerCase().trim();
     final filtered = _pos.where((r) {
       final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q);
-      final status = r['status'] as String? ?? 'ordered';
-      final locked = r['is_locked'] as bool? ?? false;
+      final disp = poDisplayStatus(r);
       final matchFilter = _filter == 'all'
           || (_filter == 'pending' && _poIsPending(r, _orgApprovalRequired))
-          || (_filter == 'open' && !locked && status != 'received' && status != 'invoiced')
-          || (_filter == 'received' && (status == 'received' || status == 'partially_received'))
-          || (_filter == 'invoiced' && status == 'invoiced');
+          || (_filter == 'approved' && disp == 'Approved')
+          || (_filter == 'open' && (disp == 'Ordered' || disp == 'Approved'))
+          || (_filter == 'received' && (disp == 'Received' || disp == 'Partially Received'))
+          || (_filter == 'invoiced' && disp == 'Invoiced');
       return matchSearch && matchFilter;
     }).toList();
     return Container(
@@ -601,6 +746,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             ],
             _PoFilterTab(label: 'Open',     value: 'open',     current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
+            _PoFilterTab(label: 'Approved', value: 'approved', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 5),
             _PoFilterTab(label: 'Received', value: 'received', current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
@@ -617,7 +764,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                     title: Row(children: [
                       Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
-                      voided ? const _PoVoidChip() : (_poIsPending(r, _orgApprovalRequired) ? const _PoPendingChip() : _PoStatusBadge(status: status)),
+                      voided ? const _PoVoidChip() : (_poIsPending(r, _orgApprovalRequired) ? const _PoPendingChip() : _PoStatusBadge(status: poDisplayStatus(r))),
                     ]),
                     subtitle: Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
                     onTap: () => _loadDetail(r['id'] as String));
@@ -633,42 +780,65 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       // Header
       Container(padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
         decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        child: LayoutBuilder(builder: (ctx, cons) {
+          final narrow = cons.maxWidth < 640;
+          final title = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(_detail['voucher_number'] as String? ?? '-', softWrap: false, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             const Text('Purchase Order', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
-          ])),
-          if (_isDraft && !_isLocked) ...[
-            ElevatedButton.icon(icon: const Icon(Icons.check, size: 16), label: const Text('Confirm Order'),
-                onPressed: _confirmOrder),
-            const SizedBox(width: 8),
-          ],
-          if (_isLocked && _approvalRequired && _detail['approved_at'] == null && !_isVoided && _canApprove) ...[
-            ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve'),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                onPressed: _approve),
-            const SizedBox(width: 8),
-          ],
-          if (_canEditDate)
-            IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
-          if (!_isDraft || !_isLocked || _canUnlock)
-            IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-                tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
-          IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print', onPressed: _print),
-          if (_canDelete && !_isVoided)
-            IconButton(
-              icon: Icon(_detail['approved_at'] != null ? Icons.block : Icons.delete_outline,
-                  color: _detail['approved_at'] != null ? Colors.orange.shade800 : AppTheme.danger),
-              tooltip: _detail['approved_at'] != null ? 'Void (approved PO cannot be deleted)' : 'Delete',
-              onPressed: _detail['approved_at'] != null ? _void : _delete),
-        ]),
+          ]);
+          final actions = <Widget>[
+            if (_isDraft && !_isLocked)
+              ElevatedButton.icon(icon: const Icon(Icons.check, size: 16), label: const Text('Confirm Order'), onPressed: _confirmOrder),
+            if (_isLocked && _approvalRequired && _detail['approved_at'] == null && !_isVoided && _canApprove)
+              ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green), onPressed: _approve),
+            // Only offer short-close once at least one GRN exists.
+            if (_isLocked && !_isVoided && _hasGrn && _outstandingQty > 0 && _detail['status'] != 'invoiced')
+              OutlinedButton.icon(icon: const Icon(Icons.playlist_add_check, size: 16), label: const Text('Close remaining'),
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.orange.shade800), onPressed: _shortClose),
+            if (_canEditDate)
+              IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
+            if (!_isDraft || !_isLocked || _canUnlock)
+              IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+                  tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print', onPressed: _print),
+            if (_canDelete && !_isVoided)
+              IconButton(
+                icon: Icon(_detail['approved_at'] != null ? Icons.block : Icons.delete_outline,
+                    color: _detail['approved_at'] != null ? Colors.orange.shade800 : AppTheme.danger),
+                tooltip: _detail['approved_at'] != null ? 'Void (approved PO cannot be deleted)' : 'Delete',
+                onPressed: _detail['approved_at'] != null ? _void : _delete),
+          ];
+          if (narrow) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              title,
+              const SizedBox(height: 10),
+              Wrap(spacing: 6, runSpacing: 6, children: actions),
+            ]);
+          }
+          return Row(children: [
+            Expanded(child: title),
+            for (final a in actions) Padding(padding: const EdgeInsets.only(left: 8), child: a),
+          ]);
+        }),
       ),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
-          _PoChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            _PoChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),
+            if (_canEditLines)
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 15, color: AppTheme.textSecondary),
+                tooltip: 'Change supplier',
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.only(left: 2),
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                onPressed: _changeSupplier),
+          ]),
           _PoChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
           _PoChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
-          _PoChip(label: 'Status', value: _detail['status'] as String? ?? 'draft'),
+          _PoChip(label: 'Status', value: poDisplayStatus(_detail)),
           if (_approvalRequired && _isLocked)
             _PoChip(label: 'Approval', value: _detail['approved_at'] != null
                 ? 'Approved · ${_detail['approved_by_name'] ?? ''}'
@@ -724,6 +894,31 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   Expanded(flex: 5, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
                     if (it['products']?['sku'] != null) Text(it['products']!['sku'] as String, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                    if (!_isDraft) Builder(builder: (_) {
+                      final ord = (it['quantity_ordered'] as num?)?.toDouble() ?? 0;
+                      final rec = (it['quantity_received'] as num?)?.toDouble() ?? 0;
+                      final full = ord > 0 && rec >= ord;
+                      final c = rec <= 0 ? AppTheme.textSecondary : (full ? AppTheme.success : Colors.orange.shade800);
+                      return Padding(padding: const EdgeInsets.only(top: 2), child: Text(
+                        full ? 'Received ${_trimQty(rec)} of ${_trimQty(ord)} ✓'
+                             : 'Received ${_trimQty(rec)} of ${_trimQty(ord)}',
+                        style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: c)));
+                    }),
+                    if (_isFreeText(it)) Padding(padding: const EdgeInsets.only(top: 4, right: 8),
+                      child: _canEditLines
+                        ? TextField(
+                            controller: _lineDescCtrls[it['id']],
+                            style: const TextStyle(fontSize: 12),
+                            minLines: 1, maxLines: 2,
+                            decoration: const InputDecoration(isDense: true, hintText: 'Describe the item / service…',
+                              prefixIcon: Icon(Icons.notes, size: 14),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                              border: OutlineInputBorder()),
+                            onEditingComplete: () => _updateLineDesc(it['id'] as String),
+                            onSubmitted: (_) => _updateLineDesc(it['id'] as String),
+                          )
+                        : Text((it['description'] as String?)?.isNotEmpty == true ? it['description'] as String : '—',
+                            style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppTheme.textSecondary))),
                     if (_showStockConsumption) Builder(builder: (_) {
                       final m = _lineMetrics[it['product_id']];
                       final oh = (m?['on_hand'] as double?) ?? 0;
@@ -759,17 +954,23 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                           onTapOutside: (_) => _updateLineRate(it['id'] as String),
                         )))
                       : Text(_effRate(it).toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
-                    Expanded(flex: 2, child: Text((qty * _effRate(it)).toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
+                    Expanded(flex: 2, child: Text(money(qty * _effRate(it)), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
                   ],
                   SizedBox(width: 44, child: _canEditLines ? IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => _deleteItem(it['id'] as String)) : null),
                 ]));
             }),
-            if (_showRates && _items.isNotEmpty) ...[
+            if (_items.isNotEmpty) ...[
               const Divider(height: 1),
               Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: const BoxDecoration(color: AppTheme.background),
                 child: Row(children: [
-                  const Expanded(flex: 11, child: Text('Grand Total', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-                  Expanded(flex: 2, child: Padding(padding: const EdgeInsets.only(left: 8), child: Text('Rs ${_grandTotal.toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: AppTheme.primary)))),
+                  const Expanded(flex: 5, child: Text('Total', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13))),
+                  const Expanded(flex: 2, child: SizedBox()),
+                  Expanded(flex: 2, child: Text(_trimQty(_totalQty), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13))),
+                  if (_showRates) ...[
+                    const Expanded(flex: 2, child: SizedBox()),
+                    Expanded(flex: 2, child: Padding(padding: const EdgeInsets.only(left: 8), child: Text('Rs ${money(_grandTotal)}', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: AppTheme.primary)))),
+                  ],
                   const SizedBox(width: 44),
                 ])),
             ],
@@ -811,7 +1012,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         const SizedBox(height: 8),
         Align(alignment: Alignment.centerRight, child: Text('${_items.length} item(s)', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
         const SizedBox(height: 16),
-        _PoAuditTrail(voucherId: _selectedId ?? ''),
+        _PoAuditTrail(key: ValueKey('audit_${_selectedId}_$_auditRefresh'), voucherId: _selectedId ?? ''),
       ]))),
     ]);
   }
@@ -907,6 +1108,20 @@ class _PoVoidChip extends StatelessWidget {
     child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.block, size: 12, color: AppTheme.danger), SizedBox(width: 4), Text('Voided', style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w600))]));
 }
 
+/// Human status shown on the badge/chip and used by the list filters.
+/// draft -> Ordered (locked) -> Approved -> Partially Received -> Received ->
+/// Invoiced, with Voided taking precedence.
+String poDisplayStatus(Map<String, dynamic> r) {
+  if (r['voided_at'] != null) return 'Voided';
+  final s = (r['status'] as String?) ?? 'draft';
+  if (s == 'received') return 'Received';
+  if (s == 'partially_received') return 'Partially Received';
+  if (s == 'invoiced') return 'Invoiced';
+  if (r['approved_at'] != null) return 'Approved';
+  if (s == 'ordered' || r['is_locked'] == true) return 'Ordered';
+  return 'Draft';
+}
+
 bool _poIsPending(Map<String, dynamic> r, bool orgApprovalRequired) {
   if (!orgApprovalRequired) return false;
   final status = r['status'] as String? ?? '';
@@ -932,27 +1147,29 @@ class _PoStatusBadge extends StatelessWidget {
   @override Widget build(BuildContext context) {
     Color bg; Color fg;
     switch (status) {
-      case 'confirmed':         bg = AppTheme.primary.withOpacity(0.12);  fg = AppTheme.primary;  break;
-      case 'received':          bg = AppTheme.success.withOpacity(0.12);  fg = AppTheme.success;  break;
-      case 'partially_received':bg = Colors.orange.withOpacity(0.12);     fg = Colors.orange;     break;
-      case 'invoiced':          bg = Colors.purple.withOpacity(0.12);     fg = Colors.purple;     break;
-      default:                  bg = AppTheme.border;                      fg = AppTheme.textSecondary;
+      case 'Approved':           bg = AppTheme.primary.withOpacity(0.12);  fg = AppTheme.primary;  break;
+      case 'Ordered':            bg = Colors.blue.withOpacity(0.12);       fg = Colors.blue;       break;
+      case 'Received':           bg = AppTheme.success.withOpacity(0.12);  fg = AppTheme.success;  break;
+      case 'Partially Received': bg = Colors.orange.withOpacity(0.12);     fg = Colors.orange;     break;
+      case 'Invoiced':           bg = Colors.purple.withOpacity(0.12);     fg = Colors.purple;     break;
+      case 'Voided':             bg = AppTheme.danger.withOpacity(0.12);   fg = AppTheme.danger;   break;
+      default:                   bg = AppTheme.border;                      fg = AppTheme.textSecondary;
     }
     return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
-      child: Text(status.replaceAll('_', ' '), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)));
+      child: Text(status, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)));
   }
 }
 
 class _PoAuditTrail extends StatelessWidget {
   final String voucherId;
-  const _PoAuditTrail({required this.voucherId});
+  const _PoAuditTrail({super.key, required this.voucherId});
   @override Widget build(BuildContext context) {
     if (voucherId.isEmpty) return const SizedBox.shrink();
     return FutureBuilder<List<dynamic>>(
       future: Supabase.instance.client.from('voucher_audit_log')
-          .select('*, users(name)').eq('voucher_id', voucherId).eq('voucher_type', 'PO')
-          .order('performed_at', ascending: false).limit(20),
+          .select().eq('voucher_id', voucherId).eq('voucher_type', 'PO')
+          .order('performed_at', ascending: false).limit(30),
       builder: (ctx, snap) {
         if (!snap.hasData || (snap.data as List).isEmpty) return Container(
           margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

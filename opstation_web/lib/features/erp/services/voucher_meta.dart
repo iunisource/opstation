@@ -10,9 +10,31 @@ class VoucherMeta {
   final String? preparedBy;
   final String? footerNote;
   final String? purchaseFooterNote;
+  // Per-voucher-type sales footer overrides. Each falls back to [footerNote]
+  // (the generic org.voucher_footer_note) when blank, so orgs that never set a
+  // per-type note keep exactly their current footer.
+  final String? soFooterNote;
+  final String? doFooterNote;
+  final String? siFooterNote;
   final String? diagnostic;
 
-  VoucherMeta({this.salespersonName, this.preparedBy, this.footerNote, this.purchaseFooterNote, this.diagnostic});
+  VoucherMeta({this.salespersonName, this.preparedBy, this.footerNote, this.purchaseFooterNote, this.soFooterNote, this.doFooterNote, this.siFooterNote, this.diagnostic});
+
+  static String? _pick(String? specific, String? fallback) {
+    final s = specific?.trim();
+    if (s != null && s.isNotEmpty) return s;
+    final f = fallback?.trim();
+    return (f != null && f.isNotEmpty) ? f : null;
+  }
+
+  /// Footer to print on a Sales Order (its own note, else the default).
+  String? get soFooter => _pick(soFooterNote, footerNote);
+
+  /// Footer to print on a Delivery Order (its own note, else the default).
+  String? get doFooter => _pick(doFooterNote, footerNote);
+
+  /// Footer to print on a Sales Invoice (its own note, else the default).
+  String? get siFooter => _pick(siFooterNote, footerNote);
 
   // Plain print() rather than developer.log so messages show in browser console
   // even in release builds.
@@ -33,6 +55,9 @@ class VoucherMeta {
       _userNameFor(client, createdById),
       _footerNoteFor(client, orgId),
       _purchaseFooterNoteFor(client, orgId),
+      _configValue(client, orgId, 'org.footer_note_so'),
+      _configValue(client, orgId, 'org.footer_note_do'),
+      _configValue(client, orgId, 'org.footer_note_si'),
     ]);
     final m = VoucherMeta(
       salespersonName: spResult.name,
@@ -40,6 +65,9 @@ class VoucherMeta {
       preparedBy: results[0] as String?,
       footerNote: results[1] as String?,
       purchaseFooterNote: results[2] as String?,
+      soFooterNote: results[3] as String?,
+      doFooterNote: results[4] as String?,
+      siFooterNote: results[5] as String?,
     );
     _log('result sp=${m.salespersonName} diag=${m.diagnostic} prep=${m.preparedBy} hasFooter=${m.footerNote != null}');
     return m;
@@ -108,6 +136,18 @@ class VoucherMeta {
       _log('preparedBy error $e');
       return null;
     }
+  }
+
+  /// Generic single-key reader for org-scoped app_config string values.
+  /// Returns the trimmed value, or null when missing/blank.
+  static Future<String?> _configValue(SupabaseClient c, String orgId, String key) async {
+    if (orgId.isEmpty) return null;
+    try {
+      final row = await c.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', key).maybeSingle();
+      final v = row?['value'] as String?;
+      return (v != null && v.trim().isNotEmpty) ? v.trim() : null;
+    } catch (_) { return null; }
   }
 
   static Future<String?> _purchaseFooterNoteFor(SupabaseClient c, String orgId) async {

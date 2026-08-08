@@ -10,7 +10,7 @@ import '../../../core/supabase/supabase_auth_service.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../../core/sync/sync_controller.dart';
 import '../../../core/services/notification_service.dart';
-import '../data/mock_auth_repository.dart';
+import '../data/mock_auth_repository.dart' hide AuthException;
 import '../../admin_settings/providers/org_settings_controller.dart';
 import '../models/auth_user.dart' as app;
 import '../models/user_role.dart';
@@ -28,6 +28,36 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_kSessionKey);
     if (raw == null) return null;
+
+    // ── Supabase session guard ────────────────────────────────────────
+    // The app-level session (SharedPreferences) and the Supabase Auth
+    // session are SEPARATE. If the server session is dead, RLS rejects
+    // every write — silently — while the app still looks signed in. That
+    // is exactly how a surveyor can work all day and sync nothing. So a
+    // restored app session is only honoured if the server session is
+    // alive or refreshable. A dead session (server explicitly rejects
+    // the refresh) forces a fresh login, which restores a real JWT.
+    // A NETWORK failure keeps the session so offline work continues.
+    // Local (Drift) data is untouched either way.
+    final sb = Supabase.instance.client;
+    var sbSession = sb.auth.currentSession;
+    if (sbSession == null || sbSession.isExpired) {
+      var dead = sbSession == null;
+      try {
+        final refreshed = await sb.auth.refreshSession();
+        sbSession = refreshed.session;
+        dead = sbSession == null;
+      } on AuthException {
+        dead = true; // server says the stored session is invalid
+      } catch (_) {
+        dead = false; // network error — tolerate, sync retries later
+      }
+      if (dead) {
+        print('AUTH GUARD: Supabase session dead — forcing re-login');
+        await prefs.remove(_kSessionKey);
+        return null;
+      }
+    }
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
       return app.AuthUser(
@@ -165,6 +195,27 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
           }
           print('AUTH SUPABASE SIGN-IN: success=$authSuccess');
           if (!authSuccess) throw Exception(authError);
+
+          // Push stranded local data BEFORE pulling. The pull upserts
+          // server rows over local ones, so flushing first protects any
+          // offline edits (customer locations, audits, spottings) that
+          // accumulated while the server session was dead.
+          //
+          // This used to be a FULL pushAll, which re-uploaded every local
+          // table on every login and made the login screen crawl. Pending
+          // rows are all that need protecting from the pull (offline edits
+          // are marked pending), so flush only those — with a hard timeout
+          // so a slow network can never hang the login. The full pushAll
+          // safety net still runs UNAWAITED in the background right after
+          // login completes.
+          try {
+            await ref
+                .read(syncControllerProvider.notifier)
+                .flushPending()
+                .timeout(const Duration(seconds: 20));
+          } catch (e) {
+            print('AUTH PRE-PULL FLUSH ERROR: $e');
+          }
 
           // Build session from the local user record fetched above.
           user = app.AuthUser(

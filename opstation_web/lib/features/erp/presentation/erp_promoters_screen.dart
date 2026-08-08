@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -547,7 +548,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
         child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           const Text('Effective floor (used for commission)',
               style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          Text('Rs. ${eff.toStringAsFixed(2)}',
+          Text('Rs. ${money(eff)}',
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.primary)),
         ]),
       );
@@ -810,8 +811,8 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
         ? 'Each product price'
             '${disc != 0 ? ' \u2212 ${pct(disc)}%' : ''}'
             '${tax != 0 ? ' + ${pct(tax)}% tax' : ''}$tail'
-        : 'Floor Rs. ${eff.toStringAsFixed(2)}'
-            '${(disc != 0 || tax != 0) ? '  (base ${floorPrice.toStringAsFixed(2)}${disc != 0 ? ', -${pct(disc)}%' : ''}${tax != 0 ? ', +${pct(tax)}% tax' : ''})' : ''}$tail';
+        : 'Floor Rs. ${money(eff)}'
+            '${(disc != 0 || tax != 0) ? '  (base ${money(floorPrice)}${disc != 0 ? ', -${pct(disc)}%' : ''}${tax != 0 ? ', +${pct(tax)}% tax' : ''})' : ''}$tail';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

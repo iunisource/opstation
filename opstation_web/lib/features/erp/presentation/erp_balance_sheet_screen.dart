@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/reports/branch_scope.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -98,7 +99,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
 
 
   void _print() {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final assets = _bsRows.where((r) => r['account_type'] == 'asset').toList();
     final liabs  = _bsRows.where((r) => r['account_type'] == 'liability').toList();
     final equity = _bsRows.where((r) => r['account_type'] == 'equity').toList();
@@ -159,7 +160,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     final branch = ref.watch(selectedBranchProvider);
     final scope = ref.watch(branchScopeProvider).valueOrNull ??
         const BranchScope(restricted: false, allowed: []);
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
 
     final assets  = _bsRows.where((r) => r['account_type'] == 'asset').toList();
     final liabs   = _bsRows.where((r) => r['account_type'] == 'liability').toList();
@@ -246,7 +247,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     );
   }
 
-  Widget _column(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color, {required String footer}) =>
+  Widget _column(MoneyFmt fmt, String title, List<Map<String, dynamic>> rows, double total, Color color, {required String footer}) =>
     ListView(padding: const EdgeInsets.all(20), children: [
       _section(fmt, title, rows, total, color),
       const Divider(thickness: 2),
@@ -257,7 +258,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         ])),
     ]);
 
-  Widget _section(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color) {
+  Widget _section(MoneyFmt fmt, String title, List<Map<String, dynamic>> rows, double total, Color color) {
     // Section sign: assets shown as-is, liabilities/equity flipped to positive.
     final negate = rows.isNotEmpty && (rows.first['account_type'] != 'asset');
     final rowWidgets = <Widget>[];
@@ -284,9 +285,9 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
   }
 
   // Render a value, parenthesising negatives (abnormal-side balances).
-  String _bsFmt(NumberFormat fmt, double v) => v < 0 ? '(${fmt.format(v.abs())})' : fmt.format(v);
+  String _bsFmt(MoneyFmt fmt, double v) => v < 0 ? '(${fmt.format(v.abs())})' : fmt.format(v);
 
-  Widget _bsRow(NumberFormat fmt, Map r, bool hasChildren, String code, bool negate) {
+  Widget _bsRow(MoneyFmt fmt, Map r, bool hasChildren, String code, bool negate) {
     final expanded = _expanded.contains(code);
     final raw = _n(r['balance']);
     final v = negate ? -raw : raw;
@@ -311,7 +312,7 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     );
   }
 
-  Widget _bsChildRow(NumberFormat fmt, Map r, bool negate) {
+  Widget _bsChildRow(MoneyFmt fmt, Map r, bool negate) {
     final raw = _n(r['balance']);
     final v = negate ? -raw : raw;
     return Container(

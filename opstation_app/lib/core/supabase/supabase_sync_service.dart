@@ -31,21 +31,35 @@ class SupabaseSyncService {
     });
   }
 
-  Future<void> pushUser(UsersData u) async {
-    await _client.from('users').upsert({
+  /// Push a user to Supabase.
+  ///
+  /// [includeActive] controls whether `is_active` is written. The bulk sync
+  /// loop (pushAll) MUST pass false: activation/deactivation is a web-admin
+  /// action, and the server is authoritative for it. Previously every phone
+  /// re-uploaded its cached `is_active` for every user on each full sync, so
+  /// a device holding a stale `is_active = true` for an admin-deactivated
+  /// account silently resurrected it. Omitting the column from an upsert
+  /// leaves the server value untouched on UPDATE, and lets the DB default
+  /// apply on INSERT. New-user creation (team_repository) keeps the default
+  /// includeActive: true so a freshly-created member is pushed as active.
+  Future<void> pushUser(UsersData u, {bool includeActive = true}) async {
+    final Map<String, dynamic> data = {
       'id': u.id,
       'name': u.name,
       'email': u.email,
       'phone': u.phone,
       'role': u.role,
-      'is_active': u.isActive,
       'password_hash': u.passwordHash,
       'password_salt': u.passwordSalt,
       'created_at': _iso(u.createdAt),
       'updated_at': _iso(u.updatedAt),
       'password_temporary': u.passwordTemporary,
       'org_id': u.orgId,
-    });
+    };
+    if (includeActive) {
+      data['is_active'] = u.isActive;
+    }
+    await _client.from('users').upsert(data);
   }
 
   Future<void> pushCustomer(CustomersData c) async {

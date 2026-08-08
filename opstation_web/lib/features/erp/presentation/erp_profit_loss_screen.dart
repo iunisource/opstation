@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/reports/branch_scope.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -23,6 +24,10 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   // level-4 detail grouped by level-3 parent code
   Map<String, List<Map<String, dynamic>>> _children = {};
   final Set<String> _expanded = {};
+  // On-demand transaction drill-down for leaf accounts (no level-4 children):
+  // code -> the vouchers behind that line, via rpc_profit_loss_txns.
+  final Map<String, List<Map<String, dynamic>>> _txn = {};
+  final Set<String> _txnLoading = {};
 
   @override void initState() { super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
@@ -101,6 +106,8 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
         _rows = rows;
         _children = children;
         _expanded.clear();
+        _txn.clear();
+        _txnLoading.clear();
         _loading = false;
       });
     } catch (e) {
@@ -112,9 +119,33 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   double _sum(List<Map<String, dynamic>> rows) =>
       rows.fold(0.0, (s, r) => s + _n(r['net']));
 
+  // Fetch the vouchers behind a leaf account's total, using the SAME period +
+  // branch scope the report was built with (so the drill reconciles to the line).
+  Future<void> _fetchTxns(String code) async {
+    if (_txn.containsKey(code) || _txnLoading.contains(code)) return;
+    setState(() => _txnLoading.add(code));
+    try {
+      String? orgId = ref.read(currentUserProvider)?.orgId;
+      orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
+      final scope = await ref.read(branchScopeProvider.future);
+      final branch = ref.read(selectedBranchProvider);
+      final res = await Supabase.instance.client.rpc('rpc_profit_loss_txns', params: {
+        'p_org_id': orgId,
+        'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
+        'p_date_to': DateFormat('yyyy-MM-dd').format(_to),
+        'p_branch_ids': scope.resolve(allSelected: _allBranches, selected: branch),
+        'p_code': code,
+      });
+      final list = List<Map<String, dynamic>>.from(res as List);
+      if (mounted) setState(() { _txn[code] = list; _txnLoading.remove(code); });
+    } catch (e) {
+      if (mounted) setState(() { _txn[code] = []; _txnLoading.remove(code); });
+    }
+  }
+
 
   void _print() {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final revenue = _rows.where((r) => r['account_type'] == 'revenue').toList();
     final cogs    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] == 'Cost of Goods Sold').toList();
     final opex    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] != 'Cost of Goods Sold').toList();
@@ -174,7 +205,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     final branch = ref.watch(selectedBranchProvider);
     final scope = ref.watch(branchScopeProvider).valueOrNull ??
         const BranchScope(restricted: false, allowed: []);
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
 
     final revenue = _rows.where((r) => r['account_type'] == 'revenue').toList();
     final cogs    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] == 'Cost of Goods Sold').toList();
@@ -201,6 +232,10 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
           _datePicker('From', _from, (d) { setState(() => _from = d); _load(); }, maxDate: _to),
           const SizedBox(width: 12),
           _datePicker('To', _to, (d) { setState(() => _to = d); _load(); }, minDate: _from),
+          const SizedBox(width: 12),
+          _quickRangeButton('This Month', _setThisMonth),
+          const SizedBox(width: 8),
+          _quickRangeButton('This Quarter', _setThisQuarter),
           const SizedBox(width: 12),
           // "All" means different things to different people: org-wide for an
           // admin, but only the user's OWN branches for an erpUser — which is why
@@ -250,6 +285,32 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     );
   }
 
+  // Quick presets: set From/To to the first and last calendar day of the
+  // running month / quarter (using the app clock), then reload.
+  void _setThisMonth() {
+    final now = DateTime.now();
+    setState(() {
+      _from = DateTime(now.year, now.month, 1);
+      _to   = DateTime(now.year, now.month + 1, 0); // day 0 of next month = last day of this month
+    });
+    _load();
+  }
+
+  void _setThisQuarter() {
+    final now = DateTime.now();
+    final qStartMonth = ((now.month - 1) ~/ 3) * 3 + 1; // 1, 4, 7 or 10
+    setState(() {
+      _from = DateTime(now.year, qStartMonth, 1);
+      _to   = DateTime(now.year, qStartMonth + 3, 0);   // last day of the quarter
+    });
+    _load();
+  }
+
+  Widget _quickRangeButton(String label, VoidCallback onTap) => OutlinedButton(
+    onPressed: onTap,
+    child: Text(label),
+  );
+
   Widget _datePicker(String label, DateTime date, void Function(DateTime) onPick, {DateTime? minDate, DateTime? maxDate}) =>
     OutlinedButton.icon(
       icon: const Icon(Icons.calendar_today, size: 16),
@@ -261,15 +322,30 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
       },
     );
 
-  Widget _section(NumberFormat fmt, String title, List<Map<String, dynamic>> rows, double total, Color color) {
+  Widget _section(MoneyFmt fmt, String title, List<Map<String, dynamic>> rows, double total, Color color) {
     if (rows.isEmpty) return const SizedBox.shrink();
     final rowWidgets = <Widget>[];
     for (final r in rows) {
       final code = (r['code'] ?? '') as String;
       final kids = _children[code] ?? const [];
       rowWidgets.add(_plRow(fmt, r, kids.isNotEmpty, code));
-      if (kids.isNotEmpty && _expanded.contains(code)) {
-        for (final k in kids) rowWidgets.add(_plChildRow(fmt, k));
+      if (_expanded.contains(code)) {
+        if (kids.isNotEmpty) {
+          for (final k in kids) rowWidgets.add(_plChildRow(fmt, k));
+        } else {
+          // Leaf account → show the transactions behind the total.
+          final acctType = (r['account_type'] ?? '') as String;
+          if (_txnLoading.contains(code)) {
+            rowWidgets.add(_plTxnInfo('Loading…'));
+          } else {
+            final tx = _txn[code] ?? const [];
+            if (tx.isEmpty) {
+              rowWidgets.add(_plTxnInfo('No transactions in this period.'));
+            } else {
+              for (final t in tx) rowWidgets.add(_plTxnRow(fmt, t, acctType));
+            }
+          }
+        }
       }
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -286,14 +362,16 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     ]);
   }
 
-  Widget _plRow(NumberFormat fmt, Map r, bool hasChildren, String code) {
+  Widget _plRow(MoneyFmt fmt, Map r, bool hasChildren, String code) {
     final expanded = _expanded.contains(code);
+    // Every account is expandable: parents reveal their sub-accounts, leaf
+    // accounts reveal the vouchers behind the total.
     final inner = Padding(
       padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
       child: Row(children: [
-        SizedBox(width: 18, child: hasChildren
-          ? Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 16, color: AppTheme.textSecondary)
-          : null),
+        SizedBox(width: 18, child: Icon(
+          expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+          size: 16, color: AppTheme.textSecondary)),
         SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
         Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
         Text(_fmtNet(fmt, _n(r['net'])),
@@ -301,16 +379,60 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
                 color: _n(r['net']) < 0 ? AppTheme.danger : null)),
       ]),
     );
-    if (!hasChildren) return inner;
     return InkWell(
-      onTap: () => setState(() {
-        if (expanded) { _expanded.remove(code); } else { _expanded.add(code); }
-      }),
+      onTap: () {
+        final nowExpanded = !expanded;
+        setState(() {
+          if (expanded) { _expanded.remove(code); } else { _expanded.add(code); }
+        });
+        // Leaf account being opened → load its vouchers on demand.
+        if (nowExpanded && !hasChildren) _fetchTxns(code);
+      },
       child: inner,
     );
   }
 
-  Widget _plChildRow(NumberFormat fmt, Map r) => Container(
+  // A single voucher line under an expanded leaf account. Sign matches the
+  // parent's convention (revenue: credit-debit; expense: debit-credit) so the
+  // rows visibly sum to the line total.
+  Widget _plTxnRow(MoneyFmt fmt, Map t, String accountType) {
+    final dr = _n(t['debit']), cr = _n(t['credit']);
+    final net = accountType == 'expense' ? (dr - cr) : (cr - dr);
+    final date = t['entry_date'] != null
+        ? DateFormat('d MMM').format(DateTime.parse(t['entry_date'].toString()))
+        : '';
+    final parts = <String>[
+      if ((t['voucher'] ?? '').toString().isNotEmpty) t['voucher'].toString(),
+      if ((t['party'] ?? '').toString().isNotEmpty) t['party'].toString(),
+      if ((t['description'] ?? '').toString().isNotEmpty) t['description'].toString(),
+    ];
+    return Container(
+      color: AppTheme.background.withOpacity(0.35),
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+      child: Row(children: [
+        const SizedBox(width: 18),
+        SizedBox(width: 56, child: Text(date, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+        Expanded(child: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: Text(parts.join('  ·  '), style: const TextStyle(fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+        )),
+        Text(_fmtNet(fmt, net),
+            style: TextStyle(fontSize: 11, color: net < 0 ? AppTheme.danger : null)),
+      ]),
+    );
+  }
+
+  Widget _plTxnInfo(String msg) => Container(
+    color: AppTheme.background.withOpacity(0.35),
+    padding: const EdgeInsets.fromLTRB(30, 6, 8, 6),
+    child: Row(children: [
+      const Icon(Icons.subdirectory_arrow_right, size: 12, color: AppTheme.textSecondary),
+      const SizedBox(width: 6),
+      Text(msg, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
+    ]),
+  );
+
+  Widget _plChildRow(MoneyFmt fmt, Map r) => Container(
     color: AppTheme.background.withOpacity(0.35),
     padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
     child: Row(children: [
@@ -326,7 +448,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     ]),
   );
 
-  Widget _subtotal(NumberFormat fmt, String label, double value, Color color) => Container(
+  Widget _subtotal(MoneyFmt fmt, String label, double value, Color color) => Container(
     margin: const EdgeInsets.symmetric(vertical: 8),
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     decoration: BoxDecoration(color: color.withOpacity(0.07), borderRadius: BorderRadius.circular(6)),
@@ -336,7 +458,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     ]),
   );
 
-  Widget _bigLine(NumberFormat fmt, String label, double value, Color color) => Container(
+  Widget _bigLine(MoneyFmt fmt, String label, double value, Color color) => Container(
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withOpacity(0.3))),
@@ -346,7 +468,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     ]),
   );
 
-  String _fmtNet(NumberFormat fmt, double v) => v < 0 ? '(${fmt.format(v.abs())})' : fmt.format(v);
+  String _fmtNet(MoneyFmt fmt, double v) => v < 0 ? '(${fmt.format(v.abs())})' : fmt.format(v);
 
   Widget _card(String label, String value, Color color) => Expanded(child: Container(
     padding: const EdgeInsets.all(12),

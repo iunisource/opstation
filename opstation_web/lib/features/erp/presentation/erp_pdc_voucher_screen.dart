@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/money.dart';
 
 /// PDC Voucher — post-dated / cheque-in-hand register.
 ///
@@ -24,7 +25,7 @@ class ErpPdcVoucherScreen extends ConsumerStatefulWidget {
 }
 
 class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
-  final _fmt = NumberFormat('#,##0.00');
+  final _fmt = const MoneyFmt();
 
   List<Map<String, dynamic>> _vouchers = [];
   bool _loadingList = true;
@@ -1210,7 +1211,7 @@ class _ChequeLine {
 class _ChequeLineRow extends StatelessWidget {
   final _ChequeLine line;
   final int lineNum;
-  final NumberFormat fmt;
+  final MoneyFmt fmt;
   final VoidCallback onPickParty;
   final VoidCallback onPickDate;
   final VoidCallback onAmountSubmitted;

@@ -124,31 +124,21 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
               }
               final orgId = ref.read(currentUserProvider)?.orgId;
               final userId = ref.read(currentUserProvider)?.id;
-              final currentQty = (stock['quantity'] as num?)?.toDouble() ?? 0;
-              final diff = newQty - currentQty;
               try {
                 final client = Supabase.instance.client;
-                // Post adjustment movement
-                await client.from('inventory_movements').insert({
-                  'id': 'im_${DateTime.now().millisecondsSinceEpoch}',
-                  'org_id': orgId,
-                  'product_id': stock['product_id'],
-                  'branch_id': stock['branch_id'],
-                  'uom_id': stock['uom_id'],
-                  'quantity': diff,
-                  'movement_type': 'adjustment',
-                  'notes': notesCtrl.text.trim(),
-                  'moved_at': DateTime.now().toUtc().toIso8601String(),
-                  'created_by': userId,
+                // Atomic + naturally idempotent: the DB function locks the stock
+                // row, computes the diff itself, posts the movement and sets the
+                // new quantity in ONE transaction. A double-click's second call
+                // computes a zero diff and posts nothing.
+                await client.rpc('adjust_stock', params: {
+                  'p_org_id': orgId,
+                  'p_branch_id': stock['branch_id'],
+                  'p_product_id': stock['product_id'],
+                  'p_uom_id': stock['uom_id'],
+                  'p_new_qty': newQty,
+                  'p_notes': notesCtrl.text.trim(),
+                  'p_user_id': userId,
                 });
-                // Update stock cache
-                await client
-                    .from('inventory_stock')
-                    .update({
-                      'quantity': newQty,
-                      'updated_at': DateTime.now().toUtc().toIso8601String(),
-                    })
-                    .eq('id', stock['id']);
                 if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(

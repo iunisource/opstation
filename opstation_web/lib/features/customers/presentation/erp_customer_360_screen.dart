@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:typed_data';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import 'customer_history_screen.dart';
@@ -47,6 +49,8 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   bool _loadingIntel = true;
   List<Map<String, dynamic>> _placement = [];
   List<Map<String, dynamic>> _competitors = [];
+  // Full audit history for this shop (trend + SKU timeline grid).
+  List<Map<String, dynamic>> _paHistory = []; // {pid, present, at}
 
   bool _loadingActs = true;
   List<Map<String, dynamic>> _activities = [];
@@ -61,8 +65,12 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   double _target = 0;
   double _achieved = 0;
 
+  // Routes this customer sits on + the salesperson assigned to each.
+  bool _loadingRoutes = true;
+  List<Map<String, String>> _custRoutes = []; // {name, salesperson}
+
   final _money = NumberFormat('#,##0');
-  final _money2 = NumberFormat('#,##0.00');
+  final MoneyFmt _money2 = const MoneyFmt();
 
   String get _customerId => widget.customer['id'] as String;
   String get _shopName => (widget.customer['shop_name'] as String?) ?? '';
@@ -78,6 +86,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadActivities();
     _loadComplaints();
     _loadTarget();
+    _loadRoutes();
   }
 
   @override
@@ -93,6 +102,67 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadActivities();
     _loadComplaints();
     _loadTarget();
+    _loadRoutes();
+  }
+
+  Future<void> _loadRoutes() async {
+    setState(() => _loadingRoutes = true);
+    try {
+      final client = Supabase.instance.client;
+      final stops = await client
+          .from('route_stops')
+          .select('route_id')
+          .eq('customer_id', _customerId);
+      final routeIds =
+          {for (final s in stops) s['route_id'] as String}.toList();
+      final result = <Map<String, String>>[];
+      if (routeIds.isNotEmpty) {
+        final routes = await client
+            .from('sales_routes')
+            .select('id, name, is_active')
+            .inFilter('id', routeIds)
+            .order('name');
+        final assigns = await client
+            .from('route_assignments')
+            .select('route_id, user_id')
+            .inFilter('route_id', routeIds);
+        final userIds =
+            {for (final a in assigns) a['user_id'] as String}.toList();
+        final nameById = <String, String>{};
+        if (userIds.isNotEmpty) {
+          final us = await client
+              .from('users')
+              .select('id, name')
+              .inFilter('id', userIds);
+          for (final u in us) {
+            nameById[u['id'] as String] = (u['name'] as String?) ?? '—';
+          }
+        }
+        final spByRoute = <String, List<String>>{};
+        for (final a in assigns) {
+          spByRoute
+              .putIfAbsent(a['route_id'] as String, () => [])
+              .add(nameById[a['user_id'] as String] ?? '—');
+        }
+        for (final r in routes) {
+          final rid = r['id'] as String;
+          final active = r['is_active'] as bool? ?? true;
+          result.add({
+            'name': '${r['name'] as String? ?? '—'}${active ? '' : ' (inactive)'}',
+            'salesperson': (spByRoute[rid] ?? const []).isEmpty
+                ? 'Unassigned'
+                : spByRoute[rid]!.join(', '),
+          });
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _custRoutes = result;
+        _loadingRoutes = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingRoutes = false);
+    }
   }
 
   Future<void> _loadTarget() async {
@@ -477,9 +547,16 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
           .order('surveyed_at', ascending: false);
       final seenP = <String>{};
       final placement = <Map<String, dynamic>>[];
+      final history = <Map<String, dynamic>>[];
       for (final r in pa) {
         final pid = r['product_id'] as String?;
-        if (pid == null || !seenP.add(pid)) continue;
+        if (pid == null) continue;
+        history.add({
+          'pid': pid,
+          'present': r['is_present'] == true,
+          'at': r['surveyed_at'] as String?,
+        });
+        if (!seenP.add(pid)) continue;
         placement.add({
           'product_id': pid,
           'present': r['is_present'] as bool? ?? false,
@@ -541,6 +618,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
       if (!mounted) return;
       setState(() {
         _placement = placement;
+        _paHistory = history;
         _competitors = comps;
         _loadingIntel = false;
       });
@@ -548,6 +626,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
       if (!mounted) return;
       setState(() {
         _placement = [];
+        _paHistory = [];
         _competitors = [];
         _loadingIntel = false;
       });
@@ -744,6 +823,25 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   (c['address'] as String?)?.trim().isNotEmpty == true
                       ? c['address'] as String
                       : '—'),
+              _infoRow(
+                  Icons.alt_route,
+                  _custRoutes.length > 1 ? 'Routes' : 'Route',
+                  _loadingRoutes
+                      ? '…'
+                      : _custRoutes.isEmpty
+                          ? 'Not on any route'
+                          : _custRoutes.map((r) => r['name']).join(', ')),
+              _infoRow(
+                  Icons.person_pin_circle_outlined,
+                  'Salesperson',
+                  _loadingRoutes
+                      ? '…'
+                      : _custRoutes.isEmpty
+                          ? '—'
+                          : _custRoutes
+                              .map((r) => r['salesperson'])
+                              .toSet()
+                              .join(', ')),
             ],
           ),
         ),
@@ -1349,7 +1447,10 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
               ? const Text('No placement audits yet.',
                   style:
                       TextStyle(fontSize: 13, color: AppTheme.textSecondary))
-              : Column(children: [for (final p in _placement) _placementRow(p)]),
+              : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _placementTrendSection(),
+                  for (final p in _placement) _placementRow(p),
+                ]),
         ),
         const SizedBox(height: 16),
         _card(
@@ -1364,6 +1465,206 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
         ),
       ],
     );
+  }
+
+  // ── Placement trend for THIS shop: coverage line + SKU timeline grid ────
+  //
+  // Audits accumulate (nothing is overwritten), so per audit DATE we can
+  // snapshot "latest status per SKU up to that date" for the coverage line,
+  // and show each SKU's raw check on each date in the grid.
+
+  Widget _placementTrendSection() {
+    // Distinct audit dates (local), ascending; grid shows the last 10.
+    final dateSet = <String>{};
+    for (final h in _paHistory) {
+      final d = DateTime.tryParse('${h['at']}')?.toLocal();
+      if (d != null) dateSet.add(DateFormat('yyyy-MM-dd').format(d));
+    }
+    final allDates = dateSet.toList()..sort();
+    if (allDates.length < 2) return const SizedBox.shrink();
+    final gridDates = allDates.length > 10
+        ? allDates.sublist(allDates.length - 10)
+        : allDates;
+
+    // Ascending sweep: per-date last status per SKU + snapshot coverage.
+    final asc = List<Map<String, dynamic>>.from(_paHistory)
+      ..sort((a, b) => '${a['at']}'.compareTo('${b['at']}'));
+    final latest = <String, bool>{}; // pid -> present (as of sweep position)
+    final byDate = <String, Map<String, bool>>{}; // date -> pid -> present
+    final coverage = <MapEntry<String, double>>[]; // date -> %
+    var idx = 0;
+    for (final date in allDates) {
+      while (idx < asc.length) {
+        final d = DateTime.tryParse('${asc[idx]['at']}')?.toLocal();
+        if (d == null) { idx++; continue; }
+        final ds = DateFormat('yyyy-MM-dd').format(d);
+        if (ds.compareTo(date) > 0) break;
+        final pid = asc[idx]['pid'] as String;
+        final pres = asc[idx]['present'] == true;
+        latest[pid] = pres;
+        (byDate[ds] ??= {})[pid] = pres;
+        idx++;
+      }
+      if (latest.isNotEmpty) {
+        final present = latest.values.where((v) => v).length;
+        coverage.add(MapEntry(date, present / latest.length * 100));
+      }
+    }
+
+    String dLabel(String ymd) {
+      final d = DateTime.parse(ymd);
+      return '${d.day}/${d.month}';
+    }
+
+    // Product rows in the same order as the list below (latest first).
+    final prods = [
+      for (final p in _placement)
+        {
+          'pid': p['product_id'] as String,
+          'name': p['name'] as String? ?? '—',
+        }
+    ];
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // ── Coverage line ──
+      Row(children: [
+        const Icon(Icons.trending_up, size: 15, color: AppTheme.primary),
+        const SizedBox(width: 6),
+        const Text('Shelf coverage over time',
+            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+        const Spacer(),
+        Text('${coverage.length} audit days',
+            style: const TextStyle(
+                fontSize: 11, color: AppTheme.textSecondary)),
+      ]),
+      const SizedBox(height: 8),
+      SizedBox(
+        height: 130,
+        child: LineChart(LineChartData(
+          minY: 0,
+          maxY: 100,
+          minX: 0,
+          maxX: (coverage.length - 1).toDouble(),
+          gridData: const FlGridData(show: true, drawVerticalLine: false),
+          titlesData: FlTitlesData(
+            rightTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            leftTitles: const AxisTitles(
+                sideTitles: SideTitles(
+                    showTitles: true, reservedSize: 30, interval: 50)),
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 20,
+                interval: (coverage.length / 6).ceilToDouble().clamp(1, 99),
+                getTitlesWidget: (v, _) {
+                  final i = v.toInt();
+                  if (i < 0 || i >= coverage.length) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(dLabel(coverage[i].key),
+                        style: const TextStyle(
+                            fontSize: 9.5, color: AppTheme.textSecondary)),
+                  );
+                },
+              ),
+            ),
+          ),
+          borderData: FlBorderData(show: false),
+          lineTouchData: LineTouchData(
+            touchTooltipData: LineTouchTooltipData(
+              getTooltipItems: (spots) => [
+                for (final s in spots)
+                  LineTooltipItem('${s.y.toStringAsFixed(0)}%',
+                      const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white)),
+              ],
+            ),
+          ),
+          lineBarsData: [
+            LineChartBarData(
+              spots: [
+                for (var i = 0; i < coverage.length; i++)
+                  FlSpot(i.toDouble(), coverage[i].value),
+              ],
+              color: AppTheme.primary,
+              barWidth: 2.5,
+              isCurved: false,
+              dotData: const FlDotData(show: true),
+              belowBarData: BarAreaData(
+                  show: true, color: AppTheme.primary.withOpacity(0.08)),
+            ),
+          ],
+        )),
+      ),
+      const SizedBox(height: 14),
+      // ── SKU timeline grid ──
+      const Text('SKU history',
+          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const SizedBox(width: 190),
+            for (final d in gridDates)
+              SizedBox(
+                  width: 52,
+                  child: Text(dLabel(d),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textSecondary))),
+          ]),
+          const SizedBox(height: 4),
+          for (final pr in prods)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(children: [
+                SizedBox(
+                    width: 190,
+                    child: Text(pr['name'] as String,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11.5))),
+                for (final d in gridDates)
+                  SizedBox(
+                    width: 52,
+                    child: Center(child: () {
+                      final v = byDate[d]?[pr['pid']];
+                      if (v == null) {
+                        return const Text('—',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: AppTheme.textSecondary));
+                      }
+                      return Icon(v ? Icons.check_circle : Icons.cancel,
+                          size: 15,
+                          color: v ? AppTheme.success : AppTheme.danger);
+                    }()),
+                  ),
+              ]),
+            ),
+        ]),
+      ),
+      const SizedBox(height: 14),
+      const Divider(height: 1),
+      const SizedBox(height: 8),
+      const Text('LATEST STATUS',
+          style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textSecondary,
+              letterSpacing: 0.5)),
+      const SizedBox(height: 2),
+    ]);
   }
 
   Widget _placementRow(Map<String, dynamic> p) {

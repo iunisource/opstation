@@ -68,8 +68,11 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
     final nameCtrl = TextEditingController(text: existing?['name'] as String? ?? '');
     final seqCtrl = TextEditingController(text: (existing?['sequence'] ?? 0).toString());
     final notesCtrl = TextEditingController(text: existing?['notes'] as String? ?? '');
+    final specCtrl = TextEditingController(text: existing?['spec'] as String? ?? '');
+    final targetCtrl = TextEditingController(text: existing?['target_count'] != null ? existing!['target_count'].toString() : '');
     String scope = existing?['scope'] as String? ?? 'global';
     String? scopeRef = existing?['scope_ref'] as String?;
+    String stage = existing?['stage'] as String? ?? 'final';
     bool gating = (existing?['is_gating'] as bool?) ?? true;
     bool active = (existing?['is_active'] as bool?) ?? true;
     bool saving = false;
@@ -78,6 +81,15 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
       title: Text(isEdit ? 'Edit Checkpoint' : 'New QC Checkpoint'),
       content: SizedBox(width: 460, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Checkpoint name *', hintText: 'e.g. Final inspection')),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: stage, decoration: const InputDecoration(labelText: 'Stage'),
+          items: const [
+            DropdownMenuItem(value: 'final', child: Text('Final — gates job closing')),
+            DropdownMenuItem(value: 'in_process', child: Text('In-process — QC Station (tap-to-print)')),
+          ],
+          onChanged: (v) => setS(() => stage = v ?? 'final'),
+        ),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
           value: scope, decoration: const InputDecoration(labelText: 'Applies to'),
@@ -107,9 +119,18 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
         const SizedBox(height: 12),
         TextField(controller: seqCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Sequence', hintText: 'Order shown during QC')),
         const SizedBox(height: 8),
-        SwitchListTile(contentPadding: EdgeInsets.zero, value: gating, onChanged: (v) => setS(() => gating = v),
-          title: const Text('Gating', style: TextStyle(fontSize: 14)),
-          subtitle: const Text('Must pass before a batch can be posted', style: TextStyle(fontSize: 11))),
+        // Final checkpoints can gate posting; in-process checkpoints carry the
+        // printed spec and an optional expected count for the station.
+        if (stage == 'final')
+          SwitchListTile(contentPadding: EdgeInsets.zero, value: gating, onChanged: (v) => setS(() => gating = v),
+            title: const Text('Gating', style: TextStyle(fontSize: 14)),
+            subtitle: const Text('Must pass before a batch can be posted', style: TextStyle(fontSize: 11))),
+        if (stage == 'in_process') ...[
+          const SizedBox(height: 4),
+          TextField(controller: specCtrl, decoration: const InputDecoration(labelText: 'Spec (printed on the QC label)', hintText: 'e.g. 5 kg')),
+          const SizedBox(height: 12),
+          TextField(controller: targetCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Expected count (optional)', hintText: 'e.g. 10; blank = open-ended')),
+        ],
         SwitchListTile(contentPadding: EdgeInsets.zero, value: active, onChanged: (v) => setS(() => active = v),
           title: const Text('Active', style: TextStyle(fontSize: 14))),
         const SizedBox(height: 8),
@@ -129,7 +150,12 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
                 'org_id': _orgId, 'name': nameCtrl.text.trim(), 'scope': scope,
                 'scope_ref': scope == 'global' ? null : scopeRef,
                 'sequence': int.tryParse(seqCtrl.text.trim()) ?? 0,
-                'is_gating': gating, 'is_active': active, 'notes': notesCtrl.text.trim(),
+                'stage': stage,
+                // gating only meaningful for final; in-process is never a post gate
+                'is_gating': stage == 'final' ? gating : false,
+                'spec': stage == 'in_process' && specCtrl.text.trim().isNotEmpty ? specCtrl.text.trim() : null,
+                'target_count': stage == 'in_process' ? int.tryParse(targetCtrl.text.trim()) : null,
+                'is_active': active, 'notes': notesCtrl.text.trim(),
               };
               if (isEdit) {
                 await client.from('qc_checkpoints').update(data).eq('id', existing['id'] as String);
@@ -158,7 +184,7 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
           style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary)),
       ]),
       const SizedBox(height: 4),
-      const Text('Inspection points that gate a job batch from posting. Scope each to all products, a product, or a BOM.', style: TextStyle(color: AppTheme.textSecondary)),
+      const Text('QC inspection points. Final ones gate a job batch from posting; In-process ones appear in the QC Station for tap-to-print labels. Scope each to all products, a product, or a BOM.', style: TextStyle(color: AppTheme.textSecondary)),
       const SizedBox(height: 18),
       Expanded(child: _loading ? const Center(child: CircularProgressIndicator())
         : _rows.isEmpty ? const Center(child: Text('No checkpoints yet. Add one to start gating production QC.', style: TextStyle(color: AppTheme.textSecondary)))
@@ -171,11 +197,16 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
                 final r = _rows[i];
                 final gating = (r['is_gating'] as bool?) ?? true;
                 final active = (r['is_active'] as bool?) ?? true;
+                final stage = (r['stage'] as String?) ?? 'final';
+                final inProc = stage == 'in_process';
                 return ListTile(
                   title: Row(children: [
                     Text(r['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                     const SizedBox(width: 10),
-                    _chip(gating ? 'Gating' : 'Advisory', gating ? Colors.deepOrange : Colors.blueGrey),
+                    _chip(inProc ? 'In-process' : 'Final', inProc ? Colors.teal : Colors.indigo),
+                    const SizedBox(width: 6),
+                    if (!inProc) _chip(gating ? 'Gating' : 'Advisory', gating ? Colors.deepOrange : Colors.blueGrey),
+                    if (inProc && (r['spec'] as String?)?.trim().isNotEmpty == true) _chip(r['spec'] as String, Colors.blueGrey),
                     const SizedBox(width: 6),
                     if (!active) _chip('Inactive', Colors.grey),
                   ]),

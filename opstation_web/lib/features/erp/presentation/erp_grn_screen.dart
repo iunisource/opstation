@@ -8,6 +8,8 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../widgets/voucher_docs_panel.dart';
+import '../widgets/voucher_remarks_panel.dart';
 
 /// GRN — Goods Receipt Note.
 /// Acts like DO but in reverse: receives stock from supplier against a confirmed PO.
@@ -29,8 +31,13 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
+  bool _datesEditable = false;
+  bool _confirmBusy = false; // double-click guard for Confirm Receipt
+  bool _superviseEnabled = false; // org toggle: docs + remarks + Supervise
+  bool _superviseBusy = false;
   String _search = '';
   String _statusFilter = 'all';
+  String _supFilter = 'all'; // supervision filter: all | yes | no (only when toggle on)
 
   @override
   void initState() { super.initState(); _loadList(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
@@ -52,11 +59,36 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
-  bool get _isDraft  => !_isLocked;
+  // GRN status with the legacy 'saved' folded into 'received'.
+  String get _grnStatus { final s = _detail['status'] as String? ?? 'draft'; return s == 'saved' ? 'received' : s; }
+  // A GRN is "confirmed" once its receipt has moved stock (received / partial /
+  // invoiced). It must never offer "Confirm Receipt" again — even if it is not
+  // locked — otherwise confirm_grn rejects with "already confirmed (or is locked)".
+  bool get _isConfirmed => _grnStatus != 'draft';
+  bool get _isDraft  => !_isLocked && !_isConfirmed;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked;
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  Future<void> _pickDate() async {
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('purchase_grns')
+          .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', _detail['id']);
+      if (mounted) setState(() => _detail['voucher_date'] = iso);
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to \$iso');
+      _loadList();
+    } catch (e) { _showSnack('Failed: \$e'); }
+  }
+
 
   void _initReceivedCtrls() {
     for (final c in _receivedCtrl.values) c.dispose();
@@ -71,9 +103,11 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   Future<void> _loadList() async {
     final orgId = _orgId; final branchId = _branchId; if (orgId == null) return;
     setState(() => _listLoading = true);
+    // Keep the org toggle fresh so the list badge + supervision filter appear.
+    try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.grn_supervise_flow').maybeSingle(); _superviseEnabled = (c?['value'] as String?) == 'true'; } catch (_) {}
     try {
       var q = Supabase.instance.client.from('purchase_grns')
-          .select('id,voucher_number,voucher_date,status,is_locked,supplier_id,po_id,suppliers(name),purchase_orders(voucher_number)')
+          .select('id,voucher_number,voucher_date,status,is_locked,supplier_id,po_id,supervised_at,suppliers(name),purchase_orders(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -89,10 +123,15 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       final items = await client.from('purchase_grn_items')
           .select('*,products(name,sku),uoms(abbreviation)').eq('grn_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: grn['created_by'] as String?);
+      bool datesEd = false;
+      try { final c = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (c?['value'] as String?) == 'true'; } catch (_) {}
+      bool superviseEn = false;
+      try { final c = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.grn_supervise_flow').maybeSingle(); superviseEn = (c?['value'] as String?) == 'true'; } catch (_) {}
       setState(() {
         _detail = Map<String, dynamic>.from(grn);
         _items = List<Map<String, dynamic>>.from(items);
-        _meta = meta; _detailLoading = false;
+        _meta = meta; _detailLoading = false; _datesEditable = datesEd;
+        _superviseEnabled = superviseEn;
         _initReceivedCtrls();
       });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
@@ -218,81 +257,24 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     if (ok != true) return;
     // Save any pending received qty edits first
     for (final it in _items) await _saveReceivedQty(it['id'] as String);
-    final orgId = _orgId; final branchId = _detail['branch_id'] as String?;
-    final userId = ref.read(currentUserProvider)?.id;
+    if (_confirmBusy) return;
+    setState(() => _confirmBusy = true);
     final grnId = _detail['id'] as String;
-    final poId = _detail['po_id'] as String?;
     try {
-      for (final it in _items) {
-        final pid = it['product_id'] as String;
-        final qty = (it['qty_received'] as num?)?.toDouble() ?? 0;
-        if (qty <= 0 || branchId == null || orgId == null) continue;
-        // Add to inventory stock
-        final existing = await Supabase.instance.client.from('inventory_stock').select()
-            .eq('org_id', orgId).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-        if (existing == null) {
-          await Supabase.instance.client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-            'org_id': orgId, 'product_id': pid, 'branch_id': branchId, 'quantity': qty,
-            'uom_id': it['uom_id'],
-          });
-        } else {
-          await Supabase.instance.client.from('inventory_stock').update({
-            'quantity': ((existing['quantity'] as num).toDouble()) + qty,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }).eq('id', existing['id']);
-        }
-        await Supabase.instance.client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-          'uom_id': it['uom_id'], 'quantity': qty,
-          'movement_type': 'purchase', 'reference_id': grnId, 'reference_type': 'grn',
-          'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-        });
-        // Update PO item quantity_received
-        final poItemId = it['po_item_id'] as String?;
-        if (poItemId != null) {
-          final poItem = await Supabase.instance.client.from('purchase_order_items')
-              .select('quantity_received').eq('id', poItemId).single();
-          await Supabase.instance.client.from('purchase_order_items').update({
-            'quantity_received': ((poItem['quantity_received'] as num?)?.toDouble() ?? 0) + qty,
-          }).eq('id', poItemId);
-        }
-      }
-      // Recalculate PO status
-      if (poId != null) {
-        final poItems = await Supabase.instance.client.from('purchase_order_items')
-            .select('quantity_ordered,quantity_received').eq('purchase_order_id', poId);
-        bool allRcvd = true; bool anyRcvd = false;
-        for (final pi in poItems as List) {
-          final ord = ((pi['quantity_ordered'] as num?)?.toDouble() ?? 0);
-          final rcv = ((pi['quantity_received'] as num?)?.toDouble() ?? 0);
-          if (rcv > 0) anyRcvd = true;
-          if (rcv < ord) allRcvd = false;
-        }
-        await Supabase.instance.client.from('purchase_orders').update({
-          'status': allRcvd ? 'received' : (anyRcvd ? 'partially_received' : 'confirmed'),
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', poId);
-      }
-      // Determine receipt completeness: full vs short against ordered qty
-      bool grnPartial = false;
-      for (final it in _items) {
-        final ord = (it['qty_ordered'] as num?)?.toDouble() ?? 0;
-        final rcv = (it['qty_received'] as num?)?.toDouble() ?? 0;
-        if (rcv < ord) { grnPartial = true; break; }
-      }
-      final newStatus = grnPartial ? 'partially_received' : 'received';
-      // Lock GRN
-      await Supabase.instance.client.from('purchase_grns').update({
-        'status': newStatus, 'is_locked': true,
-        'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', grnId);
-      await _logAudit(grnId, 'confirmed', 'Receipt confirmed (${newStatus.replaceAll('_', ' ')}), stock added to inventory');
+      // Atomic + idempotent: confirm_grn claims the GRN (status guard + lock),
+      // then posts movements, stock, PO progress, PO status, GRN status and the
+      // audit-log row in ONE transaction. Double-clicks / retries error cleanly.
+      await Supabase.instance.client.rpc('confirm_grn', params: {
+        'p_grn_id': grnId,
+        'p_user_id': ref.read(currentUserProvider)?.id,
+      });
       _showSnack('Receipt confirmed — stock added to inventory');
       _loadDetail(grnId); _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) {
+      _showSnack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _confirmBusy = false);
+    }
   }
 
   Future<void> _toggleLock() async {
@@ -311,6 +293,64 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     } catch (e) { _showSnack('Failed: $e'); }
   }
 
+  // ── Supervision: a NON-BLOCKING admin review mark. Independent of posting —
+  // the GRN confirms and moves stock regardless of whether it is supervised.
+  Future<void> _supervise() async {
+    if (!_isAdmin) { _showSnack('Only admins can supervise'); return; }
+    if (_superviseBusy) return;
+    setState(() => _superviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    // Snapshot the supervisor's signature + org stamp so the printed GRN can
+    // render them under "Supervised By" (same approach as the SI admin review).
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      await Supabase.instance.client.from('purchase_grns').update({
+        'supervised_by': userId, 'supervised_at': now,
+        'supervised_by_name': userName,
+        'supervised_signature_url': sigUrl,
+        'supervised_stamp_url': stampUrl,
+        'updated_at': now,
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
+      if (mounted) setState(() {
+        _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
+        _detail['supervised_by_name'] = userName;
+        _detail['supervised_signature_url'] = sigUrl;
+        _detail['supervised_stamp_url'] = stampUrl;
+      });
+      _showSnack('Marked as supervised');
+    } catch (e) { _showSnack('Failed: $e'); }
+    finally { if (mounted) setState(() => _superviseBusy = false); }
+  }
+
+  Future<void> _clearSupervision() async {
+    if (!_isAdmin) return;
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Clear supervision?'),
+      content: const Text('Remove the supervised mark on this GRN? This does not affect the receipt or stock.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Clear'))],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('purchase_grns').update({
+        'supervised_by': null, 'supervised_at': null,
+        'supervised_by_name': null, 'supervised_signature_url': null, 'supervised_stamp_url': null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'unsupervised', null);
+      if (mounted) setState(() {
+        _detail['supervised_by'] = null; _detail['supervised_at'] = null;
+        _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
+      });
+      _showSnack('Supervision cleared');
+    } catch (e) { _showSnack('Failed: $e'); }
+  }
+
   Future<void> _delete() async {
     if (!_canDelete) return;
     try {
@@ -324,43 +364,15 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete'))],
     ));
     if (ok != true) return;
-    final orgId = _orgId; final branchId = _detail['branch_id'] as String?;
-    final userId = ref.read(currentUserProvider)?.id;
     final grnId = _detail['id'] as String;
-    final poId = _detail['po_id'] as String?;
     try {
-      if (_detail['status'] != 'draft') {
-        for (final it in _items) {
-          final pid = it['product_id'] as String;
-          final qty = (it['qty_received'] as num?)?.toDouble() ?? 0;
-          if (qty <= 0 || branchId == null || orgId == null) continue;
-          final stock = await Supabase.instance.client.from('inventory_stock').select().eq('org_id', orgId!).eq('product_id', pid).eq('branch_id', branchId).maybeSingle();
-          if (stock != null) {
-            await Supabase.instance.client.from('inventory_stock').update({'quantity': ((stock['quantity'] as num).toDouble()) - qty, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', stock['id']);
-          }
-          await Supabase.instance.client.from('inventory_movements').insert({
-            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-            'org_id': orgId, 'product_id': pid, 'branch_id': branchId,
-            'uom_id': it['uom_id'], 'quantity': -qty, 'movement_type': 'adjustment',
-            'reference_id': grnId, 'reference_type': 'grn_deleted',
-            'moved_at': DateTime.now().toUtc().toIso8601String(), 'created_by': userId,
-          });
-          final poItemId = it['po_item_id'] as String?;
-          if (poItemId != null) {
-            final poItem = await Supabase.instance.client.from('purchase_order_items').select('quantity_received').eq('id', poItemId).single();
-            await Supabase.instance.client.from('purchase_order_items').update({'quantity_received': ((poItem['quantity_received'] as num?)?.toDouble() ?? 0) - qty}).eq('id', poItemId);
-          }
-        }
-        if (poId != null) {
-          final poItems = await Supabase.instance.client.from('purchase_order_items').select('quantity_ordered,quantity_received').eq('purchase_order_id', poId);
-          bool anyRcvd = false; bool allRcvd = true;
-          for (final pi in poItems as List) { final rcv = ((pi['quantity_received'] as num?)?.toDouble() ?? 0); if (rcv > 0) anyRcvd = true; if (rcv < ((pi['quantity_ordered'] as num?)?.toDouble() ?? 0)) allRcvd = false; }
-          await Supabase.instance.client.from('purchase_orders').update({'status': allRcvd ? 'received' : (anyRcvd ? 'partially_received' : 'confirmed'), 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', poId);
-        }
-      }
-      await _logAudit(grnId, 'deleted', 'GRN ${_detail['voucher_number']} deleted');
-      await Supabase.instance.client.from('purchase_grn_items').delete().eq('grn_id', grnId);
-      await Supabase.instance.client.from('purchase_grns').delete().eq('id', grnId);
+      // Atomic: reverses stock + PO progress (if confirmed), writes the audit
+      // row, and deletes the GRN in ONE transaction. Errors cleanly if a PI
+      // exists or the GRN is already gone.
+      await Supabase.instance.client.rpc('delete_grn', params: {
+        'p_grn_id': grnId,
+        'p_user_id': ref.read(currentUserProvider)?.id,
+      });
       _showSnack('Deleted');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       _loadList();
@@ -387,6 +399,12 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       )).toList(),
       preparedBy: _meta.preparedBy, footerNote: _meta.purchaseFooterNote ?? _meta.footerNote,
       relatedRefs: _detail['purchase_orders']?['voucher_number'] != null ? {'PO #': _detail['purchase_orders']['voucher_number'] as String} : null,
+      // Middle sign-off becomes "Supervised By" when the GRN supervise flow is on.
+      checkedByLabel: _superviseEnabled ? 'Supervised By' : null,
+      checkedByName: _detail['supervised_by_name'] as String?,
+      checkedByAt: _detail['supervised_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['supervised_at'] as String).toLocal()) : null,
+      checkedBySignatureUrl: _detail['supervised_signature_url'] as String?,
+      checkedByStampUrl: _detail['supervised_stamp_url'] as String?,
     );
   }
 
@@ -409,7 +427,11 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       final st = r['status'] as String? ?? 'draft';
       final stNorm = st == 'saved' ? 'received' : st; // fold legacy 'saved'
       final matchStatus = _statusFilter == 'all' || stNorm == _statusFilter;
-      return matchSearch && matchStatus;
+      final supervised = r['supervised_at'] != null;
+      final matchSup = !_superviseEnabled || _supFilter == 'all'
+          || (_supFilter == 'yes' && supervised)
+          || (_supFilter == 'no' && !supervised);
+      return matchSearch && matchStatus && matchSup;
     }).toList();
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
       Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 12), child: Row(children: [
@@ -427,6 +449,18 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _GrnFilterTab(label: 'Partial', value: 'partially_received', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
         _GrnFilterTab(label: 'Invoiced', value: 'invoiced', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
       ])),
+      if (_superviseEnabled) ...[
+        const SizedBox(height: 8),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
+          const Text('Supervision', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 8),
+          Expanded(child: Wrap(spacing: 6, runSpacing: 6, children: [
+            _GrnFilterTab(label: 'All', value: 'all', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
+            _GrnFilterTab(label: 'Supervised', value: 'yes', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
+            _GrnFilterTab(label: 'Pending', value: 'no', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
+          ])),
+        ])),
+      ],
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
           : filtered.isEmpty ? const Center(child: Text('No GRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
@@ -438,6 +472,10 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                   title: Row(children: [
                     Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null))),
+                    if (_superviseEnabled && r['supervised_at'] != null) ...[
+                      const _GrnSupListBadge(),
+                      const SizedBox(width: 4),
+                    ],
                     _GrnBadge(status: status, locked: locked),
                   ]),
                   subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -461,10 +499,30 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
             const Text('Goods Receipt Note', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
           if (_isDraft && !_isLocked) ...[
-            ElevatedButton.icon(icon: const Icon(Icons.check_circle_outline, size: 16), label: const Text('Confirm Receipt'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _confirmReceipt),
+            ElevatedButton.icon(icon: const Icon(Icons.check_circle_outline, size: 16),
+                label: Text(_confirmBusy ? 'Confirming…' : 'Confirm Receipt'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+                onPressed: _confirmBusy ? null : _confirmReceipt),
             const SizedBox(width: 8),
           ],
+          if (_superviseEnabled && _isAdmin) ...[
+            if (_detail['supervised_at'] == null)
+              OutlinedButton.icon(
+                icon: _superviseBusy
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                label: const Text('Supervise'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                onPressed: _superviseBusy ? null : _supervise)
+            else
+              TextButton.icon(
+                icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+                onPressed: _clearSupervision),
+            const SizedBox(width: 8),
+          ],
+          if (_canEditDate)
+            IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
           if (!_isDraft || !_isLocked || _canUnlock)
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
@@ -479,6 +537,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           if (poVoucher != null) _GrnChip(label: 'PO #', value: poVoucher),
           _GrnChip(label: 'Status', value: _prettyStatus(_detail['status'] as String?)),
           if (_isLocked) const _GrnLockedChip(),
+          if (_superviseEnabled && _detail['supervised_at'] != null)
+            _GrnSupervisedChip(date: DateFormat('d MMM yyyy').format(DateTime.parse(_detail['supervised_at'] as String).toLocal())),
         ]),
         if (_isDraft && !_isLocked) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(color: Colors.green.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.25))),
@@ -518,6 +578,27 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                 ]));
             }),
           ])),
+        if (_superviseEnabled) ...[
+          const SizedBox(height: 16),
+          VoucherDocsPanel(
+            voucherType: 'GRN',
+            voucherId: _selectedId ?? '',
+            voucherNumber: _detail['voucher_number'] as String? ?? '-',
+            bucket: 'grn-documents',
+            orgId: _orgId ?? '',
+            userId: ref.read(currentUserProvider)?.id,
+            canWrite: true,
+          ),
+          const SizedBox(height: 12),
+          VoucherRemarksPanel(
+            voucherType: 'GRN',
+            voucherId: _selectedId ?? '',
+            orgId: _orgId ?? '',
+            userId: ref.read(currentUserProvider)?.id,
+            userName: ref.read(currentUserProvider)?.name,
+            canWrite: true,
+          ),
+        ],
         const SizedBox(height: 16),
         _GrnAuditTrail(voucherId: _selectedId ?? ''),
       ]))),
@@ -555,6 +636,8 @@ class _PoPickerDialogState extends State<_PoPickerDialog> {
 
 class _GrnChip extends StatelessWidget { final String label, value; const _GrnChip({required this.label, required this.value}); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)), child: Row(mainAxisSize: MainAxisSize.min, children: [Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)), Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))])); }
 class _GrnLockedChip extends StatelessWidget { const _GrnLockedChip(); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])); }
+class _GrnSupListBadge extends StatelessWidget { const _GrnSupListBadge(); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2), decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), borderRadius: BorderRadius.circular(4)), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.verified, size: 10, color: AppTheme.success), SizedBox(width: 2), Text('Supervised', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppTheme.success))])); }
+class _GrnSupervisedChip extends StatelessWidget { final String date; const _GrnSupervisedChip({required this.date}); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.success.withOpacity(0.4))), child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.verified, size: 12, color: AppTheme.success), const SizedBox(width: 4), Text('Supervised · $date', style: const TextStyle(fontSize: 11, color: AppTheme.success, fontWeight: FontWeight.w600))])); }
 class _GrnBadge extends StatelessWidget { final String status; final bool locked; const _GrnBadge({required this.status, required this.locked}); @override Widget build(BuildContext context) { Color bg; Color fg; String label; switch (status) { case 'received': case 'saved': bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success; label = 'Received'; break; case 'partially_received': bg = AppTheme.warning.withOpacity(0.14); fg = AppTheme.warning; label = 'Partial'; break; case 'invoiced': bg = Colors.purple.withOpacity(0.12); fg = Colors.purple; label = 'Invoiced'; break; default: bg = Colors.orange.withOpacity(0.12); fg = Colors.orange; label = 'Draft'; } return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)), child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg))); } }
 class _GrnFilterTab extends StatelessWidget { final String label, value, current; final ValueChanged<String> onTap; const _GrnFilterTab({required this.label, required this.value, required this.current, required this.onTap}); @override Widget build(BuildContext context) { final active = value == current; return GestureDetector(onTap: () => onTap(value), child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)), child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)))); } }
 
@@ -570,7 +653,7 @@ class _GrnAuditTrail extends StatelessWidget {
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)), const SizedBox(height: 8),
-            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
+            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; case 'supervised': color = AppTheme.success; break; case 'unsupervised': color = AppTheme.textSecondary; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
           ]));
       });
   }

@@ -49,6 +49,52 @@ class _ErpStockTransfersScreenState
   List<Map<String, dynamic>> _allBranches = [];
   bool _loading = true;
   bool _focusHandled = false;
+  String _statusFilter = 'all';
+  bool _incomingOnly = false;
+  final _searchCtrl = TextEditingController();
+  String _search = '';
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  bool _matchesStatus(String filter, String status) {
+    if (filter == 'all') return true;
+    if (filter == 'draft') return status == 'draft' || status == 'pending';
+    return status == filter;
+  }
+
+  /// Transfers after the "incoming only" toggle (to my branch), before the
+  /// status chip is applied — used both for the table and for the chip counts.
+  List<Map<String, dynamic>> _incomingBase() {
+    if (!_incomingOnly || _branchId == null) return _transfers;
+    return _transfers
+        .where((t) => t['to_branch_id'] == _branchId)
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _visibleTransfers() {
+    var base = _incomingBase();
+    if (_statusFilter != 'all') {
+      base = base
+          .where((t) =>
+              _matchesStatus(_statusFilter, t['status'] as String? ?? 'pending'))
+          .toList();
+    }
+    final q = _search.trim().toLowerCase();
+    if (q.isEmpty) return base;
+    return base.where((t) {
+      final voucher = (t['voucher_number'] as String? ?? '').toLowerCase();
+      final date = (t['transfer_date'] as String? ?? '').toLowerCase();
+      final notes = (t['notes'] as String? ?? '').toLowerCase();
+      final from = (t['from_branch']?['name'] as String? ?? '').toLowerCase();
+      final to = (t['to_branch']?['name'] as String? ?? '').toLowerCase();
+      return voucher.contains(q) || date.contains(q) || notes.contains(q) ||
+          from.contains(q) || to.contains(q);
+    }).toList();
+  }
 
   @override
   void initState() {
@@ -109,8 +155,67 @@ class _ErpStockTransfersScreenState
         .then((_) => _load());
   }
 
+  Widget _buildFilterBar() {
+    final base = _incomingBase();
+    int cnt(String f) => f == 'all'
+        ? base.length
+        : base.where((t) => _matchesStatus(f, t['status'] as String? ?? 'pending')).length;
+    const filters = [
+      ['all', 'All'],
+      ['draft', 'Draft'],
+      ['in_transit', 'In Transit'],
+      ['completed', 'Completed'],
+      ['rejected', 'Rejected'],
+      ['cancelled', 'Cancelled'],
+    ];
+    final branchName = ref.read(selectedBranchProvider)?['name'] as String?;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+      child: Row(children: [
+        Expanded(
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final f in filters)
+                ChoiceChip(
+                  label: Text('${f[1]} (${cnt(f[0])})', style: const TextStyle(fontSize: 12)),
+                  selected: _statusFilter == f[0],
+                  visualDensity: VisualDensity.compact,
+                  selectedColor: AppTheme.primary.withOpacity(0.15),
+                  labelStyle: TextStyle(
+                      color: _statusFilter == f[0] ? AppTheme.primary : AppTheme.textSecondary,
+                      fontWeight: _statusFilter == f[0] ? FontWeight.w700 : FontWeight.w500),
+                  onSelected: (_) => setState(() => _statusFilter = f[0]),
+                ),
+            ],
+          ),
+        ),
+        if (_branchId != null) ...[
+          const SizedBox(width: 12),
+          FilterChip(
+            avatar: Icon(Icons.call_received,
+                size: 15, color: _incomingOnly ? AppTheme.primary : AppTheme.textSecondary),
+            label: Text(
+                branchName != null ? 'Incoming to $branchName' : 'Incoming only',
+                style: const TextStyle(fontSize: 12)),
+            selected: _incomingOnly,
+            visualDensity: VisualDensity.compact,
+            selectedColor: AppTheme.primary.withOpacity(0.15),
+            checkmarkColor: AppTheme.primary,
+            labelStyle: TextStyle(
+                color: _incomingOnly ? AppTheme.primary : AppTheme.textSecondary,
+                fontWeight: _incomingOnly ? FontWeight.w700 : FontWeight.w500),
+            onSelected: (v) => setState(() => _incomingOnly = v),
+          ),
+        ],
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final filtered = _visibleTransfers();
     return Container(
       color: AppTheme.background,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -120,6 +225,25 @@ class _ErpStockTransfersScreenState
             const Text('Stock Transfers',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             const Spacer(),
+            SizedBox(
+              width: 300,
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: (v) => setState(() => _search = v),
+                decoration: InputDecoration(
+                  hintText: 'Search voucher, date, remarks, branch…',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  border: const OutlineInputBorder(),
+                  suffixIcon: _search.isEmpty ? null : IconButton(
+                    icon: const Icon(Icons.clear, size: 16),
+                    onPressed: () => setState(() { _searchCtrl.clear(); _search = ''; }),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
             ElevatedButton.icon(
               onPressed: () => _openTransfer(null),
               icon: const Icon(Icons.add, size: 18),
@@ -131,6 +255,7 @@ class _ErpStockTransfersScreenState
             ),
           ]),
         ),
+        if (!_loading) _buildFilterBar(),
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
@@ -178,6 +303,13 @@ class _ErpStockTransfersScreenState
                                       fontWeight: FontWeight.w600,
                                       fontSize: 13,
                                       color: AppTheme.textSecondary))),
+                          Expanded(
+                              flex: 2,
+                              child: Text('Remarks',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppTheme.textSecondary))),
                           SizedBox(
                               width: 120,
                               child: Text('Status',
@@ -189,17 +321,20 @@ class _ErpStockTransfersScreenState
                       ),
                       const Divider(height: 1),
                       Expanded(
-                        child: _transfers.isEmpty
-                            ? const Center(
-                                child: Text('No stock transfers yet.',
-                                    style: TextStyle(
+                        child: filtered.isEmpty
+                            ? Center(
+                                child: Text(
+                                    _transfers.isEmpty
+                                        ? 'No stock transfers yet.'
+                                        : 'No transfers match this filter.',
+                                    style: const TextStyle(
                                         color: AppTheme.textSecondary)))
                             : ListView.separated(
-                                itemCount: _transfers.length,
+                                itemCount: filtered.length,
                                 separatorBuilder: (_, __) =>
                                     const Divider(height: 1),
                                 itemBuilder: (_, i) {
-                                  final t = _transfers[i];
+                                  final t = filtered[i];
                                   final status =
                                       t['status'] as String? ?? 'pending';
                                   final date = t['transfer_date'] as String?;
@@ -243,6 +378,15 @@ class _ErpStockTransfersScreenState
                                                 style: const TextStyle(
                                                     color: AppTheme
                                                         .textSecondary))),
+                                        Expanded(
+                                            flex: 2,
+                                            child: Text(
+                                                (t['notes'] as String?)?.isNotEmpty == true
+                                                    ? t['notes'] as String : '—',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                    color: AppTheme.textSecondary))),
                                         SizedBox(
                                           width: 120,
                                           child: Align(
@@ -304,6 +448,7 @@ class _StockTransferVoucherScreenState
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _uoms = [];
+  Map<String, double> _inHand = {}; // product_id -> qty at SOURCE branch
   bool _loading = true;
   bool _busy = false;
   Map<String, String> _userNames = {}; // id -> name, for the audit trail
@@ -397,12 +542,31 @@ class _StockTransferVoucherScreenState
           for (final u in us as List) { names[u['id'] as String] = (u['name'] as String?) ?? '—'; }
         } catch (_) {}
       }
+      // In-hand stock at the SOURCE branch (for the In Hand column + checks).
+      final srcBranch =
+          (fresh?['from_branch_id'] as String?) ?? _fromBranchId;
+      final inHand = <String, double>{};
+      if (srcBranch != null) {
+        try {
+          final stockRows = await client
+              .from('inventory_stock')
+              .select('product_id, quantity')
+              .eq('org_id', orgId)
+              .eq('branch_id', srcBranch);
+          for (final s in stockRows as List) {
+            final pid = s['product_id'] as String;
+            inHand[pid] =
+                (inHand[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
+          }
+        } catch (_) {}
+      }
       setState(() {
         _products = List<Map<String, dynamic>>.from(products);
         _uoms = List<Map<String, dynamic>>.from(uoms);
         _items = items;
         if (fresh != null) _transfer = fresh;
         _userNames = names;
+        _inHand = inHand;
         _loading = false;
       });
     } catch (_) {
@@ -424,14 +588,27 @@ class _StockTransferVoucherScreenState
 
   Future<String> _nextVoucherNo() async {
     final orgId = _orgId!;
+    // Preferred: atomic, race-safe number from the DB function.
+    try {
+      final res = await Supabase.instance.client
+          .rpc('next_stock_transfer_number', params: {'p_org_id': orgId});
+      if (res is String && res.isNotEmpty) return res;
+    } catch (_) {/* fall back below if the function isn't deployed yet */}
+    // Fallback: MAX-based (not count-based, so gaps don't cause reuse). The
+    // unique index still guards against collisions; the caller retries once.
     final year = DateTime.now().year;
     final existing = await Supabase.instance.client
         .from('stock_transfers')
         .select('voucher_number')
         .eq('org_id', orgId)
         .like('voucher_number', 'ST-$year-%');
-    final n = (existing as List).length + 1;
-    return 'ST-$year-${n.toString().padLeft(4, '0')}';
+    int mx = 0;
+    for (final r in existing as List) {
+      final tail = (r['voucher_number'] as String?)?.split('-').last ?? '';
+      final v = int.tryParse(tail) ?? 0;
+      if (v > mx) mx = v;
+    }
+    return 'ST-$year-${(mx + 1).toString().padLeft(4, '0')}';
   }
 
   // ── Save draft (create or update header) ──────────────────────────────────
@@ -456,15 +633,27 @@ class _StockTransferVoucherScreenState
       };
       if (_isNew) {
         final id = 'st_${DateTime.now().millisecondsSinceEpoch}';
-        final vno = await _nextVoucherNo();
-        await client.from('stock_transfers').insert({
-          'id': id,
-          'org_id': _orgId,
-          'voucher_number': vno,
-          'status': 'draft',
-          'created_by': _userId,
-          ...payload,
-        });
+        var vno = await _nextVoucherNo();
+        // Retry once if the unique index rejects a colliding number (race).
+        for (var attempt = 0; ; attempt++) {
+          try {
+            await client.from('stock_transfers').insert({
+              'id': id,
+              'org_id': _orgId,
+              'voucher_number': vno,
+              'status': 'draft',
+              'created_by': _userId,
+              ...payload,
+            });
+            break;
+          } on PostgrestException catch (e) {
+            if (e.code == '23505' && attempt < 3) {
+              vno = await _nextVoucherNo();
+              continue;
+            }
+            rethrow;
+          }
+        }
         _transfer = {'id': id, 'voucher_number': vno, 'status': 'draft'};
         _snack('Draft $vno created');
       } else {
@@ -516,6 +705,24 @@ class _StockTransferVoucherScreenState
     if (_addProductId == null || _addUomId == null) { _snack('Pick a product first'); return false; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
     if (qty <= 0) { _snack('Quantity must be > 0'); return false; }
+    // Hard stock check: qty being added + qty already on this voucher for the
+    // same product must not exceed what the source branch has in hand.
+    final have = _inHand[_addProductId] ?? 0;
+    double alreadyOnVoucher = 0;
+    for (final it in _items) {
+      if (it['product_id'] == _addProductId) {
+        alreadyOnVoucher += (it['quantity'] as num?)?.toDouble() ?? 0;
+      }
+    }
+    if (qty + alreadyOnVoucher > have) {
+      final name = _products.firstWhere((p) => p['id'] == _addProductId,
+          orElse: () => const {})['name'] as String? ?? 'This product';
+      _snack(alreadyOnVoucher > 0
+          ? 'Not enough stock: $name has ${_fmtQty(have)} in hand, '
+              '${_fmtQty(alreadyOnVoucher)} already on this voucher'
+          : 'Not enough stock: $name has only ${_fmtQty(have)} in hand');
+      return false;
+    }
     try {
       await Supabase.instance.client.from('stock_transfer_items').insert({
         'id': 'sti_${DateTime.now().millisecondsSinceEpoch}',
@@ -561,8 +768,10 @@ class _StockTransferVoucherScreenState
     final orgId = _orgId!;
     final fromBranchId = _transfer!['from_branch_id'] as String;
 
-    // Stock availability (informational, non-blocking).
-    final pids = _items.map((i) => i['product_id'] as String).toList();
+    // Stock availability — BLOCKING. Re-checked against the server right now
+    // (stock may have changed since items were added). Needs are aggregated
+    // per product so multiple lines of the same item are counted together.
+    final pids = _items.map((i) => i['product_id'] as String).toSet().toList();
     final srcRows = await client
         .from('inventory_stock')
         .select('product_id, quantity')
@@ -571,41 +780,68 @@ class _StockTransferVoucherScreenState
         .inFilter('product_id', pids);
     final srcQty = <String, double>{};
     for (final s in srcRows as List) {
-      srcQty[s['product_id'] as String] =
-          (s['quantity'] as num?)?.toDouble() ?? 0;
+      final pid = s['product_id'] as String;
+      srcQty[pid] =
+          (srcQty[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
     }
-    final shortfalls = <String>[];
+    final need = <String, double>{};
+    final prodNames = <String, String>{};
     for (final it in _items) {
       final pid = it['product_id'] as String;
-      final need = (it['quantity'] as num).toDouble();
+      need[pid] = (need[pid] ?? 0) + (it['quantity'] as num).toDouble();
+      prodNames[pid] = it['products']?['name'] as String? ?? pid;
+    }
+    final shortfalls = <String>[];
+    need.forEach((pid, n) {
       final have = srcQty[pid] ?? 0;
-      if (have < need) {
-        final name = it['products']?['name'] as String? ?? pid;
-        shortfalls.add('$name: have ${_fmtQty(have)}, sending ${_fmtQty(need)}');
+      if (have < n) {
+        shortfalls.add(
+            '${prodNames[pid]}: in hand ${_fmtQty(have)}, sending ${_fmtQty(n)}');
       }
+    });
+    // Keep the In Hand column in sync with what the server just told us.
+    if (mounted) setState(() => _inHand = srcQty);
+
+    if (shortfalls.isNotEmpty) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Row(children: [
+            Icon(Icons.block, color: AppTheme.danger, size: 20),
+            SizedBox(width: 8),
+            Text('Not Enough Stock'),
+          ]),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                  '${_branchName(fromBranchId)} does not have enough stock to dispatch this transfer:'),
+              const SizedBox(height: 8),
+              ...shortfalls.map((s) => Text('• $s',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.danger))),
+              const SizedBox(height: 8),
+              const Text('Reduce the quantities or receive stock first.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+                onPressed: () =>
+                    Navigator.of(context, rootNavigator: true).pop(),
+                child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
     }
 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Dispatch Transfer'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-                'Stock will leave ${_branchName(fromBranchId)} now and sit in transit until the destination approves it.'),
-            if (shortfalls.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Text('Source stock is short for:',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w700, color: AppTheme.danger)),
-              const SizedBox(height: 4),
-              ...shortfalls.map((s) => Text('• $s',
-                  style: const TextStyle(fontSize: 12, color: AppTheme.danger))),
-            ],
-          ],
-        ),
+        content: Text(
+            'Stock will leave ${_branchName(fromBranchId)} now and sit in transit until the destination approves it.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
@@ -636,7 +872,7 @@ class _StockTransferVoucherScreenState
           'movement_type': 'transfer',
           'reference_id': _transfer!['id'],
           'reference_type': 'stock_transfer',
-          'moved_at': now,
+          'moved_at': _movedAt(),
           'created_by': _userId,
         });
         final fromStock = await client
@@ -702,54 +938,71 @@ class _StockTransferVoucherScreenState
     if (confirm != true) return;
     setState(() => _busy = true);
     try {
-      final now = DateTime.now().toUtc().toIso8601String();
-      for (var i = 0; i < _items.length; i++) {
-        final item = _items[i];
-        final qty = (item['quantity'] as num).toDouble();
-        final productId = item['product_id'] as String;
-        final uomId = item['uom_id'] as String;
-        await client.from('inventory_movements').insert({
-          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
-          'org_id': orgId,
-          'product_id': productId,
-          'branch_id': toBranchId,
-          'uom_id': uomId,
-          'quantity': qty,
-          'movement_type': 'transfer',
-          'reference_id': _transfer!['id'],
-          'reference_type': 'stock_transfer',
-          'moved_at': now,
-          'created_by': _userId,
+      // Preferred: atomic server-side receive — moves destination stock, the
+      // dated ledger movement AND the FIFO cost layers from the source branch
+      // to the destination in one transaction (so COGS/valuation follow the
+      // goods). Falls back to the legacy client loop only if the function
+      // isn't deployed yet.
+      var serverDone = false;
+      try {
+        await client.rpc('receive_stock_transfer', params: {
+          'p_transfer_id': _transfer!['id'],
+          'p_user_id': _userId,
         });
-        final toStock = await client
-            .from('inventory_stock')
-            .select()
-            .eq('org_id', orgId)
-            .eq('product_id', productId)
-            .eq('branch_id', toBranchId)
-            .maybeSingle();
-        if (toStock != null) {
-          await client.from('inventory_stock').update({
-            'quantity': (toStock['quantity'] as num).toDouble() + qty,
-            'updated_at': now,
-          }).eq('id', toStock['id']);
-        } else {
-          await client.from('inventory_stock').insert({
-            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
+        serverDone = true;
+      } on PostgrestException catch (e) {
+        if (e.code != 'PGRST202') rethrow;
+      }
+      if (!serverDone) {
+        final now = DateTime.now().toUtc().toIso8601String();
+        for (var i = 0; i < _items.length; i++) {
+          final item = _items[i];
+          final qty = (item['quantity'] as num).toDouble();
+          final productId = item['product_id'] as String;
+          final uomId = item['uom_id'] as String;
+          await client.from('inventory_movements').insert({
+            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
             'org_id': orgId,
             'product_id': productId,
             'branch_id': toBranchId,
             'uom_id': uomId,
             'quantity': qty,
+            'movement_type': 'transfer',
+            'reference_id': _transfer!['id'],
+            'reference_type': 'stock_transfer',
+            'moved_at': _movedAt(),
+            'created_by': _userId,
           });
+          final toStock = await client
+              .from('inventory_stock')
+              .select()
+              .eq('org_id', orgId)
+              .eq('product_id', productId)
+              .eq('branch_id', toBranchId)
+              .maybeSingle();
+          if (toStock != null) {
+            await client.from('inventory_stock').update({
+              'quantity': (toStock['quantity'] as num).toDouble() + qty,
+              'updated_at': now,
+            }).eq('id', toStock['id']);
+          } else {
+            await client.from('inventory_stock').insert({
+              'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${i}_in',
+              'org_id': orgId,
+              'product_id': productId,
+              'branch_id': toBranchId,
+              'uom_id': uomId,
+              'quantity': qty,
+            });
+          }
         }
+        await client.from('stock_transfers').update({
+          'status': 'completed',
+          'approved_by': _userId,
+          'approved_at': now,
+          'updated_at': now,
+        }).eq('id', _transfer!['id']);
       }
-      await client.from('stock_transfers').update({
-        'status': 'completed',
-        'approved_by': _userId,
-        'approved_at': now,
-        'updated_at': now,
-      }).eq('id', _transfer!['id']);
       _snack('Approved — stock received at destination');
       widget.onUpdated();
       await _load();
@@ -805,7 +1058,7 @@ class _StockTransferVoucherScreenState
             'movement_type': 'transfer',
             'reference_id': _transfer!['id'],
             'reference_type': 'stock_transfer',
-            'moved_at': now,
+            'moved_at': _movedAt(),
             'created_by': _userId,
           });
           final fromStock = await client
@@ -838,6 +1091,18 @@ class _StockTransferVoucherScreenState
   }
 
   String _fmtQty(double q) => q % 1 == 0 ? q.toInt().toString() : q.toString();
+
+  /// Inventory movements post on the TRANSFER's voucher date (not the running
+  /// date), keeping the current local time-of-day for same-day ordering.
+  String _movedAt() {
+    final nowL = DateTime.now();
+    final ds = _transfer?['transfer_date'] as String?;
+    final d = ds == null ? null : DateTime.tryParse(ds);
+    if (d == null) return nowL.toUtc().toIso8601String();
+    return DateTime(d.year, d.month, d.day, nowL.hour, nowL.minute, nowL.second)
+        .toUtc()
+        .toIso8601String();
+  }
 
   String? _who(String? id) => id == null ? null : _userNames[id];
   String? _fmtDT(String? iso) {
@@ -875,6 +1140,72 @@ class _StockTransferVoucherScreenState
       approvedBy: _who(t['approved_by'] as String?),
       approvedAt: _fmtDT(t['approved_at'] as String?),
     );
+  }
+
+  // Full, searchable, scrollable view of every item on the transfer — the
+  // inline card is space-constrained, so this modal shows all SKUs at once.
+  void _showAllItems() {
+    var q = '';
+    showDialog(context: context, builder: (ctx) => Dialog(
+      insetPadding: const EdgeInsets.all(24),
+      child: SizedBox(width: 760, height: 620, child: StatefulBuilder(builder: (ctx, setSt) {
+        final ql = q.trim().toLowerCase();
+        final rows = _items.where((it) {
+          if (ql.isEmpty) return true;
+          final name = (it['products']?['name'] as String? ?? '').toLowerCase();
+          final sku = (it['products']?['sku'] as String? ?? '').toLowerCase();
+          return name.contains(ql) || sku.contains(ql);
+        }).toList();
+        final totalQty = rows.fold<double>(0, (s, it) => s + ((it['quantity'] as num?)?.toDouble() ?? 0));
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(padding: const EdgeInsets.fromLTRB(16, 14, 12, 8), child: Row(children: [
+            Expanded(child: Text('${_transfer?['voucher_number'] ?? 'Transfer'} — all items (${_items.length})',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800))),
+            IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+          ])),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: TextField(
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'Search product or SKU…', prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder()),
+            onChanged: (v) => setSt(() => q = v),
+          )),
+          const SizedBox(height: 8),
+          Container(
+            color: AppTheme.background,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: const Row(children: [
+              SizedBox(width: 34, child: Text('#', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+              Expanded(flex: 5, child: Text('Product', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+              Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+              SizedBox(width: 100, child: Text('Quantity', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+            ]),
+          ),
+          const Divider(height: 1),
+          Expanded(child: rows.isEmpty
+              ? const Center(child: Text('No matching items.', style: TextStyle(color: AppTheme.textSecondary)))
+              : ListView.separated(
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final it = rows[i];
+                    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Row(children: [
+                      SizedBox(width: 34, child: Text('${i + 1}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                      Expanded(flex: 5, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(it['products']?['name'] as String? ?? '', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        if (it['products']?['sku'] != null) Text(it['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      ])),
+                      Expanded(flex: 2, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                      SizedBox(width: 100, child: Text(_fmtQty((it['quantity'] as num?)?.toDouble() ?? 0), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                    ]));
+                  })),
+          const Divider(height: 1),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Row(children: [
+            Text('${rows.length} item${rows.length == 1 ? '' : 's'}${ql.isEmpty ? '' : ' (filtered)'}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const Spacer(),
+            Text('Total qty: ${_fmtQty(totalQty)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+          ])),
+        ]);
+      })),
+    ));
   }
 
   Widget _auditCard() {
@@ -971,7 +1302,18 @@ class _StockTransferVoucherScreenState
                       const Text('Items',
                           style: TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w700)),
+                      const SizedBox(width: 8),
+                      Text('(${_items.length})',
+                          style: const TextStyle(
+                              fontSize: 14, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                       const Spacer(),
+                      if (_items.isNotEmpty) ...[
+                        OutlinedButton.icon(
+                            onPressed: _showAllItems,
+                            icon: const Icon(Icons.zoom_out_map, size: 16),
+                            label: Text('Show all (${_items.length})')),
+                        const SizedBox(width: 10),
+                      ],
                       if (editable)
                         ElevatedButton.icon(
                             onPressed: () => _pickAddProduct(),
@@ -1099,6 +1441,8 @@ class _StockTransferVoucherScreenState
         ? null
         : _products.firstWhere((p) => p['id'] == _addProductId, orElse: () => {});
     final prodName = prod == null ? null : (prod['name'] as String?);
+    final addHave =
+        _addProductId == null ? null : (_inHand[_addProductId] ?? 0);
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1137,6 +1481,21 @@ class _StockTransferVoucherScreenState
             onSubmitted: (_) => _addItemAndPickNext(),
           ),
         ),
+        if (addHave != null) ...[
+          const SizedBox(width: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+                color: (addHave > 0 ? AppTheme.success : AppTheme.danger)
+                    .withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6)),
+            child: Text('In hand: ${_fmtQty(addHave)}',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: addHave > 0 ? AppTheme.success : AppTheme.danger)),
+          ),
+        ],
         const SizedBox(width: 8),
         IconButton(
           icon: const Icon(Icons.add_circle, color: AppTheme.primary),
@@ -1159,29 +1518,37 @@ class _StockTransferVoucherScreenState
           decoration: const BoxDecoration(
               color: AppTheme.background,
               borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
-          child: const Row(children: [
-            Expanded(
+          child: Row(children: [
+            const Expanded(
                 flex: 4,
                 child: Text('Product',
                     style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                         color: AppTheme.textSecondary))),
-            Expanded(
+            const Expanded(
                 flex: 2,
                 child: Text('UOM',
                     style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                         color: AppTheme.textSecondary))),
-            Expanded(
+            const Expanded(
                 flex: 2,
                 child: Text('Quantity',
                     style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                         color: AppTheme.textSecondary))),
-            SizedBox(width: 48),
+            if (_isDraft)
+              const Expanded(
+                  flex: 2,
+                  child: Text('In Hand',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          color: AppTheme.textSecondary))),
+            const SizedBox(width: 48),
           ]),
         ),
         const Divider(height: 1),
@@ -1196,6 +1563,9 @@ class _StockTransferVoucherScreenState
                   itemBuilder: (_, i) {
                     final item = _items[i];
                     final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
+                    final have =
+                        _inHand[item['product_id'] as String? ?? ''] ?? 0;
+                    final short = have < qty;
                     return Padding(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 20, vertical: 12),
@@ -1226,6 +1596,22 @@ class _StockTransferVoucherScreenState
                             child: Text(_fmtQty(qty),
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w600))),
+                        if (_isDraft)
+                          Expanded(
+                              flex: 2,
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                Text(_fmtQty(have),
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: short
+                                            ? AppTheme.danger
+                                            : AppTheme.success)),
+                                if (short) ...[
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.warning_amber_rounded,
+                                      size: 14, color: AppTheme.danger),
+                                ],
+                              ])),
                         SizedBox(
                             width: 48,
                             child: editable

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:excel/excel.dart' as xlsx;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -129,6 +130,12 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
         bal += dr - cr;
         e['balance'] = bal;
       }
+      // Journal Vouchers store their narration on the GL line itself, so surface
+      // this account's line description (no-op for CPV/CRV whose GL lines are null).
+      await _appendLineNarrations(orgId, accId, entries);
+      // Payment/receipt narration lives only on the source voucher (CPV/CRV);
+      // pull it and show it on the matching ledger row.
+      await _appendVoucherNarrations(orgId, accId, entries);
       // Enrich descriptions with the party (customer/supplier/promoter) name so
       // shared control accounts (AR/AP/commission) are identifiable per line.
       await _appendPartyNames(orgId, accId, from, to, entries);
@@ -136,6 +143,121 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
     } catch (e) {
       if (mounted) { _snack('Report error: $e'); setState(() => _loading = false); }
     }
+  }
+
+  // Surface any narration typed on the GL line itself — Journal Vouchers store
+  // a per-line description in journal_lines. Uses the line that posts to THIS
+  // account. No-op for voucher types whose GL lines carry no description
+  // (CPV/CRV), which are handled via their source voucher instead.
+  Future<void> _appendLineNarrations(String orgId, String accId, List<Map<String, dynamic>> entries) async {
+    try {
+      final client = Supabase.instance.client;
+      final lines = await client.from('journal_lines')
+          .select('entry_id, description')
+          .eq('org_id', orgId).eq('account_id', accId);
+      final descByEntryId = <String, String>{};
+      for (final l in lines as List) {
+        final eid = l['entry_id'] as String?;
+        final d = (l['description'] as String?)?.trim() ?? '';
+        if (eid == null || d.isEmpty) continue;
+        descByEntryId.putIfAbsent(eid, () => d);
+      }
+      if (descByEntryId.isEmpty) return;
+      final jes = await client.from('journal_entries')
+          .select('id, entry_number').inFilter('id', descByEntryId.keys.toList());
+      final descByNum = <String, String>{};
+      for (final j in jes as List) {
+        final id = j['id'] as String?; final en = j['entry_number'] as String?;
+        if (id == null || en == null || en.isEmpty) continue;
+        final d = descByEntryId[id];
+        if (d != null && d.isNotEmpty) descByNum[en] = d;
+      }
+      for (final e in entries) {
+        final en = e['entry_number'] as String?;
+        if (en == null) continue;
+        final d = descByNum[en];
+        if (d == null || d.isEmpty) continue;
+        final cur = (e['description'] as String?) ?? '';
+        if (!cur.contains(d)) e['description'] = cur.isEmpty ? d : '$cur — $d';
+      }
+    } catch (_) { /* best-effort */ }
+  }
+
+  // The GL doesn't persist the narration a user typed on a payment/receipt
+  // voucher (journal_lines.description is null); it only lives on the source
+  // voucher's lines. For CPV/CRV entries, resolve entry_number -> reference
+  // (voucher number) -> voucher line description and append it. Prefer the line
+  // that posts to THIS account; otherwise use the voucher's first narration so
+  // the text still shows on the cash/control side. Display-only, best-effort.
+  Future<void> _appendVoucherNarrations(String orgId, String accId, List<Map<String, dynamic>> entries) async {
+    try {
+      final client = Supabase.instance.client;
+      // 1) entry_number -> (reference_type, reference_number)
+      final entryNos = entries.map((e) => e['entry_number'] as String?).whereType<String>().toSet();
+      if (entryNos.isEmpty) return;
+      final jes = await client.from('journal_entries')
+          .select('entry_number, reference_type, reference_number')
+          .eq('org_id', orgId).inFilter('entry_number', entryNos.toList());
+      final refByEntry = <String, List<String>>{}; // entry_number -> [type, refnum]
+      final numsByType = <String, Set<String>>{};   // type -> {reference_number}
+      for (final j in jes as List) {
+        final en = j['entry_number'] as String?;
+        final t = (j['reference_type'] as String?)?.toLowerCase();
+        final rn = j['reference_number'] as String?;
+        if (en == null || t == null || rn == null || rn.isEmpty) continue;
+        if (t != 'cpv' && t != 'crv') continue; // only payment/receipt narration
+        refByEntry[en] = [t, rn];
+        (numsByType[t] ??= <String>{}).add(rn);
+      }
+      if (numsByType.isEmpty) return;
+
+      // 2) Per type, resolve voucher number -> narration (matched-to-account
+      //    preferred, else the voucher's first non-empty line description).
+      final narr = <String, String>{}; // '$type|$refnum' -> narration
+      for (final entry in numsByType.entries) {
+        final type = entry.key;                 // cpv | crv
+        final nums = entry.value.toList();
+        try {
+          final headers = await client.from('${type}_vouchers')
+              .select('id, voucher_number').eq('org_id', orgId).inFilter('voucher_number', nums);
+          final idToNum = <String, String>{};
+          for (final h in headers as List) {
+            final id = h['id'] as String?; final vn = h['voucher_number'] as String?;
+            if (id != null && vn != null) idToNum[id] = vn;
+          }
+          if (idToNum.isEmpty) continue;
+          final lines = await client.from('${type}_voucher_lines')
+              .select('voucher_id, account_id, description').inFilter('voucher_id', idToNum.keys.toList());
+          final matched = <String, String>{};
+          final fallback = <String, String>{};
+          for (final l in lines as List) {
+            final vid = l['voucher_id'] as String?;
+            final d = (l['description'] as String?)?.trim() ?? '';
+            if (vid == null || d.isEmpty) continue;
+            final vn = idToNum[vid]; if (vn == null) continue;
+            if (l['account_id'] == accId) matched.putIfAbsent(vn, () => d);
+            fallback.putIfAbsent(vn, () => d);
+          }
+          for (final vn in idToNum.values) {
+            final d = matched[vn] ?? fallback[vn];
+            if (d != null && d.isNotEmpty) narr['$type|$vn'] = d;
+          }
+        } catch (_) { /* voucher tables differ for this type — skip */ }
+      }
+      if (narr.isEmpty) return;
+
+      // 3) Append to each entry's description.
+      for (final e in entries) {
+        final en = e['entry_number'] as String?;
+        if (en == null) continue;
+        final ref = refByEntry[en];
+        if (ref == null) continue;
+        final d = narr['${ref[0]}|${ref[1]}'];
+        if (d == null || d.isEmpty) continue;
+        final cur = (e['description'] as String?) ?? '';
+        if (!cur.contains(d)) e['description'] = cur.isEmpty ? d : '$cur — $d';
+      }
+    } catch (_) { /* display enrichment is best-effort */ }
   }
 
   // For a shared control account (AR/AP/commission), each journal line carries
@@ -214,7 +336,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
   double get _closing => _opening + _periodDr - _periodCr;
 
   String _bal(double v) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final dc = v >= 0 ? 'Dr' : 'Cr';
     return 'Rs. ${fmt.format(v.abs())} $dc';
   }
@@ -232,7 +354,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
   void _print() {
     if (!_loaded || _account == null) return;
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final branch = _effectiveBranchId == null ? 'Accumulated (All Branches)' : ((_sidebarBranch?['name'] as String?) ?? '-');
     final rows = StringBuffer();
     rows.write('<tr><td colspan="5"><b>Opening Balance</b></td><td class="num bold">' + _bal(_opening) + '</td></tr>');
@@ -266,7 +388,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final accFiltered = _filterAccounts(_accQuery);
     final branchName = (_sidebarBranch?['name'] as String?) ?? 'Current Branch';
     final shown = _txnQuery.isEmpty ? _entries : _entries.where((e) => (((e['entry_number'] as String?) ?? '').toLowerCase().contains(_txnQuery) || ((e['description'] as String?) ?? '').toLowerCase().contains(_txnQuery))).toList();
@@ -458,7 +580,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
   void _exportExcel() {
     if (!_loaded || _account == null) return;
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final book = xlsx.Excel.createExcel();
     const sheetName = 'Account Activity';
     final sheet = book[sheetName];
@@ -540,7 +662,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
   }
 
   Widget _voucherDialog(Map<String, dynamic> h, List<Map<String, dynamic>> lines) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final ds = (h['entry_date'] as String?) ?? '';
     final dt = DateTime.tryParse(ds);
     final date = dt != null ? DateFormat('d MMM yyyy').format(dt) : ds;

@@ -233,6 +233,12 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.srn_date_editable',
+    'Allow editing date on Sales Return Notes',
+    'When ON, users can change the document date on a Sales Return Note (SRN) '
+        'instead of it being fixed to the creation date. Admins can always edit dates.',
+  ),
+  _AdminToggle(
     'org.show_org_name_sales',
     'Show company name on sale vouchers',
     'When ON (default), your organization name prints in the header of Sales '
@@ -267,6 +273,39 @@ const List<_AdminToggle> _toggles = [
     'org.doc_review_flow_pri',
     'Support docs & admin review — Purchase Return Invoices',
     'Applies only to Purchase Return Invoices. Independent of the other invoice types.',
+  ),
+
+  _AdminToggle(
+    'feature.qc_station',
+    'QC Station — tap-to-print QC labels',
+    'When ON, Manufacturing → QC Station becomes available: on a shop-floor tablet an '
+        'operator picks a job, taps their RFID card, and taps a QC checkpoint to instantly '
+        'print a 2"x1" QC label (checkpoint, spec, job, product, operator, time). Checkpoints '
+        'are defined per product/BOM under QC Checkpoints. When OFF, the station shows a '
+        'disabled notice and nothing about the job card / batch-post flow changes.',
+  ),
+
+  _AdminToggle(
+    'org.grn_supervise_flow',
+    'Supervision, documents & comments on GRNs',
+    'When ON, Goods Receipt Notes gain a Support Documents panel (attach images / '
+        'PDFs, e.g. the supplier delivery challan) and an Internal Remarks trail, and '
+        'admins get a "Supervise" action as an extra review layer. Supervision is '
+        'NON-BLOCKING: a GRN still confirms and moves stock exactly as before whether '
+        'or not it has been supervised — it only records that an admin checked it. '
+        'GRN files are kept in a separate storage bucket from the invoice documents. '
+        'When OFF, GRNs behave exactly as today.',
+  ),
+
+  _AdminToggle(
+    'org.customer_supervise_flow',
+    'Supervision for new customers',
+    'When ON, every newly-created customer must be "Supervised" by an admin or '
+        'master admin. A pendency counter on the Sales → Customers menu shows how '
+        'many customers are still awaiting supervision, and clears as each is '
+        'supervised. Existing customers were auto-supervised, so only customers '
+        'created from now on appear. Supervision is non-blocking — the customer '
+        'can still be used for orders while pending. When OFF, no counter shows.',
   ),
 ];
 
@@ -636,6 +675,9 @@ class _ErpAdminSettingsScreenState
                     orgId: ref.read(currentUserProvider)?.orgId ?? '',
                     userId: ref.read(currentUserProvider)?.id,
                   ),
+                  const SizedBox(height: 16),
+                  _FooterNotesPanel(
+                      orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   if (_values['org.hide_main_groups_by_branch'] ?? false) ...[
                     const SizedBox(height: 16),
                     _HiddenGroupsPanel(
@@ -886,6 +928,193 @@ class _HiddenGroupsPanelState extends State<_HiddenGroupsPanel> {
                     : (v) => _setHidden(_branchId!, g, v ?? false),
               ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+
+/// Footer notes for vouchers, moved here from Operations → Settings and split
+/// per voucher type. Each field is stored in app_config (org-scoped):
+///   Sales Order            → org.footer_note_so
+///   Delivery Order         → org.footer_note_do
+///   Sales Invoice          → org.footer_note_si
+///   Purchase (PO/GRN/PI)   → org.purchase_footer_note
+///   Default (fallback)     → org.voucher_footer_note
+/// A sales voucher with its own field left blank falls back to the Default
+/// note, so existing orgs keep their current footer until they set a specific
+/// one. Each field saves on blur / submit.
+class _FooterNoteDef {
+  final String key;
+  final String label;
+  final String help;
+  const _FooterNoteDef(this.key, this.label, this.help);
+}
+
+const List<_FooterNoteDef> _footerNoteDefs = [
+  _FooterNoteDef('org.footer_note_so', 'Sales Order footer note',
+      'Printed at the bottom of Sales Order PDFs. Leave blank to use the default note below.'),
+  _FooterNoteDef('org.footer_note_do', 'Delivery Order footer note',
+      'Printed at the bottom of Delivery Order PDFs. Leave blank to use the default note below.'),
+  _FooterNoteDef('org.footer_note_si', 'Sales Invoice footer note',
+      'Printed at the bottom of Sales Invoice PDFs. Leave blank to use the default note below.'),
+  _FooterNoteDef('org.purchase_footer_note', 'Purchase footer note (PO, GRN, PI)',
+      'Printed at the bottom of Purchase Order, GRN and Purchase Invoice PDFs.'),
+  _FooterNoteDef('org.voucher_footer_note', 'Default footer note',
+      'Used for any sales voucher above whose own note is left blank.'),
+];
+
+class _FooterNotesPanel extends StatefulWidget {
+  final String orgId;
+  const _FooterNotesPanel({required this.orgId});
+  @override
+  State<_FooterNotesPanel> createState() => _FooterNotesPanelState();
+}
+
+class _FooterNotesPanelState extends State<_FooterNotesPanel> {
+  final Map<String, TextEditingController> _ctrls = {};
+  final Set<String> _saving = {};
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final d in _footerNoteDefs) {
+      _ctrls[d.key] = TextEditingController();
+    }
+    _load();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctrls.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (widget.orgId.isEmpty) {
+      setState(() => _loading = false);
+      return;
+    }
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', widget.orgId);
+      final cfg = <String, String>{};
+      for (final r in rows as List) {
+        cfg[r['key'] as String] = r['value'] as String? ?? '';
+      }
+      if (!mounted) return;
+      setState(() {
+        for (final d in _footerNoteDefs) {
+          _ctrls[d.key]!.text = cfg[d.key] ?? '';
+        }
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _save(_FooterNoteDef d) async {
+    if (widget.orgId.isEmpty) return;
+    final val = _ctrls[d.key]!.text.trim();
+    setState(() => _saving.add(d.key));
+    try {
+      await Supabase.instance.client.from('app_config').upsert({
+        'key': d.key,
+        'value': val,
+        'org_id': widget.orgId,
+      }, onConflict: 'key,org_id,branch_id');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving.remove(d.key));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 760),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Voucher footer notes',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          const Text(
+            'Set a footer note per voucher type. Each prints at the bottom of '
+            'that voucher\'s PDF. Changes save when you tap outside the box.',
+            style: TextStyle(
+                fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else
+            for (final d in _footerNoteDefs)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Text(d.label,
+                          style: const TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.textSecondary)),
+                      if (_saving.contains(d.key)) ...[
+                        const SizedBox(width: 10),
+                        const SizedBox(
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(strokeWidth: 2)),
+                      ],
+                    ]),
+                    const SizedBox(height: 2),
+                    Text(d.help,
+                        style: const TextStyle(
+                            fontSize: 11.5,
+                            color: AppTheme.textSecondary,
+                            height: 1.3)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _ctrls[d.key],
+                      maxLines: 2,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (_) => _save(d),
+                      onTapOutside: (_) {
+                        FocusManager.instance.primaryFocus?.unfocus();
+                        _save(d);
+                      },
+                    ),
+                  ],
+                ),
+              ),
         ],
       ),
     );

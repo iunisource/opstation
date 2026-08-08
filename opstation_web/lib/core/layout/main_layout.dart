@@ -92,6 +92,35 @@ final crmOverdueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of pending SUPPLIER items — open/in-progress supplier tasks plus open
+// supplier complaints — for the current org. Badges CRM → Suppliers and rolls
+// into the CRM nav, mirroring the customer follow-ups badge.
+final supplierPendingCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  int n = 0;
+  try {
+    final t = await client
+        .from('customer_activities')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .not('supplier_id', 'is', null)
+        .inFilter('status', ['open', 'in_progress']);
+    n += (t as List).length;
+  } catch (_) {}
+  try {
+    final c = await client
+        .from('crm_complaints')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .not('supplier_id', 'is', null)
+        .inFilter('status', ['open', 'in_progress']);
+    n += (c as List).length;
+  } catch (_) {}
+  return n;
+});
+
 // Whether the customer sales-targets feature is enabled for this org. Gates the
 // Intelligence → Performance menu item (and target widgets elsewhere). Mirrors
 // the org.customer_targets_enabled flag read by the targets screens.
@@ -202,6 +231,41 @@ FutureProvider<int> _reviewPendingProvider(String table, String configKey) => Fu
 final piReviewPendingProvider  = _reviewPendingProvider('purchase_invoices', 'org.doc_review_flow_pi');
 final priReviewPendingProvider = _reviewPendingProvider('purchase_return_invoices', 'org.doc_review_flow_pri');
 final siReviewPendingProvider  = _reviewPendingProvider('sales_invoices', 'org.doc_review_flow_si');
+
+// Count of received GRNs still awaiting admin supervision (non-blocking review
+// layer), gated by org.grn_supervise_flow. Drives the GRN menu pendency badge.
+final grnSupervisePendingProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.grn_supervise_flow').maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from('purchase_grns').select('id')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null)
+        .neq('status', 'draft');
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+
+// Count of newly-created customers still awaiting admin supervision, gated by
+// org.customer_supervise_flow. Drives the Customers menu pendency badge.
+final customerSupervisePendingProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.customer_supervise_flow').maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from('customers').select('id')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null);
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
 
 /// Count of field orders awaiting review (status 'submitted') for the org.
 /// Drives the live nav badge on the Field Orders menu item. Invalidated by
@@ -417,6 +481,10 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
 bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
   final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
   final access = ref.watch(accessSyncProvider);
+  // Menus follow the ACTIVE branch: only grants valid at the selected branch
+  // (or global grants) light up their menu items. Switching branch reshapes
+  // the nav immediately.
+  final branchId = ref.watch(selectedBranchProvider)?['id'] as String?;
   return (String route) {
     if (route == '/erp/onboarding') return true; // onboarding guide: visible to all
     final mod = kRouteToModule[route];
@@ -426,13 +494,14 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
         r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
     if (isAdminTier2) return true;
     if (access == null) return false;
-    return access.canAccessRoute(route);
+    return access.canAccessRouteAt(route, branchId);
   };
 }
 
 List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, String location) {
   final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
   final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
+  final supplierPending = ref.watch(supplierPendingCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
@@ -441,6 +510,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final siReviewPending = ref.watch(siReviewPendingProvider).valueOrNull ?? 0;
   final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
   final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
+  final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
+  final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -476,7 +547,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
         if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
         if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
-        if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location),
+        if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location, badge: grnSupervisePending),
         if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending),
         _menuDivider(),
         if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
@@ -490,7 +561,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final salesItems = <Widget>[
       if (modules.contains('sales')) ...[
         if (show('/erp/sales-dashboard')) _menuItem(context, 'Sales Dashboard',         Icons.dashboard_outlined,         '/erp/sales-dashboard',          location),
-        if (show('/customers')) _menuItem(context, 'Customers',             Icons.store_outlined,             '/customers',                 location),
+        if (show('/customers')) _menuItem(context, 'Customers',             Icons.store_outlined,             '/customers',                 location, badge: customerSupervisePending),
         if (show('/erp/quotation')) _menuItem(context, 'Quotation',            Icons.request_quote_outlined,     '/erp/quotation',             location),
         if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
         if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
@@ -525,6 +596,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final reportItems = <Widget>[
       if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
       if (show('/reports/customer-balance')) _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location),
+      if (show('/reports/supplier-balance')) _menuItem(context, 'Supplier Balance Report', Icons.account_balance_outlined, '/reports/supplier-balance', location),
       if (show('/intelligence/report-builder')) _menuItem(context, 'Report Builder', Icons.table_chart_outlined, '/intelligence/report-builder', location),
     ];
 
@@ -571,11 +643,14 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/pdc-voucher')) _menuItem(context, 'PDC Voucher', Icons.account_balance_wallet_outlined, '/erp/pdc-voucher', location),
       if (show('/financials/trial-balance')) _menuItem(context, 'Trial Balance',    Icons.account_balance_outlined, '/financials/trial-balance',  location),
       if (show('/financials/account-activity')) _menuItem(context, 'Account Activity', Icons.receipt_long_outlined, '/financials/account-activity', location),
+      if (show('/financials/cash-book')) _menuItem(context, 'Cash Book Report', Icons.menu_book_outlined, '/financials/cash-book', location),
       if (show('/financials/profit-loss')) _menuItem(context, 'Profit & Loss',    Icons.trending_up_outlined,     '/financials/profit-loss',    location),
       if (show('/financials/balance-sheet')) _menuItem(context, 'Balance Sheet',    Icons.balance_outlined,         '/financials/balance-sheet',  location),
     ];
 
     final erpAdminItems = <Widget>[
+      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+        _menuItem(context, 'Super Summary', Icons.summarize_outlined, '/erp/super-summary', location),
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
         _menuItem(context, 'ERP Users', Icons.manage_accounts_outlined, '/erp/users', location),
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
@@ -602,19 +677,19 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
            '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
            '/erp/supplier-ledger', '/erp/supplier-aging'],
-          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending),
+          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
-          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
       if (_hasItems(reportItems))
         _navMenu(context, 'Reports', Icons.summarize_outlined, location,
-          ['/reports/margin', '/reports/customer-balance', '/intelligence/report-builder'],
+          ['/reports/margin', '/reports/customer-balance', '/reports/supplier-balance', '/intelligence/report-builder'],
           reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
@@ -624,7 +699,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(manufacturingItems)),
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
-          ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher'],
+          ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/cash-book'],
           _trimDividers(financialItems)),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
@@ -643,7 +718,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           badge: assetsDue + facilityDue,
         ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-        ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
+        ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
           _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
           if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
@@ -685,18 +760,20 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
             ],
           ),
           _navMenu(context, 'CRM', Icons.contacts_outlined, location,
-            ['/crm/customers', '/crm/follow-ups', '/crm/pipeline'],
+            ['/crm/customers', '/crm/follow-ups', '/crm/pipeline', '/crm/supplier-profile'],
             [
               _menuItem(context, 'Customers', Icons.store_outlined, '/crm/customers', location),
               _menuItem(context, 'Pipeline', Icons.view_kanban_outlined, '/crm/pipeline', location),
               _menuItem(context, 'Follow-ups', Icons.task_alt_outlined, '/crm/follow-ups', location, badge: crmOverdue),
+              if (show('/crm/supplier-profile')) _menuItem(context, 'Suppliers', Icons.local_shipping_outlined, '/crm/supplier-profile', location, badge: supplierPending),
             ],
-            badge: crmOverdue,
+            badge: crmOverdue + supplierPending,
           ),
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
-            ['/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors',
+            ['/intelligence/dashboard', '/products', '/competitor-categories', '/intelligence/placement', '/intelligence/competitors',
              if (targetsOn) '/intelligence/performance'],
             [
+              _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/intelligence/dashboard', location),
               _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
               _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
               _menuItem(context, 'Placement Audit', Icons.checklist_outlined, '/intelligence/placement', location),
@@ -788,6 +865,17 @@ Widget _branchSelector(WidgetRef ref, Set<String> modules) {
                   final branch = branches.firstWhere((b) => b['id'] == id);
                   ref.read(selectedBranchProvider.notifier).state = branch;
                   html.window.localStorage['op_selected_branch_id'] = id;
+                  // If the screen we're on isn't granted at the new branch,
+                  // bounce to home rather than leaving a forbidden screen up.
+                  final access = ref.read(accessSyncProvider);
+                  if (access != null && !access.isAdmin) {
+                    try {
+                      final loc = GoRouterState.of(ctx).uri.path;
+                      if (!access.canAccessRouteAt(loc, id)) {
+                        GoRouter.of(ctx).go('/erp/home');
+                      }
+                    } catch (_) {}
+                  }
                   ScaffoldMessenger.of(ctx)
                     ..clearSnackBars()
                     ..showSnackBar(SnackBar(

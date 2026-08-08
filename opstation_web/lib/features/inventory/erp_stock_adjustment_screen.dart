@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/format/money.dart';
 import '../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../auth/auth_controller.dart';        // exposes currentUserProvider (WebUser: id, orgId)
 
@@ -224,23 +225,38 @@ class _ErpStockAdjustmentScreenState
   // Fetch current unit cost + on-hand for the picked product (revalue preview).
   Future<void> _loadPickCost(String productId) async {
     setState(() { _pickCostLoading = true; _pickCurCost = null; _pickOnHand = null; });
+    final branch = _branchId;
+    if (branch == null) { setState(() => _pickCostLoading = false); return; }
     try {
-      // on-hand from positive cost layers
+      // Cost basis = weighted avg of POSITIVE layers at THIS branch.
       final layers = await _supa
           .from('inventory_cost_layers')
           .select('qty_remaining, unit_cost')
           .eq('org_id', _orgId)
           .eq('product_id', productId)
+          .eq('branch_id', branch)
           .gt('qty_remaining', 0);
-      double onHand = 0, valSum = 0;
+      double posQty = 0, valSum = 0;
       for (final l in (layers as List)) {
         final q = (l['qty_remaining'] as num?)?.toDouble() ?? 0;
         final c = (l['unit_cost'] as num?)?.toDouble() ?? 0;
-        onHand += q; valSum += q * c;
+        posQty += q; valSum += q * c;
       }
-      final curCost = onHand > 0 ? valSum / onHand : null;
+      final curCost = posQty > 0 ? valSum / posQty : null;
+      // TRUE net on-hand (can be NEGATIVE) from the stock balance at this branch
+      // — so the preview reflects reality instead of showing 0 for negative stock.
+      final stk = await _supa
+          .from('inventory_stock')
+          .select('quantity')
+          .eq('org_id', _orgId)
+          .eq('product_id', productId)
+          .eq('branch_id', branch);
+      double net = 0;
+      for (final s in (stk as List)) {
+        net += (s['quantity'] as num?)?.toDouble() ?? 0;
+      }
       if (!mounted) return;
-      setState(() { _pickOnHand = onHand; _pickCurCost = curCost; _pickCostLoading = false; });
+      setState(() { _pickOnHand = net; _pickCurCost = curCost; _pickCostLoading = false; });
     } catch (_) {
       if (!mounted) return;
       setState(() { _pickCostLoading = false; });
@@ -330,31 +346,40 @@ class _ErpStockAdjustmentScreenState
         'voucher_number': number,
         'voucher_date': _dateStr(_date),
         'remarks': _remarks.text.trim().isEmpty ? null : _remarks.text.trim(),
-        'status': lock ? 'posted' : 'draft',
+        // Stay 'draft' until the lines are safely inserted; the status flips to
+        // 'posted' in the lock update below. This avoids leaving a header marked
+        // posted with no items when a line insert fails (the Vr7 "no effect /
+        // reopens empty" symptom).
+        'status': 'draft',
         'is_locked': false, // flip separately below so the trigger fires on the transition
         'created_by': _userId,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
 
-      // replace lines
+      // replace lines. The item id MUST be unique per line — the same product
+      // can appear twice (a Qty line + a Revalue line). Keying the id off the
+      // product id (plus a web-clamped microsecond clock) collided and raised
+      // duplicate_key. Use the voucher id + line index, which is always unique.
       await _supa
           .from('stock_adjustment_voucher_items')
           .delete()
           .eq('voucher_id', id);
-      await _supa.from('stock_adjustment_voucher_items').insert([
-        for (final l in _lines)
-          {
-            'id': 'savi_${DateTime.now().microsecondsSinceEpoch}_${l.productId}',
-            'voucher_id': id,
-            'org_id': _orgId,
-            'product_id': l.productId,
-            'uom_id': l.uomId,
-            'quantity': l.signedQty, // In => +, Out => -; revaluation => 0
-            'line_type': l.lineType,
-            'new_unit_cost': l.lineType == 'revaluation' ? l.newUnitCost : null,
-            'notes': l.note,
-          }
-      ]);
+      final items = <Map<String, dynamic>>[];
+      for (var i = 0; i < _lines.length; i++) {
+        final l = _lines[i];
+        items.add({
+          'id': 'savi_${id}_$i',
+          'voucher_id': id,
+          'org_id': _orgId,
+          'product_id': l.productId,
+          'uom_id': l.uomId,
+          'quantity': l.signedQty, // In => +, Out => -; revaluation => 0
+          'line_type': l.lineType,
+          'new_unit_cost': l.lineType == 'revaluation' ? l.newUnitCost : null,
+          'notes': l.note,
+        });
+      }
+      await _supa.from('stock_adjustment_voucher_items').insert(items);
 
       setState(() {
         _voucherId = id;
@@ -366,6 +391,7 @@ class _ErpStockAdjustmentScreenState
         // Flip is_locked false->true. The DB trigger posts the GL.
         await _supa.from('stock_adjustment_vouchers').update({
           'is_locked': true,
+          'status': 'posted',
           'locked_by': _userId,
           'locked_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', id);
@@ -391,7 +417,7 @@ class _ErpStockAdjustmentScreenState
   Future<void> _delete() async {
     if (_voucherId == null) return;
     if (_isLocked || _status == 'posted') {
-      _toast('Posted vouchers cannot be deleted — reverse via Void');
+      _toast('Posted vouchers cannot be deleted — enter a new adjustment voucher with opposite lines to reverse the effect');
       return;
     }
     final ok = await showDialog<bool>(
@@ -658,16 +684,9 @@ class _ErpStockAdjustmentScreenState
                   padding: EdgeInsets.only(right: 8),
                   child: Chip(label: Text('VOIDED'), backgroundColor: Color(0xFFFDE2E1)),
                 ),
-              if (_canVoid)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.undo, size: 16, color: Colors.red),
-                    label: const Text('Void', style: TextStyle(color: Colors.red)),
-                    style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.red)),
-                    onPressed: _saving ? null : _void,
-                  ),
-                ),
+              // Void is intentionally removed: a posted adjustment writes cost
+              // layers and GL, so it must not be reversed in place. To undo an
+              // effect, enter a NEW adjustment voucher with the opposite lines.
               if (_isDraft && _voucherId != null)
                 IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
@@ -863,16 +882,19 @@ class _ErpStockAdjustmentScreenState
                 }
                 final onHand = _pickOnHand ?? 0;
                 if (onHand <= 0) {
-                  return const Text('No on-hand stock for this product — nothing to revalue. Use a recount/quantity adjustment instead.',
-                      style: TextStyle(fontSize: 12, color: Colors.orange));
+                  final q = onHand.toStringAsFixed(onHand % 1 == 0 ? 0 : 2);
+                  return Text(
+                      'On hand: $q  —  cannot revalue ${onHand < 0 ? 'negative' : 'zero'} stock. Fix the quantity first with a Qty adjustment, then revalue. '
+                      '(Posting a revalue here will still set the product\'s cost reference for POS, but reprices no layers.)',
+                      style: const TextStyle(fontSize: 12, color: Colors.orange));
                 }
                 final cur = _pickCurCost ?? 0;
                 final nc = double.tryParse(_pickNewCost.text.trim()) ?? 0;
                 final delta = (nc - cur) * onHand;
-                final deltaStr = (delta >= 0 ? '+' : '') + delta.toStringAsFixed(2);
+                final deltaStr = (delta >= 0 ? '+' : '') + money(delta);
                 final onHandStr = onHand.toStringAsFixed(onHand % 1 == 0 ? 0 : 2);
-                final curValStr = (cur * onHand).toStringAsFixed(2);
-                final newValStr = (nc * onHand).toStringAsFixed(2);
+                final curValStr = money(cur * onHand);
+                final newValStr = money(nc * onHand);
                 final tail = nc > 0
                     ? '   \u2192   New value: $newValStr   (GL impact $deltaStr)'
                     : '';

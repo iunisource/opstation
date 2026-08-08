@@ -53,6 +53,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   final _bankAcct = TextEditingController();
   final _notes = TextEditingController();
   final _notifyEmail = TextEditingController();
+  final _cardUid = TextEditingController();
   bool _notifyPunch = false;
   // form state
   String? _deptId, _desigId, _branchId, _gender, _empType;
@@ -88,7 +89,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   @override
   void dispose() {
-    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail]) c.dispose();
+    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid]) c.dispose();
     super.dispose();
   }
 
@@ -141,7 +142,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   void _newEmployee() {
     setState(() {
       _current = null; _status = 'active';
-      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail]) c.clear();
+      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid]) c.clear();
       _deptId = null; _desigId = null; _gender = null; _empType = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
       _dob = null; _joinDate = null;
@@ -177,6 +178,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _photoUrl = e['photo_url'] as String?;
       _notifyPunch = e['notify_punch'] == true;
       _notifyEmail.text = e['notify_email'] as String? ?? '';
+      _cardUid.text = e['card_uid'] as String? ?? '';
     });
     _loadDocs();
   }
@@ -275,6 +277,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'notify_punch': _notifyPunch, 'notify_email': _t(_notifyEmail),
         'approval_status': _isAdmin ? 'approved' : 'pending',
         'bank_name': _t(_bankName), 'bank_account': _t(_bankAcct), 'notes': _t(_notes),
+        'card_uid': _t(_cardUid),
         'updated_at': DateTime.now().toIso8601String(),
       };
       if (_isAdmin) { payload['approved_by'] = userId; payload['approved_at'] = DateTime.now().toIso8601String(); }
@@ -294,6 +297,33 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   }
 
   String? _t(TextEditingController c) => c.text.trim().isEmpty ? null : c.text.trim();
+
+  // Capture an RFID card in a focused dialog: the keyboard-wedge reader types
+  // the card UID (+ Enter) into the field. Whatever it emits is stored verbatim
+  // as card_uid, so enrollment and the kiosk match on the identical value.
+  Future<void> _enrollCardScan() async {
+    final ctrl = TextEditingController();
+    final uid = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tap RFID card'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Hold the card on the reader now. Its number will appear below.'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl, autofocus: true,
+            decoration: const InputDecoration(hintText: 'Waiting for card…', border: OutlineInputBorder()),
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Use')),
+        ],
+      ),
+    );
+    if (uid != null && uid.isNotEmpty && mounted) setState(() => _cardUid.text = uid);
+  }
 
   Future<void> _delete() async {
     final id = _current?['id'] as String?; if (id == null) return;
@@ -771,6 +801,16 @@ $docsHtml
                 Expanded(flex: 2, child: _labeled('Full name *', _tf(_name))),
                 const SizedBox(width: 12),
                 Expanded(child: _labeled('Status', _statusToggle())),
+              ]),
+              const SizedBox(height: 12),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: _labeled('RFID card', Row(children: [
+                  Expanded(child: _tf(_cardUid, hint: 'Tap card or type UID — blank to unassign')),
+                  const SizedBox(width: 6),
+                  IconButton(icon: const Icon(Icons.nfc, size: 20), tooltip: 'Tap card to capture', onPressed: _enrollCardScan),
+                ]))),
+                const SizedBox(width: 12),
+                const Expanded(flex: 2, child: SizedBox()),
               ]),
               const SizedBox(height: 12),
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [

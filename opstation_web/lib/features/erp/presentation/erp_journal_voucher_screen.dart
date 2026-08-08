@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -280,8 +281,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       }
       final updated = await client.from('journal_entries').select().eq('id', eId).single();
       if (mounted) setState(() { _current = updated; _status = newSt; });
-      if (wasNew) _logAudit('created', notes: 'Total Dr: ' + _totalDr.toStringAsFixed(2) + '  •  ' + valid.length.toString() + ' lines');
-      if (post)   _logAudit('posted',  notes: 'Total Dr: ' + _totalDr.toStringAsFixed(2) + '  •  ' + valid.length.toString() + ' lines');
+      if (wasNew) _logAudit('created', notes: 'Total Dr: ' + money(_totalDr) + '  •  ' + valid.length.toString() + ' lines');
+      if (post)   _logAudit('posted',  notes: 'Total Dr: ' + money(_totalDr) + '  •  ' + valid.length.toString() + ' lines');
       _snack(post ? 'JV ' + eNum + ' posted ✓' : 'Draft saved');
       await _loadVouchers();
     } catch (e) { _snack('Save failed: ' + e.toString()); }
@@ -414,8 +415,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       <td><b>Status:</b> ${_status.toUpperCase()}</td>
     </tr><tr><td colspan="3"><b>Narration:</b> ${_narCtrl.text}</td></tr></table>
     <table><thead><tr><th style="width:30px">#</th><th>Account</th><th>Description</th><th class="num" style="width:120px">Debit</th><th class="num" style="width:120px">Credit</th></tr></thead><tbody>
-    ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td class="num">${e.value.debit > 0 ? e.value.debit.toStringAsFixed(2) : ''}</td><td class="num">${e.value.credit > 0 ? e.value.credit.toStringAsFixed(2) : ''}</td></tr>').join()}
-    </tbody><tfoot><tr><td colspan="3" class="total num">Total:</td><td class="total num">${_totalDr.toStringAsFixed(2)}</td><td class="total num">${_totalCr.toStringAsFixed(2)}</td></tr></tfoot></table>
+    ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td class="num">${e.value.debit > 0 ? money(e.value.debit) : ''}</td><td class="num">${e.value.credit > 0 ? money(e.value.credit) : ''}</td></tr>').join()}
+    </tbody><tfoot><tr><td colspan="3" class="total num">Total:</td><td class="total num">${money(_totalDr)}</td><td class="total num">${money(_totalCr)}</td></tr></tfoot></table>
     <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Posted: $postedInfo</div></div>
     </body></html>''';
     final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
@@ -424,7 +425,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   }
 
   @override Widget build(BuildContext context) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final access = ref.watch(accessSyncProvider);
     final accessReady = access != null && access.role != null;
     final canAdd = access?.canAddDoc('jv') ?? false;

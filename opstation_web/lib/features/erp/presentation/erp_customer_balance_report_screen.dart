@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -49,6 +50,7 @@ class _ErpCustomerBalanceReportScreenState
   String _sortKey = 'default'; // default | name | credit | bal1 | bal2 | bal3
   bool _sortAsc = true;
   bool _showZero = true; // master filter: include customers whose current balance is 0
+  String _search = ''; // live client-side filter on customer name / code
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
@@ -305,11 +307,17 @@ class _ErpCustomerBalanceReportScreenState
   void _rebuildItems() {
     final items = <Map<String, dynamic>>[];
     int dataRow = 0;
+    final q = _search.trim().toLowerCase();
     for (final g in _rawGroups) {
       final name = g['name'] as String;
       final rows = <Map<String, dynamic>>[];
       for (final r in (g['rows'] as List).cast<Map<String, dynamic>>()) {
         if (!_showZero && ((r['bal3'] as num?)?.toDouble() ?? 0) == 0) continue;
+        if (q.isNotEmpty) {
+          final nm = (r['shop_name'] as String? ?? '').toLowerCase();
+          final cd = (r['code'] as String? ?? '').toLowerCase();
+          if (!nm.contains(q) && !cd.contains(q)) continue;
+        }
         rows.add(r);
       }
       if (rows.isEmpty) continue; // group emptied by the zero filter
@@ -370,7 +378,7 @@ class _ErpCustomerBalanceReportScreenState
 
   String _money(num v) {
     final d = v.toDouble();
-    return d < 0 ? '(${_fmt.format(-d)})' : _fmt.format(d);
+    return d < 0 ? '(${money(-d)})' : money(d);
   }
 
   // ── Print / PDF (full grid lines) ─────────────────────────────────────────
@@ -580,6 +588,22 @@ class _ErpCustomerBalanceReportScreenState
                         DropdownMenuItem(value: 'all', child: Text('All')),
                       ],
                       onChanged: (v) => setState(() => _statusFilter = v ?? 'active'),
+                    )),
+                    _field('Search', SizedBox(
+                      width: 190,
+                      child: TextField(
+                        decoration: const InputDecoration(
+                            hintText: 'Name or code…',
+                            prefixIcon: Icon(Icons.search, size: 16),
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 11),
+                            border: OutlineInputBorder()),
+                        style: const TextStyle(fontSize: 13),
+                        onChanged: (v) {
+                          _search = v;
+                          if (_loaded) _rebuildItems();
+                        },
+                      ),
                     )),
                     _field('Zero Balances', Row(mainAxisSize: MainAxisSize.min, children: [
                       Switch(

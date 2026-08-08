@@ -28,6 +28,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   List<String> _groups = [];
   bool _loading = true;
   bool _targetsEnabled = false; // org.customer_targets_enabled
+  bool _customerSuperviseEnabled = false; // org.customer_supervise_flow
   final _searchCtrl = TextEditingController();
   String _missingFilter = 'all'; // all | contact | phone | either
   String _routeFilter = 'all'; // all | assigned | unassigned
@@ -124,6 +125,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           .maybeSingle();
       final targetsOn = (tgtRow?['value'] as String?) == 'true';
 
+      bool superviseOn = false;
+      try {
+        final supRow = await client.from('app_config').select('value')
+            .eq('key', 'org.customer_supervise_flow').eq('org_id', orgId).maybeSingle();
+        superviseOn = (supRow?['value'] as String?) == 'true';
+      } catch (_) {}
+
       // Which customers are on a route? route_stops has no org_id, so scope by
       // this org's routes. Used by the "Route" filter (assigned/unassigned).
       final Set<String> assignedIds = {};
@@ -151,6 +159,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         _categories = cats;
         _groups = grps;
         _targetsEnabled = targetsOn;
+        _customerSuperviseEnabled = superviseOn;
         _assignedCustomerIds = assignedIds;
         _loading = false;
       });
@@ -257,6 +266,17 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           const SizedBox(height: 8),
           Row(children: [
             Text('${_filtered.length} customers', style: const TextStyle(color: AppTheme.textSecondary)),
+            if (!widget.crmMode && _customerSuperviseEnabled && _canDeactivateCustomer(ref.watch(currentUserProvider)?.role)) ...[
+              () {
+                final pending = _customers.where((c) => c['supervised_at'] == null).length;
+                if (pending == 0) return const SizedBox.shrink();
+                return Padding(padding: const EdgeInsets.only(left: 12), child: TextButton.icon(
+                  onPressed: _superviseAllPending,
+                  icon: Icon(Icons.verified_user_outlined, size: 16, color: Colors.amber.shade800),
+                  label: Text('Supervise all pending ($pending)', style: TextStyle(fontSize: 12, color: Colors.amber.shade800)),
+                ));
+              }(),
+            ],
             if (_canBulk && _selectedIds.isNotEmpty) ...[
               const Spacer(),
               TextButton.icon(
@@ -415,6 +435,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                     padding: EdgeInsets.only(left: 6),
                                     child: Icon(Icons.location_on, size: 14, color: AppTheme.success),
                                   ),
+                                if (!widget.crmMode && _customerSuperviseEnabled && c['supervised_at'] == null)
+                                  Container(
+                                    margin: const EdgeInsets.only(left: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                    decoration: BoxDecoration(color: Colors.amber.shade700.withOpacity(0.14), borderRadius: BorderRadius.circular(4)),
+                                    child: Text('Supervision pending', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.amber.shade800)),
+                                  ),
                               ])),
                               Expanded(flex: 2, child: Text(c['contact_person'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                               Expanded(flex: 2, child: Text(c['phone'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
@@ -447,6 +474,12 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                       ),
                                     )),
                                     tooltip: 'View History',
+                                  ),
+                                if (!widget.crmMode && _customerSuperviseEnabled && c['supervised_at'] == null && _canDeactivateCustomer(ref.watch(currentUserProvider)?.role))
+                                  IconButton(
+                                    icon: const Icon(Icons.verified_user_outlined, size: 18, color: AppTheme.primary),
+                                    tooltip: 'Supervise (admin)',
+                                    onPressed: () => _superviseCustomer(c),
                                   ),
                                 if (!widget.crmMode)
                                   IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, c)),
@@ -502,7 +535,77 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     }
   }
 
+  // Mark a newly-created customer as supervised (admin / master admin only).
+  // Clears it from the Sales → Customers menu pendency counter.
+  Future<void> _superviseCustomer(Map<String, dynamic> c) async {
+    final user = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('customers').update({
+        'supervised_by': user?.id,
+        'supervised_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', c['id']);
+      ref.invalidate(customerSupervisePendingProvider);
+      _showSnack('Customer supervised');
+      _load();
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _superviseAllPending() async {
+    final user = ref.read(currentUserProvider);
+    final pending = _customers.where((c) => c['supervised_at'] == null).toList();
+    if (pending.isEmpty) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Supervise all pending?'),
+      content: Text('Mark all ${pending.length} unsupervised customer(s) as supervised?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Supervise all')),
+      ],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('customers').update({
+        'supervised_by': user?.id,
+        'supervised_at': DateTime.now().toUtc().toIso8601String(),
+      }).filter('supervised_at', 'is', null).eq('org_id', user?.orgId ?? '');
+      ref.invalidate(customerSupervisePendingProvider);
+      _showSnack('Supervised ${pending.length} customer(s)');
+      _load();
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  // A customer with ANY ledger/transaction footprint must never be deleted —
+  // deleting would orphan invoices, receipts and GL lines (or silently succeed
+  // if no FK protects the row). Returns the first table that references it, else
+  // null. Checked before every delete; deactivate such customers instead.
+  Future<String?> _customerTransactionBlock(String id) async {
+    final client = Supabase.instance.client;
+    Future<bool> has(String table, String col) async {
+      try {
+        final r = await client.from(table).select('id').eq(col, id).limit(1);
+        return (r as List).isNotEmpty;
+      } catch (_) { return false; } // missing table/column → not a blocker
+    }
+    if (await has('sales_invoices', 'customer_id')) return 'a Sales Invoice';
+    if (await has('sales_orders', 'customer_id')) return 'a Sales Order';
+    if (await has('sales_return_invoices', 'customer_id')) return 'a Sales Return';
+    if (await has('deliveries', 'customer_id')) return 'a Delivery Order';
+    if (await has('receipt_vouchers', 'customer_id')) return 'a Receipt Voucher';
+    if (await has('crv_voucher_lines', 'account_id')) return 'a cash receipt';
+    if (await has('journal_lines', 'party_id')) return 'a ledger entry';
+    return null;
+  }
+
   Future<void> _delete(String id) async {
+    final block = await _customerTransactionBlock(id);
+    if (block != null) {
+      _showSnack('Cannot delete: this customer has $block in the ledger. Deactivate it instead.');
+      return;
+    }
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -519,9 +622,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       ),
     );
     if (confirm == true) {
-      await Supabase.instance.client.from('customers').delete().eq('id', id);
-      _showSnack('Customer deleted');
-      _load();
+      try {
+        await Supabase.instance.client.from('customers').delete().eq('id', id);
+        _showSnack('Customer deleted');
+        _load();
+      } catch (e) {
+        _showSnack('Cannot delete: this customer is referenced by transactions. Deactivate it instead.');
+      }
     }
   }
 
@@ -549,11 +656,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     if (confirm != true) return;
     int ok = 0, blocked = 0;
     for (final id in ids) {
+      // Skip any customer with ledger activity — never orphan transactions.
+      if (await _customerTransactionBlock(id) != null) { blocked++; continue; }
       try {
         await Supabase.instance.client.from('customers').delete().eq('id', id);
         ok++;
       } catch (_) {
-        blocked++; // usually an FK: customer has linked transactions
+        blocked++; // FK: customer has linked transactions
       }
     }
     if (!mounted) return;

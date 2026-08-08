@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -233,7 +234,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
     final user = ref.read(currentUserProvider);
     final branch = ref.read(selectedBranchProvider);
     final rows = _filteredSorted;
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     List<List<String>> detailRows = [];
     String detailTitle = '';
     if (rows.length == 1) {
@@ -325,7 +326,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
     final totalB2   = rows.fold<double>(0, (s, r) => s + r.bucket2);
     final totalB3   = rows.fold<double>(0, (s, r) => s + r.bucket3);
     final totalB4   = rows.fold<double>(0, (s, r) => s + r.bucket4);
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
 
     return Container(
       color: AppTheme.background,
@@ -480,7 +481,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
   }
 
   Widget _buildInvoiceDetail(_AgingRow row) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final dateFmt = DateFormat('d MMM yyyy');
     final invs = List<Map<String, dynamic>>.from(row.openInvoices)
       ..sort((a, b) => (a['voucher_date'] as DateTime).compareTo(b['voucher_date'] as DateTime));
@@ -559,7 +560,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
   }
 
   Widget _summary(String label, double v, Color c, {bool bold = false}) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(14),
@@ -592,7 +593,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
   }
 
   Widget _cell(double v, Color c) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     return Expanded(flex: 2, child: Align(alignment: Alignment.centerRight,
         child: Text(v > 0.005 ? fmt.format(v) : '-',
             style: TextStyle(fontWeight: FontWeight.w600, color: v > 0.005 ? c : AppTheme.textSecondary, fontSize: 12))));

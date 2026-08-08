@@ -73,6 +73,14 @@ class VoucherPdf {
     String? approvedAt,
     String? approvedSignatureUrl,
     String? stampUrl,
+    // Middle sign-off column. Defaults to a blank "Checked By" box; callers can
+    // relabel it (e.g. 'Supervised By' for GRN) and supply a name/signature/stamp
+    // so it prints like the Approved By column.
+    String? checkedByLabel,
+    String? checkedByName,
+    String? checkedByAt,
+    String? checkedBySignatureUrl,
+    String? checkedByStampUrl,
     String? footerNote,
     Map<String, String>? relatedRefs, // e.g. {'SO #': 'SO-2026-0001', 'DO #': 'DO-...'}
     String? watermark, // optional diagonal page watermark, e.g. 'VOIDED'
@@ -95,6 +103,8 @@ class VoucherPdf {
       preparedBy: preparedBy, createdAt: createdAt,
       approvedBy: approvedBy, approvedAt: approvedAt,
       approvedSignatureUrl: approvedSignatureUrl, stampUrl: stampUrl,
+      checkedByLabel: checkedByLabel, checkedByName: checkedByName, checkedByAt: checkedByAt,
+      checkedBySignatureUrl: checkedBySignatureUrl, checkedByStampUrl: checkedByStampUrl,
       footerNote: footerNote, relatedRefs: relatedRefs,
       watermark: watermark, docTitle: fileBase,
     );
@@ -222,7 +232,13 @@ class VoucherPdf {
         child: pw.Text(s, textAlign: align, style: pw.TextStyle(fontSize: header ? 9 : 10, fontWeight: header ? pw.FontWeight.bold : pw.FontWeight.normal, color: header ? _muted : PdfColors.black)),
       );
 
-  static String _stNum(double v) => v % 1 == 0 ? v.toInt().toString() : v.toStringAsFixed(2);
+  static String _stNum(double v) => _n4(v);
+
+  /// Up to 4 decimals, trailing zeros trimmed, with thousands separators —
+  /// used for quantities, unit prices and totals so fractional values are not
+  /// rounded away on the printed voucher.
+  static final NumberFormat _num4 = NumberFormat('#,##0.####');
+  static String _n4(num? v) => _num4.format((v ?? 0).toDouble());
 
   static Future<Uint8List> generateBytes({
     required String voucherNumber,
@@ -248,6 +264,14 @@ class VoucherPdf {
     String? approvedAt,
     String? approvedSignatureUrl,
     String? stampUrl,
+    // Middle sign-off column. Defaults to a blank "Checked By" box; callers can
+    // relabel it (e.g. 'Supervised By' for GRN) and supply a name/signature/stamp
+    // so it prints like the Approved By column.
+    String? checkedByLabel,
+    String? checkedByName,
+    String? checkedByAt,
+    String? checkedBySignatureUrl,
+    String? checkedByStampUrl,
     String? footerNote,
     Map<String, String>? relatedRefs,
     String? watermark, // optional diagonal page watermark, e.g. 'VOIDED'
@@ -268,6 +292,8 @@ class VoucherPdf {
       preparedBy: preparedBy, createdAt: createdAt,
       approvedBy: approvedBy, approvedAt: approvedAt,
       approvedSignatureUrl: approvedSignatureUrl, stampUrl: stampUrl,
+      checkedByLabel: checkedByLabel, checkedByName: checkedByName, checkedByAt: checkedByAt,
+      checkedBySignatureUrl: checkedBySignatureUrl, checkedByStampUrl: checkedByStampUrl,
       footerNote: footerNote, relatedRefs: relatedRefs,
       watermark: watermark, docTitle: fileBase,
     );
@@ -298,6 +324,14 @@ class VoucherPdf {
     String? approvedAt,
     String? approvedSignatureUrl,
     String? stampUrl,
+    // Middle sign-off column. Defaults to a blank "Checked By" box; callers can
+    // relabel it (e.g. 'Supervised By' for GRN) and supply a name/signature/stamp
+    // so it prints like the Approved By column.
+    String? checkedByLabel,
+    String? checkedByName,
+    String? checkedByAt,
+    String? checkedBySignatureUrl,
+    String? checkedByStampUrl,
     String? footerNote,
     Map<String, String>? relatedRefs,
     String? watermark, // optional diagonal page watermark, e.g. 'VOIDED'
@@ -344,6 +378,16 @@ class VoucherPdf {
     }
     if (stampUrl != null && stampUrl.isNotEmpty) {
       try { stampImg = await networkImage(stampUrl); } catch (_) {}
+    }
+
+    // Signature + stamp for the middle (Checked By / Supervised By) column.
+    pw.ImageProvider? checkedSigImg;
+    pw.ImageProvider? checkedStampImg;
+    if (checkedBySignatureUrl != null && checkedBySignatureUrl.isNotEmpty) {
+      try { checkedSigImg = await networkImage(checkedBySignatureUrl); } catch (_) {}
+    }
+    if (checkedByStampUrl != null && checkedByStampUrl.isNotEmpty) {
+      try { checkedStampImg = await networkImage(checkedByStampUrl); } catch (_) {}
     }
 
     doc.addPage(pw.MultiPage(
@@ -540,12 +584,12 @@ class VoucherPdf {
               padding: const pw.EdgeInsets.all(10),
               decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
               child: pw.Column(children: [
-                if (subtotal != null) _totalRow('Subtotal', subtotal.toStringAsFixed(2)),
+                if (subtotal != null) _totalRow('Subtotal', _n4(subtotal)),
                 if (discountTotal != null && discountTotal > 0)
-                  _totalRow('Discount', '- ${discountTotal.toStringAsFixed(2)}', color: PdfColors.orange),
+                  _totalRow('Discount', '- ${_n4(discountTotal)}', color: PdfColors.orange),
                 if (grandTotal != null) ...[
                   pw.Divider(color: _border, height: 8),
-                  _totalRow('Grand Total', grandTotal.toStringAsFixed(2), bold: true),
+                  _totalRow('Grand Total', _n4(grandTotal), bold: true),
                 ],
               ]),
             ),
@@ -556,7 +600,7 @@ class VoucherPdf {
         pw.SizedBox(height: 36),
         pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
           _signatureBlock('Prepared By', preparedBy, sub: createdAt),
-          _signatureBlock('Checked By', null),
+          _signatureBlock(checkedByLabel ?? 'Checked By', checkedByName, sub: checkedByAt, signature: checkedSigImg, stamp: checkedStampImg),
           _signatureBlock('Approved By', apName, sub: apTime, signature: sigImg, stamp: stampImg),
         ]),
 
@@ -662,9 +706,9 @@ class VoucherPdf {
 
   static pw.Widget _itemsTable(List<VoucherLine> lines, bool hasMoney) {
     final headers = hasMoney
-        ? ['#', 'Product', 'UOM', 'Qty', 'Unit Price', 'Discount', 'Line Total']
+        ? ['#', 'Product', 'UOM', 'Qty', 'Unit Price', 'Discount', 'Disc. Price', 'Line Total']
         : ['#', 'Product', 'UOM', 'Qty'];
-    final flex = hasMoney ? [1, 5, 1, 2, 2, 2, 2] : [1, 8, 1, 2];
+    final flex = hasMoney ? [1, 5, 1, 2, 2, 2, 2, 2] : [1, 8, 1, 2];
 
     return pw.Table(
       border: pw.TableBorder.all(color: _border, width: 0.5),
@@ -686,16 +730,17 @@ class VoucherPdf {
                   '${i + 1}',
                   l.product + (l.sku != null ? '\n${l.sku}' : ''),
                   l.uom ?? '-',
-                  l.qty.toStringAsFixed(l.qty == l.qty.toInt() ? 0 : 2),
-                  l.unitPrice?.toStringAsFixed(2) ?? '-',
-                  l.discountPct != null ? '${l.discountPct!.toStringAsFixed(2)}%' : '-',
-                  l.lineTotal?.toStringAsFixed(2) ?? '-',
+                  _n4(l.qty),
+                  l.unitPrice != null ? _n4(l.unitPrice) : '-',
+                  l.discountPct != null ? '${_n4(l.discountPct)}%' : '-',
+                  l.unitPrice != null ? _n4(l.unitPrice! * (1 - (l.discountPct ?? 0) / 100)) : '-',
+                  l.lineTotal != null ? _n4(l.lineTotal) : '-',
                 ]
               : [
                   '${i + 1}',
                   l.product + (l.sku != null ? '\n${l.sku}' : ''),
                   l.uom ?? '-',
-                  l.qty.toStringAsFixed(l.qty == l.qty.toInt() ? 0 : 2),
+                  _n4(l.qty),
                 ];
           return pw.TableRow(
             children: cells.map((c) => pw.Padding(

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -166,7 +167,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
                       Expanded(child: Text(cust, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
                     ])),
                     Expanded(flex: 3, child: Text(itemsSummary, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-                    Expanded(flex: 1, child: Text('Rs. ${tot.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.orange))),
+                    Expanded(flex: 1, child: Text('Rs. ${money(tot)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.orange))),
                     SizedBox(width: 160, child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                       TextButton.icon(
                         icon: const Icon(Icons.close, size: 14),

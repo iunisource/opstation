@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpStockValueReportScreen extends ConsumerStatefulWidget {
@@ -148,19 +149,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
 
   String get _branchName => (_branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String?) ?? '-';
 
-  String _money(double v) {
-    final s = v.toStringAsFixed(2);
-    final parts = s.split('.');
-    final intPart = parts[0];
-    final neg = intPart.startsWith('-');
-    final digits = neg ? intPart.substring(1) : intPart;
-    final buf = StringBuffer();
-    for (int i = 0; i < digits.length; i++) {
-      if (i > 0 && (digits.length - i) % 3 == 0) buf.write(',');
-      buf.write(digits[i]);
-    }
-    return '${neg ? '-' : ''}${buf.toString()}.${parts[1]}';
-  }
+  String _money(double v) => money(v);
 
   Widget _sortHeader(String label, String key, {bool right = false}) {
     final active = _sortKey == key;

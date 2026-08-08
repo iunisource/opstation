@@ -93,8 +93,44 @@ class _PlacementAuditScreenState extends ConsumerState<PlacementAuditScreen> {
     });
   }
 
+  /// Guard against accidental double-saves: if this shop was audited within
+  /// the last 15 minutes, ask before writing another full set of rows. A
+  /// deliberate re-audit is one extra tap; a double-tap gets caught.
+  Future<bool> _confirmRecentSave() async {
+    final db = ref.read(appDatabaseProvider);
+    final recent = await (db.select(db.placementAudits)
+          ..where((p) => p.customerId.equals(_selectedCustomer!.id))
+          ..orderBy([(p) => OrderingTerm.desc(p.surveyedAt)])
+          ..limit(1))
+        .getSingleOrNull();
+    if (recent == null) return true;
+    final mins = DateTime.now().difference(recent.surveyedAt).inMinutes;
+    if (mins >= 15) return true;
+    if (!mounted) return false;
+    final ago = mins <= 0 ? 'less than a minute' : '$mins min';
+    final res = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Audited recently'),
+        content: Text(
+            'This shop was already audited $ago ago. Save a new audit anyway?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save anyway')),
+        ],
+      ),
+    );
+    return res ?? false;
+  }
+
   Future<void> _save() async {
     if (_selectedCustomer == null) return;
+    if (!await _confirmRecentSave()) return;
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       final db = ref.read(appDatabaseProvider);

@@ -6,6 +6,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'dart:js_util' as js_util;
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -295,7 +296,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
             final already = _lines.any((l) => l['product_id'] == e.key);
             return ListTile(dense: true,
               title: Text(e.value['name'] as String? ?? e.key, style: const TextStyle(fontSize: 13)),
-              subtitle: Text('${e.value['sku'] ?? ''}  ·  Rs. ${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11)),
+              subtitle: Text('${e.value['sku'] ?? ''}  ·  Rs. ${money(price)}', style: const TextStyle(fontSize: 11)),
               trailing: already ? const Icon(Icons.check, size: 16, color: AppTheme.success) : const Icon(Icons.add, size: 18),
               onTap: already ? null : () {
                 setState(() => _lines.add({
@@ -611,7 +612,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
                 return Row(children: [
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(l['name'] as String, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                    Text('Rs. ${price.toStringAsFixed(2)} each', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    Text('Rs. ${money(price)} each', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   ])),
                   if (readOnly)
                     Text('× ${qty.toStringAsFixed(0)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))
@@ -628,7 +629,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
                     ),
                     IconButton(icon: const Icon(Icons.add_circle_outline, size: 20), onPressed: () => setState(() => l['quantity'] = qty + 1)),
                   ],
-                  SizedBox(width: 92, child: Text('Rs. ${(qty * price).toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                  SizedBox(width: 92, child: Text('Rs. ${money(qty * price)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
                   if (!readOnly) IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => setState(() => _lines.removeAt(i))),
                 ]);
               },
@@ -637,7 +638,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
         Padding(padding: const EdgeInsets.all(16), child: Row(children: [
           Text('Total (at current prices)', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           const Spacer(),
-          Text('Rs. ${_total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+          Text('Rs. ${money(_total)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppTheme.primary)),
         ])),
         if (!readOnly) Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 16), child: Row(children: [
           Expanded(child: OutlinedButton.icon(style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)),

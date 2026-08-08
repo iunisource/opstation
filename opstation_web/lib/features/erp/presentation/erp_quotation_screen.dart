@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -641,7 +642,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           final base = 'From quotation ${_doc!['voucher_number'] ?? ''}';
           final gd = double.tryParse(_globalDiscCtrl.text.trim()) ?? 0;
           if (gd <= 0) return base;
-          final label = _globalDiscType == 'percent' ? '$gd%' : 'Rs. ${gd.toStringAsFixed(2)}';
+          final label = _globalDiscType == 'percent' ? '$gd%' : 'Rs. ${money(gd)}';
           return '$base | Global discount: $label (apply at invoice)';
         })(),
         'created_by': ref.read(currentUserProvider)?.id,
@@ -953,7 +954,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                       ])),
                       Expanded(flex: 2, child: Text(r['_branch_name'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text(r['voucher_date'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Padding(padding: const EdgeInsets.only(right: 16), child: Text('Rs. ${((r['_value'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), textAlign: TextAlign.right))),
+                      Expanded(flex: 2, child: Padding(padding: const EdgeInsets.only(right: 16), child: Text('Rs. ${money((r['_value'] as num?)?.toDouble() ?? 0)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), textAlign: TextAlign.right))),
                       Expanded(flex: 2, child: Text(r['valid_until'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: _statusChip(status)),
                     ]),
@@ -1160,7 +1161,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             const SizedBox(width: 18),
             Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Subtotal', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
-              Text('Rs. ${_linesSubtotal.toStringAsFixed(2)}',
+              Text('Rs. ${money(_linesSubtotal)}',
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             ]),
             const SizedBox(width: 18),
@@ -1188,14 +1189,14 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                   onChanged: (v) => setState(() => _globalDiscType = v ?? 'fixed'),
                 ),
                 const SizedBox(width: 6),
-                Text('- ${_globalDiscAmt.toStringAsFixed(2)}',
+                Text('- ${money(_globalDiscAmt)}',
                     style: const TextStyle(fontSize: 12, color: Colors.orange)),
               ]),
             ]),
             const Spacer(),
             Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
               const Text('Grand Total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
-              Text('Rs. ${_grandTotal.toStringAsFixed(2)}',
+              Text('Rs. ${money(_grandTotal)}',
                   style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AppTheme.primary)),
             ]),
           ]),
@@ -1273,7 +1274,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             onChanged: (v) => setState(() => l['discount_type'] = v),
           ),
         ]))),
-        Expanded(flex: 2, child: Text('Rs. ${_lineTotal(l).toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+        Expanded(flex: 2, child: Text('Rs. ${money(_lineTotal(l))}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
         SizedBox(width: 40, child: IconButton(
           icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
           visualDensity: VisualDensity.compact,

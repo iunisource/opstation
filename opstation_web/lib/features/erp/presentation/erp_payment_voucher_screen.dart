@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -405,8 +406,8 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     <h2>Cash Payment Voucher</h2>
     <table style="border:none;margin-bottom:5px;width:100%"><tr><td style="border:none;padding:1px 10px 1px 0;font-size:10px;white-space:nowrap"><b>Voucher#:</b> ${_currentVoucher!['voucher_number'] ?? ''}</td><td style="border:none;padding:1px 10px;font-size:10px;white-space:nowrap"><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</td><td style="border:none;padding:1px 10px;font-size:10px"><b>Cash A/c:</b> $_cashAccountName</td><td style="border:none;padding:1px 0;font-size:10px;white-space:nowrap"><b>Status:</b> ${_status.toUpperCase()}</td></tr></table>
     <table><thead><tr><th>#</th><th>Account / Party</th><th>Description</th><th style="text-align:right">Amount (Rs.)</th></tr></thead><tbody>
-    ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td style="text-align:right">${double.tryParse(e.value.amtCtrl.text)?.toStringAsFixed(2) ?? '0.00'}</td></tr>').join()}
-    </tbody><tfoot><tr><td colspan="3" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${_total.toStringAsFixed(2)}</td></tr></tfoot></table>
+    ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td style="text-align:right">${money(double.tryParse(e.value.amtCtrl.text))}</td></tr>').join()}
+    </tbody><tfoot><tr><td colspan="3" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${money(_total)}</td></tr></tfoot></table>
     <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Posted by: $postedBy$postedAtStr</div></div>
     </body></html>''';
     final blob = html.Blob([html_str], 'text/html;charset=utf-8');
@@ -430,7 +431,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
             return GestureDetector(onSecondaryTapDown: (d) => _showCtxMenu(d.globalPosition, v), child: InkWell(onTap: () => _loadVoucher(v), child: Container(color: sel ? AppTheme.primary.withOpacity(0.07) : null, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [Expanded(child: Text(v['voucher_number'] as String? ?? 'Draft', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))), Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: (posted ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(posted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, color: posted ? Colors.green : Colors.orange, fontWeight: FontWeight.w700)))]),
               Text(v['cash_account_name'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
-              Text('Rs. ${(v['total_amount'] as num?)?.toStringAsFixed(2) ?? '0.00'}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sel ? AppTheme.primary : AppTheme.textPrimary)),
+              Text('Rs. ${money(v['total_amount'] as num?)}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sel ? AppTheme.primary : AppTheme.textPrimary)),
             ]))));
           })),
         ],
@@ -517,7 +518,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
           const SizedBox(width: 16),
           const Text('Total:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(width: 10),
-          Text('Rs. ${_total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          Text('Rs. ${money(_total)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
         ])),
       ])),
     ]));

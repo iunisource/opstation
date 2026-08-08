@@ -4,6 +4,7 @@ import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -155,13 +156,13 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                     // Stats
                     _StatBox(label: 'Transactions', value: '${txns.where((t) => (t['transaction_type'] ?? 'sale') == 'sale').length}', color: AppTheme.primary),
                     const SizedBox(width: 12),
-                    _StatBox(label: 'Total Spent', value: 'Rs. ${_totalSpent.toStringAsFixed(2)}', color: AppTheme.success),
+                    _StatBox(label: 'Total Spent', value: 'Rs. ${money(_totalSpent)}', color: AppTheme.success),
                     const SizedBox(width: 12),
-                    _StatBox(label: 'Refunded', value: 'Rs. ${_totalRefunded.toStringAsFixed(2)}', color: Colors.orange),
+                    _StatBox(label: 'Refunded', value: 'Rs. ${money(_totalRefunded)}', color: Colors.orange),
                     const SizedBox(width: 12),
-                    _StatBox(label: 'Net Paid', value: 'Rs. ${(_totalSpent - _totalRefunded).toStringAsFixed(2)}', color: AppTheme.primary),
+                    _StatBox(label: 'Net Paid', value: 'Rs. ${money(_totalSpent - _totalRefunded)}', color: AppTheme.primary),
                     const SizedBox(width: 12),
-                    Builder(builder: (_) { final bal = (_selectedCustomer!['balance'] as num?)?.toDouble() ?? 0; return _StatBox(label: 'Account Balance', value: 'Rs. ${bal.toStringAsFixed(2)}', color: bal >= 0 ? Colors.green.shade700 : Colors.red.shade700); }),
+                    Builder(builder: (_) { final bal = (_selectedCustomer!['balance'] as num?)?.toDouble() ?? 0; return _StatBox(label: 'Account Balance', value: 'Rs. ${money(bal)}', color: bal >= 0 ? Colors.green.shade700 : Colors.red.shade700); }),
                   ]),
                   const SizedBox(height: 12),
                   // Date filter
@@ -204,9 +205,9 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                                 Text(ts, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                                 Text('$branch · $payment', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                               ])),
-                              if (disc > 0) Padding(padding: const EdgeInsets.only(right: 12), child: Text('Disc: -${disc.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12, color: Colors.orange))),
+                              if (disc > 0) Padding(padding: const EdgeInsets.only(right: 12), child: Text('Disc: -${money(disc)}', style: const TextStyle(fontSize: 12, color: Colors.orange))),
                       Builder(builder: (_) { final bc = (t['balance_change'] as num?)?.toDouble() ?? 0; if (bc == 0) return const SizedBox.shrink(); return Container(margin: const EdgeInsets.only(right: 8), padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bc > 0 ? Colors.green.shade50 : Colors.red.shade50, borderRadius: BorderRadius.circular(4)), child: Text(bc > 0 ? '+Rs.${bc.toStringAsFixed(0)}' : '-Rs.${(-bc).toStringAsFixed(0)}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: bc > 0 ? Colors.green.shade700 : Colors.red.shade700))); }),
-                              Text('${isReturn ? 'REFUND  -' : ''}Rs. ${total.abs().toStringAsFixed(2)}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: isReturn ? Colors.orange : AppTheme.primary)),
+                              Text('${isReturn ? 'REFUND  -' : ''}Rs. ${money(total.abs())}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: isReturn ? Colors.orange : AppTheme.primary)),
                             ])),
                             if (items.isNotEmpty) ...[
                               const Divider(height: 1),
@@ -217,7 +218,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                                   final name = item['products']?['name'] as String? ?? '-';
                                   return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                     decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
-                                    child: Text('$name × ${qty.abs().toStringAsFixed(0)} @ ${price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 11)));
+                                    child: Text('$name × ${qty.abs().toStringAsFixed(0)} @ ${money(price)}', style: const TextStyle(fontSize: 11)));
                                 }).toList())),
                             ],
                           ]),
@@ -241,10 +242,10 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
       final d = (i['discount'] as num?)?.toDouble() ?? 0;
       final lt = q * p - d;
       final n = i['products']?['name'] as String? ?? '-';
-      return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${p.toStringAsFixed(2)}</td><td style="text-align:right;color:${d > 0 ? "#e67e22" : "#999"}">${d > 0 ? "-${d.toStringAsFixed(2)}" : "-"}</td><td style="text-align:right;font-weight:bold">${lt.toStringAsFixed(2)}</td></tr>';
+      return '<tr><td>$n</td><td style="text-align:center">${q.toStringAsFixed(0)}</td><td style="text-align:right">${money(p)}</td><td style="text-align:right;color:${d > 0 ? "#e67e22" : "#999"}">${d > 0 ? "-${money(d)}" : "-"}</td><td style="text-align:right;font-weight:bold">${money(lt)}</td></tr>';
     }).join();
-    final discRow = disc > 0 ? '<tr><td colspan="4" style="color:#e67e22">Discount</td><td style="text-align:right;color:#e67e22">-${disc.toStringAsFixed(2)}</td></tr>' : '';
-    final content = '''<!DOCTYPE html><html><head><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.tr td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body><h2>$orgName</h2><p style="text-align:center">$ts<br>Customer: $customer</p><hr><table><thead><tr><th>Item</th><th>Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${subtotal.toStringAsFixed(2)}</td></tr>$discRow<tr class="tr"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${total.toStringAsFixed(2)}</td></tr></tbody></table><p style="text-align:center">Payment: $payment</p><script>window.print()</script></body></html>''';
+    final discRow = disc > 0 ? '<tr><td colspan="4" style="color:#e67e22">Discount</td><td style="text-align:right;color:#e67e22">-${money(disc)}</td></tr>' : '';
+    final content = '''<!DOCTYPE html><html><head><title>Receipt</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.tr td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body><h2>$orgName</h2><p style="text-align:center">$ts<br>Customer: $customer</p><hr><table><thead><tr><th>Item</th><th>Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${money(subtotal)}</td></tr>$discRow<tr class="tr"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${money(total)}</td></tr></tbody></table><p style="text-align:center">Payment: $payment</p><script>window.print()</script></body></html>''';
     final blob = html.Blob([content], 'text/html');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.window.open(url, '_blank');

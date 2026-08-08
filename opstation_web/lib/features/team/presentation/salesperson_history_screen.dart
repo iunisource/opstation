@@ -81,7 +81,7 @@ class _SalespersonHistoryScreenState
         if (custIds.isNotEmpty) {
           final custRes = await Supabase.instance.client
               .from('customers')
-              .select('id, name, code')
+              .select('id, shop_name, code')
               .inFilter('id', custIds);
           for (final c in custRes) {
             customers[c['id'] as String] = Map<String, dynamic>.from(c);
@@ -520,7 +520,7 @@ class _VisitRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = visit['status'] as String? ?? '';
     final cust = customers[visit['customer_id']];
-    final custName = cust?['name'] as String? ?? '(unknown customer)';
+    final custName = cust?['shop_name'] as String? ?? '(unknown customer)';
     final custCode = cust?['code'] as String? ?? '';
     final ts = visit['timestamp'] != null
         ? DateTime.parse(visit['timestamp'] as String).toLocal()

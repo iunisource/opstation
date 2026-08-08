@@ -5,6 +5,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import 'salesperson_history_screen.dart';
 import 'driver_history_screen.dart';
+import 'team_member_360_screen.dart';
 
 class TeamScreen extends ConsumerStatefulWidget {
   const TeamScreen({super.key});
@@ -214,6 +215,13 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                   style: TextStyle(color: isActive ? AppTheme.success : AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w600)),
                               )),
                               SizedBox(width: 220, child: Row(children: [
+                                IconButton(
+                                  icon: const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary),
+                                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => TeamMember360Screen(user: u),
+                                  )),
+                                  tooltip: 'Profile',
+                                ),
                                 if (canEdit)
                                   IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showEditUser(context, u), tooltip: 'Edit'),
                                 if (role == 'salesperson') ...[

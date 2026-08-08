@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
@@ -102,7 +103,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
   static String _trim(double v) { if (v == v.roundToDouble()) return v.toStringAsFixed(0); return v.toString(); }
-  static String _money(num v) => NumberFormat('#,##0.00').format(v);
+  static String _money(num v) => money(v);
 
   // ---------- loaders ----------
   Future<void> _loadProducts() async {
@@ -339,10 +340,44 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     return resultId;
   }
 
+  /// Components are consumed from stock (FIFO) when a production voucher posts.
+  /// Returns a human-readable message if any component's on-hand at the branch
+  /// is short of what this voucher would consume, else null. Blocks posting.
+  Future<String?> _componentShortage() async {
+    final orgId = _orgId, branch = _branchId;
+    if (orgId == null || branch == null) return null;
+    final need = <String, double>{};
+    for (final l in _components) {
+      if (l.productId == null || l.qty <= 0) continue;
+      need[l.productId!] = (need[l.productId!] ?? 0) + l.qty;
+    }
+    if (need.isEmpty) return null;
+    try {
+      final rows = await Supabase.instance.client.from('inventory_stock')
+          .select('product_id, quantity')
+          .eq('org_id', orgId).eq('branch_id', branch)
+          .inFilter('product_id', need.keys.toList());
+      final oh = <String, double>{};
+      for (final s in rows as List) {
+        final pid = s['product_id'] as String;
+        oh[pid] = (oh[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
+      }
+      final short = <String>[];
+      need.forEach((pid, req) {
+        final have = oh[pid] ?? 0;
+        if (have + 1e-9 < req) short.add('• ${_prodLabel[pid] ?? pid}: need ${_trim(req)}, have ${_trim(have)}');
+      });
+      if (short.isNotEmpty) return 'Not enough stock to post:\n' + short.join('\n');
+      return null;
+    } catch (e) { return 'Stock check failed: $e'; }
+  }
+
   Future<void> _post() async {
     if (!_isDraft) return;
     final id = await _save(silent: true);
     if (id == null) return;
+    final shortage = await _componentShortage();
+    if (shortage != null) { _snack(shortage); return; }
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Post production?'),
       content: const Text('Components will be consumed from stock (FIFO) and the finished good added to inventory at full absorbed cost. This posts to the General Ledger and cannot be edited afterward (use a Production Inverse to reverse).'),

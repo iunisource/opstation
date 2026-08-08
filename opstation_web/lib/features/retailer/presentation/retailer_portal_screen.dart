@@ -9,6 +9,7 @@ import 'package:latlong2/latlong.dart';
 import '../../auth/retailer_auth_controller.dart';
 import '../../erp/services/voucher_pdf.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/money.dart';
 
 /// Badge counters shared between the tabs (which load the data) and the shell
 /// (which paints the badges). Set by the tabs on load / mutation.
@@ -769,7 +770,7 @@ class _OrdersTabState extends ConsumerState<_OrdersTab> {
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (_, i) {
           final inv = _invoices[i];
-          final total = (inv['grand_total'] as num?)?.toStringAsFixed(2);
+          final total = (inv['grand_total'] as num?);
           final opening = _openingId == inv['id'];
           return Container(
             decoration: BoxDecoration(
@@ -788,7 +789,7 @@ class _OrdersTabState extends ConsumerState<_OrdersTab> {
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text(
                 [
-                  if (total != null) 'Rs $total',
+                  if (total != null) 'Rs ${money(total)}',
                   if (inv['voucher_date'] != null)
                     DateFormat('d MMM yyyy')
                         .format(DateTime.parse('${inv['voucher_date']}')),

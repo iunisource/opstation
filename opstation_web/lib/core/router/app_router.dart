@@ -1,6 +1,7 @@
 import '../../features/inventory/erp_stock_adjustment_screen.dart';
 import '../../features/erp/presentation/erp_trial_balance_screen.dart';
 import '../../features/erp/presentation/erp_journal_voucher_screen.dart';
+import '../../features/erp/presentation/erp_cash_book_screen.dart';
 import '../../features/erp/presentation/erp_opening_journal_screen.dart';
 import '../../features/erp/presentation/erp_account_activity_screen.dart';
 import '../../features/erp/presentation/erp_profit_loss_screen.dart';
@@ -15,11 +16,14 @@ import '../../features/erp/presentation/erp_production_waste_report_screen.dart'
 import '../../features/erp/presentation/erp_overheads_summary_screen.dart';
 import '../../features/erp/presentation/erp_job_card_screen.dart';
 import '../../features/erp/presentation/erp_qc_checkpoints_screen.dart';
+import '../../features/erp/presentation/erp_qc_station_screen.dart';
 import '../../features/erp/presentation/erp_production_floor_screen.dart';
 import '../../features/erp/presentation/erp_production_plan_screen.dart';
 import '../../features/erp/presentation/erp_report_builder_screen.dart';
 import '../../features/erp/presentation/erp_margin_report_screen.dart';
 import '../../features/erp/presentation/erp_customer_balance_report_screen.dart';
+import '../../features/erp/presentation/erp_supplier_balance_report_screen.dart';
+import '../../features/erp/presentation/erp_super_summary_screen.dart';
 import '../../features/hr/presentation/hr_employees_screen.dart';
 import '../../features/hr/presentation/hr_attendance_board_screen.dart';
 import '../../features/hr/presentation/hr_attendance_kiosk_screen.dart';
@@ -37,9 +41,11 @@ import '../../features/customers/presentation/customers_screen.dart';
 import '../../features/customers/presentation/follow_ups_screen.dart';
 import '../../features/customers/presentation/crm_pipeline_screen.dart';
 import '../../features/customers/presentation/erp_tasks_screen.dart';
+import '../../features/customers/presentation/erp_supplier_360_screen.dart';
 import '../../features/products/presentation/products_screen.dart';
 import '../../features/competitor_categories/presentation/competitor_categories_screen.dart';
 import '../../features/intelligence/presentation/intelligence_placement_screen.dart';
+import '../../features/intelligence/presentation/intelligence_dashboard_screen.dart';
 import '../../features/intelligence/presentation/intelligence_competitors_screen.dart';
 import '../../features/intelligence/presentation/intelligence_performance_screen.dart';
 import '../../features/routes/presentation/routes_screen.dart';
@@ -213,7 +219,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // Unregistered ERP-area route => no access. Was `return true`, the
             // fail-open leak that let one grant expose whole unrelated menus.
             if (it == null) return false;
-            return access.canAccessRoute(loc);
+            // Branch-scoped: a route is only reachable if granted at the
+            // ACTIVE branch (or globally). Null branch (still restoring after
+            // refresh) falls back to any-branch reachability.
+            final branchId =
+                ref.read(selectedBranchProvider)?['id'] as String?;
+            return access.canAccessRouteAt(loc, branchId);
           }
           // admin / masterAdmin — everything except super admin's /orgs
           return loc != '/orgs';
@@ -257,8 +268,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/crm/follow-ups', builder: (_, __) => const FollowUpsScreen()),
           GoRoute(path: '/crm/pipeline', builder: (_, __) => const CrmPipelineScreen()),
           GoRoute(path: '/crm/tasks', builder: (_, __) => const ErpTasksScreen()),
+          GoRoute(path: '/crm/supplier-profile', builder: (_, __) => const ErpSupplier360Screen()),
           GoRoute(path: '/products', builder: (_, __) => const ProductsScreen()),
           GoRoute(path: '/competitor-categories', builder: (_, __) => const CompetitorCategoriesScreen()),
+          GoRoute(path: '/intelligence/dashboard', builder: (_, __) => const IntelligenceDashboardScreen()),
           GoRoute(path: '/intelligence/placement', builder: (_, __) => const IntelligencePlacementScreen()),
           GoRoute(path: '/intelligence/competitors', builder: (_, __) => const IntelligenceCompetitorsScreen()),
           GoRoute(path: '/intelligence/performance', builder: (_, __) => const IntelligencePerformanceScreen()),
@@ -293,6 +306,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
           GoRoute(path: '/erp/admin-settings', builder: (_, __) => const ErpAdminSettingsScreen()),
           GoRoute(path: '/erp/audit-log', builder: (_, __) => const ErpAuditLogScreen()),
+          GoRoute(path: '/erp/super-summary', builder: (_, __) => const ErpSuperSummaryScreen()),
           GoRoute(path: '/erp/onboarding', builder: (_, __) => const ErpOnboardingScreen()),
           GoRoute(path: '/erp/home', builder: (_, __) => const ErpHomeScreen()),
           GoRoute(path: '/erp/no-access', builder: (_, __) => const _NoAccessScreen()),
@@ -307,12 +321,14 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 GoRoute(path: '/financials/opening-journal', builder: (_, __) => const ErpOpeningJournalScreen()),
         GoRoute(path: '/financials/trial-balance',  builder: (_, __) => const ErpTrialBalanceScreen()),
         GoRoute(path: '/financials/account-activity', builder: (_, __) => const ErpAccountActivityScreen()),
+        GoRoute(path: '/financials/cash-book', builder: (_, __) => const ErpCashBookScreen()),
       GoRoute(path: '/financials/profit-loss',     builder: (_, __) => const ErpProfitLossScreen()),
       GoRoute(path: '/financials/balance-sheet',   builder: (_, __) => const ErpBalanceSheetScreen()),
       GoRoute(path: '/manufacturing/product-assembly', builder: (_, __) => const ErpProductAssemblyScreen()),
       GoRoute(path: '/manufacturing/production-voucher', builder: (_, state) => ErpProductionVoucherScreen(focusId: state.uri.queryParameters['focus'])),
       GoRoute(path: '/manufacturing/job-card', builder: (_, __) => const ErpJobCardScreen()),
       GoRoute(path: '/manufacturing/qc-checkpoints', builder: (_, __) => const ErpQcCheckpointsScreen()),
+      GoRoute(path: '/manufacturing/qc-station', builder: (_, __) => const ErpQcStationScreen()),
       GoRoute(path: '/manufacturing/production-floor', builder: (_, __) => const ErpProductionFloorScreen()),
       // Registered in the permission registry (so it rendered as a menu item)
       // but had no GoRoute — same pre-existing gap as the HR attendance screens.
@@ -320,6 +336,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/intelligence/report-builder', builder: (_, __) => const ErpReportBuilderScreen()),
       GoRoute(path: '/reports/margin', builder: (_, __) => const ErpMarginReportScreen()),
       GoRoute(path: '/reports/customer-balance', builder: (_, __) => const ErpCustomerBalanceReportScreen()),
+      GoRoute(path: '/reports/supplier-balance', builder: (_, __) => const ErpSupplierBalanceReportScreen()),
       GoRoute(path: '/manufacturing/production-inverse-voucher', builder: (_, __) => const ErpProductionInverseVoucherScreen()),
       GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => const ErpDamageStockVoucherScreen()),
       GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => const ErpClaimProcessingVoucherScreen()),
@@ -350,7 +367,11 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/uoms',      builder: (_, __) => const ErpUomsScreen()),
           GoRoute(path: '/erp/stock',     builder: (_, __) => const ErpStockScreen()),
           GoRoute(path: '/erp/suppliers', builder: (_, state) => ErpSuppliersScreen(focusId: state.uri.queryParameters['focus'])),
-          GoRoute(path: '/erp/purchase',  builder: (_, state) => ErpPurchaseScreen(focusId: state.uri.queryParameters['focus'])),
+          GoRoute(path: '/erp/purchase',  builder: (_, state) => ErpPurchaseScreen(
+            focusId: state.uri.queryParameters['focus'],
+            seedProductId: state.uri.queryParameters['seedProduct'],
+            seedQty: state.uri.queryParameters['seedQty'],
+            seedBranchId: state.uri.queryParameters['seedBranch'])),
           GoRoute(path: '/erp/sales',     builder: (_, state) => ErpSalesScreen(focusId: state.uri.queryParameters['focus'])),
           GoRoute(path: '/erp/field-orders', builder: (_, __) => const ErpFieldOrdersScreen()),
           GoRoute(path: '/erp/retailer-orders', builder: (_, __) => const ErpRetailerOrdersScreen()),

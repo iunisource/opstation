@@ -7,10 +7,13 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 
-/// Supplier Aging: outstanding receivables grouped by customer with 0-30 /
-/// 31-60 / 61-90 / 90+ day buckets. Sources unpaid purchase_invoices.
+/// Supplier Aging: outstanding payables grouped by supplier with 0-30 /
+/// 31-60 / 61-90 / 91-120 / 120+ day buckets. Reads the GL Accounts-Payable
+/// account via rpc_supplier_aging (mirror of customer aging on AR), so the
+/// total reconciles to Accounts Payable on the balance sheet.
 class ErpSupplierAgingScreen extends ConsumerStatefulWidget {
   const ErpSupplierAgingScreen({super.key});
   @override
@@ -26,10 +29,12 @@ class _AgingRow {
   double bucket2 = 0;   // 61-90
   double bucket3 = 0;   // 91-120
   double bucket4 = 0;   // 120+
+  double netTotal = 0;  // GL AP balance (credit - debit) for this supplier;
+                        // authoritative — reconciles to the balance-sheet AP.
   int invoiceCount = 0;
   DateTime? oldestInvoiceDate;
   final List<Map<String, dynamic>> openInvoices = [];
-  double get total => current + bucket1 + bucket2 + bucket3 + bucket4;
+  double get total => netTotal;
   _AgingRow(this.supplierId, this.supplierName, this.code);
 }
 
@@ -60,116 +65,75 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
       final client = Supabase.instance.client;
       final branchId = _branchId;
       final asOfStr = DateFormat('yyyy-MM-dd').format(_asOf);
-      final List invs = [];
+
+      // Supplier master (names/codes) — seed the full roster so zero-balance
+      // suppliers still appear.
+      final Map<String, Map<String, dynamic>> supInfo = {};
       for (int from = 0; ; from += 1000) {
-        var q = client.from('purchase_invoices')
-            .select('id, voucher_number, voucher_date, grand_total, supplier_id, suppliers(name)')
-            .eq('org_id', orgId);
-        if (branchId != null) q = q.eq('branch_id', branchId);
-        final page = List.from(await q.lte('voucher_date', asOfStr).range(from, from + 999));
-        invs.addAll(page);
+        final page = List.from(await client.from('suppliers')
+            .select('id, name, code').eq('org_id', orgId).range(from, from + 999));
+        for (final s in page) {
+          final m = s as Map;
+          supInfo[m['id'] as String] = {'name': m['name'], 'code': m['code']};
+        }
         if (page.length < 1000 || from > 200000) break;
       }
 
-      // Pull payments from CPV vouchers (we paid the supplier). The CPV header
-      // carries date + status; the supplier + amount live on cpv_voucher_lines
-      // (account_type = 'supplier'). Mirrors how the Supplier Ledger reads CPV.
-      final paidBySupplier = <String, double>{};
+      // Aging buckets straight from the GL Accounts-Payable account, so the
+      // total reconciles to the balance sheet (same as customer aging on AR).
+      final aging = await client.rpc('rpc_supplier_aging', params: {
+        'p_org_id': orgId, 'p_as_of': asOfStr, 'p_branch_id': branchId,
+      });
+
+      // Open-item detail — powers the single-supplier panel + invoice count.
+      final Map<String, List<Map<String, dynamic>>> detail = {};
       try {
-        final List cpvHeaders = [];
-        for (int from = 0; ; from += 1000) {
-          var cq = client.from('cpv_vouchers')
-              .select('id, voucher_date, created_at')
-              .eq('org_id', orgId).eq('status', 'posted');
-          if (branchId != null) cq = cq.eq('branch_id', branchId);
-          final page = List.from(await cq.range(from, from + 999));
-          cpvHeaders.addAll(page);
-          if (page.length < 1000 || from > 200000) break;
-        }
-        final asOfEnd = DateTime(_asOf.year, _asOf.month, _asOf.day, 23, 59, 59);
-        final cpvIds = <String>[];
-        for (final v in cpvHeaders as List) {
-          final m = v as Map;
-          final ed = DateTime.tryParse((m['voucher_date'] as String?) ?? '') ??
-                     DateTime.tryParse((m['created_at'] as String?) ?? '');
-          if (ed == null || !ed.isAfter(asOfEnd)) cpvIds.add(m['id'] as String);
-        }
-        for (var i = 0; i < cpvIds.length; i += 100) {
-          final end = (i + 100) > cpvIds.length ? cpvIds.length : (i + 100);
-          final chunk = cpvIds.sublist(i, end);
-          final lines = await client.from('cpv_voucher_lines')
-              .select('account_id, amount')
-              .eq('account_type', 'supplier')
-              .inFilter('voucher_id', chunk);
-          for (final ln in lines as List) {
-            final sid = (ln as Map)['account_id'] as String?;
-            if (sid == null) continue;
-            paidBySupplier[sid] = (paidBySupplier[sid] ?? 0) + ((ln['amount'] as num?)?.toDouble() ?? 0);
-          }
-        }
-      } catch (e) {
-        // ignore: avoid_print
-        print('[SupplierAging] CPV payments error: $e');
-      }
-
-      // Walk invoices oldest → newest, applying paid balance per customer.
-      final list = List<Map<String, dynamic>>.from(invs)
-        ..sort((a, b) => (a['voucher_date'] as String).compareTo(b['voucher_date'] as String));
-
-      // Seed rows with the full supplier master list so zero-balance suppliers
-      // still appear (aging shows the entire roster, not just those with debt).
-      final rows = <String, _AgingRow>{};
-      try {
-        final List allSuppliers = [];
-        for (int from = 0; ; from += 1000) {
-          final page = List.from(await client.from('suppliers')
-              .select('id, name')
-              .eq('org_id', orgId)
-              .range(from, from + 999));
-          allSuppliers.addAll(page);
-          if (page.length < 1000 || from > 200000) break;
-        }
-        for (final s in allSuppliers as List) {
-          final m = s as Map;
-          final id = m['id'] as String;
-          rows[id] = _AgingRow(id, m['name'] as String? ?? '(Unknown)', null);
-        }
-      } catch (e) {
-        // ignore: avoid_print
-        print('[SupplierAging] supplier master load: $e');
-      }
-      for (final inv in list) {
-        final cid = inv['supplier_id'] as String?;
-        if (cid == null) continue;
-        final sup = inv['suppliers'] as Map?;
-        final name = sup?['name'] as String? ?? '(Unknown)';
-        final code = sup?['code'] as String?;
-        final row = rows.putIfAbsent(cid, () => _AgingRow(cid, name, code));
-
-        final total = (inv['grand_total'] as num?)?.toDouble() ?? 0;
-        // Apply available receipt credit (FIFO across invoices)
-        final available = paidBySupplier[cid] ?? 0;
-        final applied = available >= total ? total : available;
-        paidBySupplier[cid] = available - applied;
-        final outstanding = total - applied;
-        if (outstanding <= 0.005) continue;
-
-        final invDate = DateTime.parse(inv['voucher_date'] as String);
-        final ageDays = _asOf.difference(invDate).inDays;
-        if (ageDays <= 30) row.current += outstanding;
-        else if (ageDays <= 60) row.bucket1 += outstanding;
-        else if (ageDays <= 90) row.bucket2 += outstanding;
-        else if (ageDays <= 120) row.bucket3 += outstanding;
-        else row.bucket4 += outstanding;
-        row.openInvoices.add({
-          'voucher_number': inv['voucher_number'] as String? ?? '-',
-          'voucher_date': invDate,
-          'outstanding': outstanding,
-          'ageDays': ageDays,
+        final det = await client.rpc('rpc_supplier_aging_detail', params: {
+          'p_org_id': orgId, 'p_as_of': asOfStr, 'p_branch_id': branchId,
         });
-        row.invoiceCount += 1;
-        if (row.oldestInvoiceDate == null || invDate.isBefore(row.oldestInvoiceDate!)) {
-          row.oldestInvoiceDate = invDate;
+        for (final d in (det as List? ?? const [])) {
+          final m = d as Map;
+          final sid = m['supplier_id'] as String?;
+          if (sid == null) continue;
+          (detail[sid] ??= []).add({
+            'voucher_number': m['reference_number'] as String? ?? '-',
+            'voucher_date': DateTime.tryParse((m['ref_date'] as String?) ?? '') ?? _asOf,
+            'outstanding': -((m['open_amt'] as num?)?.toDouble() ?? 0), // payable negative
+            'ageDays': (m['age_days'] as num?)?.toInt() ?? 0,
+          });
+        }
+      } catch (e) {
+        // ignore: avoid_print
+        print('[SupplierAging] detail error: $e');
+      }
+
+      // Seed every supplier as a zero row, then overlay the GL buckets.
+      final rows = <String, _AgingRow>{};
+      for (final e in supInfo.entries) {
+        rows[e.key] = _AgingRow(e.key, e.value['name'] as String? ?? '(Unknown)', e.value['code'] as String?);
+      }
+      for (final a in (aging as List? ?? const [])) {
+        final m = a as Map;
+        final sid = m['supplier_id'] as String?;
+        if (sid == null) continue; // unallocated (no supplier) rows are skipped
+        final info = supInfo[sid];
+        final row = rows.putIfAbsent(sid,
+            () => _AgingRow(sid, info?['name'] as String? ?? '(Unknown)', info?['code'] as String?));
+        // Sign convention: payable NEGATIVE, advance POSITIVE (matches the
+        // ledger / balance report / old ERP). The RPC returns payable-positive,
+        // so negate.
+        row.current  = -((m['cur']   as num?)?.toDouble() ?? 0);
+        row.bucket1  = -((m['b1']    as num?)?.toDouble() ?? 0);
+        row.bucket2  = -((m['b2']    as num?)?.toDouble() ?? 0);
+        row.bucket3  = -((m['b3']    as num?)?.toDouble() ?? 0);
+        row.bucket4  = -((m['b4']    as num?)?.toDouble() ?? 0);
+        row.netTotal = -((m['total'] as num?)?.toDouble() ?? 0);
+        final det = detail[sid];
+        if (det != null && det.isNotEmpty) {
+          det.sort((a, b) => (a['voucher_date'] as DateTime).compareTo(b['voucher_date'] as DateTime));
+          row.openInvoices..clear()..addAll(det);
+          row.invoiceCount = det.length;
+          row.oldestInvoiceDate = det.first['voucher_date'] as DateTime;
         }
       }
 
@@ -217,7 +181,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
     final user = ref.read(currentUserProvider);
     final branch = ref.read(selectedBranchProvider);
     final rows = _filteredSorted;
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     List<List<String>> detailRows = [];
     String detailTitle = '';
     if (rows.length == 1) {
@@ -307,7 +271,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
     final totalB2   = rows.fold<double>(0, (s, r) => s + r.bucket2);
     final totalB3   = rows.fold<double>(0, (s, r) => s + r.bucket3);
     final totalB4   = rows.fold<double>(0, (s, r) => s + r.bucket4);
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
 
     return Container(
       color: AppTheme.background,
@@ -441,7 +405,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
   }
 
   Widget _buildInvoiceDetail(_AgingRow row) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     final dateFmt = DateFormat('d MMM yyyy');
     final invs = List<Map<String, dynamic>>.from(row.openInvoices)
       ..sort((a, b) => (a['voucher_date'] as DateTime).compareTo(b['voucher_date'] as DateTime));
@@ -520,7 +484,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
   }
 
   Widget _summary(String label, double v, Color c, {bool bold = false}) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(14),
@@ -553,9 +517,9 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
   }
 
   Widget _cell(double v, Color c) {
-    final fmt = NumberFormat('#,##0.00');
+    final fmt = const MoneyFmt();
     return Expanded(flex: 2, child: Align(alignment: Alignment.centerRight,
-        child: Text(v > 0.005 ? fmt.format(v) : '-',
-            style: TextStyle(fontWeight: FontWeight.w600, color: v > 0.005 ? c : AppTheme.textSecondary, fontSize: 12))));
+        child: Text(v.abs() > 0.005 ? fmt.format(v) : '-',
+            style: TextStyle(fontWeight: FontWeight.w600, color: v.abs() > 0.005 ? c : AppTheme.textSecondary, fontSize: 12))));
   }
 }

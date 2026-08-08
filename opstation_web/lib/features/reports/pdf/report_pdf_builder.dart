@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../../core/format/money.dart';
+
 /// Web port of mobile's TripReportContext.
 /// Pre-computed data for a trip report. Distances via Haversine (no Google
 /// Directions on web yet).
@@ -153,6 +155,7 @@ class ReportPdfBuilder {
         _visitDetailsTable(ctx),
         pw.SizedBox(height: 10),
         _receiptsFooter(ctx),
+        _receiptGapsNote(ctx),
         pw.SizedBox(height: 36),
         _signatureLine(),
       ],
@@ -431,7 +434,8 @@ class ReportPdfBuilder {
         _statusTagWithDistance(status, v),
         status == 'pending' ? '-' : '$amount',
         receipt.isEmpty ? '-' : receipt,
-        DateFormat('hh:mm a').format(DateTime.parse(v['timestamp'] as String)),
+        DateFormat('hh:mm a')
+            .format(DateTime.parse(v['timestamp'] as String).toLocal()),
         _notesFor(status, v),
       ]);
     }
@@ -500,6 +504,77 @@ class ReportPdfBuilder {
     );
   }
 
+  /// Expand a receipt field into every slip number it represents — combined
+  /// entries ("31457 & 31458", "31451 to 31452") and shorthand ("32282 83 84"
+  /// = 32282, 32283, 32284). Reading only the first number over-counted skips.
+  static List<int> _receiptSlipNumbers(String raw) {
+    final toks = RegExp(r'\d+').allMatches(raw).map((m) => m.group(0)!).toList();
+    final out = <int>[];
+    int? prevFull;
+    for (final t in toks) {
+      final n = int.parse(t);
+      final prevLen = prevFull?.toString().length ?? 0;
+      if (prevFull == null || t.length >= prevLen) {
+        out.add(n); prevFull = n;
+      } else {
+        var p10 = 1; for (var i = 0; i < t.length; i++) p10 *= 10;
+        final e = (prevFull - (prevFull % p10)) + n;
+        out.add(e); prevFull = e;
+      }
+    }
+    return out;
+  }
+
+  /// Missing receipt numbers in the trip's sequence — a skip means a
+  /// collection may have been made but never entered. Big jumps (> 20) are
+  /// treated as a new receipt book and ignored. Admin control only.
+  static List<int> _skippedReceipts(TripReportContext ctx) {
+    final nums = <int>[];
+    for (final v in ctx.visits) {
+      nums.addAll(_receiptSlipNumbers(v['receipt_number'] as String? ?? ''));
+    }
+    nums.sort();
+    final missing = <int>[];
+    for (var i = 1; i < nums.length; i++) {
+      final gap = nums[i] - nums[i - 1];
+      if (gap > 1 && gap <= 20) {
+        for (var n = nums[i - 1] + 1; n < nums[i]; n++) {
+          missing.add(n);
+        }
+      }
+    }
+    return missing;
+  }
+
+  /// Admin-only line listing skipped receipt numbers. Renders nothing when
+  /// the sequence is clean (or on a salesperson's own copy, which never
+  /// calls this).
+  static pw.Widget _receiptGapsNote(TripReportContext ctx) {
+    final missing = _skippedReceipts(ctx);
+    if (missing.isEmpty) return pw.SizedBox();
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(top: 6),
+      padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: pw.BoxDecoration(
+        color: PdfColor.fromInt(0xFFFFF7ED),
+        border: pw.Border.all(color: PdfColor.fromInt(0xFFFB923C), width: 0.5),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+        pw.Text('Missing receipts:  ',
+            style: pw.TextStyle(
+                fontSize: 9.5,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColor.fromInt(0xFF9A3412))),
+        pw.Expanded(
+          child: pw.Text(missing.join(', '),
+              style: pw.TextStyle(
+                  fontSize: 9.5, color: PdfColor.fromInt(0xFF9A3412))),
+        ),
+      ]),
+    );
+  }
+
   static pw.Widget _sequencedTable(TripReportContext ctx) {
     final headers = ['#', 'CODE', 'CUSTOMER', 'DISTANCE (KM)', 'TIME'];
     final rows = <List<String>>[];
@@ -514,7 +589,8 @@ class ReportPdfBuilder {
         (c?['code'] as String?) ?? '-',
         (c?['shop_name'] as String?) ?? '-',
         km.toStringAsFixed(2),
-        DateFormat('hh:mm a').format(DateTime.parse(v['timestamp'] as String)),
+        DateFormat('hh:mm a')
+            .format(DateTime.parse(v['timestamp'] as String).toLocal()),
       ]);
     }
 
@@ -527,7 +603,7 @@ class ReportPdfBuilder {
         ctx.trip['ended_at'] == null
             ? '-'
             : DateFormat('hh:mm a').format(
-                DateTime.parse(ctx.trip['ended_at'] as String)),
+                DateTime.parse(ctx.trip['ended_at'] as String).toLocal()),
       ]);
     }
 
@@ -700,17 +776,7 @@ class ReportPdfBuilder {
     return '-';
   }
 
-  static String _fmtNum(int n) {
-    final s = n.toString();
-    final buf = StringBuffer();
-    int count = 0;
-    for (int i = s.length - 1; i >= 0; i--) {
-      buf.write(s[i]);
-      count++;
-      if (count % 3 == 0 && i != 0) buf.write(',');
-    }
-    return buf.toString().split('').reversed.join();
-  }
+  static String _fmtNum(int n) => money(n);
 
   static String _coordsOrDash(double? lat, double? lng) {
     if (lat == null || lng == null) return 'No GPS';

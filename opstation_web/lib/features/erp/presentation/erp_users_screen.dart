@@ -66,6 +66,175 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
         .showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
+  // ── "How they use the app" activity panel ───────────────────────────────
+  Future<void> _showActivity(Map<String, dynamic> u) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final now = DateTime.now();
+    final from = now.subtract(const Duration(days: 30));
+    String d(DateTime x) => '${x.year}-${x.month.toString().padLeft(2, '0')}-${x.day.toString().padLeft(2, '0')}';
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Row(children: [
+          const Icon(Icons.insights_outlined, size: 18, color: AppTheme.primary),
+          const SizedBox(width: 8),
+          Expanded(child: Text('${u['name'] ?? 'User'} — App usage', style: const TextStyle(fontSize: 16))),
+        ]),
+        content: SizedBox(
+          width: 520,
+          child: FutureBuilder(
+            future: Supabase.instance.client.rpc('erp_user_activity', params: {
+              'p_org': orgId, 'p_user': u['id'], 'p_from': d(from), 'p_to': d(now),
+            }),
+            builder: (ctx, snap) {
+              if (snap.connectionState != ConnectionState.done) {
+                return const SizedBox(height: 120, child: Center(child: CircularProgressIndicator()));
+              }
+              if (snap.hasError || snap.data == null) {
+                return const Padding(padding: EdgeInsets.all(12), child: Text('Could not load activity.'));
+              }
+              return _activityBody(Map<String, dynamic>.from(snap.data as Map));
+            },
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(), child: const Text('Close'))],
+      ),
+    );
+  }
+
+  Widget _activityBody(Map<String, dynamic> m) {
+    final total = (m['total'] as num?)?.toInt() ?? 0;
+    final voided = (m['voided'] as num?)?.toInt() ?? 0;
+    final backdated = (m['backdated'] as num?)?.toInt() ?? 0;
+    final afterHours = (m['after_hours'] as num?)?.toInt() ?? 0;
+    final activeDays = (m['active_days'] as num?)?.toInt() ?? 0;
+    final approvals = (m['approvals'] as num?)?.toInt() ?? 0;
+    final byModule = Map<String, dynamic>.from(m['by_module'] as Map? ?? {});
+    final last = m['last_active'] != null ? DateTime.tryParse(m['last_active'] as String)?.toLocal() : null;
+    final daysSince = last == null ? null : DateTime.now().difference(last).inDays;
+
+    if (total == 0 && approvals == 0) {
+      return const Padding(padding: EdgeInsets.all(8),
+        child: Text('No voucher activity in the last 30 days.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)));
+    }
+
+    // top module
+    String? topMod; int topN = 0;
+    byModule.forEach((k, v) { final n = (v as num).toInt(); if (n > topN) { topN = n; topMod = k; } });
+    final modules = byModule.keys.toList()..sort();
+    final voidPct = total > 0 ? (voided / total * 100) : 0.0;
+
+    final amber = Colors.amber.shade800;
+    final notes = <(IconData, Color, String)>[];
+    notes.add((Icons.receipt_long, AppTheme.primary,
+        '$total voucher${total == 1 ? '' : 's'} created in 30 days${topMod != null ? ' — mostly $topMod ($topN)' : ''}.'));
+    if (approvals > 0) notes.add((Icons.verified, AppTheme.primary, '$approvals purchase order${approvals == 1 ? '' : 's'} approved.'));
+    if (modules.isNotEmpty) notes.add((Icons.dashboard_customize_outlined, AppTheme.textSecondary,
+        'Works across: ${[for (final k in modules) '$k (${(byModule[k] as num).toInt()})'].join(', ')}.'));
+    if (voided > 0) {
+      notes.add((voidPct >= 8 ? Icons.error_outline : Icons.undo, voidPct >= 8 ? AppTheme.danger : amber,
+          '$voided (${voidPct.toStringAsFixed(0)}%) of their vouchers were later voided${voidPct >= 8 ? ' — high rework, worth reviewing' : ''}.'));
+    }
+    if (backdated > 0) notes.add((Icons.event_repeat, amber,
+        '$backdated entr${backdated == 1 ? 'y was' : 'ies were'} back-dated (voucher date well before entry) — check timing controls.'));
+    if (afterHours > 0 && total > 0 && afterHours / total >= 0.25) notes.add((Icons.nightlight_round, amber,
+        '$afterHours of $total entered after hours (after 8 PM / before 6 AM).'));
+    if (daysSince != null && daysSince >= 5) notes.add((Icons.event_busy, Colors.orange,
+        'No vouchers entered in the last $daysSince days.'));
+    if (notes.length <= (modules.isNotEmpty ? 2 : 1)) notes.add((Icons.thumb_up, AppTheme.success,
+        'Steady, clean usage — low rework and consistent entry.'));
+
+    final concerns = notes.where((n) => n.$2 == AppTheme.danger).length;
+    final warns = notes.where((n) => n.$2 == amber || n.$2 == Colors.orange).length;
+    final (IconData, Color, String) head = concerns > 0
+        ? (Icons.warning_amber_rounded, AppTheme.danger, 'Needs attention')
+        : warns > 0 ? (Icons.info_outline, amber, 'A few habits to watch')
+                    : (Icons.check_circle, AppTheme.success, 'Healthy usage');
+
+    // ── Productivity score + estimated active time ──────────────────────────
+    // Score = weighted blend of five 0–100 sub-scores. Volume is peer-relative
+    // (this user vs the top user that period); Consistency uses the org's actual
+    // working days (distinct days anyone was active). Shown transparently below.
+    final peerTop = (m['peer_top_total'] as num?)?.toInt() ?? 0;
+    final orgActiveDays = (m['org_active_days'] as num?)?.toInt() ?? 0;
+    final engagedMin = (m['period_engaged_min'] as num?)?.toDouble() ?? 0;
+    final distinctModules = byModule.keys.length;
+    const totalModules = 5; // Purchase, Sales, Accounts, Inventory, Production
+    double clamp100(double v) => v < 0 ? 0 : (v > 100 ? 100 : v);
+    final sVolume = peerTop > 0 ? clamp100(total / peerTop * 100) : (total > 0 ? 100.0 : 0.0);
+    final sConsistency = orgActiveDays > 0 ? clamp100(activeDays / orgActiveDays * 100) : 0.0;
+    final sBreadth = clamp100(distinctModules / totalModules * 100);
+    final sTimeliness = total > 0 ? clamp100(100 - backdated / total * 100) : 100.0;
+    final sQuality = total > 0 ? clamp100(100 - voidPct.toDouble()) : 100.0;
+    final productivity =
+        (0.40 * sVolume + 0.20 * sConsistency + 0.15 * sBreadth + 0.15 * sTimeliness + 0.10 * sQuality).round();
+    final scoreColor = productivity >= 75 ? AppTheme.success : (productivity >= 50 ? amber : AppTheme.danger);
+    final scoreLabel = productivity >= 75 ? 'Strong' : (productivity >= 50 ? 'Steady' : 'Needs attention');
+    final hrs = engagedMin ~/ 60;
+    final mns = (engagedMin % 60).round();
+    final timeStr = hrs > 0 ? '${hrs}h ${mns}m' : '${mns}m';
+    final daysDenom = orgActiveDays == 0 ? activeDays : orgActiveDays;
+
+    Widget subBar(String label, double v) => Padding(
+      padding: const EdgeInsets.only(bottom: 5),
+      child: Row(children: [
+        SizedBox(width: 82, child: Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(value: (v / 100).clamp(0, 1), minHeight: 7,
+            backgroundColor: Colors.grey.shade200,
+            valueColor: AlwaysStoppedAnimation(v >= 75 ? AppTheme.success : (v >= 50 ? amber : AppTheme.danger))))),
+        const SizedBox(width: 8),
+        SizedBox(width: 28, child: Text('${v.round()}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+      ]),
+    );
+
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        padding: const EdgeInsets.all(12),
+        margin: const EdgeInsets.only(bottom: 14),
+        decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(width: 54, height: 54, alignment: Alignment.center,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: scoreColor.withOpacity(0.12), border: Border.all(color: scoreColor, width: 2)),
+              child: Text('$productivity', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: scoreColor))),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Productivity · $scoreLabel', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: scoreColor)),
+              const SizedBox(height: 3),
+              Text('~$timeStr active  ·  $total vouchers  ·  $activeDays/$daysDenom working days',
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            ])),
+          ]),
+          const SizedBox(height: 12),
+          subBar('Volume', sVolume),
+          subBar('Consistency', sConsistency),
+          subBar('Breadth', sBreadth),
+          subBar('Timeliness', sTimeliness),
+          subBar('Quality', sQuality),
+        ]),
+      ),
+      Row(children: [
+        Icon(head.$1, size: 16, color: head.$2),
+        const SizedBox(width: 6),
+        Text(head.$3, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: head.$2)),
+        const Spacer(),
+        Text('active ${activeDays}d${daysSince != null ? ' · last ${daysSince == 0 ? 'today' : '${daysSince}d ago'}' : ''}',
+            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ]),
+      const SizedBox(height: 12),
+      for (final n in notes) ...[
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(n.$1, size: 16, color: n.$2),
+          const SizedBox(width: 8),
+          Expanded(child: Text(n.$3, style: const TextStyle(fontSize: 13, height: 1.35))),
+        ]),
+        const SizedBox(height: 8),
+      ],
+    ]);
+  }
+
   Future<void> _toggleActive(Map<String, dynamic> user) async {
     final newVal = !(user['is_active'] as bool? ?? true);
     try {
@@ -585,7 +754,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                     Expanded(flex: 3, child: Text('Email', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 3, child: Text('Branches', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 1, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    SizedBox(width: 80),
+                    SizedBox(width: 120),
                   ]),
                 ),
                 const Divider(height: 1),
@@ -617,7 +786,9 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                                     child: Text(isActive ? 'Active' : 'Inactive',
                                         style: TextStyle(color: isActive ? AppTheme.success : AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w600)),
                                   )),
-                                  SizedBox(width: 80, child: Row(children: [
+                                  SizedBox(width: 120, child: Row(children: [
+                                    IconButton(icon: const Icon(Icons.insights_outlined, size: 18, color: AppTheme.primary),
+                                        tooltip: 'How they use the app', onPressed: () => _showActivity(u)),
                                     IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, u)),
                                     IconButton(
                                       icon: Icon(isActive ? Icons.block : Icons.check_circle_outline, size: 18,

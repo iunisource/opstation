@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:html' as html;
+import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -37,12 +38,14 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   bool _running = false;
   bool _hasRun = false;
   String _search = '';
+  bool _negCostOnly = false;
+  bool _negMarginOnly = false;
   String _sortKey = '';
   bool _sortAsc = true;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
-  static final _money = NumberFormat('#,##0.00');
+  static const _money = MoneyFmt();
   static String _fmtMoney(num? v) => _money.format(v ?? 0);
   static String _fmtQty(num? v) {
     final d = (v ?? 0).toDouble();
@@ -156,6 +159,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       _branchId = null; _customerId = null; _customerLabel = '';
       _productId = null; _productLabel = ''; _group = null; _mainGroup = null; _subGroup = null;
       _rows = []; _hasRun = false; _search = '';
+      _negCostOnly = false; _negMarginOnly = false;
     });
   }
 
@@ -189,6 +193,13 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       (r['party']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false) ||
       (r['sale_number']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false)
     ).toList();
+    if (_negCostOnly) {
+      out = out.where((r) => ((r['unit_cost'] as num?)?.toDouble() ?? 0) < 0
+                          || ((r['cost_amount'] as num?)?.toDouble() ?? 0) < 0).toList();
+    }
+    if (_negMarginOnly) {
+      out = out.where(_isNegMargin).toList();
+    }
     if (_sortKey.isNotEmpty) {
       final dir = _sortAsc ? 1 : -1;
       out.sort((a, b) {
@@ -200,6 +211,16 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       });
     }
     return out;
+  }
+
+  // Negative-margin = margin percentage below zero (margin / amount < 0).
+  // When there's no revenue on the line (amount == 0) we fall back to the raw
+  // margin sign so loss-making zero-revenue lines still get flagged.
+  bool _isNegMargin(Map<String, dynamic> r) {
+    final amt = (r['amount'] as num?)?.toDouble() ?? 0;
+    final mgn = (r['margin'] as num?)?.toDouble() ?? 0;
+    if (amt == 0) return mgn < 0;
+    return (mgn / amt) < 0;
   }
 
   void _toggleSort(String key) {
@@ -498,6 +519,9 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     }
     final rows = _visible;
     final negCount = _rows.where((r) => (r['margin'] as num? ?? 0) < 0).length;
+    final negCostCount = _rows.where((r) => ((r['unit_cost'] as num?)?.toDouble() ?? 0) < 0
+                                         || ((r['cost_amount'] as num?)?.toDouble() ?? 0) < 0).length;
+    final negMarginCount = _rows.where(_isNegMargin).length;
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -507,6 +531,28 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
           if (negCount > 0) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(color: Colors.red.withOpacity(0.10), borderRadius: BorderRadius.circular(4)),
             child: Text('$negCount below cost', style: const TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.w700))),
+          const SizedBox(width: 8),
+          FilterChip(
+            label: Text('Negative cost${negCostCount > 0 ? ' ($negCostCount)' : ''}', style: const TextStyle(fontSize: 11)),
+            selected: _negCostOnly,
+            onSelected: (v) => setState(() => _negCostOnly = v),
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            selectedColor: Colors.deepOrange.withOpacity(0.14),
+            checkmarkColor: Colors.deepOrange,
+            tooltip: 'Show only lines whose unit cost or cost amount is negative',
+          ),
+          const SizedBox(width: 8),
+          FilterChip(
+            label: Text('Negative margin${negMarginCount > 0 ? ' ($negMarginCount)' : ''}', style: const TextStyle(fontSize: 11)),
+            selected: _negMarginOnly,
+            onSelected: (v) => setState(() => _negMarginOnly = v),
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            selectedColor: Colors.red.withOpacity(0.14),
+            checkmarkColor: Colors.red,
+            tooltip: 'Show only lines sold at a negative margin (margin % below zero)',
+          ),
           const Spacer(),
           SizedBox(width: 240, child: TextField(
             decoration: const InputDecoration(hintText: 'Search product / party / voucher', isDense: true, prefixIcon: Icon(Icons.search, size: 16)),
@@ -570,7 +616,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         DataCell(t((r['pu_type'] ?? '').toString())),
         DataCell(t((r['pu_number'] ?? '').toString())),
         DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 200), child: Text((r['party'] ?? '').toString(), style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
-        DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 240), child: Text(prod, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
+        DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: Text(prod, style: const TextStyle(fontSize: 12), softWrap: true, maxLines: 3, overflow: TextOverflow.ellipsis))),
         DataCell(t(_fmtQty(r['qty'] as num?), num: true)),
         DataCell(t(_fmtMoney(r['rate'] as num?), num: true)),
         DataCell(t(_fmtMoney(r['amount'] as num?), num: true)),
