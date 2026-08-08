@@ -283,6 +283,11 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         await client.from('journal_lines').insert({
           'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
           'account_id': accId, 'debit': amt, 'credit': 0.0, 'line_order': i + 1,
+          // Carry the per-line narration + account label onto the GL line so the
+          // P&L drill-down shows the description and real account name instead of
+          // a borrowed entry-level payee.
+          'description': l.descCtrl.text.trim(),
+          'account_name': l.accountName,
           // Attribute the payable/party leg so it nets against the supplier
           // (or customer) in the ledger & aging. GL-account lines stay null.
           'party_id': (l.accountType == 'customer' || l.accountType == 'supplier' || l.accountType == 'promoter') ? l.accountId : null,

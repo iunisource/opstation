@@ -217,7 +217,16 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
   Future<void> _save({bool post = false}) async {
     final valid = _lines.where((l) => l.accountId != null && (l.debit + l.credit) > 0).toList();
     if (valid.isEmpty) { _snack('Add at least one account line'); return; }
-    if (post && !_balanced) { _snack('Debits must equal credits to post'); return; }
+    // A line with an amount but no account is counted in the on-screen Dr/Cr
+    // totals (_balanced) yet is NOT inserted below — posting it would write an
+    // unbalanced entry. Block it so the posted lines always balance.
+    final dangling = _lines.where((l) => l.accountId == null && (l.debit + l.credit) > 0).toList();
+    if (dangling.isNotEmpty) { _snack('A line has an amount but no account selected — pick an account or clear the amount.'); return; }
+    if (post) {
+      final pDr = valid.fold<double>(0, (s, l) => s + l.debit);
+      final pCr = valid.fold<double>(0, (s, l) => s + l.credit);
+      if (pDr <= 0 || (pDr - pCr).abs() >= 0.005) { _snack('Debits must equal credits to post'); return; }
+    }
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return; }
     final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id ?? '';
     final apId = 'coa_' + orgId + '_2110';   // Accounts Payable control account
