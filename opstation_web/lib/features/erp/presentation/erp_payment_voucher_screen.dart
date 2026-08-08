@@ -70,8 +70,24 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
             .select('id, name, phone').eq('org_id', orgId).eq('is_active', true).order('name');
         prom = List<Map<String, dynamic>>.from(pr as List);
       } catch (_) {}
+      // Postable accounts only. COA design: Group -> L1 -> L2 -> L3 -> L4 (the
+      // named detail account). Rule: show Level-4 detail accounts; for a Level-3
+      // branch that has no Level-4 beneath it, show the Level-3 itself as the
+      // postable leaf. Hide L1/L2 and any Level-3 that DOES have children, so an
+      // amount can never post to a parent (e.g. "5260 — Miscellaneous").
+      final coaParentIds = <String>{
+        for (final a in coa) if (a['parent_id'] != null) a['parent_id'].toString()
+      };
+      int lvlOf(Map a) => a['level'] is num ? (a['level'] as num).toInt() : int.tryParse('${a['level']}') ?? 0;
+      bool isLeaf(Map a) => !coaParentIds.contains(a['id'].toString());
+      final coaPostable = coa.where((a) {
+        final lvl = lvlOf(a);
+        if (lvl >= 4) return true;          // Level-4 (or deeper) detail account
+        if (lvl == 3) return isLeaf(a);     // Level-3 only when it has no children
+        return false;                        // hide L1 / L2 and L3 parents
+      }).toList();
       final all = <Map<String, dynamic>>[
-        ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
+        ...coaPostable.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
         ...sup.map((s) => {'id': s['id'], 'label': '${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}', 'sub': 'Supplier', 'type': 'supplier'}),
         ...cus.map((c) => {'id': c['id'], 'label': '${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}', 'sub': 'Customer', 'type': 'customer'}),
         ...prom.map((p) => {'id': p['id'], 'label': '${p['name']}${(p['phone'] as String?)?.isNotEmpty == true ? ' (${p['phone']})' : ''}', 'sub': 'Promoter', 'type': 'promoter'}),

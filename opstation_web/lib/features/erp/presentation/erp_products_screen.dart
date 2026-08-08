@@ -594,11 +594,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       final names = items.map((t) => t['name'] as String).toList();
       final cur = (value != null && value.isNotEmpty) ? value : null;
       if (cur != null && !names.contains(cur)) names.insert(0, cur);
-      return DropdownButtonFormField<String>(
+      return _SearchSelect(
+        key: ValueKey('sel_$label'),
+        label: label,
         value: cur,
-        decoration: InputDecoration(labelText: label),
-        hint: const Text('Select...'),
-        items: names.map((n) => DropdownMenuItem(value: n, child: Text(n))).toList(),
+        items: [for (final n in names) <String, String>{'value': n, 'label': n}],
         onChanged: onChanged,
       );
     }
@@ -706,13 +706,12 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                           decoration: const InputDecoration(labelText: 'Barcode'))),
                 ]),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
+                _SearchSelect(
+                  key: const ValueKey('sel_uom'),
+                  label: 'Base UOM *',
+                  hint: 'Select UOM',
                   value: uomId,
-                  decoration: const InputDecoration(labelText: 'Base UOM *'),
-                  hint: const Text('Select UOM'),
-                  items: _uoms.map((u) => DropdownMenuItem(
-                      value: u['id'] as String,
-                      child: Text('${u['name']} (${u['abbreviation']})'))).toList(),
+                  items: [for (final u in _uoms) <String, String>{'value': u['id'] as String, 'label': '${u['name']} (${u['abbreviation']})'}],
                   onChanged: (v) => setS(() => uomId = v),
                 ),
                 const SizedBox(height: 16),
@@ -1595,4 +1594,113 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       Text(val, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: color)),
     ]),
   );
+}
+
+// ── Searchable, freeze-proof dropdown ────────────────────────────────────────
+// Replaces the native DropdownButtonFormField in the Add/Edit Product dialog.
+// A native dropdown opened inside an AlertDialog on Flutter web can lock up (its
+// menu route and the dialog route fight over focus) — that's the "dropdown is
+// frozen, reopen the modal to fix it" bug. This widget never opens a native menu
+// route; it expands a panel in place, so it can't freeze — and it adds
+// type-to-search over the options.
+class _SearchSelect extends StatefulWidget {
+  final String label;
+  final String hint;
+  final String? value;
+  final List<Map<String, String>> items;
+  final ValueChanged<String?> onChanged;
+  const _SearchSelect({super.key, required this.label, required this.value, required this.items, required this.onChanged, this.hint = 'Select...'});
+  @override
+  State<_SearchSelect> createState() => _SearchSelectState();
+}
+
+class _SearchSelectState extends State<_SearchSelect> {
+  bool _open = false;
+  String _q = '';
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() { _searchCtrl.dispose(); super.dispose(); }
+
+  String get _currentLabel {
+    for (final it in widget.items) {
+      if (it['value'] == widget.value) return it['label'] ?? '';
+    }
+    return '';
+  }
+
+  List<Map<String, String>> get _filtered {
+    if (_q.isEmpty) return widget.items;
+    final ql = _q.toLowerCase();
+    return widget.items.where((it) => (it['label'] ?? '').toLowerCase().contains(ql)).toList();
+  }
+
+  void _close() { setState(() { _open = false; _q = ''; _searchCtrl.clear(); }); }
+
+  @override
+  Widget build(BuildContext context) {
+    final selLabel = _currentLabel;
+    final hasValue = selLabel.isNotEmpty;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(widget.label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 4),
+      InkWell(
+        onTap: () => setState(() { _open = !_open; if (!_open) { _q = ''; _searchCtrl.clear(); } }),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          decoration: BoxDecoration(
+            border: Border.all(color: _open ? AppTheme.primary : AppTheme.border),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(children: [
+            Expanded(child: Text(hasValue ? selLabel : widget.hint, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: hasValue ? AppTheme.textPrimary : Colors.grey))),
+            if (hasValue) InkWell(
+              onTap: () { widget.onChanged(null); _close(); },
+              child: const Padding(padding: EdgeInsets.only(right: 4), child: Icon(Icons.clear, size: 16, color: AppTheme.textSecondary)),
+            ),
+            Icon(_open ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
+          ]),
+        ),
+      ),
+      if (_open) Container(
+        margin: const EdgeInsets.only(top: 2),
+        constraints: const BoxConstraints(maxHeight: 240),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppTheme.border),
+          borderRadius: BorderRadius.circular(6),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8, offset: const Offset(0, 4))],
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: TextField(
+              controller: _searchCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(hintText: 'Search...', isDense: true, prefixIcon: Icon(Icons.search, size: 16), contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 8), border: OutlineInputBorder()),
+              onChanged: (v) => setState(() => _q = v),
+            ),
+          ),
+          Flexible(
+            child: _filtered.isEmpty
+              ? const Padding(padding: EdgeInsets.all(12), child: Text('No results', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+              : ListView(shrinkWrap: true, children: _filtered.map((it) {
+                  final selected = it['value'] == widget.value;
+                  return InkWell(
+                    onTap: () { widget.onChanged(it['value']); _close(); },
+                    child: Container(
+                      color: selected ? AppTheme.primary.withOpacity(0.06) : null,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                      child: Row(children: [
+                        Expanded(child: Text(it['label'] ?? '', style: TextStyle(fontSize: 13, fontWeight: selected ? FontWeight.w700 : FontWeight.w400))),
+                        if (selected) const Icon(Icons.check, size: 15, color: AppTheme.primary),
+                      ]),
+                    ),
+                  );
+                }).toList()),
+          ),
+        ]),
+      ),
+    ]);
+  }
 }
