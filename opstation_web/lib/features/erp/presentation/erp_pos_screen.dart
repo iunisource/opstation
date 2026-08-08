@@ -1527,16 +1527,25 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'reference_transaction_id': originalTxn['id'],
           'created_by': userId, 'transacted_at': now,
         },
-        'p_lines': [
-          for (final item in returnItems)
-            {
-              'product_id': item['product_id'],
-              'uom_id': item['uom_id'],
-              'quantity': item['return_qty'],
-              'unit_price': item['unit_price'],
-              'discount': 0,
-            },
-        ],
+        // Store the NET unit price (original price minus the line discount,
+        // pro-rated per unit) with discount 0, so the return line's value equals
+        // its share of the refund total. Previously it recorded the GROSS price
+        // with discount 0, so line-derived reports overstated returns.
+        'p_lines': returnItems.map((item) {
+          final price = (item['unit_price'] as num?)?.toDouble() ?? 0;
+          final disc = (item['discount'] as num?)?.toDouble() ?? 0;
+          final discType = item['discount_type'] as String? ?? 'fixed';
+          final origQty = (item['quantity'] as num?)?.toDouble() ?? 1;
+          final daPerUnit = discType == 'percent' ? price * (disc / 100) : (origQty > 0 ? disc / origQty : 0);
+          final netUnit = (price - daPerUnit).clamp(0, double.infinity).toDouble();
+          return {
+            'product_id': item['product_id'],
+            'uom_id': item['uom_id'],
+            'quantity': item['return_qty'],
+            'unit_price': netUnit,
+            'discount': 0,
+          };
+        }).toList(),
         'p_branch_id': branchId,
       });
       _showSnack('Return processed — Rs. ${money(returnTotal)} refunded');
