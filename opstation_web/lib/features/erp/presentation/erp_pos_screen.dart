@@ -1432,16 +1432,25 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final client = Supabase.instance.client;
       final txnId = 'post_${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(9999999)}';
       String txnNumber = 'TRX-${DateTime.now().year}-00001';
+      bool numbered = false;
       try {
-        final lastTxn = await client.from('pos_transactions').select('transaction_number')
-            .eq('org_id', orgId ?? '').not('transaction_number', 'is', null)
-            .order('transacted_at', ascending: false).limit(1);
-        if ((lastTxn as List).isNotEmpty && lastTxn[0]['transaction_number'] != null) {
-          final last = lastTxn[0]['transaction_number'] as String;
-          final lastNum = int.tryParse(last.split('-').last) ?? 0;
-          txnNumber = 'TRX-${DateTime.now().year}-${(lastNum + 1).toString().padLeft(5, "0")}'; 
-        }
+        // Atomic per-org sequence — two concurrent checkouts can't mint the same
+        // number. Falls back to the old client scan if the RPC isn't deployed yet.
+        final n = await client.rpc('next_pos_transaction_number', params: {'p_org': orgId ?? ''});
+        if (n is String && n.isNotEmpty) { txnNumber = n; numbered = true; }
       } catch (_) {}
+      if (!numbered) {
+        try {
+          final lastTxn = await client.from('pos_transactions').select('transaction_number')
+              .eq('org_id', orgId ?? '').not('transaction_number', 'is', null)
+              .order('transacted_at', ascending: false).limit(1);
+          if ((lastTxn as List).isNotEmpty && lastTxn[0]['transaction_number'] != null) {
+            final last = lastTxn[0]['transaction_number'] as String;
+            final lastNum = int.tryParse(last.split('-').last) ?? 0;
+            txnNumber = 'TRX-${DateTime.now().year}-${(lastNum + 1).toString().padLeft(5, "0")}';
+          }
+        } catch (_) {}
+      }
       final now = DateTime.now().toUtc().toIso8601String();
       final cartSnapshot = List<Map<String, dynamic>>.from(_cart);
       final totalAmt = _cartTotal;
@@ -3170,15 +3179,12 @@ class _ReturnDialogState extends State<_ReturnDialog> {
           .or('transaction_type.eq.sale,transaction_type.is.null')
           .order('transacted_at', ascending: false)
           .limit(500);
-      // Filter out fully returned transactions
-      final returnedIds = await Supabase.instance.client
-          .from('pos_transactions')
-          .select('reference_transaction_id')
-          .eq('org_id', widget.orgId)
-          .eq('transaction_type', 'return');
-      final Set<String> returned = {for (final r in returnedIds as List) r['reference_transaction_id'] as String? ?? ''};
+      // Show all sales. Per-line REMAINING quantity (sold minus already-returned)
+      // is enforced when an invoice is opened (see _loadItems), so a partially
+      // returned invoice stays returnable for its un-returned lines instead of
+      // disappearing from the list after a single partial return.
       setState(() {
-        _transactions = (txns as List).map((t) => Map<String, dynamic>.from(t)).where((t) => !returned.contains(t['id'] as String)).toList();
+        _transactions = (txns as List).map((t) => Map<String, dynamic>.from(t)).toList();
         _loadingTxns = false;
       });
     } catch (e) { setState(() => _loadingTxns = false); }
@@ -3192,13 +3198,43 @@ class _ReturnDialogState extends State<_ReturnDialog> {
           .select('*, products(name, sku)')
           .eq('transaction_id', txn['id'] as String)
           .gt('quantity', 0);
+      // How much of this invoice was already returned, per product, so each line
+      // only offers its REMAINING quantity (sold - already returned).
+      final Map<String, double> returnedByProduct = {};
+      try {
+        final priorRet = await Supabase.instance.client
+            .from('pos_transactions').select('id')
+            .eq('org_id', widget.orgId).eq('transaction_type', 'return')
+            .eq('reference_transaction_id', txn['id'] as String);
+        final retIds = [for (final r in priorRet as List) r['id'] as String];
+        if (retIds.isNotEmpty) {
+          final retItems = await Supabase.instance.client
+              .from('pos_transaction_items').select('product_id, quantity')
+              .inFilter('transaction_id', retIds);
+          for (final ri in retItems as List) {
+            final pid = ri['product_id'] as String?;
+            if (pid == null) continue;
+            returnedByProduct[pid] = (returnedByProduct[pid] ?? 0) + ((ri['quantity'] as num?)?.toDouble() ?? 0).abs();
+          }
+        }
+      } catch (_) {}
+      final annotated = <Map<String, dynamic>>[];
+      for (final raw in (items as List)) {
+        final it = Map<String, dynamic>.from(raw as Map);
+        final sold = (it['quantity'] as num?)?.toDouble() ?? 0;
+        final alreadyRet = returnedByProduct[it['product_id']] ?? 0;
+        final remaining = sold - alreadyRet;
+        if (remaining <= 0) continue; // already fully returned — nothing left
+        it['returnable'] = remaining;
+        annotated.add(it);
+      }
       setState(() {
-        _txnItems = List<Map<String, dynamic>>.from(items);
+        _txnItems = annotated;
         for (final it in _txnItems) {
           final id = it['id'] as String;
           _selected[id] = false;
-          final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-          _qtyCtrls[id] = TextEditingController(text: qty.toStringAsFixed(0));
+          final rem = (it['returnable'] as num?)?.toDouble() ?? 0;
+          _qtyCtrls[id] = TextEditingController(text: rem.toStringAsFixed(0));
         }
         _loadingItems = false;
       });
@@ -3223,7 +3259,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   @override Widget build(BuildContext context) {
     final filtered = _filtered;
     final selectedItems = _txnItems.where((it) => _selected[it['id']] == true).toList();
-    final returnTotal = selectedItems.fold(0.0, (s, it) { final qty = (double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0).clamp(0, (it['quantity'] as num?)?.toDouble() ?? 0).toDouble(); final price = (it['unit_price'] as num?)?.toDouble() ?? 0; final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final origQty = (it['quantity'] as num?)?.toDouble() ?? 1; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final netPrice = price - (origQty > 0 ? discAmt / origQty : 0); return s + qty * netPrice; });
+    final returnTotal = selectedItems.fold(0.0, (s, it) { final qty = (double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0).clamp(0, (it['returnable'] as num?)?.toDouble() ?? 0).toDouble(); final price = (it['unit_price'] as num?)?.toDouble() ?? 0; final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final origQty = (it['quantity'] as num?)?.toDouble() ?? 1; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final netPrice = price - (origQty > 0 ? discAmt / origQty : 0); return s + qty * netPrice; });
     return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 800, maxHeight: 600), child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         const Text('Process Return', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
@@ -3281,6 +3317,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                       final id = it['id'] as String;
                       final name = it['products']?['name'] as String? ?? it['name'] as String? ?? '-';
                       final origQty = (it['quantity'] as num?)?.toDouble() ?? 0;
+                      final returnable = (it['returnable'] as num?)?.toDouble() ?? origQty;
                       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
                       return CheckboxListTile(dense: true, value: _selected[id] ?? false, onChanged: (v) => setState(() => _selected[id] = v ?? false),
                         title: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
@@ -3291,12 +3328,13 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           enabled: _selected[id] == true,
                           onChanged: (v) {
-                            // Cap the return qty at the quantity originally sold —
-                            // prevents over-refund and inventory inflation.
+                            // Cap the return qty at what's still returnable (sold
+                            // minus already-returned) — prevents over-refund and
+                            // inventory inflation, including across repeat returns.
                             final ent = double.tryParse(v) ?? 0;
-                            if (ent > origQty) {
+                            if (ent > returnable) {
                               final c = _qtyCtrls[id]!;
-                              c.text = origQty.toStringAsFixed(0);
+                              c.text = returnable.toStringAsFixed(0);
                               c.selection = TextSelection.collapsed(offset: c.text.length);
                             }
                             setState(() {});
@@ -3316,7 +3354,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
           label: Text('Process Return${selectedItems.isNotEmpty ? ' — Rs. ${money(returnTotal)}' : ''}'),
           style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
           onPressed: selectedItems.isEmpty ? null : () async {
-            final retItems = selectedItems.map((it) { final sold = (it['quantity'] as num?)?.toDouble() ?? 0; final qty = (double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0).clamp(0, sold).toDouble(); return {...it, 'return_qty': qty}; }).toList();
+            final retItems = selectedItems.map((it) { final cap = (it['returnable'] as num?)?.toDouble() ?? (it['quantity'] as num?)?.toDouble() ?? 0; final qty = (double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0).clamp(0, cap).toDouble(); return {...it, 'return_qty': qty}; }).toList();
             Navigator.pop(context);
             await widget.onProcess(_selectedTxn!, retItems);
           }),
