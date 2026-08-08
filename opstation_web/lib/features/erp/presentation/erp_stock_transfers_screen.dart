@@ -768,6 +768,44 @@ class _StockTransferVoucherScreenState
     final orgId = _orgId!;
     final fromBranchId = _transfer!['from_branch_id'] as String;
 
+    // ── Self-heal a "stuck" draft ────────────────────────────────────────────
+    // A previous dispatch can leave source stock ALREADY deducted while the
+    // voucher is still Draft — e.g. the connection dropped after the legacy
+    // client loop decremented stock but before it flipped the status. Such a
+    // voucher is a dead-end: it can't be re-dispatched (source now shows short)
+    // and the destination can't receive it (still Draft). Detect it here from
+    // the ledger and offer the correct recovery instead of the normal path.
+    final needAgg = <String, double>{};
+    for (final it in _items) {
+      final pid = it['product_id'] as String;
+      needAgg[pid] = (needAgg[pid] ?? 0) + (it['quantity'] as num).toDouble();
+    }
+    final moveRows = await client
+        .from('inventory_movements')
+        .select('product_id, quantity')
+        .eq('org_id', orgId)
+        .eq('reference_type', 'stock_transfer')
+        .eq('reference_id', _transfer!['id'])
+        .eq('branch_id', fromBranchId);
+    final srcNet = <String, double>{}; // signed net at source for this transfer
+    for (final m in moveRows as List) {
+      final pid = m['product_id'] as String;
+      srcNet[pid] = (srcNet[pid] ?? 0) + ((m['quantity'] as num?)?.toDouble() ?? 0);
+    }
+    final removed = <String, double>{}; // net qty already gone from source
+    srcNet.forEach((pid, net) { if (net < -1e-6) removed[pid] = -net; });
+    if (removed.values.any((v) => v > 0)) {
+      // How complete is the deduction versus what the lines call for?
+      final complete = needAgg.entries
+          .every((e) => (removed[e.key] ?? 0) + 1e-6 >= e.value);
+      if (complete) {
+        await _resumeStuckDispatch();   // stock already gone → just go in-transit
+      } else {
+        await _reverseStuckDispatch(removed); // partial → put it back, stay draft
+      }
+      return;
+    }
+
     // Stock availability — BLOCKING. Re-checked against the server right now
     // (stock may have changed since items were added). Needs are aggregated
     // per product so multiple lines of the same item are counted together.
@@ -922,6 +960,150 @@ class _StockTransferVoucherScreenState
       }).eq('id', _transfer!['id']);
       }
       _snack('Dispatched — awaiting approval at destination');
+      widget.onUpdated();
+      await _load();
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ── Recovery: source stock already fully removed, but still Draft ─────────
+  // The goods are genuinely gone from source, so the truthful state is
+  // in-transit. Flip the status only (no second deduction), which lets the
+  // destination receive it. No stock is touched here.
+  Future<void> _resumeStuckDispatch() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Row(children: [
+          Icon(Icons.build_circle_outlined, color: AppTheme.primary, size: 20),
+          SizedBox(width: 8),
+          Text('Resume Dispatch'),
+        ]),
+        content: const Text(
+            'The stock for this transfer was already removed from the source '
+            'branch during an earlier dispatch, but the voucher was left in '
+            'Draft. No stock will be moved again — this only marks it In Transit '
+            'so the destination can receive it.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+              child: const Text('Mark In Transit')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _busy = true);
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      await Supabase.instance.client.from('stock_transfers').update({
+        'status': 'in_transit',
+        'dispatched_by': _transfer!['dispatched_by'] ?? _userId,
+        'dispatched_at': _transfer!['dispatched_at'] ?? now,
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
+      _snack('Resumed — now In Transit, awaiting approval at destination');
+      widget.onUpdated();
+      await _load();
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ── Recovery: source stock only PARTIALLY removed, still Draft ────────────
+  // We can't safely mark this in-transit (the destination would receive more
+  // than actually left source). Put back exactly what was removed and keep it
+  // Draft, so the user can review and dispatch it cleanly.
+  Future<void> _reverseStuckDispatch(Map<String, double> removed) async {
+    final client = Supabase.instance.client;
+    final orgId = _orgId!;
+    final fromBranchId = _transfer!['from_branch_id'] as String;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Row(children: [
+          Icon(Icons.warning_amber_rounded, color: AppTheme.danger, size: 20),
+          SizedBox(width: 8),
+          Text('Incomplete Dispatch'),
+        ]),
+        content: const Text(
+            'An earlier dispatch removed only part of this transfer’s stock '
+            'from the source branch before it stopped. To avoid moving stock '
+            'that never actually left, the partial deduction will be returned to '
+            'the source branch and the voucher kept as Draft. You can then '
+            'dispatch it again.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+              child: const Text('Return Stock & Keep Draft')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => _busy = true);
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      var i = 0;
+      for (final entry in removed.entries) {
+        final productId = entry.key;
+        final qty = entry.value; // positive amount to give back
+        if (qty <= 1e-6) continue;
+        final line = _items.firstWhere((it) => it['product_id'] == productId,
+            orElse: () => const <String, dynamic>{});
+        final uomId = line['uom_id'] as String?;
+        await client.from('inventory_movements').insert({
+          'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_rev',
+          'org_id': orgId,
+          'product_id': productId,
+          'branch_id': fromBranchId,
+          'uom_id': uomId,
+          'quantity': qty,
+          'movement_type': 'transfer',
+          'reference_id': _transfer!['id'],
+          'reference_type': 'stock_transfer',
+          'moved_at': _movedAt(),
+          'created_by': _userId,
+        });
+        final fromStock = await client
+            .from('inventory_stock')
+            .select()
+            .eq('org_id', orgId)
+            .eq('product_id', productId)
+            .eq('branch_id', fromBranchId)
+            .maybeSingle();
+        if (fromStock != null) {
+          await client.from('inventory_stock').update({
+            'quantity': (fromStock['quantity'] as num).toDouble() + qty,
+            'updated_at': now,
+          }).eq('id', fromStock['id']);
+        } else {
+          await client.from('inventory_stock').insert({
+            'id': 'is_${DateTime.now().microsecondsSinceEpoch}_${i}_rev',
+            'org_id': orgId,
+            'product_id': productId,
+            'branch_id': fromBranchId,
+            'uom_id': uomId,
+            'quantity': qty,
+          });
+        }
+        i++;
+      }
+      await client.from('stock_transfers').update({
+        'status': 'draft',
+        'updated_at': now,
+      }).eq('id', _transfer!['id']);
+      _snack('Partial deduction returned to source — voucher kept as Draft');
       widget.onUpdated();
       await _load();
     } catch (e) {

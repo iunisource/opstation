@@ -1280,7 +1280,19 @@ $runSection
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _listSearch.isEmpty ? _jobs : _jobs.where((j) {
+    // Jobs are loaded org-wide but shown for the sidebar-selected branch only —
+    // production moves stock at the job's branch, so the list must follow the
+    // branch the user is looking at. Switching branch in the sidebar re-runs
+    // build (we watch the provider) and re-filters here; we also refresh the
+    // component on-hand figures for the new branch.
+    final branchId = ref.watch(selectedBranchProvider)?['id'] as String?;
+    ref.listen(selectedBranchProvider, (prev, next) {
+      if ((prev?['id'] as String?) != (next?['id'] as String?)) _loadStock();
+    });
+    final byBranch = branchId == null
+        ? _jobs
+        : _jobs.where((j) => j['branch_id'] == branchId).toList();
+    final filtered = _listSearch.isEmpty ? byBranch : byBranch.where((j) {
       final q = _listSearch.toLowerCase();
       final pn = (_prodLabel[j['product_id']] ?? '').toLowerCase();
       return (j['job_number'] as String? ?? '').toLowerCase().contains(q) || pn.contains(q);
@@ -1316,7 +1328,7 @@ $runSection
               TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 15), isDense: true), onChanged: (v) => setState(() => _listSearch = v)),
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            : filtered.isEmpty ? const Center(child: Text('No job cards yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : filtered.isEmpty ? Center(child: Text(_jobs.isEmpty ? 'No job cards yet' : 'No job cards for this branch', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
             : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
                 final j = filtered[i]; final sel = _current?['id'] == j['id'];
                 final st = (j['status'] as String? ?? 'queued');
