@@ -702,103 +702,133 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       // reflects at the till immediately. There is no FK from pos_catalog to
       // products, so we fetch prices separately and merge by product_id rather
       // than relying on a PostgREST embedded join.
-      try {
-        final priceRows = await _fetchAllPaged((from, to) => client
-            .from('products')
-            .select('id, selling_price, cost_price, is_consignment')
-            .eq('org_id', orgId)
-            .order('id')
-            .range(from, to));
-        final priceMap = <String, double>{};
-        final costOk = <String, bool>{};   // product has a valid cost basis (or is consignment)
-        for (final r in List<Map<String, dynamic>>.from(priceRows)) {
-          final id = r['id'] as String?;
-          if (id == null) continue;
-          if (r['selling_price'] != null) priceMap[id] = (r['selling_price'] as num).toDouble();
-          final isConsign = r['is_consignment'] == true;
-          costOk[id] = isConsign || ((r['cost_price'] as num?)?.toDouble() ?? 0) > 0;
-        }
-        for (final p in prods) {
-          final pid = p['product_id'] as String?;
-          if (pid != null && priceMap.containsKey(pid)) p['price'] = priceMap[pid];
-          p['cost_ok'] = pid != null ? (costOk[pid] ?? false) : false;
-        }
-      } catch (_) {
-        // If the price fetch fails for any reason, fall back to the stored
-        // pos_catalog.price already present on each row (no crash).
+      // ── Second concurrent wave ────────────────────────────────────────────
+      // These lookups are all independent of one another. Previously they ran
+      // as ~9 SERIAL round-trips after the first batch — the bulk of the
+      // session-open delay. Fire them together instead; each closure keeps its
+      // own error handling (falling back to a safe default) so one failure
+      // can't sink the batch. Pure post-processing (merges, defaults, config
+      // parsing) happens after, once the rows are in hand.
+      final sid = _session['id'];
+      final priceFuture = (() async {
+        try {
+          return await _fetchAllPaged((from, to) => client
+              .from('products')
+              .select('id, selling_price, cost_price, is_consignment')
+              .eq('org_id', orgId)
+              .order('id')
+              .range(from, to));
+        } catch (_) { return <Map<String, dynamic>>[]; }
+      })();
+      final expFuture = (() async {
+        try {
+          final r = await client.from('pos_expenses').select('*').eq('session_id', sid).order('created_at', ascending: false);
+          return List<Map<String, dynamic>>.from(r as List);
+        } catch (_) { return <Map<String, dynamic>>[]; }
+      })();
+      final payFuture = (() async {
+        try {
+          final r = await client.from('cpv_vouchers').select('id, voucher_number, total_amount, notes, created_at, cash_account_name, cpv_voucher_lines(account_name, account_type, description, amount)').eq('session_id', sid).eq('status', 'posted').order('created_at', ascending: false);
+          return List<Map<String, dynamic>>.from(r as List);
+        } catch (_) { return <Map<String, dynamic>>[]; }
+      })();
+      final rcvFuture = (() async {
+        try {
+          final r = await client.from('crv_vouchers').select('id, voucher_number, total_amount, notes, created_at, crv_voucher_lines(account_name, account_type, description, amount)').eq('session_id', sid).eq('status', 'posted').order('created_at', ascending: false);
+          return List<Map<String, dynamic>>.from(r as List);
+        } catch (_) { return <Map<String, dynamic>>[]; }
+      })();
+      final settingsFuture = (() async {
+        try {
+          return await client.from('pos_settings').select('allow_sell_without_stock, allow_price_edit').eq('org_id', orgId).maybeSingle();
+        } catch (_) { return null; }
+      })();
+      final payMethodsFuture = (() async {
+        try {
+          final r = await client.from('pos_payment_methods').select('code, label, gl_account_id, is_credit, sort_order').eq('org_id', orgId).eq('is_active', true).order('sort_order');
+          return List<Map<String, dynamic>>.from(r as List);
+        } catch (_) { return <Map<String, dynamic>>[]; }
+      })();
+      // Bank accounts = active COA accounts under the "Bank Accounts" (1120)
+      // node. Two dependent hops, but they overlap the rest of the wave.
+      final bankFuture = (() async {
+        try {
+          final bankParent = await client.from('chart_of_accounts').select('id').eq('org_id', orgId).eq('code', '1120').maybeSingle();
+          if (bankParent == null) return <Map<String, dynamic>>[];
+          final banks = await client.from('chart_of_accounts').select('id, code, name').eq('org_id', orgId).eq('parent_id', bankParent['id']).eq('is_active', true).order('code');
+          return List<Map<String, dynamic>>.from(banks as List);
+        } catch (_) { return <Map<String, dynamic>>[]; }
+      })();
+      final cfgFuture = (() async {
+        try {
+          final r = await client.from('app_config').select('key, value, branch_id').eq('org_id', orgId).like('key', 'pos.%');
+          return List<Map<String, dynamic>>.from(r as List);
+        } catch (_) { return <Map<String, dynamic>>[]; }
+      })();
+
+      final priceRows = await priceFuture;
+      final expenseList = await expFuture;
+      _sessionPayments = await payFuture;
+      _sessionReceipts = await rcvFuture;
+      final s = await settingsFuture;
+      _payMethods = await payMethodsFuture;
+      _bankAccounts = await bankFuture;
+      final cfgRows = await cfgFuture;
+
+      // Live pricing: the sell price always comes from products.selling_price,
+      // not the frozen pos_catalog.price snapshot, so a price update reflects at
+      // the till immediately. No FK from pos_catalog to products, so merge by
+      // product_id. If the price fetch failed the list is empty and each row
+      // keeps its stored pos_catalog.price (no crash).
+      final priceMap = <String, double>{};
+      final costOk = <String, bool>{};   // has a valid cost basis (or is consignment)
+      for (final r in priceRows) {
+        final id = r['id'] as String?;
+        if (id == null) continue;
+        if (r['selling_price'] != null) priceMap[id] = (r['selling_price'] as num).toDouble();
+        final isConsign = r['is_consignment'] == true;
+        costOk[id] = isConsign || ((r['cost_price'] as num?)?.toDouble() ?? 0) > 0;
       }
-      List<Map<String, dynamic>> expenseList = [];
-      try {
-        final expRows = await Supabase.instance.client.from('pos_expenses').select('*').eq('session_id', _session['id']).order('created_at', ascending: false);
-        expenseList = List<Map<String, dynamic>>.from(expRows);
-        try {
-          final payRows = await Supabase.instance.client.from('cpv_vouchers').select('id, voucher_number, total_amount, notes, created_at, cash_account_name, cpv_voucher_lines(account_name, account_type, description, amount)').eq('session_id', _session['id']).eq('status', 'posted').order('created_at', ascending: false);
-          _sessionPayments = List<Map<String, dynamic>>.from(payRows);
-        } catch (_) { _sessionPayments = []; }
-        try {
-          final rcvRows = await Supabase.instance.client.from('crv_vouchers').select('id, voucher_number, total_amount, notes, created_at, crv_voucher_lines(account_name, account_type, description, amount)').eq('session_id', _session['id']).eq('status', 'posted').order('created_at', ascending: false);
-          _sessionReceipts = List<Map<String, dynamic>>.from(rcvRows);
-        } catch (_) { _sessionReceipts = []; }
-      } catch (_) {}
-      // Load expenses separately (avoids Future.wait index issues)
-      bool allowNoStock = false;
-      bool allowPriceEdit = false;
-      try {
-        final s = await Supabase.instance.client.from('pos_settings').select('allow_sell_without_stock, allow_price_edit').eq('org_id', orgId).maybeSingle();
-        allowNoStock = s != null && s['allow_sell_without_stock'] == true;
-        allowPriceEdit = s != null && s['allow_price_edit'] == true;
-      } catch (_) {}
+      for (final p in prods) {
+        final pid = p['product_id'] as String?;
+        if (pid != null && priceMap.containsKey(pid)) p['price'] = priceMap[pid];
+        p['cost_ok'] = pid != null ? (costOk[pid] ?? false) : false;
+      }
 
-      // Phase 1: configurable payment methods (active, ordered)
-      try {
-        final pm = await Supabase.instance.client.from('pos_payment_methods')
-            .select('code, label, gl_account_id, is_credit, sort_order')
-            .eq('org_id', orgId).eq('is_active', true).order('sort_order');
-        _payMethods = List<Map<String, dynamic>>.from(pm);
-        for (final m in _payMethods) {
-          _tenderCtrls.putIfAbsent(m['code'] as String, () => TextEditingController());
-        }
-        if (_payMethods.isNotEmpty && !_payMethods.any((m) => m['code'] == _paymentMethod)) {
-          _paymentMethod = _payMethods.first['code'] as String;
-        }
-        // Bank accounts = active COA accounts whose parent is the "Bank Accounts" (1120) node
-        final bankParent = await Supabase.instance.client.from('chart_of_accounts')
-            .select('id').eq('org_id', orgId).eq('code', '1120').maybeSingle();
-        if (bankParent != null) {
-          final banks = await Supabase.instance.client.from('chart_of_accounts')
-              .select('id, code, name').eq('org_id', orgId).eq('parent_id', bankParent['id'])
-              .eq('is_active', true).order('code');
-          _bankAccounts = List<Map<String, dynamic>>.from(banks);
-        }
-        final bankMethod = _payMethods.firstWhere((m) => m['code'] == 'bank', orElse: () => <String, dynamic>{});
-        if (_selectedBankId == null || !_bankAccounts.any((b) => b['id'] == _selectedBankId)) {
-          final def = bankMethod.isEmpty ? null : bankMethod['gl_account_id'];
-          _selectedBankId = (def != null && _bankAccounts.any((b) => b['id'] == def))
-              ? def as String
-              : (_bankAccounts.isNotEmpty ? _bankAccounts.first['id'] as String : null);
-        }
-      } catch (_) {}
+      final allowNoStock = s != null && s['allow_sell_without_stock'] == true;
+      final allowPriceEdit = s != null && s['allow_price_edit'] == true;
 
-      // Receipt config from app_config (pos.*). Branch-scoped: a branch's own
-      // config (branch_id == this branch) takes precedence as a complete set;
-      // otherwise fall back to the org-level default (branch_id null/empty).
-      Map<String, String> orgCfg = {};
-      Map<String, String> brCfg = {};
-      try {
-        final cfgRows = await Supabase.instance.client
-            .from('app_config').select('key, value, branch_id').eq('org_id', orgId).like('key', 'pos.%');
-        for (final row in (cfgRows as List)) {
-          final k = row['key'] as String?;
-          if (k == null) continue;
-          final v = row['value']?.toString() ?? '';
-          final b = row['branch_id'] as String?;
-          if (b == null || b.isEmpty) {
-            orgCfg[k] = v;
-          } else if (b == branchId) {
-            brCfg[k] = v;
-          }
+      // Payment methods: tender controllers + default selection.
+      for (final m in _payMethods) {
+        _tenderCtrls.putIfAbsent(m['code'] as String, () => TextEditingController());
+      }
+      if (_payMethods.isNotEmpty && !_payMethods.any((m) => m['code'] == _paymentMethod)) {
+        _paymentMethod = _payMethods.first['code'] as String;
+      }
+      // Default bank selection needs both payMethods and bankAccounts.
+      final bankMethod = _payMethods.firstWhere((m) => m['code'] == 'bank', orElse: () => <String, dynamic>{});
+      if (_selectedBankId == null || !_bankAccounts.any((b) => b['id'] == _selectedBankId)) {
+        final def = bankMethod.isEmpty ? null : bankMethod['gl_account_id'];
+        _selectedBankId = (def != null && _bankAccounts.any((b) => b['id'] == def))
+            ? def as String
+            : (_bankAccounts.isNotEmpty ? _bankAccounts.first['id'] as String : null);
+      }
+
+      // Receipt config from app_config (pos.*). A branch's own config takes
+      // precedence over the org-level default.
+      final orgCfg = <String, String>{};
+      final brCfg = <String, String>{};
+      for (final row in cfgRows) {
+        final k = row['key'] as String?;
+        if (k == null) continue;
+        final v = row['value']?.toString() ?? '';
+        final b = row['branch_id'] as String?;
+        if (b == null || b.isEmpty) {
+          orgCfg[k] = v;
+        } else if (b == branchId) {
+          brCfg[k] = v;
         }
-      } catch (_) {}
+      }
       final posCfg = brCfg.isNotEmpty ? brCfg : orgCfg;
 
       setState(() {

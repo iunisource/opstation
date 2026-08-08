@@ -118,43 +118,64 @@ class _DashboardStatsState extends State<_DashboardStats> {
           .toUtc()
           .toIso8601String();
 
-      final users = await client
-          .from('users')
-          .select('id, role')
-          .eq('org_id', widget.orgId);
-      final customerCount = await client
-          .from('customers')
-          .select('id')
-          .eq('org_id', widget.orgId)
-          .count(CountOption.exact);
-      final routes = await client
-          .from('sales_routes')
-          .select('id')
-          .eq('org_id', widget.orgId);
-
-      // Active = ended_at IS NULL, regardless of start date. A trip
-      // that started yesterday and is still running is still active.
-      final activeTrips = await client
-          .from('trips')
-          .select('id')
-          .eq('org_id', widget.orgId)
-          .filter('ended_at', 'is', null);
-
-      // Completed = ended_at within today's local-day window.
-      final completedTrips = await client
-          .from('trips')
-          .select('id')
-          .eq('org_id', widget.orgId)
-          .gte('ended_at', todayStart)
-          .lt('ended_at', tomorrowStart);
-
-      // Today's visits — RLS scopes to the user's org. Bounded window
-      // (gte + lt) so trips that span midnight don't double-count.
-      final todayVisits = await client
-          .from('visits')
-          .select('amount, customer_id')
-          .gte('timestamp', todayStart)
-          .lt('timestamp', tomorrowStart);
+      // All eight rollup queries are independent of one another, so fire them
+      // concurrently and await the batch. This turns eight serial round-trips
+      // (which dominated the dashboard's load time, worst on admin accounts
+      // with the largest data sets) into a single parallel wave — total wait
+      // drops from the SUM of the query latencies to the slowest single one.
+      final results = await Future.wait<dynamic>([
+        client
+            .from('users')
+            .select('id, role')
+            .eq('org_id', widget.orgId),
+        client
+            .from('customers')
+            .select('id')
+            .eq('org_id', widget.orgId)
+            .count(CountOption.exact),
+        client
+            .from('sales_routes')
+            .select('id')
+            .eq('org_id', widget.orgId),
+        // Active = ended_at IS NULL, regardless of start date. A trip
+        // that started yesterday and is still running is still active.
+        client
+            .from('trips')
+            .select('id')
+            .eq('org_id', widget.orgId)
+            .filter('ended_at', 'is', null),
+        // Completed = ended_at within today's local-day window.
+        client
+            .from('trips')
+            .select('id')
+            .eq('org_id', widget.orgId)
+            .gte('ended_at', todayStart)
+            .lt('ended_at', tomorrowStart),
+        // Today's visits — RLS scopes to the user's org. Bounded window
+        // (gte + lt) so trips that span midnight don't double-count.
+        client
+            .from('visits')
+            .select('amount, customer_id')
+            .gte('timestamp', todayStart)
+            .lt('timestamp', tomorrowStart),
+        // Intelligence rollups.
+        client
+            .from('placement_audit')
+            .select('customer_id, surveyed_at')
+            .eq('org_id', widget.orgId),
+        client
+            .from('competitor_spotting')
+            .select('customer_id, brand_name, surveyed_at')
+            .eq('org_id', widget.orgId),
+      ]);
+      final users = results[0] as List;
+      final customerCount = results[1];
+      final routes = results[2] as List;
+      final activeTrips = results[3] as List;
+      final completedTrips = results[4] as List;
+      final todayVisits = results[5] as List;
+      final paRows = results[6] as List;
+      final csRows = results[7] as List;
 
       int totalCollection = 0;
       // Shops visited — matches the app's admin_dashboard_stats formula:
@@ -170,16 +191,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
       }
       final shopsVisited = shopsSet.length;
 
-      // === Intelligence rollups ===
-      final paRows = await client
-          .from('placement_audit')
-          .select('customer_id, surveyed_at')
-          .eq('org_id', widget.orgId);
-      final csRows = await client
-          .from('competitor_spotting')
-          .select('customer_id, brand_name, surveyed_at')
-          .eq('org_id', widget.orgId);
-
+      // === Intelligence rollups (rows fetched in the parallel batch above) ===
       final auditedShops = paRows
           .map((r) => r['customer_id'] as String)
           .toSet();
