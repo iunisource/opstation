@@ -364,9 +364,14 @@ class DispatchOrderService {
     // delivered. (Failed-only stays Approved — no Failed status exists.)
     final deliveredByVoucher = <String>{};
     try {
+      // Scope to THIS org's deliveries via the parent (delivery_stops has no
+      // org_id of its own). Without this, a delivered stop for another org's
+      // voucher number — which collides, since numbers restart per org — would
+      // mark this org's same-numbered DO as Delivered.
       final allStops = await _client
           .from('delivery_stops')
-          .select('so_invoice_number, status')
+          .select('so_invoice_number, status, deliveries!inner(org_id)')
+          .eq('deliveries.org_id', orgId)
           .not('so_invoice_number', 'is', null);
       for (final s in allStops as List) {
         if ((s['status'] as String?) == 'delivered') {
