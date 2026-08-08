@@ -661,6 +661,19 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     return out;
   }
 
+  // Lightweight post-sale refresh: only this session's transactions change on a
+  // sale/return (stock is decremented locally), so re-fetch just those instead
+  // of the full catalog/customer/price reload that made checkout feel slow.
+  Future<void> _refreshSessionTxns() async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('pos_transactions')
+          .select('*, customers(shop_name), pos_customers(name, phone), transaction_number, amount_paid, balance_change')
+          .eq('session_id', _session['id']).order('transacted_at', ascending: false);
+      if (mounted) setState(() => _transactions = List<Map<String, dynamic>>.from(rows));
+    } catch (_) {}
+  }
+
   Future<void> _loadData() async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() { _loading = true; _stagedProduct = null; _stagedCartIndex = null; _stagedQtyCtrl.clear(); _stagedDiscCtrl.clear(); _showDropdown = false; });
@@ -1506,11 +1519,23 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       });
       // Customer balances are GL-computed (via the sale's AR posting under
       // customer_id) — no separate balance column to maintain.
-      setState(() { _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _selectedPromoter = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes(); }); _playSuccessSound();
-      await _loadData();
-      // Show receipt
+      final custShop = _selectedCustomer?['shop_name'] as String?;
+      setState(() {
+        // Decrement local stock for the sold items so the till reflects it
+        // instantly — this removes the need for the slow full reload post-sale.
+        for (final ci in cartSnapshot) {
+          final pid = ci['product_id'];
+          final q = (ci['quantity'] as num?)?.toDouble() ?? 0;
+          for (final pr in _allProducts) {
+            if (pr['product_id'] == pid) { pr['stock_qty'] = ((pr['stock_qty'] as num?)?.toDouble() ?? 0) - q; break; }
+          }
+        }
+        _cart.clear(); _orderDiscount = 0; _selectedCustomer = null; _selectedPosCustomer = null; _selectedPromoter = null; _customerSearchCtrl.clear(); _paymentMethod = _payMethods.isNotEmpty ? _payMethods.first['code'] as String : 'cash'; _customPaymentCtrl.clear(); _splitPayment = false; _amountPaidCtrl.clear(); for (final c in _tenderCtrls.values) { c.clear(); } _syncFocusNodes();
+      }); _playSuccessSound();
+      // Show the receipt immediately from the just-posted data — don't block the
+      // cashier on a full catalog/stock reload (that was the post-sale lag).
       if (mounted) {
-        final txn = _transactions.firstWhere((t) => t['id'] == txnId, orElse: () => {'id': txnId, 'transaction_number': txnNumber, 'total': totalAmt, 'discount': discountAmt, 'payment_method': _paymentMethod, 'transacted_at': now, 'customers': _selectedCustomer != null ? {'shop_name': _selectedCustomer!['shop_name']} : null});
+        final Map<String, dynamic> txn = {'id': txnId, 'transaction_number': txnNumber, 'total': totalAmt, 'discount': discountAmt, 'payment_method': primaryMethod, 'transacted_at': now, 'customers': custShop != null ? {'shop_name': custShop} : null};
         await showDialog(context: context, barrierDismissible: false, builder: (_) => _ReceiptDialog(
           transaction: txn, items: cartSnapshot,
           orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
@@ -1518,11 +1543,31 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           cashierName: ref.read(currentUserProvider)?.name ?? '', posConfig: _posConfig,
         ));
       }
+      // Refresh only this session's transactions (one fast query) so the
+      // receipts panel updates. Catalog / customers / prices are unchanged.
+      await _refreshSessionTxns();
     } catch (e) { _showSnack('Failed: $e'); } finally { setState(() => _checkingOut = false); }
   }
 
   Future<void> _processReturn(Map<String, dynamic> originalTxn, List<Map<String, dynamic>> returnItems) async {
     if (returnItems.isEmpty) { _showSnack('Select at least one item'); return; }
+    // Ask where the refund goes — always offer both. Customer Account needs a
+    // customer on the sale (post_pos_money credits their receivable).
+    final hasCustomer = (originalTxn['customer_id'] as String?)?.isNotEmpty == true;
+    final refundDest = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Refund to'),
+      content: const Text('Where should this refund go?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        OutlinedButton(onPressed: () => Navigator.pop(ctx, 'Customer Account'), child: const Text('Customer Account')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, 'Cash'), child: const Text('Cash')),
+      ],
+    ));
+    if (refundDest == null) return; // cancelled
+    if (refundDest == 'Customer Account' && !hasCustomer) {
+      _showSnack('This sale has no customer — attach a customer to refund to their account, or choose Cash.');
+      return;
+    }
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final branchId = _session['branch_id'] as String;
     try {
@@ -1537,7 +1582,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'id': retId, 'org_id': orgId, 'session_id': _session['id'],
           'customer_id': originalTxn['customer_id'],
           'total': -returnTotal, 'discount': 0,
-          'payment_method': originalTxn['payment_method'] ?? 'cash',
+          'payment_method': refundDest,
           'transaction_type': 'return',
           'reference_transaction_id': originalTxn['id'],
           'created_by': userId, 'transacted_at': now,
@@ -1702,7 +1747,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
       }).eq('id', _session['id']);
       await _loadData();
-      _exportSummary(combined: false); // auto-print on close keeps the bill-wise format
+      await _exportSummary(); // ask bill-wise vs combined on close (restored)
       widget.onUpdated();
       if (mounted) Navigator.of(context).pop();
     } catch (e) { _showSnack('Failed: $e'); }
