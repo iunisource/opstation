@@ -606,6 +606,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/manufacturing/production-plan')) _menuItem(context, 'Production Material Planner', Icons.account_tree_outlined, '/manufacturing/production-plan', location),
       if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card', Icons.assignment_outlined, '/manufacturing/job-card', location),
       if (show('/manufacturing/qc-checkpoints')) _menuItem(context, 'QC Checkpoints', Icons.fact_check_outlined, '/manufacturing/qc-checkpoints', location),
+      if (show('/manufacturing/qc-station')) _menuItem(context, 'QC Station', Icons.checklist_outlined, '/manufacturing/qc-station', location),
     ];
     final mfgVoucherItems = <Widget>[
       if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)', Icons.account_tree_outlined, '/manufacturing/product-assembly', location),
@@ -693,7 +694,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
-          ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints',
+          ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
            '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary'],
           _trimDividers(manufacturingItems)),
