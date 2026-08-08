@@ -1191,9 +1191,15 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final da = i['discount_type'] == 'percent' ? gross * (d.clamp(0, 100) / 100) : d.clamp(0, gross).toDouble();
     return s + da;
   });
-  double get _orderDiscountAmt => _orderDiscountType == 'percent'
-      ? _cartSubtotal * (_orderDiscount.clamp(0, 100) / 100)
-      : _orderDiscount.clamp(0, _cartSubtotal).toDouble();
+  double get _orderDiscountAmt {
+    // Apply the order-level discount to the subtotal AFTER line-item discounts,
+    // so a percent discount isn't inflated by the gross and the combined
+    // discount (line + order) can never exceed the sale.
+    final base = (_cartSubtotal - _cartItemDiscounts).clamp(0, double.infinity).toDouble();
+    return _orderDiscountType == 'percent'
+        ? base * (_orderDiscount.clamp(0, 100) / 100)
+        : _orderDiscount.clamp(0, base).toDouble();
+  }
   double get _cartTotal => (_cartSubtotal - _cartItemDiscounts - _orderDiscountAmt).clamp(0, double.infinity);
   double get _totalDiscount => _cartItemDiscounts + _orderDiscountAmt;
 
