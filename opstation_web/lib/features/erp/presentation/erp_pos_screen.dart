@@ -3208,7 +3208,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   @override Widget build(BuildContext context) {
     final filtered = _filtered;
     final selectedItems = _txnItems.where((it) => _selected[it['id']] == true).toList();
-    final returnTotal = selectedItems.fold(0.0, (s, it) { final qty = double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0; final price = (it['unit_price'] as num?)?.toDouble() ?? 0; final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final origQty = (it['quantity'] as num?)?.toDouble() ?? 1; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final netPrice = price - (origQty > 0 ? discAmt / origQty : 0); return s + qty * netPrice; });
+    final returnTotal = selectedItems.fold(0.0, (s, it) { final qty = (double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0).clamp(0, (it['quantity'] as num?)?.toDouble() ?? 0).toDouble(); final price = (it['unit_price'] as num?)?.toDouble() ?? 0; final disc = (it['discount'] as num?)?.toDouble() ?? 0; final discType = it['discount_type'] as String? ?? 'fixed'; final origQty = (it['quantity'] as num?)?.toDouble() ?? 1; final discAmt = discType == 'percent' ? price * origQty * (disc/100) : disc; final netPrice = price - (origQty > 0 ? discAmt / origQty : 0); return s + qty * netPrice; });
     return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 800, maxHeight: 600), child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         const Text('Process Return', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
@@ -3275,7 +3275,17 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                           decoration: InputDecoration(labelText: 'Return qty', isDense: true, filled: true, fillColor: _selected[id] == true ? Colors.orange.withOpacity(0.08) : Colors.grey.withOpacity(0.05)),
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           enabled: _selected[id] == true,
-                          onChanged: (_) => setState(() {}),
+                          onChanged: (v) {
+                            // Cap the return qty at the quantity originally sold —
+                            // prevents over-refund and inventory inflation.
+                            final ent = double.tryParse(v) ?? 0;
+                            if (ent > origQty) {
+                              final c = _qtyCtrls[id]!;
+                              c.text = origQty.toStringAsFixed(0);
+                              c.selection = TextSelection.collapsed(offset: c.text.length);
+                            }
+                            setState(() {});
+                          },
                         )));
                     }).toList())),
                 if (selectedItems.isNotEmpty) Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)),
@@ -3291,7 +3301,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
           label: Text('Process Return${selectedItems.isNotEmpty ? ' — Rs. ${money(returnTotal)}' : ''}'),
           style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
           onPressed: selectedItems.isEmpty ? null : () async {
-            final retItems = selectedItems.map((it) { final qty = double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0; return {...it, 'return_qty': qty}; }).toList();
+            final retItems = selectedItems.map((it) { final sold = (it['quantity'] as num?)?.toDouble() ?? 0; final qty = (double.tryParse(_qtyCtrls[it['id']]?.text ?? '0') ?? 0).clamp(0, sold).toDouble(); return {...it, 'return_qty': qty}; }).toList();
             Navigator.pop(context);
             await widget.onProcess(_selectedTxn!, retItems);
           }),

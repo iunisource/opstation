@@ -399,10 +399,21 @@ class _ErpStockAdjustmentScreenState
         // The lock flip alone does NOT post — there is no trigger that calls the
         // poster (the only trigger fires on is_voided). So invoke the poster
         // explicitly, the same way the other voucher screens do.
-        final res = await _supa
-            .rpc('post_stock_adjustment_voucher', params: {'p_id': id});
-        setState(() => _isLocked = true);
-        _toast(res?.toString() ?? 'Posted');
+        try {
+          final res = await _supa
+              .rpc('post_stock_adjustment_voucher', params: {'p_id': id});
+          setState(() => _isLocked = true);
+          _toast(res?.toString() ?? 'Posted');
+        } catch (e) {
+          // GL posting failed AFTER the header was flipped to posted/locked
+          // above. Revert the lock so the voucher isn't stranded locked-with-no-GL
+          // and can be edited/retried, then surface the error.
+          await _supa.from('stock_adjustment_vouchers').update({
+            'is_locked': false, 'status': 'draft', 'locked_by': null, 'locked_at': null,
+          }).eq('id', id);
+          setState(() { _isLocked = false; _status = 'draft'; });
+          rethrow;
+        }
       } else {
         _toast('Saved draft $number');
       }

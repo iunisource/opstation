@@ -583,6 +583,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   Future<void> _produceBatch() async {
     if (_current == null) { _snack('Save the job first'); return; }
     if (_branchId == null) { _snack('No branch selected'); return; }
+    // The batch consumes components from — and lands finished goods in — the
+    // sidebar-selected branch. If that isn't the job's own branch, production
+    // would move stock in the wrong branch (the job list isn't branch-filtered).
+    final jobBranch = _current!['branch_id'] as String?;
+    if (jobBranch != null && jobBranch != _branchId) {
+      _snack('This job belongs to a different branch than the one selected in the sidebar — switch to the job’s branch before producing.');
+      return;
+    }
     final jobId = _current!['id'] as String;
     final producedCtrl = TextEditingController();
     final rejectedCtrl = TextEditingController(text: '0');
