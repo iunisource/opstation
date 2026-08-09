@@ -47,6 +47,7 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
           .eq('recipient_user_id', uid)
           .filter('read_at', 'is', null);
       if (mounted) setState(() => _unread = (res as List).length);
+      _overlay?.markNeedsBuild();
     } catch (_) {}
   }
 
@@ -54,37 +55,49 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
     final uid = _uid;
     if (uid == null) return;
     setState(() => _loading = true);
+    _overlay?.markNeedsBuild();
     try {
-      final rows = await Supabase.instance.client
-          .from('notifications')
-          .select(
-              'id, title, body, link_url, created_at, notification_recipients!inner(read_at, recipient_user_id)')
-          .eq('notification_recipients.recipient_user_id', uid)
-          .order('created_at', ascending: false)
-          .limit(30);
+      // Two-step (no embedded join) — robust against FK/RLS embed quirks:
+      // 1) my recipient rows, 2) the matching notifications, merged client-side.
+      final recips = await Supabase.instance.client
+          .from('notification_recipients')
+          .select('notification_id, read_at')
+          .eq('recipient_user_id', uid);
+      final recipList = List<Map<String, dynamic>>.from(recips as List);
+      final readBy = <String, dynamic>{
+        for (final r in recipList) (r['notification_id'] as String): r['read_at']
+      };
+      final ids = readBy.keys.toList();
+      List<Map<String, dynamic>> notifs = [];
+      if (ids.isNotEmpty) {
+        final rows = await Supabase.instance.client
+            .from('notifications')
+            .select('id, title, body, link_url, created_at')
+            .inFilter('id', ids)
+            .order('created_at', ascending: false)
+            .limit(50);
+        notifs = List<Map<String, dynamic>>.from(rows);
+        // Attach each notification's read_at for this user.
+        for (final n in notifs) {
+          n['read_at'] = readBy[n['id'] as String];
+        }
+      }
       if (mounted) {
         setState(() {
-          _items = List<Map<String, dynamic>>.from(rows);
+          _items = notifs;
           _loading = false;
         });
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+    _overlay?.markNeedsBuild();
   }
 
-  bool _isUnread(Map<String, dynamic> n) {
-    final rec = n['notification_recipients'];
-    if (rec is List && rec.isNotEmpty) return rec.first['read_at'] == null;
-    if (rec is Map) return rec['read_at'] == null;
-    return false;
-  }
+  bool _isUnread(Map<String, dynamic> n) => n['read_at'] == null;
 
   void _markLocalRead(Map<String, dynamic> n) {
-    final rec = n['notification_recipients'];
-    final stamp = DateTime.now().toUtc().toIso8601String();
-    if (rec is List && rec.isNotEmpty) rec.first['read_at'] = stamp;
-    if (rec is Map) rec['read_at'] = stamp;
+    n['read_at'] = DateTime.now().toUtc().toIso8601String();
   }
 
   Future<void> _markRead(Map<String, dynamic> n) async {
