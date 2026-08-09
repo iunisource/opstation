@@ -268,6 +268,25 @@ final customerSupervisePendingProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
+// Count of job cards awaiting acknowledgement (queued & not yet noted) for the
+// current org, gated by org.job_ack_flow. Drives the Manufacturing → Job Card
+// pendency badge. Invalidated by the Job Card screen on acknowledge + realtime.
+final jobAckPendingCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.job_ack_flow').maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from('job_cards').select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'queued')
+        .filter('acknowledged_at', 'is', null);
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+
 /// Count of field orders awaiting review (status 'submitted') for the org.
 /// Drives the live nav badge on the Field Orders menu item. Invalidated by
 /// erp_field_orders_screen on approve/reject and realtime arrival.
@@ -513,6 +532,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
   final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
+  final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -605,7 +625,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final mfgTopItems = <Widget>[
       if (show('/manufacturing/production-floor')) _menuItem(context, 'Production Floor', Icons.dashboard_outlined, '/manufacturing/production-floor', location),
       if (show('/manufacturing/production-plan')) _menuItem(context, 'Production Material Planner', Icons.account_tree_outlined, '/manufacturing/production-plan', location),
-      if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card', Icons.assignment_outlined, '/manufacturing/job-card', location),
+      if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card', Icons.assignment_outlined, '/manufacturing/job-card', location, badge: jobAckPending),
       if (show('/manufacturing/qc-checkpoints')) _menuItem(context, 'QC Checkpoints', Icons.fact_check_outlined, '/manufacturing/qc-checkpoints', location),
       if (show('/manufacturing/qc-station')) _menuItem(context, 'QC Station', Icons.checklist_outlined, '/manufacturing/qc-station', location),
     ];
@@ -698,7 +718,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
            '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary'],
-          _trimDividers(manufacturingItems)),
+          _trimDividers(manufacturingItems), badge: jobAckPending),
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
           ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/cash-book'],

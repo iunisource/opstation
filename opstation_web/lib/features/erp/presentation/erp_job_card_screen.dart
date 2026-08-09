@@ -368,6 +368,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         }
       });
       _evaluateBuzzer();
+      ref.invalidate(jobAckPendingCountProvider); // keep the nav badge live
     } catch (_) { /* transient; next event or manual action recovers */ }
   }
 
@@ -953,6 +954,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       await _loadJobAudit(jid);
     } catch (_) {/* transient; realtime will still reconcile */}
     _disarmBuzzer();
+    ref.invalidate(jobAckPendingCountProvider); // refresh the Manufacturing badge
     if (mounted) setState(() {});
     if (thenPrint) _printJobCard();
   }
@@ -966,39 +968,41 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final prod = _prodLabel[job['product_id']] ?? '';
     showDialog(
       context: context,
-      barrierDismissible: true,
-      builder: (ctx) => AlertDialog(
-        title: Row(children: const [
-          Icon(Icons.notifications_active, color: Colors.orange, size: 22),
-          SizedBox(width: 8),
-          Text('New job — acknowledge'),
-        ]),
-        content: Text(
-            'Job $title${prod.isEmpty ? '' : ' — $prod'} needs acknowledgement.\n\n'
-            'Click Noted so the team knows it has been seen. This stops the alert '
-            'for everyone and records who acknowledged it (and when).'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Later')),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.print_outlined, size: 16),
-            label: const Text('Note & Print'),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _acknowledgeJob(thenPrint: true);
-            },
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _acknowledgeJob();
-            },
-            child: const Text('Noted'),
-          ),
-        ],
+      // Hard to bypass: no barrier-tap dismiss and no back-button escape — the
+      // user must acknowledge (Noted / Note & Print) to clear it.
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Row(children: const [
+            Icon(Icons.notifications_active, color: Colors.deepOrange, size: 22),
+            SizedBox(width: 8),
+            Expanded(child: Text('New job — acknowledge')),
+          ]),
+          content: Text(
+              'Job $title${prod.isEmpty ? '' : ' — $prod'} needs acknowledgement.\n\n'
+              'Click Noted so the team knows it has been seen. This stops the alert '
+              'for everyone and records who acknowledged it (and when).'),
+          actions: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.print_outlined, size: 16),
+              label: const Text('Note & Print'),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _acknowledgeJob(thenPrint: true);
+              },
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _acknowledgeJob();
+              },
+              child: const Text('Noted'),
+            ),
+          ],
+        ),
       ),
     ).whenComplete(() => _ackDialogOpen = false);
   }
@@ -1534,6 +1538,16 @@ $runSection
       return (j['job_number'] as String? ?? '').toLowerCase().contains(q) || pn.contains(q);
     }).toList();
 
+    // Jobs awaiting acknowledgement bubble to the very top (and blink) until
+    // someone notes them — regardless of the normal priority/serial order.
+    // Stable partition keeps the existing order within each group.
+    final display = _ackFlowEnabled
+        ? [
+            ...filtered.where(_jobUnacked),
+            ...filtered.where((j) => !_jobUnacked(j)),
+          ]
+        : filtered;
+
     final running = (_current?['is_running'] as bool?) ?? false;
 
     final wcNames = _workCenters.where((w) => w['is_active'] != false).map((w) => w['name'] as String).toList();
@@ -1565,20 +1579,30 @@ $runSection
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
             : filtered.isEmpty ? Center(child: Text(_jobs.isEmpty ? 'No job cards yet' : 'No job cards for this branch', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-            : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
-                final j = filtered[i]; final sel = _current?['id'] == j['id'];
+            : ListView.builder(itemCount: display.length, itemBuilder: (_, i) {
+                final j = display[i]; final sel = _current?['id'] == j['id'];
                 final st = (j['status'] as String? ?? 'queued');
                 final c = st == 'completed' ? Colors.green : st == 'cancelled' ? Colors.grey : st == 'in_progress' ? Colors.blue : Colors.orange;
                 final lbl = st == 'completed' ? 'Completed' : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : 'Queued';
                 final planned = (j['planned_qty'] as num? ?? 0).toDouble();
                 final produced = (j['produced_qty'] as num? ?? 0).toDouble();
                 final jOpen = (j['is_open_ended'] as bool?) ?? false;
+                final needsAttn = _jobUnacked(j);
                 return InkWell(onTap: () => _loadJob(j, promptAck: true), child: Container(
-                  color: sel ? AppTheme.primary.withOpacity(0.07) : null,
+                  color: sel
+                      ? AppTheme.primary.withOpacity(0.07)
+                      : (needsAttn ? Colors.orange.withOpacity(0.09) : null),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
+                      if (needsAttn) const Padding(
+                          padding: EdgeInsets.only(right: 6),
+                          child: _BlinkingDot(color: Colors.deepOrange, size: 9)),
                       Expanded(child: Text(j['job_number'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))),
+                      if (needsAttn) const Padding(
+                          padding: EdgeInsets.only(right: 6),
+                          child: Text('NEW · unacked',
+                              style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.w800, color: Colors.deepOrange))),
                       if (j['is_running'] == true) const Padding(padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
                       Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.13), borderRadius: BorderRadius.circular(3)),
                         child: Text(lbl, style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))),
@@ -1621,20 +1645,6 @@ $runSection
               if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail', visualDensity: VisualDensity.compact),
               if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)', visualDensity: VisualDensity.compact),
               if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
-              if (_current != null && _ackFlowEnabled && _jobUnacked(_current!))
-                Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.notifications_active_outlined, size: 16),
-                    label: const Text('Note & Print'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange.shade800,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    ),
-                    onPressed: () => _acknowledgeJob(thenPrint: true),
-                  ),
-                ),
               if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
               if (_current != null && _status != 'completed' && _status != 'cancelled')
                 IconButton(
@@ -1996,5 +2006,48 @@ class _ProductFieldState extends State<_ProductField> {
           child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), child: Text(p['label'] as String? ?? '', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
         )).toList())),
     ]);
+  }
+}
+
+/// A softly pulsing dot used to flag a job that still needs acknowledgement.
+class _BlinkingDot extends StatefulWidget {
+  final Color color;
+  final double size;
+  const _BlinkingDot({required this.color, this.size = 9});
+  @override
+  State<_BlinkingDot> createState() => _BlinkingDotState();
+}
+
+class _BlinkingDotState extends State<_BlinkingDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 650))
+    ..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 1.0, end: 0.15).animate(_c),
+      child: Container(
+        width: widget.size,
+        height: widget.size,
+        decoration: BoxDecoration(
+          color: widget.color,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+                color: widget.color.withOpacity(0.6),
+                blurRadius: 5,
+                spreadRadius: 1),
+          ],
+        ),
+      ),
+    );
   }
 }
