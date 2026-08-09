@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/services.dart';
@@ -91,6 +93,31 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   RealtimeChannel? _channel;
   Timer? _rtDebounce;
 
+  // ── New-job alert / acknowledgement flow ─────────────────────────────────
+  bool _ackFlowEnabled = false;      // org.job_ack_flow toggle
+  Timer? _buzzTimer;                 // fires every 5 min while unacked jobs exist
+  Timer? _buzzStopTimer;             // pauses the current buzz after ~22s
+  html.AudioElement? _buzzEl;        // looped buzzer clip
+  String _buzzUri = '';             // lazily-built WAV data URI
+  bool _ackDialogOpen = false;       // guard against stacked pop-ups
+  Set<String> _prevUnackedIds = {};  // to detect a freshly-arrived new job
+
+  String? get _uid => ref.read(currentUserProvider)?.id;
+
+  // A job needs acknowledgement if the feature is on, it is still queued, and
+  // nobody has noted it yet. The buzzer/pop-up ignore jobs THIS user created
+  // (they already know) but the manual "Note & Print" button still shows.
+  bool _jobUnacked(Map<String, dynamic> j) =>
+      _ackFlowEnabled &&
+      j['acknowledged_at'] == null &&
+      ((j['status'] as String?) ?? 'queued') == 'queued';
+
+  bool _jobNeedsMyAck(Map<String, dynamic> j) =>
+      _jobUnacked(j) && (j['created_by'] as String?) != _uid;
+
+  List<Map<String, dynamic>> get _buzzableJobs =>
+      _jobs.where(_jobNeedsMyAck).toList();
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _editable => _status == 'queued' || _status == 'in_progress';
@@ -117,16 +144,17 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _pendingJobId = _jobIdFromUrl();
       _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCustomers(); _loadCheckpoints();
+      await _loadAckSetting();
       await Future.wait([_loadProducts(), _loadBoms()]);
       await _loadJobs();
       if (_pendingJobId != null && mounted) {
         final m = _jobs.where((j) => j['id'] == _pendingJobId).toList();
         if (m.isNotEmpty) {
-          _loadJob(m.first);
+          _loadJob(m.first, promptAck: true);
         } else {
           try {
             final row = await Supabase.instance.client.from('job_cards').select().eq('id', _pendingJobId!).maybeSingle();
-            if (row != null && mounted) _loadJob(Map<String, dynamic>.from(row as Map));
+            if (row != null && mounted) _loadJob(Map<String, dynamic>.from(row as Map), promptAck: true);
           } catch (_) {}
         }
         _pendingJobId = null;
@@ -149,6 +177,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   @override
   void dispose() {
     _rtDebounce?.cancel();
+    _disarmBuzzer();
+    try { _buzzEl?.pause(); } catch (_) {}
     final ch = _channel;
     if (ch != null) Supabase.instance.client.removeChannel(ch);
     _plannedQtyCtrl.dispose(); _priorityCtrl.dispose(); _wcCtrl.dispose(); _notesCtrl.dispose();
@@ -296,6 +326,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           .order('priority', ascending: false).order('created_at', ascending: false).limit(400);
       if (mounted) setState(() { _jobs = List<Map<String, dynamic>>.from(rows); _loadingList = false; });
       _subscribe(orgId);
+      _evaluateBuzzer();
     } catch (e) { if (mounted) setState(() => _loadingList = false); }
   }
 
@@ -336,6 +367,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           if (m.isNotEmpty) _current!['is_running'] = m.first['is_running'];
         }
       });
+      _evaluateBuzzer();
     } catch (_) { /* transient; next event or manual action recovers */ }
   }
 
@@ -368,7 +400,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     });
   }
 
-  Future<void> _loadJob(Map<String, dynamic> j) async {
+  Future<void> _loadJob(Map<String, dynamic> j, {bool promptAck = false}) async {
     try {
       final client = Supabase.instance.client;
       final mats = await client.from('job_card_materials').select().eq('job_card_id', j['id'] as String).order('line_order');
@@ -416,6 +448,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _notesCtrl.text = j['notes'] as String? ?? '';
         _materials = newMats; _overheads = newOh;
       });
+      if (promptAck && mounted) _maybeShowAckDialog(j);
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -769,6 +802,207 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   bool get _canViewCost => ref.read(accessSyncProvider)?.canViewReport('production_cost') ?? false;
   bool get _canEditCost => ref.read(currentUserProvider)?.role == WebUserRole.masterAdmin;
 
+  // ── New-job alert / acknowledgement ──────────────────────────────────────
+  Future<void> _loadAckSetting() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final row = await Supabase.instance.client
+          .from('app_config')
+          .select('value')
+          .eq('org_id', orgId)
+          .eq('key', 'org.job_ack_flow')
+          .maybeSingle();
+      final on = (row?['value'] as String?)?.trim() == 'true';
+      if (mounted) setState(() => _ackFlowEnabled = on);
+    } catch (_) {/* default off */}
+  }
+
+  /// Decide whether the buzzer should be running, and buzz immediately when a
+  /// brand-new un-acknowledged job appears. Called after every list refresh.
+  void _evaluateBuzzer() {
+    if (!_ackFlowEnabled) {
+      _disarmBuzzer();
+      _prevUnackedIds = {};
+      return;
+    }
+    final ids = _buzzableJobs.map((j) => j['id'] as String).toSet();
+    final justArrived = ids.difference(_prevUnackedIds).isNotEmpty;
+    _prevUnackedIds = ids;
+    if (ids.isEmpty) {
+      _disarmBuzzer();
+      return;
+    }
+    if (_buzzTimer == null) {
+      // Not armed yet: start the cycle (buzz now, then every 5 minutes).
+      _buzzOnce();
+      _buzzTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+        if (_ackFlowEnabled && _buzzableJobs.isNotEmpty) {
+          _buzzOnce();
+        } else {
+          _disarmBuzzer();
+        }
+      });
+    } else if (justArrived) {
+      // Already armed but a new job just came in — buzz right away.
+      _buzzOnce();
+    }
+  }
+
+  void _disarmBuzzer() {
+    _buzzTimer?.cancel();
+    _buzzTimer = null;
+    _buzzStopTimer?.cancel();
+    _buzzStopTimer = null;
+    try { _buzzEl?.pause(); } catch (_) {}
+  }
+
+  /// A loud, long alarm: a ~1s klaxon clip looped for ~22 seconds. The clip is
+  /// synthesised once as a WAV data-URI so no asset is needed.
+  void _buzzOnce() {
+    try {
+      if (_buzzUri.isEmpty) _buzzUri = _buildBuzzerWav();
+      final el = (_buzzEl ??= html.AudioElement()
+        ..loop = true
+        ..volume = 1.0);
+      if (el.src != _buzzUri) el.src = _buzzUri;
+      el.currentTime = 0;
+      // play() may reject until the user has interacted with the page; that's
+      // fine — the next 5-minute tick (after any click) will sound.
+      el.play();
+      _buzzStopTimer?.cancel();
+      _buzzStopTimer = Timer(const Duration(seconds: 22), () {
+        try { _buzzEl?.pause(); } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
+  /// Build a 1-second 16-bit-mono WAV of an alternating two-tone klaxon and
+  /// return it as a base64 data URI.
+  String _buildBuzzerWav() {
+    const sr = 11025; // sample rate
+    const n = sr; // 1 second
+    final samples = Int16List(n);
+    for (var i = 0; i < n; i++) {
+      final t = i / sr;
+      // Switch tone every 0.15s (klaxon feel).
+      final hi = (((t * 1000) ~/ 150) % 2) == 0;
+      final f = hi ? 900.0 : 640.0;
+      final phase = (t * f) % 1.0;
+      samples[i] = (phase < 0.5 ? 26000 : -26000); // loud square wave
+    }
+    final pcm = samples.buffer.asUint8List();
+    final dataLen = pcm.length;
+    final header = ByteData(44);
+    void s4(int off, String s) {
+      for (var i = 0; i < 4; i++) header.setUint8(off + i, s.codeUnitAt(i));
+    }
+    s4(0, 'RIFF');
+    header.setUint32(4, 36 + dataLen, Endian.little);
+    s4(8, 'WAVE');
+    s4(12, 'fmt ');
+    header.setUint32(16, 16, Endian.little);      // PCM chunk size
+    header.setUint16(20, 1, Endian.little);       // audio format = PCM
+    header.setUint16(22, 1, Endian.little);       // channels = 1
+    header.setUint32(24, sr, Endian.little);      // sample rate
+    header.setUint32(28, sr * 2, Endian.little);  // byte rate
+    header.setUint16(32, 2, Endian.little);       // block align
+    header.setUint16(34, 16, Endian.little);      // bits per sample
+    s4(36, 'data');
+    header.setUint32(40, dataLen, Endian.little);
+    final out = Uint8List(44 + dataLen);
+    out.setRange(0, 44, header.buffer.asUint8List());
+    out.setRange(44, 44 + dataLen, pcm);
+    return 'data:audio/wav;base64,${base64Encode(out)}';
+  }
+
+  /// First user to click "Noted" stamps the acknowledgement for everyone; the
+  /// realtime job_cards update silences every other open screen's buzzer.
+  Future<void> _acknowledgeJob({bool thenPrint = false}) async {
+    final job = _current;
+    final jid = job?['id'] as String?;
+    if (jid == null) return;
+    // Already noted? Just print (if asked) and make sure our buzzer is quiet.
+    if (job!['acknowledged_at'] != null) {
+      _disarmBuzzer();
+      if (thenPrint) _printJobCard();
+      return;
+    }
+    final u = ref.read(currentUserProvider);
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    try {
+      // Only the first ack wins (guard on acknowledged_at IS NULL).
+      await Supabase.instance.client
+          .from('job_cards')
+          .update({
+            'acknowledged_at': nowIso,
+            'acknowledged_by': u?.id,
+            'acknowledged_by_name': u?.name,
+          })
+          .eq('id', jid)
+          .filter('acknowledged_at', 'is', null);
+      job['acknowledged_at'] = nowIso;
+      job['acknowledged_by'] = u?.id;
+      job['acknowledged_by_name'] = u?.name;
+      final idx = _jobs.indexWhere((j) => j['id'] == jid);
+      if (idx >= 0) {
+        _jobs[idx]['acknowledged_at'] = nowIso;
+        _jobs[idx]['acknowledged_by_name'] = u?.name;
+      }
+      await _logJobAudit('acknowledged', notes: 'Noted by ${u?.name ?? 'user'}');
+      await _loadJobAudit(jid);
+    } catch (_) {/* transient; realtime will still reconcile */}
+    _disarmBuzzer();
+    if (mounted) setState(() {});
+    if (thenPrint) _printJobCard();
+  }
+
+  /// When an un-acknowledged job is opened, prompt the opener to note it.
+  void _maybeShowAckDialog(Map<String, dynamic> job) {
+    if (!_jobNeedsMyAck(job)) return; // off, already noted, done, or mine
+    if (_ackDialogOpen) return;
+    _ackDialogOpen = true;
+    final title = (job['job_number'] as String?) ?? 'New job';
+    final prod = _prodLabel[job['product_id']] ?? '';
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: const [
+          Icon(Icons.notifications_active, color: Colors.orange, size: 22),
+          SizedBox(width: 8),
+          Text('New job — acknowledge'),
+        ]),
+        content: Text(
+            'Job $title${prod.isEmpty ? '' : ' — $prod'} needs acknowledgement.\n\n'
+            'Click Noted so the team knows it has been seen. This stops the alert '
+            'for everyone and records who acknowledged it (and when).'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Later')),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.print_outlined, size: 16),
+            label: const Text('Note & Print'),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _acknowledgeJob(thenPrint: true);
+            },
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _acknowledgeJob();
+            },
+            child: const Text('Noted'),
+          ),
+        ],
+      ),
+    ).whenComplete(() => _ackDialogOpen = false);
+  }
+
   Future<void> _logJobAudit(String action, {String? notes}) async {
     final jid = _current?['id'] as String?;
     if (jid == null) return;
@@ -879,6 +1113,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       case 'batch_posted': return Icons.inventory_2_outlined;
       case 'batch_voided': return Icons.undo;
       case 'completed': return Icons.check_circle_outline;
+      case 'acknowledged': return Icons.notifications_active_outlined;
       default: return Icons.circle_outlined;
     }
   }
@@ -892,6 +1127,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       case 'batch_posted': return Colors.teal;
       case 'batch_voided': return Colors.red;
       case 'completed': return Colors.green.shade700;
+      case 'acknowledged': return Colors.orange.shade800;
       default: return Colors.grey;
     }
   }
@@ -1337,7 +1573,7 @@ $runSection
                 final planned = (j['planned_qty'] as num? ?? 0).toDouble();
                 final produced = (j['produced_qty'] as num? ?? 0).toDouble();
                 final jOpen = (j['is_open_ended'] as bool?) ?? false;
-                return InkWell(onTap: () => _loadJob(j), child: Container(
+                return InkWell(onTap: () => _loadJob(j, promptAck: true), child: Container(
                   color: sel ? AppTheme.primary.withOpacity(0.07) : null,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1385,6 +1621,20 @@ $runSection
               if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail', visualDensity: VisualDensity.compact),
               if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)', visualDensity: VisualDensity.compact),
               if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
+              if (_current != null && _ackFlowEnabled && _jobUnacked(_current!))
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.notifications_active_outlined, size: 16),
+                    label: const Text('Note & Print'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange.shade800,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    ),
+                    onPressed: () => _acknowledgeJob(thenPrint: true),
+                  ),
+                ),
               if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
               if (_current != null && _status != 'completed' && _status != 'cancelled')
                 IconButton(

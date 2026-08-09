@@ -107,6 +107,17 @@ const List<_AdminToggle> _toggles = [
   // _AdminToggle('org.some_flag', 'Title shown to admin', 'What it does.'),
 
   _AdminToggle(
+    'org.job_ack_flow',
+    'New job alert & acknowledgement (Job Cards)',
+    'When ON, a loud buzzer sounds on open Job Card screens whenever a new job '
+        'is created, and repeats every 5 minutes (for ~20 seconds) until someone '
+        'acknowledges it. Opening the job shows a "Noted" pop-up; the moment any '
+        'user clicks Noted, the alert stops for everyone and who acknowledged it '
+        '(and when) is recorded in the job\'s audit trail. Adds a "Note & Print" '
+        'button that acknowledges and prints in one step.',
+  ),
+
+  _AdminToggle(
     'org.customer_edit_alert',
     'Email alert when a customer is edited',
     'When an existing customer record is edited (not newly created), email the '
