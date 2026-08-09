@@ -77,6 +77,9 @@ class _IntelligenceDashboardScreenState
   Map<String, String> _custName = {};
   final Set<String> _expandedGroups = {};
 
+  // Section-wide market/route filter. null = All routes.
+  String? _filterRouteId;
+
   // Auto-insights (narrative), computed each load from the same period's data.
   List<_SkuStat> _skuStats = [];          // sorted best-placed first
   String? _leadBrand;                     // most-spotted competitor overall
@@ -241,8 +244,19 @@ class _IntelligenceDashboardScreenState
       _GroupScore salesmanBucket(String key, String name) =>
           bySalesman.putIfAbsent(key, () => _GroupScore(name));
 
+      // Section-wide market/route filter: when a route is picked, every stat
+      // (KPIs, score cards, SKU insights, competitor read) counts only shops on
+      // that route. null = All routes.
+      final filterRoute = _filterRouteId;
+      bool passesRoute(String? cid) =>
+          filterRoute == null ||
+          (cid != null && (custRoutes[cid]?.contains(filterRoute) ?? false));
+
+      final shopsInScope = auditedCustomers.where(passesRoute).length;
+
       int totPresent = 0, totAll = 0;
       for (final cid in auditedCustomers) {
+        if (!passesRoute(cid)) continue;
         final p = custPresent[cid] ?? 0;
         final t = custTotal[cid] ?? 0;
         totPresent += p;
@@ -289,8 +303,12 @@ class _IntelligenceDashboardScreenState
         return l;
       }
 
-      final skusTracked =
-          latest.values.map((a) => a['product_id'] as String?).whereType<String>().toSet().length;
+      final skusTracked = latest.values
+          .where((a) => passesRoute(a['customer_id'] as String?))
+          .map((a) => a['product_id'] as String?)
+          .whereType<String>()
+          .toSet()
+          .length;
 
       // ── SKU on-shelf rates (from the same latest-per-pair set) ──────────
       final skuPresent = <String, int>{};
@@ -298,6 +316,7 @@ class _IntelligenceDashboardScreenState
       for (final a in latest.values) {
         final pid = a['product_id'] as String?;
         if (pid == null) continue;
+        if (!passesRoute(a['customer_id'] as String?)) continue;
         skuShops[pid] = (skuShops[pid] ?? 0) + 1;
         if (a['is_present'] == true) skuPresent[pid] = (skuPresent[pid] ?? 0) + 1;
       }
@@ -345,6 +364,7 @@ class _IntelligenceDashboardScreenState
           final cid = s['customer_id'] as String?;
           final cat = s['category_id'] as String?;
           if (brand == null || brand.isEmpty || cid == null) continue;
+          if (!passesRoute(cid)) continue;
           (brandShops[brand] ??= {}).add(cid);
           if (cat != null) {
             ((catBrandShops[cat] ??= {})[brand] ??= {}).add(cid);
@@ -373,7 +393,7 @@ class _IntelligenceDashboardScreenState
 
       if (!mounted) return;
       setState(() {
-        _shopsAudited = auditedCustomers.length;
+        _shopsAudited = shopsInScope;
         _skusTracked = skusTracked;
         _skuPresent = totPresent;
         _skuTotal = totAll;
@@ -648,6 +668,49 @@ class _IntelligenceDashboardScreenState
       chip('custom', 'Custom…', onTap: _pickRange),
     ]);
 
+    // Market / route filter — scopes every stat below. Default "All routes".
+    final routeItems = _routeNames.entries.toList()
+      ..sort((a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()));
+    final routeFilter = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppTheme.border),
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.white,
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.route_outlined, size: 15, color: AppTheme.textSecondary),
+        const SizedBox(width: 6),
+        DropdownButtonHideUnderline(
+          child: DropdownButton<String?>(
+            value: _routeNames.containsKey(_filterRouteId) ? _filterRouteId : null,
+            isDense: true,
+            hint: const Text('All routes', style: TextStyle(fontSize: 12)),
+            style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+            items: [
+              const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('All routes', style: TextStyle(fontSize: 12))),
+              for (final e in routeItems)
+                DropdownMenuItem<String?>(
+                  value: e.key,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 320),
+                    child: Text(e.value,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12)),
+                  ),
+                ),
+            ],
+            onChanged: (v) {
+              setState(() => _filterRouteId = v);
+              _load();
+            },
+          ),
+        ),
+      ]),
+    );
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (mobile) ...[
         title,
@@ -659,7 +722,16 @@ class _IntelligenceDashboardScreenState
           buttons,
         ]),
       const SizedBox(height: 12),
-      chips,
+      if (mobile) ...[
+        chips,
+        const SizedBox(height: 10),
+        Align(alignment: Alignment.centerLeft, child: routeFilter),
+      ] else
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          Expanded(child: chips),
+          const SizedBox(width: 12),
+          routeFilter,
+        ]),
     ]);
   }
 
