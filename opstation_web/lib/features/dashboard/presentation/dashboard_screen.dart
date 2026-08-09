@@ -195,8 +195,16 @@ class _DashboardStatsState extends State<_DashboardStats> {
       final auditedShops = paRows
           .map((r) => r['customer_id'] as String)
           .toSet();
+      // Distinct competitor brands. Normalize hard so the SAME brand written
+      // slightly differently ("Excel", "excel ", "Excel-Lighting", "Excel  LED")
+      // collapses to one: lowercase, and reduce any run of spaces/punctuation to
+      // a single space. (Genuinely different spellings still count separately —
+      // those are data-entry variants to clean up in competitor management.)
       final brandsTracked = csRows
-          .map((r) => (r['brand_name'] as String? ?? '').toLowerCase().trim())
+          .map((r) => (r['brand_name'] as String? ?? '')
+              .toLowerCase()
+              .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+              .trim())
           .where((b) => b.isNotEmpty)
           .toSet();
 

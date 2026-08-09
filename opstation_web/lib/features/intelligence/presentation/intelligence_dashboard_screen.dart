@@ -113,18 +113,50 @@ class _IntelligenceDashboardScreenState
     try {
       final client = Supabase.instance.client;
 
-      // ── 1. All placement audits for the org (paginated) ────────────────
-      final audits = <Map<String, dynamic>>[];
-      for (int from = 0;; from += 1000) {
-        final page = await client
+      // ── 1. Fetch everything for this period concurrently ────────────────
+      // These queries are independent, so awaiting them one-by-one was the main
+      // reason the dashboard felt slow. Fire them together; the helper paginates
+      // past the 1000-row PostgREST cap.
+      Future<List<Map<String, dynamic>>> pageAll(
+          dynamic Function(int from, int to) build) async {
+        final out = <Map<String, dynamic>>[];
+        for (int from = 0;; from += 1000) {
+          final page = await build(from, from + 999);
+          final list = List<Map<String, dynamic>>.from(page as List);
+          out.addAll(list);
+          if (list.length < 1000 || from > 500000) break;
+        }
+        return out;
+      }
+
+      final res = await Future.wait<dynamic>([
+        pageAll((f, t) => client
             .from('placement_audit')
             .select('customer_id, product_id, is_present, surveyed_at')
             .eq('org_id', orgId)
-            .range(from, from + 999);
-        final list = List<Map<String, dynamic>>.from(page);
-        audits.addAll(list);
-        if (list.length < 1000 || from > 500000) break;
-      }
+            .range(f, t)),
+        client.from('sales_routes').select('id, name').eq('org_id', orgId),
+        pageAll((f, t) => client.from('route_stops').select('route_id, customer_id').range(f, t)),
+        pageAll((f, t) => client.from('route_assignments').select('user_id, route_id').range(f, t)),
+        client.from('users').select('id, name').eq('org_id', orgId),
+        pageAll((f, t) => client.from('customers').select('id, shop_name').eq('org_id', orgId).range(f, t)),
+        pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
+        pageAll((f, t) => client
+            .from('competitor_spotting')
+            .select('customer_id, category_id, brand_name, surveyed_at')
+            .eq('org_id', orgId)
+            .range(f, t)),
+        client.from('competitor_categories').select('id, name').eq('org_id', orgId),
+      ]);
+      final audits = List<Map<String, dynamic>>.from(res[0] as List);
+      final routesRaw = res[1] as List;
+      final stopsRaw = res[2] as List;
+      final assignsRaw = res[3] as List;
+      final usersRaw = res[4] as List;
+      final custRaw = res[5] as List;
+      final prodRaw = res[6] as List; // intelligence_products (the audited SKUs)
+      final compRaw = List<Map<String, dynamic>>.from(res[7] as List);
+      final catRaw = res[8] as List;
 
       // Optional date-range restriction (then latest-per-pair within it).
       Iterable<Map<String, dynamic>> rows = audits;
@@ -163,78 +195,48 @@ class _IntelligenceDashboardScreenState
       }
       final auditedCustomers = custTotal.keys.toSet();
 
-      // ── 3. Route / salesman attribution ────────────────────────────────
-      final routesRaw = await client
-          .from('sales_routes')
-          .select('id, name')
-          .eq('org_id', orgId);
+      // ── 3. Route / salesman attribution (from the parallel fetch) ───────
       final routeName = {
-        for (final r in routesRaw as List)
+        for (final r in routesRaw)
           r['id'] as String: (r['name'] as String? ?? '(route)')
       };
-
-      final stops = await client.from('route_stops').select('route_id, customer_id');
       // customer -> routes (only routes belonging to this org)
       final custRoutes = <String, Set<String>>{};
-      for (final s in stops as List) {
+      for (final s in stopsRaw) {
         final rid = s['route_id'] as String?;
         final cid = s['customer_id'] as String?;
         if (rid == null || cid == null) continue;
         if (!routeName.containsKey(rid)) continue;
         (custRoutes[cid] ??= {}).add(rid);
       }
-
-      final assigns =
-          await client.from('route_assignments').select('user_id, route_id');
       final routeUsers = <String, Set<String>>{};
-      for (final a in assigns as List) {
+      for (final a in assignsRaw) {
         final rid = a['route_id'] as String?;
         final uid = a['user_id'] as String?;
         if (rid == null || uid == null) continue;
         if (!routeName.containsKey(rid)) continue;
         (routeUsers[rid] ??= {}).add(uid);
       }
-
-      final usersRaw = await client
-          .from('users')
-          .select('id, name')
-          .eq('org_id', orgId);
       final userName = {
-        for (final u in usersRaw as List)
+        for (final u in usersRaw)
           u['id'] as String: (u['name'] as String? ?? 'Unknown')
       };
-
-      // Shop names, so an "Unassigned" row can expand to show which shops.
-      // Paginated — PostgREST caps a plain select at 1000 rows, and orgs have
-      // more than that, which would leave later shops/SKUs unnamed.
-      final custName = <String, String>{};
-      for (int from = 0;; from += 1000) {
-        final page = await client
-            .from('customers')
-            .select('id, shop_name')
-            .eq('org_id', orgId)
-            .range(from, from + 999);
-        final list = List<Map<String, dynamic>>.from(page);
-        for (final c in list) {
-          custName[c['id'] as String] = (c['shop_name'] as String? ?? 'Unnamed shop');
-        }
-        if (list.length < 1000 || from > 500000) break;
-      }
-
-      // Product names, for SKU-level insight sentences (paginated too).
-      final prodName = <String, String>{};
-      for (int from = 0;; from += 1000) {
-        final page = await client
-            .from('products')
-            .select('id, name')
-            .eq('org_id', orgId)
-            .range(from, from + 999);
-        final list = List<Map<String, dynamic>>.from(page);
-        for (final p in list) {
-          prodName[p['id'] as String] = (p['name'] as String? ?? 'Unnamed SKU');
-        }
-        if (list.length < 1000 || from > 500000) break;
-      }
+      // Shop names, for expanding the "Unassigned" rows.
+      final custName = <String, String>{
+        for (final c in custRaw)
+          c['id'] as String: (c['shop_name'] as String? ?? 'Unnamed shop')
+      };
+      // SKU names for insight sentences come from intelligence_products — the
+      // survey SKU list that placement_audit.product_id references (NOT the main
+      // products table, which was the bug that showed every SKU as "SKU").
+      final prodName = <String, String>{
+        for (final p in prodRaw)
+          p['id'] as String: (p['name'] as String? ?? 'Unnamed SKU')
+      };
+      final catName = {
+        for (final c in catRaw)
+          c['id'] as String: (c['name'] as String? ?? 'Category')
+      };
 
       // ── 4. Aggregate ───────────────────────────────────────────────────
       final byRoute = <String, _GroupScore>{};
@@ -334,18 +336,7 @@ class _IntelligenceDashboardScreenState
       int leadBrandShops = 0;
       final catLeaders = <MapEntry<String, String>>[];
       try {
-        final compRaw = <Map<String, dynamic>>[];
-        for (int from = 0;; from += 1000) {
-          final page = await client
-              .from('competitor_spotting')
-              .select('customer_id, category_id, brand_name, surveyed_at')
-              .eq('org_id', orgId)
-              .range(from, from + 999);
-          final list = List<Map<String, dynamic>>.from(page);
-          compRaw.addAll(list);
-          if (list.length < 1000 || from > 500000) break;
-        }
-        // Date-filter to match the placement window.
+        // Date-filter to match the placement window (compRaw fetched above).
         final fromD = _from;
         final toD = _to?.add(const Duration(days: 1));
         bool inWindow(dynamic ts) {
@@ -374,14 +365,6 @@ class _IntelligenceDashboardScreenState
           if (shops.length > leadBrandShops) { leadBrandShops = shops.length; leadBrand = brand; }
         });
         if (catBrandShops.isNotEmpty) {
-          final catRows = await client
-              .from('competitor_categories')
-              .select('id, name')
-              .eq('org_id', orgId);
-          final catName = {
-            for (final c in catRows as List)
-              c['id'] as String: (c['name'] as String? ?? 'Category')
-          };
           catBrandShops.forEach((cat, brands) {
             String? top; int topN = 0;
             brands.forEach((b, shops) { if (shops.length > topN) { topN = shops.length; top = b; } });
