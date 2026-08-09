@@ -197,6 +197,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
             return hasLoc;
           case 'malformed':
             return _isMalformed(c);
+          case 'supervise_pending':
+            return c['supervised_at'] == null; // not yet supervised
           default:
             return true;
         }
@@ -313,24 +315,30 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   labelText: 'Filter',
                   isDense: true,
                 ),
-                items: const [
-                  DropdownMenuItem(
+                items: [
+                  // Only when the supervise flow is on: jump straight to the
+                  // customers still awaiting supervision.
+                  if (!widget.crmMode && _customerSuperviseEnabled)
+                    const DropdownMenuItem(
+                        value: 'supervise_pending',
+                        child: Text('Supervision pending')),
+                  const DropdownMenuItem(
                       value: 'all', child: Text('All customers')),
-                  DropdownMenuItem(
+                  const DropdownMenuItem(
                       value: 'contact',
                       child: Text('Missing: Contact Person')),
-                  DropdownMenuItem(
+                  const DropdownMenuItem(
                       value: 'phone', child: Text('Missing: Phone')),
-                  DropdownMenuItem(
+                  const DropdownMenuItem(
                       value: 'either',
                       child: Text('Missing: Contact or Phone')),
-                  DropdownMenuItem(
+                  const DropdownMenuItem(
                       value: 'no_location',
                       child: Text('Missing: Location')),
-                  DropdownMenuItem(
+                  const DropdownMenuItem(
                       value: 'has_location',
                       child: Text('Has Location')),
-                  DropdownMenuItem(
+                  const DropdownMenuItem(
                       value: 'malformed',
                       child: Text('Malformed: Contact/Phone')),
                 ],
