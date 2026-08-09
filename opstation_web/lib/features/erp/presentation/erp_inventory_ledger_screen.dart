@@ -710,7 +710,10 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             : '';
         final descRaw = _movementDescription(m);
         final desc = descRaw.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-        rowsBuf.write('<tr><td>' + date + '</td>' + brCell + '<td><span class="badge">' + type + '</span></td><td>' + vno + '</td><td>' + desc + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
+        final manualTag = ((m['created_by'] as String?) ?? '').isEmpty
+            ? ' <span class="badge" style="background:#fef3c7;color:#b45309;">manual</span>'
+            : '';
+        rowsBuf.write('<tr><td>' + date + '</td>' + brCell + '<td><span class="badge">' + type + '</span>' + manualTag + '</td><td>' + vno + '</td><td>' + desc + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
       }
       final productName = (p['name'] as String?) ?? '';
       final sku = (p['sku'] as String?) ?? '';
@@ -1065,11 +1068,34 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
                                 Expanded(flex: 2, child: Align(
                                   alignment: Alignment.centerLeft,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(color: _typeColor(type).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                                    child: Text(type, style: TextStyle(fontSize: 11, color: _typeColor(type), fontWeight: FontWeight.w600)),
-                                  ),
+                                  child: Wrap(spacing: 4, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(color: _typeColor(type).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                      child: Text(type, style: TextStyle(fontSize: 11, color: _typeColor(type), fontWeight: FontWeight.w600)),
+                                    ),
+                                    // A movement with no created_by was NOT posted from the app —
+                                    // every screen stamps the user. It came from a script / manual
+                                    // SQL repair. Flag it so data fixes announce themselves instead
+                                    // of masquerading as ordinary vouchers.
+                                    if (((m['created_by'] as String?) ?? '').isEmpty)
+                                      Tooltip(
+                                        message: 'No user recorded — this entry was made by a script or manual database repair, not from a screen in the app.',
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: AppTheme.warning.withOpacity(0.12),
+                                            borderRadius: BorderRadius.circular(4),
+                                            border: Border.all(color: AppTheme.warning.withOpacity(0.45)),
+                                          ),
+                                          child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                                            Icon(Icons.terminal, size: 10, color: AppTheme.warning),
+                                            SizedBox(width: 3),
+                                            Text('manual', style: TextStyle(fontSize: 10, color: AppTheme.warning, fontWeight: FontWeight.w700)),
+                                          ]),
+                                        ),
+                                      ),
+                                  ]),
                                 )),
                                 Expanded(flex: 3, child: hasVoucher
                                     ? MouseRegion(
