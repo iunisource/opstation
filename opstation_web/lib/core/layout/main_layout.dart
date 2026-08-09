@@ -10,6 +10,7 @@ import '../theme/app_theme.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
 import '../notifications/notifications_menu_tile.dart';
+import '../notifications/notification_bell.dart';
 import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
@@ -407,7 +408,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ),
           actions: [
             _searchButton(context, user, _showFn(ref, user)),
-            _userMenu(ref, user, const Offset(0, 8)),
+            const NotificationBell(), _userMenu(ref, user, const Offset(0, 8)),
             const SizedBox(width: 6),
           ],
         ),
@@ -469,7 +470,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
         child: Row(children: [
           const Spacer(),
-          _userMenu(ref, user, const Offset(0, 8)),
+          const NotificationBell(), _userMenu(ref, user, const Offset(0, 8)),
         ]),
       ),
     ]);
@@ -1026,7 +1027,7 @@ class _TopNav extends ConsumerWidget {
         const SizedBox(width: 4),
         _branchSelector(ref, modules),
         Container(width: 1, height: 28, color: Colors.white12),
-        _userMenu(ref, user, const Offset(0, 52)),
+        const NotificationBell(), _userMenu(ref, user, const Offset(0, 52)),
       ]),
     );
   }
@@ -1103,7 +1104,7 @@ class _SideNav extends ConsumerWidget {
           child: Row(children: [
             _searchButton(context, user, show),
             const Spacer(),
-            _userMenu(ref, user, const Offset(0, 8)),
+            const NotificationBell(), _userMenu(ref, user, const Offset(0, 8)),
           ]),
         ),
         Padding(
