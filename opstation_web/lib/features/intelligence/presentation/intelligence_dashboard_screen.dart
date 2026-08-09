@@ -45,6 +45,101 @@ class _SkuStat {
   double get rate => shops == 0 ? 0 : present / shops;
 }
 
+// ── Fuzzy brand-name clustering ──────────────────────────────────────────────
+// Competitor spottings are typed by hand in the field, so the same brand shows
+// up spelled several ways ("Excel", "Excal", "Philips", "Phillips"). Counting
+// those as separate brands inflates the competitor list and splits a category
+// leader's shops across near-duplicate rows. We merge names that differ by only
+// a character or two (edit distance, length-aware) into one cluster.
+
+/// Normalised comparison key: lowercase, alphanumerics only, single-spaced.
+String _brandKey(String s) => s
+    .toLowerCase()
+    .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+    .trim()
+    .replaceAll(RegExp(r'\s+'), ' ');
+
+int _levenshtein(String a, String b) {
+  if (a == b) return 0;
+  if (a.isEmpty) return b.length;
+  if (b.isEmpty) return a.length;
+  final prev = List<int>.generate(b.length + 1, (i) => i);
+  final cur = List<int>.filled(b.length + 1, 0);
+  for (var i = 0; i < a.length; i++) {
+    cur[0] = i + 1;
+    for (var j = 0; j < b.length; j++) {
+      final cost = a.codeUnitAt(i) == b.codeUnitAt(j) ? 0 : 1;
+      final del = prev[j + 1] + 1;
+      final ins = cur[j] + 1;
+      final sub = prev[j] + cost;
+      cur[j + 1] = del < ins ? (del < sub ? del : sub) : (ins < sub ? ins : sub);
+    }
+    for (var k = 0; k <= b.length; k++) {
+      prev[k] = cur[k];
+    }
+  }
+  return prev[b.length];
+}
+
+/// Two normalised names count as the same brand when they're within a
+/// length-aware edit distance (1 for short names, 2 for longer ones). This
+/// catches typos like Excel/Excal without merging genuinely different brands
+/// like Osaka/Osram (distance 3).
+bool _sameBrand(String ka, String kb) {
+  if (ka == kb) return true;
+  final shorter = ka.length < kb.length ? ka.length : kb.length;
+  if (shorter <= 2) return false; // too short to fuzz safely
+  final allowed = shorter <= 8 ? 1 : 2;
+  if ((ka.length - kb.length).abs() > allowed) return false;
+  return _levenshtein(ka, kb) <= allowed;
+}
+
+/// Collapse a brand→shops map into fuzzy clusters. Returns display-name→shops
+/// where the display name is the cluster's most-common original spelling.
+/// Shop sets are unioned so each shop is counted once per cluster.
+List<MapEntry<String, Set<String>>> _clusterBrands(
+    Map<String, Set<String>> raw) {
+  // Seed clusters largest-first so the dominant spelling anchors each cluster.
+  final entries = raw.entries.toList()
+    ..sort((a, b) => b.value.length.compareTo(a.value.length));
+  final clusters = <_BrandCluster>[];
+  for (final e in entries) {
+    final key = _brandKey(e.key);
+    if (key.isEmpty) continue;
+    _BrandCluster? hit;
+    for (final c in clusters) {
+      if (_sameBrand(c.key, key)) {
+        hit = c;
+        break;
+      }
+    }
+    if (hit == null) {
+      clusters.add(_BrandCluster(key, e.key, Set<String>.from(e.value)));
+    } else {
+      hit.shops.addAll(e.value);
+      hit.consider(e.key, e.value.length);
+    }
+  }
+  return clusters
+      .map((c) => MapEntry(c.display, c.shops))
+      .toList()
+    ..sort((a, b) => b.value.length.compareTo(a.value.length));
+}
+
+class _BrandCluster {
+  final String key; // normalised anchor
+  String display; // best original spelling seen
+  int _bestCount;
+  final Set<String> shops;
+  _BrandCluster(this.key, this.display, this.shops) : _bestCount = shops.length;
+  void consider(String original, int count) {
+    if (count > _bestCount) {
+      _bestCount = count;
+      display = original;
+    }
+  }
+}
+
 class _IntelligenceDashboardScreenState
     extends ConsumerState<IntelligenceDashboardScreen> {
   bool _loading = true;
@@ -85,6 +180,18 @@ class _IntelligenceDashboardScreenState
   String? _leadBrand;                     // most-spotted competitor overall
   int _leadBrandShops = 0;
   List<MapEntry<String, String>> _catLeaders = []; // category name -> top brand
+
+  // Routes that actually carry audited shops in this period (id -> name), for
+  // the searchable market picker. Filter-independent (whole audited set).
+  Map<String, String> _routesWithData = {};
+
+  // Company-wide placement average, computed ignoring the route filter, so a
+  // route report can compare its salesperson against the whole company.
+  double _orgAvgScore = 0;
+
+  // Total audited shops per route in this period (route id -> shop count),
+  // filter-independent — drives the task sheet's coverage lines.
+  Map<String, int> _routeShopCount = {};
 
   final _pct = NumberFormat('#,##0.0');
   final _int = NumberFormat('#,##0');
@@ -217,6 +324,23 @@ class _IntelligenceDashboardScreenState
         if (!routeName.containsKey(rid)) continue;
         (routeUsers[rid] ??= {}).add(uid);
       }
+
+      // ── Filter-independent rollups (ignore the current route filter) ─────
+      // Company placement average across every audited shop, and the set of
+      // routes that actually carry audited shops (for the market picker), with
+      // each route's audited-shop count (for the task sheet).
+      int orgPresent = 0, orgTotal = 0;
+      final routesWithData = <String, String>{};
+      final routeShopCount = <String, int>{};
+      for (final cid in auditedCustomers) {
+        orgPresent += custPresent[cid] ?? 0;
+        orgTotal += custTotal[cid] ?? 0;
+        for (final rid in (custRoutes[cid] ?? const <String>{})) {
+          routesWithData[rid] = routeName[rid] ?? '(route)';
+          routeShopCount[rid] = (routeShopCount[rid] ?? 0) + 1;
+        }
+      }
+      final orgAvgScore = orgTotal == 0 ? 0.0 : orgPresent / orgTotal;
       final userName = {
         for (final u in usersRaw)
           u['id'] as String: (u['name'] as String? ?? 'Unknown')
@@ -361,14 +485,20 @@ class _IntelligenceDashboardScreenState
             ((catBrandShops[cat] ??= {})[brand] ??= {}).add(cid);
           }
         }
-        brandShops.forEach((brand, shops) {
-          if (shops.length > leadBrandShops) { leadBrandShops = shops.length; leadBrand = brand; }
-        });
+        // Fuzzy-merge near-duplicate spellings before ranking, so a typo can't
+        // split one brand's shops or pad the list (Excel/Excal count as one).
+        for (final entry in _clusterBrands(brandShops)) {
+          if (entry.value.length > leadBrandShops) {
+            leadBrandShops = entry.value.length;
+            leadBrand = entry.key;
+          }
+        }
         if (catBrandShops.isNotEmpty) {
           catBrandShops.forEach((cat, brands) {
-            String? top; int topN = 0;
-            brands.forEach((b, shops) { if (shops.length > topN) { topN = shops.length; top = b; } });
-            if (top != null) catLeaders.add(MapEntry(catName[cat] ?? 'Category', top!));
+            final merged = _clusterBrands(brands); // sorted, most-shops first
+            if (merged.isNotEmpty) {
+              catLeaders.add(MapEntry(catName[cat] ?? 'Category', merged.first.key));
+            }
           });
           catLeaders.sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
         }
@@ -390,6 +520,9 @@ class _IntelligenceDashboardScreenState
         _leadBrand = leadBrand;
         _leadBrandShops = leadBrandShops;
         _catLeaders = catLeaders;
+        _routesWithData = routesWithData;
+        _orgAvgScore = orgAvgScore;
+        _routeShopCount = routeShopCount;
         _loading = false;
       });
     } catch (e) {
@@ -652,46 +785,48 @@ class _IntelligenceDashboardScreenState
     ]);
 
     // Market / route filter — scopes every stat below. Default "All routes".
-    final routeItems = _routeNames.entries.toList()
-      ..sort((a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()));
-    final routeFilter = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        border: Border.all(color: AppTheme.border),
-        borderRadius: BorderRadius.circular(8),
-        color: Colors.white,
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.route_outlined, size: 15, color: AppTheme.textSecondary),
-        const SizedBox(width: 6),
-        DropdownButtonHideUnderline(
-          child: DropdownButton<String?>(
-            value: _routeNames.containsKey(_filterRouteId) ? _filterRouteId : null,
-            isDense: true,
-            hint: const Text('All routes', style: TextStyle(fontSize: 12)),
-            style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
-            items: [
-              const DropdownMenuItem<String?>(
-                  value: null,
-                  child: Text('All routes', style: TextStyle(fontSize: 12))),
-              for (final e in routeItems)
-                DropdownMenuItem<String?>(
-                  value: e.key,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    child: Text(e.value,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12)),
-                  ),
-                ),
-            ],
-            onChanged: (v) {
-              setState(() => _filterRouteId = v);
-              _load();
-            },
-          ),
+    // Only routes that actually carry audited shops this period are offered, and
+    // the picker has a search box (built in _openMarketPicker).
+    final selectedLabel = _filterRouteId != null
+        ? (_routesWithData[_filterRouteId] ?? 'All routes')
+        : 'All routes';
+    final routeFilter = InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: _openMarketPicker,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: AppTheme.border),
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.white,
         ),
-      ]),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.route_outlined, size: 15, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 260),
+            child: Text(selectedLabel,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary)),
+          ),
+          const SizedBox(width: 4),
+          const Icon(Icons.expand_more, size: 16, color: AppTheme.textSecondary),
+        ]),
+      ),
+    );
+
+    // Task sheet: a printable, auto-derived action list. Scoped to the selected
+    // market, or org-wide (grouped by market) when "All routes" is showing.
+    final taskSheetBtn = OutlinedButton.icon(
+      onPressed: _loading ? null : _openTaskSheet,
+      icon: const Icon(Icons.assignment_outlined, size: 16),
+      label: Text(_filterRouteId != null ? 'Market task sheet' : 'Task sheet',
+          style: const TextStyle(fontSize: 12)),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppTheme.primary,
+        side: const BorderSide(color: AppTheme.border),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      ),
     );
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -708,12 +843,14 @@ class _IntelligenceDashboardScreenState
       if (mobile) ...[
         chips,
         const SizedBox(height: 10),
-        Align(alignment: Alignment.centerLeft, child: routeFilter),
+        Wrap(spacing: 10, runSpacing: 10, children: [routeFilter, taskSheetBtn]),
       ] else
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(child: chips),
           const SizedBox(width: 12),
           routeFilter,
+          const SizedBox(width: 8),
+          taskSheetBtn,
         ]),
     ]);
   }
@@ -1358,6 +1495,347 @@ class _IntelligenceDashboardScreenState
     );
   }
 
+  // ── Salesperson read (my own judgment, context-aware) ───────────────────
+  List<Widget> _salespersonInsight() {
+    const icon = Icons.person_outline;
+    final avg = _orgAvgScore;
+    String pts(double d) {
+      final n = (d.abs() * 100).round();
+      return '$n pt${n == 1 ? '' : 's'}';
+    }
+
+    if (_filterRouteId != null) {
+      // A market is selected: this route's placement = the in-scope overall,
+      // and we judge whoever owns the route against the whole company.
+      final routeScore = _skuTotal == 0 ? 0.0 : _skuPresent / _skuTotal;
+      final named = _bySalesman
+          .where((g) => g.name != 'Unassigned' && g.total > 0)
+          .toList();
+      if (named.isEmpty) {
+        return [
+          _insightLine(icon, AppTheme.warning, [
+            _t('This market has no salesperson assigned. Placement here is '),
+            _b('${(routeScore * 100).round()}%'),
+            _t(' — assign an owner so someone is accountable for the shelf.'),
+          ])
+        ];
+      }
+      final who = named.map((g) => g.name).join(' & ');
+      final delta = routeScore - avg;
+      final spans = <InlineSpan>[
+        _t('On this market, '),
+        _b(who),
+        _t(' is holding placement at '),
+        _b('${(routeScore * 100).round()}%'),
+      ];
+      if (delta >= 0.05) {
+        spans.add(_t(
+            ' — ${pts(delta)} above the company average of ${(avg * 100).round()}%. Strong coverage; protect it.'));
+      } else if (delta <= -0.05) {
+        spans.add(_t(
+            ' — ${pts(delta)} below the company average of ${(avg * 100).round()}%. This market needs a push.'));
+      } else {
+        spans.add(_t(
+            ' — roughly in line with the company average of ${(avg * 100).round()}%.'));
+      }
+      final weakest = _skuStats.where((s) => s.rate < 0.5).toList()
+        ..sort((a, b) => a.rate.compareTo(b.rate));
+      if (weakest.isNotEmpty) {
+        spans.add(_t(' Start with '));
+        spans.add(_b(weakest.first.name));
+        spans.add(_t(' (${(weakest.first.rate * 100).round()}% on shelf).'));
+      } else if (_catLeaders.isNotEmpty) {
+        spans.add(_t(' Biggest competitive gap: '));
+        spans.add(_b(_catLeaders.first.value));
+        spans.add(_t(' leads '));
+        spans.add(_b(_catLeaders.first.key));
+        spans.add(_t('.'));
+      }
+      return [_insightLine(icon, _scoreColor(routeScore), spans)];
+    }
+
+    // All routes: judge the whole team.
+    final team = _bySalesman
+        .where((g) =>
+            g.name != 'Unassigned' && g.total > 0 && g.customers.length >= 2)
+        .toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
+    if (team.isEmpty) return const [];
+    final best = team.first;
+    final worst = team.last;
+    if (team.length == 1) {
+      return [
+        _insightLine(icon, _scoreColor(best.score), [
+          _b(best.name),
+          _t(' is carrying every assigned route at '),
+          _b('${(best.score * 100).round()}%'),
+          _t(' placement across ${best.customers.length} shops.'),
+        ])
+      ];
+    }
+    final spread = best.score - worst.score;
+    final teamSpans = <InlineSpan>[
+      _t('Across the team, '),
+      _b(best.name),
+      _t(' leads at '),
+      _b('${(best.score * 100).round()}%'),
+      _t(' while '),
+      _b(worst.name),
+      _t(' trails at '),
+      _b('${(worst.score * 100).round()}%'),
+    ];
+    if (spread >= 0.25) {
+      teamSpans.add(_t(
+          ' — a wide ${pts(spread)} gap. The lower half is what is pulling company placement down to ${(avg * 100).round()}%.'));
+    } else {
+      teamSpans.add(_t(
+          ' — fairly consistent, with the company averaging ${(avg * 100).round()}%.'));
+    }
+    final out = <Widget>[_insightLine(icon, _scoreColor(worst.score), teamSpans)];
+    final belowAvg = team.where((g) => g.score < avg).length;
+    if (belowAvg > 0 && team.length > 2) {
+      out.add(_insightLine(Icons.trending_down, AppTheme.textSecondary, [
+        _b('$belowAvg of ${team.length}'),
+        _t(' salespeople are below the company average — focus coaching there first.'),
+      ]));
+    }
+    return out;
+  }
+
+  // ── Searchable, data-only market picker ─────────────────────────────────
+  static const String _kAllMarkets = '__all_markets__';
+
+  Future<void> _openMarketPicker() async {
+    final all = _routesWithData.entries.toList()
+      ..sort((a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()));
+    String query = '';
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        final q = query.trim().toLowerCase();
+        final filtered =
+            q.isEmpty ? all : all.where((e) => e.value.toLowerCase().contains(q)).toList();
+        return AlertDialog(
+          contentPadding: const EdgeInsets.fromLTRB(0, 14, 0, 0),
+          title: const Text('Filter by market', style: TextStyle(fontSize: 16)),
+          content: SizedBox(
+            width: 440,
+            height: 480,
+            child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: TextField(
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    hintText: 'Search markets…',
+                    border:
+                        OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onChanged: (v) => setLocal(() => query = v),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: ListView(children: [
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.public, size: 18),
+                    title: const Text('All routes'),
+                    trailing: _filterRouteId == null
+                        ? const Icon(Icons.check, size: 18, color: AppTheme.primary)
+                        : null,
+                    onTap: () => Navigator.pop(ctx, _kAllMarkets),
+                  ),
+                  const Divider(height: 1),
+                  if (filtered.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(28),
+                      child: Text('No markets match your search.',
+                          style: TextStyle(color: AppTheme.textSecondary)),
+                    ),
+                  for (final e in filtered)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.route_outlined, size: 18),
+                      title: Text(e.value,
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                      subtitle: Text('${_routeShopCount[e.key] ?? 0} shop'
+                          '${(_routeShopCount[e.key] ?? 0) == 1 ? '' : 's'} audited'),
+                      trailing: _filterRouteId == e.key
+                          ? const Icon(Icons.check, size: 18, color: AppTheme.primary)
+                          : null,
+                      onTap: () => Navigator.pop(ctx, e.key),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+          ],
+        );
+      }),
+    );
+    if (picked == null) return; // cancelled
+    final newId = picked == _kAllMarkets ? null : picked;
+    if (newId == _filterRouteId) return;
+    setState(() => _filterRouteId = newId);
+    _load();
+  }
+
+  // ── Printable, auto-derived market task sheet ───────────────────────────
+  String _esc(String s) => s
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+
+  void _openTaskSheet() {
+    final marketMode = _filterRouteId != null;
+    final scopeName = marketMode
+        ? (_routesWithData[_filterRouteId] ?? 'Market')
+        : 'All markets (company-wide)';
+    final orgName = ref.read(currentUserProvider)?.orgName ?? '';
+    final generated = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final periodLabel = _range == 'all'
+        ? 'All time'
+        : (_from != null && _to != null
+            ? '${DateFormat('d MMM').format(_from!)} – ${DateFormat('d MMM yyyy').format(_to!)}'
+            : 'Selected period');
+    final overall = _skuTotal == 0 ? 0.0 : _skuPresent / _skuTotal;
+
+    // Auto-derived action items.
+    final weakSkus = _skuStats.where((s) => s.rate < 0.5).toList()
+      ..sort((a, b) => a.rate.compareTo(b.rate));
+
+    String checkRow(String txt) =>
+        '<tr><td class="cbx">☐</td><td>$txt</td></tr>';
+
+    final actions = StringBuffer();
+    if (!marketMode) {
+      // Org-wide: prioritise the weakest markets first.
+      final weakMarkets = _byRoute
+          .where((g) => g.name != 'No route / Unassigned' && g.total > 0)
+          .toList()
+        ..sort((a, b) => a.score.compareTo(b.score));
+      for (final m in weakMarkets.take(3)) {
+        actions.write(checkRow(
+            'Prioritise <b>${_esc(m.name)}</b> — placement is only '
+            '<b>${(m.score * 100).round()}%</b> (${m.customers.length} shops). '
+            'Ride along or re-brief the route owner.'));
+      }
+    }
+    for (final s in weakSkus.take(marketMode ? 8 : 6)) {
+      actions.write(checkRow(
+          'Push <b>${_esc(s.name)}</b> — on shelf in only '
+          '<b>${(s.rate * 100).round()}%</b> of ${s.shops} shops. '
+          'Secure facings / arrange restock.'));
+    }
+    for (final c in _catLeaders.take(6)) {
+      actions.write(checkRow(
+          'Win back <b>${_esc(c.key)}</b> — <b>${_esc(c.value)}</b> is the '
+          'most-visible brand in this category. Pitch our range against it.'));
+    }
+    if (_leadBrand != null) {
+      actions.write(checkRow(
+          'Watch <b>${_esc(_leadBrand!)}</b> — the most-spotted competitor '
+          'overall ($_leadBrandShops shops). Note pricing / display where seen.'));
+    }
+    if (actions.isEmpty) {
+      actions.write(checkRow(
+          'No weak points flagged in this period — keep coverage up and '
+          'log any new competitor displays.'));
+    }
+
+    // Who this is for.
+    final assignedNames = marketMode
+        ? (_bySalesman
+            .where((g) => g.name != 'Unassigned')
+            .map((g) => g.name)
+            .toList())
+        : <String>[];
+    final assignedLine = marketMode
+        ? (assignedNames.isEmpty
+            ? 'Assigned to: <i>no salesperson linked to this route</i>'
+            : 'Assigned to: <b>${_esc(assignedNames.join(', '))}</b>')
+        : '';
+
+    // Optional org-wide reference tables.
+    String marketTable() {
+      final rows = _byRoute
+          .where((g) => g.total > 0)
+          .toList()
+        ..sort((a, b) => a.score.compareTo(b.score));
+      if (rows.isEmpty) return '';
+      final b = StringBuffer(
+          '<h3>Markets by placement (weakest first)</h3><table class="ref">'
+          '<tr><th>Market</th><th class="num">Shops</th><th class="num">Placement</th></tr>');
+      for (final g in rows) {
+        b.write('<tr><td>${_esc(g.name)}</td><td class="num">'
+            '${g.customers.length}</td><td class="num">'
+            '${(g.score * 100).round()}%</td></tr>');
+      }
+      b.write('</table>');
+      return b.toString();
+    }
+
+    String salesTable() {
+      final rows = _bySalesman.where((g) => g.total > 0).toList()
+        ..sort((a, b) => a.score.compareTo(b.score));
+      if (rows.isEmpty) return '';
+      final b = StringBuffer(
+          '<h3>Salespeople by placement (weakest first)</h3><table class="ref">'
+          '<tr><th>Salesperson</th><th class="num">Shops</th><th class="num">Placement</th></tr>');
+      for (final g in rows) {
+        b.write('<tr><td>${_esc(g.name)}</td><td class="num">'
+            '${g.customers.length}</td><td class="num">'
+            '${(g.score * 100).round()}%</td></tr>');
+      }
+      b.write('</table>');
+      return b.toString();
+    }
+
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+        '<title>Task Sheet — ${_esc(scopeName)}</title><style>'
+        'body{font-family:Arial,sans-serif;padding:22px;color:#111;font-size:12px}'
+        'h1{font-size:20px;margin:0 0 2px}h3{font-size:13px;margin:20px 0 6px}'
+        '.info{font-size:11px;margin:1px 0;color:#444}'
+        '.kpi{margin:12px 0 4px;font-size:12px}'
+        '.kpi b{font-size:15px}'
+        'table{width:100%;border-collapse:collapse;margin-top:6px}'
+        'td,th{padding:6px 8px;border-bottom:1px solid #e6e6e6;text-align:left;vertical-align:top}'
+        'th{background:#f0f4ff;font-size:11px}'
+        '.num{text-align:right;white-space:nowrap}'
+        '.cbx{width:22px;font-size:16px;color:#333}'
+        'table.ref td,table.ref th{font-size:11px}'
+        '.assign{margin:6px 0 2px;font-size:12px}'
+        '.foot{margin-top:22px;font-size:10px;color:#888;border-top:1px solid #ccc;padding-top:8px}'
+        '@page{margin:0.7cm}</style></head><body>'
+        '<div class="no-print" style="margin-bottom:12px">'
+        '<button onclick="window.print()">Print / Save PDF</button></div>'
+        '<h1>Field Task Sheet</h1>'
+        '<div class="info"><b>Scope:</b> ${_esc(scopeName)}</div>'
+        '${orgName.isEmpty ? '' : '<div class="info"><b>Company:</b> ${_esc(orgName)}</div>'}'
+        '<div class="info"><b>Period:</b> $periodLabel</div>'
+        '<div class="info"><b>Generated:</b> $generated</div>'
+        '${assignedLine.isEmpty ? '' : '<div class="assign">$assignedLine</div>'}'
+        '<div class="kpi">Placement this period: <b>${(overall * 100).round()}%</b> '
+        'across $_shopsAudited shops ($_skuPresent of $_skuTotal shelf checks on shelf).</div>'
+        '<h3>Action items</h3>'
+        '<table>${actions.toString()}</table>'
+        '${marketMode ? '' : marketTable()}'
+        '${marketMode ? '' : salesTable()}'
+        '<div class="foot">Auto-generated by Opstation Intelligence from this '
+        'period’s shelf checks and competitor spottings. Tick items as completed.</div>'
+        '</body></html>';
+
+    final blob = html.Blob([doc], 'text/html;charset=utf-8');
+    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+  }
+
   // ── Auto-insights: a plain-language read of this period's data ───────────
   TextSpan _t(String s) => TextSpan(text: s);
   TextSpan _b(String s) =>
@@ -1444,20 +1922,11 @@ class _IntelligenceDashboardScreenState
       lines.add(_insightLine(Icons.category_outlined, AppTheme.textSecondary, spans));
     }
 
-    // Salesperson needing the most attention.
-    _GroupScore? weak;
-    for (final g in _bySalesman) {
-      if (g.name == 'Unassigned') continue;
-      if (g.customers.length < 2) continue; // ignore tiny samples
-      if (weak == null || g.score < weak.score) weak = g;
-    }
-    if (weak != null) {
-      lines.add(_insightLine(Icons.person_outline, _scoreColor(weak.score), [
-        _b(weak.name),
-        _t(' needs the most attention — placement across their routes is '),
-        _b('${(weak.score * 100).round()}%'),
-        _t(', the lowest on the team (${weak.customers.length} shops).'),
-      ]));
+    // Salesperson read — context-aware:
+    //  • a market is selected  -> judge that route's assigned salesperson
+    //  • all routes            -> judge the whole team
+    for (final l in _salespersonInsight()) {
+      lines.add(l);
     }
 
     if (lines.isEmpty) {
