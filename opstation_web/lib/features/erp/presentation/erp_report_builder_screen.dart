@@ -28,6 +28,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   String _view = 'table'; // table | pivot | chart
   String _chartType = 'bar'; // bar | line | pie
   String _userName = '';
+  String _fieldSearch = ''; // filters the Dimensions/Measures field lists
 
   List<Map<String, dynamic>> _result = [];
   bool _running = false;
@@ -491,32 +492,50 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   }
 
   Widget _configPanel() {
+    final q = _fieldSearch.trim().toLowerCase();
+    final dims = q.isEmpty ? _dims : _dims.where((m) => (m['label'] as String).toLowerCase().contains(q)).toList();
+    final measures = q.isEmpty ? _measures : _measures.where((m) => (m['label'] as String).toLowerCase().contains(q)).toList();
     return Container(
       decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
       child: SingleChildScrollView(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _zone('Rows', _rows, AppTheme.primary),
-        _zone('Columns', _cols, Colors.teal),
-        _zone('Values', _values, Colors.deepPurple),
+        _zone('Rows', _rows, AppTheme.primary, 'Group results down the page'),
+        _zone('Columns', _cols, Colors.teal, 'Spread results across the page'),
+        _zone('Values', _values, Colors.deepPurple, 'Numbers to total'),
         _filterZone(),
         const Divider(height: 24),
+        // Field search — the lists can be long; this narrows them fast.
+        TextField(
+          decoration: const InputDecoration(hintText: 'Search fields…', prefixIcon: Icon(Icons.search, size: 16), isDense: true),
+          style: const TextStyle(fontSize: 12),
+          onChanged: (v) => setState(() => _fieldSearch = v),
+        ),
+        const SizedBox(height: 6),
+        // Legend so the R / C / Σ / filter buttons aren't cryptic.
+        Wrap(spacing: 10, runSpacing: 2, children: const [
+          _LegendChip('R', 'Rows'), _LegendChip('C', 'Columns'),
+          _LegendChip('Σ', 'Values'), _LegendChip('⏷', 'Filter'),
+        ]),
+        const SizedBox(height: 10),
         const Text('Dimensions', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
         const SizedBox(height: 6),
-        ..._dims.map((m) => _dimRow(m['field'] as String, m['label'] as String)),
+        if (dims.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('No matching fields', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        ...dims.map((m) => _dimRow(m['field'] as String, m['label'] as String)),
         const SizedBox(height: 14),
         const Text('Measures', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
         const SizedBox(height: 6),
-        ..._measures.map((m) => _measureRow(m['field'] as String, m['label'] as String)),
+        if (measures.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('No matching fields', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        ...measures.map((m) => _measureRow(m['field'] as String, m['label'] as String)),
       ])),
     );
   }
 
-  Widget _zone(String title, List<String> items, Color c) {
+  Widget _zone(String title, List<String> items, Color c, [String? hint]) {
     return Padding(padding: const EdgeInsets.only(bottom: 10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(title, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
       const SizedBox(height: 4),
       Container(width: double.infinity, constraints: const BoxConstraints(minHeight: 36), padding: const EdgeInsets.all(6),
         decoration: BoxDecoration(color: c.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: c.withOpacity(0.25))),
-        child: items.isEmpty ? const Text('—', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+        child: items.isEmpty ? Text(hint ?? '—', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))
           : Wrap(spacing: 4, runSpacing: 4, children: items.map((f) => Chip(
               label: Text(_label(f), style: const TextStyle(fontSize: 11)),
               visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -571,8 +590,70 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
   Widget _resultsPanel() {
     if (_error != null) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('Query error:\n$_error', style: const TextStyle(color: Colors.red))));
-    if (_result.isEmpty) return const Center(child: Text('Assign fields and press Run.', style: TextStyle(color: AppTheme.textSecondary)));
+    if (_result.isEmpty) return _emptyState();
     return Padding(padding: const EdgeInsets.all(16), child: _view == 'pivot' ? _pivot() : _view == 'chart' ? _chart() : _table());
+  }
+
+  // Guided empty state: a short how-to plus one-click "quick starts" that fill
+  // Rows + Values and run, so a new user gets a real report without knowing the
+  // cube model. Quick starts adapt to whatever fields the source actually has.
+  Widget _emptyState() {
+    final presets = _presetButtons();
+    return Center(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.insights_outlined, size: 40, color: AppTheme.textSecondary),
+      const SizedBox(height: 12),
+      const Text('Build a report', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      const SizedBox(width: 420, child: Text(
+        'Pick a field to group by (add it to Rows), a number to total (Values), then press Run. '
+        'Use Columns to break the numbers out sideways, and Filters to narrow the data.',
+        textAlign: TextAlign.center, style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary))),
+      if (presets.isNotEmpty) ...[
+        const SizedBox(height: 20),
+        const Text('Quick starts', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+        const SizedBox(height: 8),
+        SizedBox(width: 460, child: Wrap(alignment: WrapAlignment.center, spacing: 8, runSpacing: 8, children: presets)),
+      ],
+    ])));
+  }
+
+  // Preferred measure for a quick start: the most "headline" number available.
+  String? _preferredMeasure() {
+    if (_measures.isEmpty) return null;
+    const pri = ['net', 'sales', 'amount', 'total', 'value', 'qty', 'quantity'];
+    for (final p in pri) {
+      final m = _measures.firstWhere((x) => (x['label'] as String).toLowerCase().contains(p), orElse: () => <String, dynamic>{});
+      if (m.isNotEmpty) return m['field'] as String;
+    }
+    return _measures.first['field'] as String;
+  }
+
+  List<Widget> _presetButtons() {
+    final mf = _preferredMeasure();
+    if (mf == null) return [];
+    const wanted = ['Customer', 'Product', 'Branch', 'Supplier', 'Date', 'Group'];
+    final out = <Widget>[];
+    for (final label in wanted) {
+      final d = _dims.firstWhere((x) => (x['label'] as String).toLowerCase() == label.toLowerCase(), orElse: () => <String, dynamic>{});
+      if (d.isEmpty) continue;
+      final df = d['field'] as String;
+      out.add(OutlinedButton.icon(
+        icon: const Icon(Icons.bolt_outlined, size: 15),
+        label: Text('${_label(mf)} by $label', style: const TextStyle(fontSize: 12)),
+        onPressed: () => _applyPreset(df, mf),
+      ));
+    }
+    return out;
+  }
+
+  void _applyPreset(String dimField, String measureField) {
+    setState(() {
+      _rows..clear()..add(dimField);
+      _cols.clear();
+      _values..clear()..add(measureField);
+      _view = 'table';
+    });
+    _run();
   }
 
   Widget _table() {
@@ -827,6 +908,29 @@ class _Cond {
   String op;
   List<String> vals;
   _Cond(this.op, this.vals);
+}
+
+/// Tiny legend entry explaining a field-row action button (R / C / Σ / filter).
+class _LegendChip extends StatelessWidget {
+  final String symbol;
+  final String meaning;
+  const _LegendChip(this.symbol, this.meaning);
+  @override
+  Widget build(BuildContext context) {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 18, height: 18, alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppTheme.background,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Text(symbol, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+      ),
+      const SizedBox(width: 4),
+      Text(meaning, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+    ]);
+  }
 }
 
 class _FilterResult {

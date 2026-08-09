@@ -135,6 +135,41 @@ class _ReportsCenterScreenState extends ConsumerState<ReportsCenterScreen> {
     }
   }
 
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _deleteSaved(Map<String, dynamic> t) async {
+    final name = (t['name'] as String?) ?? 'this report';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete saved report'),
+        content: Text('Delete "$name"? This removes it for everyone it was shared with. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      // Share rows are removed automatically via the FK's ON DELETE CASCADE.
+      await Supabase.instance.client
+          .from('report_templates').delete().eq('id', t['id'] as String);
+      setState(() => _saved.removeWhere((x) => x['id'] == t['id']));
+      _snack('Report deleted');
+    } catch (e) {
+      _snack('Delete failed: $e');
+    }
+  }
+
   bool _match(String label, String desc) {
     if (_search.trim().isEmpty) return true;
     final q = _search.toLowerCase();
@@ -304,7 +339,25 @@ class _ReportsCenterScreenState extends ConsumerState<ReportsCenterScreen> {
             child: const Icon(Icons.bookmark_outline, size: 18, color: AppTheme.success),
           ),
           const Spacer(),
-          const Icon(Icons.chevron_right, size: 18, color: AppTheme.textSecondary),
+          if (isAdmin)
+            SizedBox(
+              width: 28, height: 28,
+              child: PopupMenuButton<String>(
+                padding: EdgeInsets.zero,
+                tooltip: 'Options',
+                icon: const Icon(Icons.more_vert, size: 18, color: AppTheme.textSecondary),
+                onSelected: (v) { if (v == 'delete') _deleteSaved(t); },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'delete', child: Row(children: [
+                    Icon(Icons.delete_outline, size: 16, color: AppTheme.danger),
+                    SizedBox(width: 8),
+                    Text('Delete', style: TextStyle(color: AppTheme.danger)),
+                  ])),
+                ],
+              ),
+            )
+          else
+            const Icon(Icons.chevron_right, size: 18, color: AppTheme.textSecondary),
         ]),
         const SizedBox(height: 12),
         Text((t['name'] as String?) ?? 'Untitled report',
