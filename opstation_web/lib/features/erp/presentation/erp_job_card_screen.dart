@@ -926,7 +926,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     // Already noted? Just print (if asked) and make sure our buzzer is quiet.
     if (job!['acknowledged_at'] != null) {
       _disarmBuzzer();
-      if (thenPrint) _printJobCard();
+      if (thenPrint) _printJobCard(withPrices: false); // Note & Print = internal shop-floor copy (no prices)
       return;
     }
     final u = ref.read(currentUserProvider);
@@ -956,7 +956,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     _disarmBuzzer();
     ref.invalidate(jobAckPendingCountProvider); // refresh the Manufacturing badge
     if (mounted) setState(() {});
-    if (thenPrint) _printJobCard();
+    if (thenPrint) _printJobCard(withPrices: false); // Note & Print = internal shop-floor copy (no prices)
   }
 
   /// When an un-acknowledged job is opened, prompt the opener to note it.
