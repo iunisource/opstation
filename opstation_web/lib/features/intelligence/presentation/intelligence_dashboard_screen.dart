@@ -64,6 +64,10 @@ class _IntelligenceDashboardScreenState
   final _trendCustSearchCtrl = TextEditingController();
   bool _trendCustPicking = false;
 
+  // Shop names for expanding the "Unassigned" rows, and which rows are open.
+  Map<String, String> _custName = {};
+  final Set<String> _expandedGroups = {};
+
   final _pct = NumberFormat('#,##0.0');
   final _int = NumberFormat('#,##0');
 
@@ -182,6 +186,16 @@ class _IntelligenceDashboardScreenState
           u['id'] as String: (u['name'] as String? ?? 'Unknown')
       };
 
+      // Shop names, so an "Unassigned" row can expand to show which shops.
+      final custRaw = await client
+          .from('customers')
+          .select('id, shop_name')
+          .eq('org_id', orgId);
+      final custName = {
+        for (final c in custRaw as List)
+          c['id'] as String: (c['shop_name'] as String? ?? 'Unnamed shop')
+      };
+
       // ── 4. Aggregate ───────────────────────────────────────────────────
       final byRoute = <String, _GroupScore>{};
       final bySalesman = <String, _GroupScore>{};
@@ -252,6 +266,7 @@ class _IntelligenceDashboardScreenState
         _allAudits = audits; // FULL history for the trend (range-independent)
         _routeNames = routeName;
         _custRoutes = custRoutes;
+        _custName = custName;
         _loading = false;
       });
     } catch (e) {
@@ -1035,14 +1050,19 @@ class _IntelligenceDashboardScreenState
             padding: const EdgeInsets.fromLTRB(18, 6, 18, 16),
             itemCount: rows.length,
             separatorBuilder: (_, __) => const SizedBox(height: 14),
-            itemBuilder: (_, i) => _meterRow(i + 1, rows[i]),
+            itemBuilder: (_, i) => _meterRow(i + 1, rows[i], unit),
           ),
       ]),
     );
   }
 
-  Widget _meterRow(int rank, _GroupScore g) {
+  Widget _meterRow(int rank, _GroupScore g, String panelKey) {
     final c = _scoreColor(g.score);
+    // The catch-all buckets are the only expandable rows: tapping the shop count
+    // reveals exactly which shops fell into "Unassigned" / "No route".
+    final isUnassigned = g.name == 'Unassigned' || g.name == 'No route / Unassigned';
+    final rowKey = '$panelKey:${g.name}';
+    final expanded = isUnassigned && _expandedGroups.contains(rowKey);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         SizedBox(
@@ -1092,12 +1112,73 @@ class _IntelligenceDashboardScreenState
       ),
       Padding(
         padding: const EdgeInsets.only(left: 22, top: 4),
-        child: Text(
-            '${g.customers.length} shop${g.customers.length == 1 ? '' : 's'}',
-            style: const TextStyle(
-                fontSize: 10.5, color: AppTheme.textSecondary)),
+        child: isUnassigned
+            ? InkWell(
+                onTap: () => setState(() {
+                  if (expanded) {
+                    _expandedGroups.remove(rowKey);
+                  } else {
+                    _expandedGroups.add(rowKey);
+                  }
+                }),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 15, color: AppTheme.primary),
+                  const SizedBox(width: 2),
+                  Text(
+                      '${g.customers.length} shop${g.customers.length == 1 ? '' : 's'} — ${expanded ? 'hide' : 'show'}',
+                      style: const TextStyle(
+                          fontSize: 10.5,
+                          color: AppTheme.primary,
+                          fontWeight: FontWeight.w600)),
+                ]),
+              )
+            : Text(
+                '${g.customers.length} shop${g.customers.length == 1 ? '' : 's'}',
+                style: const TextStyle(
+                    fontSize: 10.5, color: AppTheme.textSecondary)),
       ),
+      if (expanded) _unassignedShops(g),
     ]);
+  }
+
+  // The list of shops inside an expanded "Unassigned" bucket, sorted by name.
+  Widget _unassignedShops(_GroupScore g) {
+    final names = g.customers
+        .map((cid) => _custName[cid] ?? 'Unnamed shop')
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return Container(
+      margin: const EdgeInsets.only(left: 22, top: 6),
+      constraints: const BoxConstraints(maxHeight: 220),
+      decoration: BoxDecoration(
+        color: AppTheme.background,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Scrollbar(
+        child: ListView.separated(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          itemCount: names.length,
+          separatorBuilder: (_, __) =>
+              const Divider(height: 1, color: AppTheme.border),
+          itemBuilder: (_, i) => Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Row(children: [
+              const Icon(Icons.storefront_outlined,
+                  size: 13, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(names[i],
+                    style: const TextStyle(fontSize: 12),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 
   BoxDecoration get _cardDeco => BoxDecoration(
