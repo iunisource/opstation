@@ -106,6 +106,10 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('supplier_balance_report', 'Supplier Balance Report', PermKind.report, '/reports/supplier-balance', module: 'purchase'),
     // Report Builder and Files are cross-cutting tools, not tied to a single
     // licensable module — left permission-gated only.
+    // Reports Center is the browsable gallery landing; grant it to let a user
+    // open the Center. Individual cards inside are still gated by each report's
+    // own permission, and saved custom reports by their share audience.
+    PermItem('reports_center', 'Reports Center', PermKind.report, '/reports/center'),
     PermItem('report_builder', 'Report Builder', PermKind.report, '/intelligence/report-builder'),
     PermItem('shared_files', 'Files', PermKind.report, '/erp/files'),
   ], moduleGated: false),

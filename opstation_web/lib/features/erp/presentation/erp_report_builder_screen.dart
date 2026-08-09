@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/permissions/access_control.dart';
 import 'dart:html' as html;
 
 class ErpReportBuilderScreen extends ConsumerStatefulWidget {
@@ -35,6 +36,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   List<Map<String, dynamic>> _templates = [];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _isAdmin => ref.read(accessSyncProvider)?.isAdmin ?? false;
 
   @override
   void initState() {
@@ -301,33 +303,80 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
   // ---------- templates ----------
   Future<void> _saveTemplate() async {
+    if (!_isAdmin) { _snack('Only admins can save reports'); return; }
+    final orgId = _orgId;
+    if (orgId == null) { _snack('Not authenticated'); return; }
+
+    // Load the org's users once, for the "Selected users" audience picker.
+    List<Map<String, dynamic>> users = [];
+    try {
+      final rows = await Supabase.instance.client
+          .from('users').select('id, name').eq('org_id', orgId).order('name');
+      users = List<Map<String, dynamic>>.from(rows);
+    } catch (_) {}
+
     final nameCtrl = TextEditingController();
-    bool shared = true;
+    String scope = 'admins'; // admins | all | selected
+    final picked = <String>{};
+
     final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (c, setS) => AlertDialog(
-      title: const Text('Save as template'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: 'Template name')),
-        const SizedBox(height: 8),
-        SwitchListTile(contentPadding: EdgeInsets.zero, value: shared, onChanged: (v) => setS(() => shared = v),
-          title: const Text('Shared with org', style: TextStyle(fontSize: 14))),
-      ]),
+      title: const Text('Save report'),
+      content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: 'Report name')),
+        const SizedBox(height: 12),
+        const Text('Who can see this report?', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        RadioListTile<String>(contentPadding: EdgeInsets.zero, dense: true, value: 'admins', groupValue: scope,
+          onChanged: (v) => setS(() => scope = v!), title: const Text('Admins only', style: TextStyle(fontSize: 13))),
+        RadioListTile<String>(contentPadding: EdgeInsets.zero, dense: true, value: 'all', groupValue: scope,
+          onChanged: (v) => setS(() => scope = v!), title: const Text('All users', style: TextStyle(fontSize: 13))),
+        RadioListTile<String>(contentPadding: EdgeInsets.zero, dense: true, value: 'selected', groupValue: scope,
+          onChanged: (v) => setS(() => scope = v!), title: const Text('Selected users', style: TextStyle(fontSize: 13))),
+        if (scope == 'selected') ...[
+          const SizedBox(height: 4),
+          Container(
+            constraints: const BoxConstraints(maxHeight: 220),
+            decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6)),
+            child: users.isEmpty
+                ? const Padding(padding: EdgeInsets.all(12), child: Text('No other users found', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+                : ListView(shrinkWrap: true, children: [
+                    for (final u in users)
+                      CheckboxListTile(
+                        dense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                        value: picked.contains(u['id'] as String),
+                        onChanged: (v) => setS(() { final id = u['id'] as String; if (v == true) picked.add(id); else picked.remove(id); }),
+                        title: Text((u['name'] as String?) ?? (u['id'] as String), style: const TextStyle(fontSize: 13)),
+                      ),
+                  ]),
+          ),
+        ],
+      ])),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Save')),
       ],
     )));
     if (ok != true || nameCtrl.text.trim().isEmpty) return;
+    if (scope == 'selected' && picked.isEmpty) { _snack('Pick at least one user, or choose another audience'); return; }
+
+    final id = 'rpt_${DateTime.now().millisecondsSinceEpoch}';
     try {
       await Supabase.instance.client.from('report_templates').insert({
-        'id': 'rpt_${DateTime.now().millisecondsSinceEpoch}', 'org_id': _orgId, 'name': nameCtrl.text.trim(), 'source': _source,
-        'is_shared': shared, 'created_by': ref.read(currentUserProvider)?.id,
+        'id': id, 'org_id': orgId, 'name': nameCtrl.text.trim(), 'source': _source,
+        // is_shared kept for backward-compat: true when everyone can see it.
+        'is_shared': scope == 'all', 'share_scope': scope,
+        'created_by': ref.read(currentUserProvider)?.id,
         'config': {
           'rows': _rows, 'cols': _cols, 'values': _values, 'filters': _filters.map((k, v) => MapEntry(k, {'op': v.op, 'vals': v.vals})), 'view': _view,
           'date_from': _dateFrom != null ? DateFormat('yyyy-MM-dd').format(_dateFrom!) : null,
           'date_to': _dateTo != null ? DateFormat('yyyy-MM-dd').format(_dateTo!) : null,
         },
       });
-      _snack('Template saved');
+      if (scope == 'selected' && picked.isNotEmpty) {
+        await Supabase.instance.client.from('report_template_shares').insert([
+          for (final uid in picked) {'template_id': id, 'user_id': uid, 'org_id': orgId},
+        ]);
+      }
+      _snack('Report saved');
       await _loadTemplates();
     } catch (e) { _snack('Save failed: $e'); }
   }
@@ -420,7 +469,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         if (_view == 'chart') DropdownButton<String>(value: _chartType, underline: const SizedBox(),
           items: const [DropdownMenuItem(value: 'bar', child: Text('Bar')), DropdownMenuItem(value: 'line', child: Text('Line')), DropdownMenuItem(value: 'pie', child: Text('Pie'))],
           onChanged: (v) { if (v != null) setState(() => _chartType = v); }),
-        OutlinedButton.icon(onPressed: _saveTemplate, icon: const Icon(Icons.bookmark_add_outlined, size: 16), label: const Text('Save')),
+        if (_isAdmin) OutlinedButton.icon(onPressed: _saveTemplate, icon: const Icon(Icons.bookmark_add_outlined, size: 16), label: const Text('Save')),
         OutlinedButton.icon(onPressed: _result.isEmpty ? null : _export, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
         if (_templates.isNotEmpty) PopupMenuButton<Map<String, dynamic>>(
           tooltip: 'Load template',

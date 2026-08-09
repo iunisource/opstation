@@ -20,6 +20,7 @@ import '../../features/erp/presentation/erp_qc_station_screen.dart';
 import '../../features/erp/presentation/erp_production_floor_screen.dart';
 import '../../features/erp/presentation/erp_production_plan_screen.dart';
 import '../../features/erp/presentation/erp_report_builder_screen.dart';
+import '../../features/erp/presentation/reports_center_screen.dart';
 import '../../features/erp/presentation/erp_margin_report_screen.dart';
 import '../../features/erp/presentation/erp_customer_balance_report_screen.dart';
 import '../../features/erp/presentation/erp_supplier_balance_report_screen.dart';
@@ -334,6 +335,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       // but had no GoRoute — same pre-existing gap as the HR attendance screens.
       GoRoute(path: '/manufacturing/production-plan', builder: (_, __) => const ErpProductionPlanScreen()),
       GoRoute(path: '/intelligence/report-builder', builder: (_, __) => const ErpReportBuilderScreen()),
+      GoRoute(path: '/reports/center', builder: (_, __) => const ReportsCenterScreen()),
       GoRoute(path: '/reports/margin', builder: (_, __) => const ErpMarginReportScreen()),
       GoRoute(path: '/reports/customer-balance', builder: (_, __) => const ErpCustomerBalanceReportScreen()),
       GoRoute(path: '/reports/supplier-balance', builder: (_, __) => const ErpSupplierBalanceReportScreen()),

@@ -597,7 +597,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
       if (show('/reports/customer-balance')) _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location),
       if (show('/reports/supplier-balance')) _menuItem(context, 'Supplier Balance Report', Icons.account_balance_outlined, '/reports/supplier-balance', location),
-      if (show('/intelligence/report-builder')) _menuItem(context, 'Report Builder', Icons.table_chart_outlined, '/intelligence/report-builder', location),
+      if (show('/reports/center')) _menuItem(context, 'Reports Center', Icons.grid_view_outlined, '/reports/center', location),
     ];
 
     // Top-level production items (non-voucher)
@@ -690,7 +690,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
       if (_hasItems(reportItems))
         _navMenu(context, 'Reports', Icons.summarize_outlined, location,
-          ['/reports/margin', '/reports/customer-balance', '/reports/supplier-balance', '/intelligence/report-builder'],
+          ['/reports/margin', '/reports/customer-balance', '/reports/supplier-balance', '/reports/center'],
           reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
