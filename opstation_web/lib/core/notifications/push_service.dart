@@ -10,9 +10,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// Dart just invokes them and stores the result — far more reliable than the
 /// dart:html Push bindings.
 class PushService {
-  // VAPID public key — safe to ship in the client.
+  // VAPID public key — safe to ship in the client. Must match VAPID_PUBLIC_KEY
+  // (and its private pair) set as Edge Function secrets on the server.
   static const vapidPublicKey =
-      'BDsUwuFL_xt7xpeY5Q7CrIuUsMWjvhp7o4B5wSIRmA8vwoRc5sKjvdnpwQ4MDQCfl18C-QY-lQJcM5v1ItRuqE8';
+      'BA1DeQkrDtSzeXkAUiLvn4ShG3bjxdH973-Tr0sH4EmzoZB6r7T49OPwAXIx7XdSKvprtzUB_wrVECRep0tP9Vs';
 
   static bool get isSupported {
     try {
