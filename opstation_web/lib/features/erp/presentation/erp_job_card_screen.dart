@@ -61,6 +61,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   List<Map<String, dynamic>> _jobs = [];
   bool _loadingList = true;
   String _listSearch = '';
+  String _statusFilter = 'all'; // all | queued | in_progress | completed | cancelled
+  bool _completedExpanded = false; // the collapsible "Completed" drawer section
   bool _drawerOpen = true;
 
   Map<String, dynamic>? _current;
@@ -1518,6 +1520,123 @@ $runSection
     decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
     child: Row(children: [const Icon(Icons.event, size: 15, color: AppTheme.textSecondary), const SizedBox(width: 8), Text(DateFormat('d MMM yyyy').format(_date), style: const TextStyle(fontSize: 13))])));
 
+  // A status filter chip for the drawer (in addition to the search box).
+  Widget _statusChip(String label, String value) {
+    final sel = _statusFilter == value;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: GestureDetector(
+        onTap: () => setState(() => _statusFilter = value),
+        child: Container(
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: sel ? AppTheme.primary : Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: sel ? AppTheme.primary : AppTheme.border),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                  color: sel ? Colors.white : AppTheme.textSecondary)),
+        ),
+      ),
+    );
+  }
+
+  // One job row in the drawer list. Shared by the active list and the
+  // collapsible Completed section.
+  Widget _jobTile(Map<String, dynamic> j) {
+    final sel = _current?['id'] == j['id'];
+    final st = (j['status'] as String? ?? 'queued');
+    final c = st == 'completed'
+        ? Colors.green
+        : st == 'cancelled'
+            ? Colors.grey
+            : st == 'in_progress'
+                ? Colors.blue
+                : Colors.orange;
+    final lbl = st == 'completed'
+        ? 'Completed'
+        : st == 'cancelled'
+            ? 'Voided'
+            : st == 'in_progress'
+                ? 'In progress'
+                : 'Queued';
+    final planned = (j['planned_qty'] as num? ?? 0).toDouble();
+    final produced = (j['produced_qty'] as num? ?? 0).toDouble();
+    final jOpen = (j['is_open_ended'] as bool?) ?? false;
+    final needsAttn = _jobUnacked(j);
+    return InkWell(
+      onTap: () => _loadJob(j, promptAck: true),
+      child: Container(
+        color: sel
+            ? AppTheme.primary.withOpacity(0.07)
+            : (needsAttn ? Colors.orange.withOpacity(0.09) : null),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            if (needsAttn)
+              const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: _BlinkingDot(color: Colors.deepOrange, size: 9)),
+            Expanded(
+                child: Text(j['job_number'] as String? ?? '',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: sel ? AppTheme.primary : AppTheme.textPrimary))),
+            if (needsAttn)
+              const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Text('NEW · unacked',
+                      style: TextStyle(
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.deepOrange))),
+            if (j['is_running'] == true)
+              const Padding(
+                  padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
+            Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                    color: c.withOpacity(0.13),
+                    borderRadius: BorderRadius.circular(3)),
+                child: Text(lbl,
+                    style: TextStyle(
+                        fontSize: 9, color: c, fontWeight: FontWeight.w700))),
+          ]),
+          const SizedBox(height: 2),
+          Text(_prodLabel[j['product_id']] ?? '',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: sel ? AppTheme.primary : AppTheme.textSecondary),
+              overflow: TextOverflow.ellipsis),
+          Text(
+              jOpen
+                  ? '${_trim(produced)} made · open-ended'
+                  : '${_trim(produced)} / ${_trim(planned)} done  ·  ${_leftLabel(planned, produced)}',
+              style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+          if (j['customer_id'] != null &&
+              (_custLabel[j['customer_id']] ?? '').isNotEmpty)
+            Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: Row(children: [
+                  const Icon(Icons.storefront_outlined,
+                      size: 11, color: AppTheme.textSecondary),
+                  const SizedBox(width: 3),
+                  Expanded(
+                      child: Text(_custLabel[j['customer_id']]!,
+                          style: const TextStyle(
+                              fontSize: 10, color: AppTheme.textSecondary),
+                          overflow: TextOverflow.ellipsis)),
+                ])),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Jobs are loaded org-wide but shown for the sidebar-selected branch only —
@@ -1532,21 +1651,34 @@ $runSection
     final byBranch = branchId == null
         ? _jobs
         : _jobs.where((j) => j['branch_id'] == branchId).toList();
-    final filtered = _listSearch.isEmpty ? byBranch : byBranch.where((j) {
+    final searched = _listSearch.isEmpty ? byBranch : byBranch.where((j) {
       final q = _listSearch.toLowerCase();
       final pn = (_prodLabel[j['product_id']] ?? '').toLowerCase();
       return (j['job_number'] as String? ?? '').toLowerCase().contains(q) || pn.contains(q);
     }).toList();
 
+    // Status filter chips (in addition to search).
+    String stOf(Map<String, dynamic> j) => (j['status'] as String? ?? 'queued');
+    final filtered = _statusFilter == 'all'
+        ? searched
+        : searched.where((j) => stOf(j) == _statusFilter).toList();
+
     // Jobs awaiting acknowledgement bubble to the very top (and blink) until
     // someone notes them — regardless of the normal priority/serial order.
     // Stable partition keeps the existing order within each group.
-    final display = _ackFlowEnabled
+    final surfaced = _ackFlowEnabled
         ? [
             ...filtered.where(_jobUnacked),
             ...filtered.where((j) => !_jobUnacked(j)),
           ]
         : filtered;
+
+    // Split active (queued / in progress) from finished (completed / voided) so
+    // finished jobs live in their own collapsible section of the drawer.
+    bool isDone(Map<String, dynamic> j) =>
+        stOf(j) == 'completed' || stOf(j) == 'cancelled';
+    final activeJobs = surfaced.where((j) => !isDone(j)).toList();
+    final doneJobs = surfaced.where(isDone).toList();
 
     final running = (_current?['is_running'] as bool?) ?? false;
 
@@ -1576,49 +1708,53 @@ $runSection
               ]),
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 15), isDense: true), onChanged: (v) => setState(() => _listSearch = v)),
+              const SizedBox(height: 8),
+              // Status filter chips, alongside the search.
+              SizedBox(
+                height: 26,
+                child: ListView(scrollDirection: Axis.horizontal, children: [
+                  _statusChip('All', 'all'),
+                  _statusChip('Queued', 'queued'),
+                  _statusChip('In progress', 'in_progress'),
+                  _statusChip('Completed', 'completed'),
+                  _statusChip('Voided', 'cancelled'),
+                ]),
+              ),
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            : filtered.isEmpty ? Center(child: Text(_jobs.isEmpty ? 'No job cards yet' : 'No job cards for this branch', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-            : ListView.builder(itemCount: display.length, itemBuilder: (_, i) {
-                final j = display[i]; final sel = _current?['id'] == j['id'];
-                final st = (j['status'] as String? ?? 'queued');
-                final c = st == 'completed' ? Colors.green : st == 'cancelled' ? Colors.grey : st == 'in_progress' ? Colors.blue : Colors.orange;
-                final lbl = st == 'completed' ? 'Completed' : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : 'Queued';
-                final planned = (j['planned_qty'] as num? ?? 0).toDouble();
-                final produced = (j['produced_qty'] as num? ?? 0).toDouble();
-                final jOpen = (j['is_open_ended'] as bool?) ?? false;
-                final needsAttn = _jobUnacked(j);
-                return InkWell(onTap: () => _loadJob(j, promptAck: true), child: Container(
-                  color: sel
-                      ? AppTheme.primary.withOpacity(0.07)
-                      : (needsAttn ? Colors.orange.withOpacity(0.09) : null),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      if (needsAttn) const Padding(
-                          padding: EdgeInsets.only(right: 6),
-                          child: _BlinkingDot(color: Colors.deepOrange, size: 9)),
-                      Expanded(child: Text(j['job_number'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))),
-                      if (needsAttn) const Padding(
-                          padding: EdgeInsets.only(right: 6),
-                          child: Text('NEW · unacked',
-                              style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.w800, color: Colors.deepOrange))),
-                      if (j['is_running'] == true) const Padding(padding: EdgeInsets.only(right: 6), child: RunningDot(size: 7)),
-                      Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.13), borderRadius: BorderRadius.circular(3)),
-                        child: Text(lbl, style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))),
-                    ]),
-                    const SizedBox(height: 2),
-                    Text(_prodLabel[j['product_id']] ?? '', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
-                    Text(jOpen ? '${_trim(produced)} made · open-ended' : '${_trim(produced)} / ${_trim(planned)} done  ·  ${_leftLabel(planned, produced)}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
-                    if (j['customer_id'] != null && (_custLabel[j['customer_id']] ?? '').isNotEmpty)
-                      Padding(padding: const EdgeInsets.only(top: 1), child: Row(children: [
-                        const Icon(Icons.storefront_outlined, size: 11, color: AppTheme.textSecondary),
-                        const SizedBox(width: 3),
-                        Expanded(child: Text(_custLabel[j['customer_id']]!, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-                      ])),
-                  ]),
-                ));
-              })),
+            : filtered.isEmpty ? Center(child: Text(_jobs.isEmpty ? 'No job cards yet' : 'No jobs match this filter', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : ListView(children: [
+                // Active jobs (queued / in progress). When the filter itself is a
+                // finished status, activeJobs is empty and only the section below shows.
+                for (final j in activeJobs) _jobTile(j),
+                // Completed / voided in their own collapsible section (only in the
+                // "All" view — a specific finished-status filter lists them flat).
+                if (doneJobs.isNotEmpty && _statusFilter == 'all') ...[
+                  InkWell(
+                    onTap: () => setState(() => _completedExpanded = !_completedExpanded),
+                    child: Container(
+                      color: const Color(0xFFF7F7F9),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      child: Row(children: [
+                        Icon(_completedExpanded ? Icons.expand_more : Icons.chevron_right,
+                            size: 17, color: AppTheme.textSecondary),
+                        const SizedBox(width: 4),
+                        Text('Completed',
+                            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: AppTheme.textSecondary)),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(10)),
+                          child: Text('${doneJobs.length}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+                        ),
+                      ]),
+                    ),
+                  ),
+                  if (_completedExpanded) for (final j in doneJobs) _jobTile(j),
+                ] else if (_statusFilter != 'all')
+                  // A finished-status filter is active: list its jobs flat.
+                  for (final j in doneJobs) _jobTile(j),
+              ])),
         ]));
 
     final detailPane = Column(children: [
