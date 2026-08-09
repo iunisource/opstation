@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/notifications/global_transfer_alert.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
@@ -152,7 +153,32 @@ class _ErpStockTransfersScreenState
           builder: (_) => _StockTransferVoucherScreen(
               transfer: transfer, branches: _allBranches, onUpdated: _load),
         ))
-        .then((_) => _load());
+        .then((_) {
+      _load();
+      ref.invalidate(transferPendingCountProvider); // an accept clears the badge
+    });
+  }
+
+  /// Open a specific transfer by id (from the global "Open & Accept" alert),
+  /// fetching it if it isn't in the current list. Clears the request.
+  Future<void> _openRequestedTransfer(String id) async {
+    ref.read(transferOpenRequestProvider.notifier).state = null;
+    final inList = _transfers.where((t) => t['id'] == id).toList();
+    if (inList.isNotEmpty) {
+      _openTransfer(inList.first);
+      return;
+    }
+    try {
+      final row = await Supabase.instance.client
+          .from('stock_transfers')
+          .select(
+              '*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')
+          .eq('id', id)
+          .maybeSingle();
+      if (row != null && mounted) {
+        _openTransfer(Map<String, dynamic>.from(row as Map));
+      }
+    } catch (_) {}
   }
 
   Widget _buildFilterBar() {
@@ -215,6 +241,11 @@ class _ErpStockTransfersScreenState
 
   @override
   Widget build(BuildContext context) {
+    // "Open & Accept" from the app-global transfer alert asks us to open a
+    // specific transfer (where Approve & Receive lives).
+    ref.listen(transferOpenRequestProvider, (prev, next) {
+      if (next != null) _openRequestedTransfer(next);
+    });
     final filtered = _visibleTransfers();
     return Container(
       color: AppTheme.background,

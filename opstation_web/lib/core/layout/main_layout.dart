@@ -12,6 +12,7 @@ import '../permissions/permission_registry.dart';
 import '../notifications/notifications_menu_tile.dart';
 import '../notifications/notification_bell.dart';
 import '../notifications/global_job_alert.dart';
+import '../notifications/global_transfer_alert.dart';
 import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
@@ -288,6 +289,50 @@ final jobAckPendingCountProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
+// Accessible branch ids for the current user: erpUsers are limited to their
+// assigned branches (erp_user_branches); every other role sees the whole org.
+// Returns null to mean "all branches" (no scoping).
+final userBranchIdsProvider = FutureProvider<Set<String>?>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return <String>{};
+  if (user.role != WebUserRole.erpUser) return null; // all branches
+  try {
+    final res = await Supabase.instance.client
+        .from('erp_user_branches')
+        .select('branch_id')
+        .eq('user_id', user.id);
+    return {for (final r in res as List) r['branch_id'] as String};
+  } catch (_) {
+    return <String>{};
+  }
+});
+
+// Count of stock transfers awaiting acceptance (status 'in_transit') that touch
+// a branch this user can see — either endpoint on the transfer. Drives the
+// Inventory -> Stock Transfers pendency badge.
+final transferPendingCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final branchIds = await ref.watch(userBranchIdsProvider.future);
+  final client = Supabase.instance.client;
+  try {
+    final res = await client
+        .from('stock_transfers')
+        .select('id, from_branch_id, to_branch_id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'in_transit');
+    if (branchIds == null) return (res as List).length; // sees all
+    var n = 0;
+    for (final t in res as List) {
+      if (branchIds.contains(t['from_branch_id']) ||
+          branchIds.contains(t['to_branch_id'])) n++;
+    }
+    return n;
+  } catch (_) {
+    return 0;
+  }
+});
+
 /// Count of field orders awaiting review (status 'submitted') for the org.
 /// Drives the live nav badge on the Field Orders menu item. Invalidated by
 /// erp_field_orders_screen on approve/reject and realtime arrival.
@@ -436,7 +481,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [widget.child, const GlobalJobAlert()]),
+        body: Stack(children: [widget.child, const GlobalJobAlert(), const GlobalTransferAlert()]),
       );
     }
 
@@ -449,6 +494,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
             Expanded(child: widget.child),
           ]),
           const GlobalJobAlert(),
+          const GlobalTransferAlert(),
         ]),
       );
     }
@@ -459,6 +505,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           Expanded(child: widget.child),
         ]),
         const GlobalJobAlert(),
+        const GlobalTransferAlert(),
       ]),
     );
   }
@@ -540,6 +587,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
   final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
+  final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -561,7 +609,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/purchase-variance')) _menuItem(context, 'Purchase Price Variance', Icons.trending_up_outlined, '/erp/purchase-variance', location),
         if (show('/erp/product-classifications')) _menuItem(context, 'Product Classifications', Icons.label_outline, '/erp/product-classifications', location),
         if (show('/erp/opening-stock')) _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
-        if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location),
+        if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location, badge: transferPending),
         if (show('/erp/stock-adjustment')) _menuItem(context, 'Stock Adjustment', Icons.tune_outlined, '/erp/stock-adjustment', location),
         if (show('/erp/inventory-ledger')) _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
         if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
@@ -701,7 +749,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/purchase-variance',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan'],
-          _trimDividers(inventoryItems)),
+          _trimDividers(inventoryItems), badge: transferPending),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
