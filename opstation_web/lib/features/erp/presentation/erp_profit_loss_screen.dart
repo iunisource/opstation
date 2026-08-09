@@ -30,7 +30,35 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
   final Set<String> _txnLoading = {};
 
   @override void initState() { super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load()); }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyFiscalDefaultThenLoad()); }
+
+  /// Default the date range to the org's CURRENT fiscal year (per
+  /// app_config org.fiscal_year_start_month) instead of the calendar year, so
+  /// the P&L total lines up with what the Balance Sheet now books into
+  /// "Current Year Profit/Loss". Falls back to the Jan-1→today default on any
+  /// error or if no start month is configured.
+  Future<void> _applyFiscalDefaultThenLoad() async {
+    try {
+      final orgId = ref.read(currentUserProvider)?.orgId ??
+          (ref.read(selectedBranchProvider)?['org_id'] as String?);
+      if (orgId != null) {
+        final row = await Supabase.instance.client
+            .from('app_config')
+            .select('value')
+            .eq('org_id', orgId)
+            .eq('key', 'org.fiscal_year_start_month')
+            .maybeSingle();
+        final m = int.tryParse((row?['value'] as String?)?.trim() ?? '');
+        if (m != null && m >= 1 && m <= 12) {
+          final now = DateTime.now();
+          final startYear = now.month >= m ? now.year : now.year - 1;
+          _from = DateTime(startYear, m, 1);
+          _to = now;
+        }
+      }
+    } catch (_) { /* keep the calendar-year default */ }
+    if (mounted) _load();
+  }
 
   Future<void> _refreshWithSweep() async {
     final orgId = ref.read(currentUserProvider)?.orgId;

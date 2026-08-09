@@ -670,6 +670,14 @@ class _ErpAdminSettingsScreenState
                       ],
                     ),
                   ),
+                  if (ref.read(currentUserProvider)?.role ==
+                          WebUserRole.masterAdmin ||
+                      ref.read(currentUserProvider)?.role ==
+                          WebUserRole.superAdmin) ...[
+                    const SizedBox(height: 16),
+                    _FiscalYearPanel(
+                        orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                  ],
                   const SizedBox(height: 16),
                   SignatureStampSettings(
                     orgId: ref.read(currentUserProvider)?.orgId ?? '',
@@ -738,6 +746,347 @@ class _ErpAdminSettingsScreenState
   }
 }
 
+
+/// Master-admin-only Fiscal Year card. Lets you set the org's fiscal-year start
+/// month (app_config org.fiscal_year_start_month) and close / reopen the books
+/// through a date (calls close_fiscal_year / reopen_books, which are themselves
+/// server-side gated to master admins). Once closed, no journal entry can be
+/// posted or edited with a date inside the locked period. Old records stay fully
+/// reportable — this only prevents back-posting into a finalised year.
+class _FiscalYearPanel extends StatefulWidget {
+  final String orgId;
+  const _FiscalYearPanel({required this.orgId});
+  @override
+  State<_FiscalYearPanel> createState() => _FiscalYearPanelState();
+}
+
+class _FiscalYearPanelState extends State<_FiscalYearPanel> {
+  static const List<String> _months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+
+  int _startMonth = 1; // 1..12
+  DateTime? _closedThrough; // null = nothing closed
+  bool _loading = true;
+  bool _savingMonth = false;
+  bool _busy = false; // close/reopen in flight
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (widget.orgId.isEmpty) {
+      setState(() => _loading = false);
+      return;
+    }
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', widget.orgId)
+          .inFilter('key',
+              ['org.fiscal_year_start_month', 'org.books_closed_through']);
+      int month = 1;
+      DateTime? closed;
+      for (final r in rows as List) {
+        final k = r['key'] as String;
+        final v = (r['value'] as String?)?.trim() ?? '';
+        if (k == 'org.fiscal_year_start_month') {
+          final m = int.tryParse(v);
+          if (m != null && m >= 1 && m <= 12) month = m;
+        } else if (k == 'org.books_closed_through') {
+          closed = DateTime.tryParse(v);
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _startMonth = month;
+          _closedThrough = closed;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  // Fiscal-year window that contains "today", per the start month.
+  ({DateTime start, DateTime end}) _currentFy() {
+    final now = DateTime.now();
+    final startYear =
+        now.month >= _startMonth ? now.year : now.year - 1;
+    final start = DateTime(startYear, _startMonth, 1);
+    final end = DateTime(startYear + 1, _startMonth, 1)
+        .subtract(const Duration(days: 1));
+    return (start: start, end: end);
+  }
+
+  String _fmt(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')} ${_months[d.month - 1].substring(0, 3)} ${d.year}';
+
+  Future<void> _saveMonth(int m) async {
+    setState(() {
+      _startMonth = m;
+      _savingMonth = true;
+    });
+    try {
+      await Supabase.instance.client.from('app_config').upsert({
+        'key': 'org.fiscal_year_start_month',
+        'value': m.toString(),
+        'org_id': widget.orgId,
+      }, onConflict: 'key,org_id,branch_id');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _savingMonth = false);
+    }
+  }
+
+  Future<void> _closeYear() async {
+    final fy = _currentFy();
+    // Default the picker to this fiscal year's last day.
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: fy.end,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      helpText: 'Close the books through this date',
+    );
+    if (picked == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Close the books?'),
+        content: Text(
+            'No journal entry dated on or before ${_fmt(picked)} will be postable or editable after this. '
+            'You can reopen the period later if you need to. Old records stay fully reportable.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white),
+              child: const Text('Close year')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _runRpc('close_fiscal_year', {
+      'p_org': widget.orgId,
+      'p_through':
+          '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}',
+    });
+  }
+
+  Future<void> _reopen() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reopen the books?'),
+        content: const Text(
+            'This clears the period lock, allowing entries to be posted into the previously closed period again.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Reopen')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    // p_through omitted / null -> clears the lock entirely.
+    await _runRpc('reopen_books', {'p_org': widget.orgId});
+  }
+
+  Future<void> _runRpc(String fn, Map<String, dynamic> params) async {
+    setState(() => _busy = true);
+    try {
+      final res =
+          await Supabase.instance.client.rpc(fn, params: params);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(res?.toString() ?? 'Done')));
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fy = _currentFy();
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 760),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: _loading
+          ? const Center(
+              child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: CircularProgressIndicator(strokeWidth: 2)))
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  const Icon(Icons.event_available_outlined,
+                      size: 18, color: AppTheme.primary),
+                  const SizedBox(width: 8),
+                  const Text('Fiscal Year',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: AppTheme.primary.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(5)),
+                    child: const Text('Master admin',
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.primary)),
+                  ),
+                ]),
+                const SizedBox(height: 4),
+                const Text(
+                    'Set when your financial year begins, and close a year to lock it against back-posting. '
+                    'Closing keeps all old records fully reportable.',
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        color: AppTheme.textSecondary,
+                        height: 1.35)),
+                const SizedBox(height: 16),
+
+                // Start month
+                Row(children: [
+                  const SizedBox(
+                      width: 150,
+                      child: Text('Financial year starts',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600))),
+                  const SizedBox(width: 12),
+                  DropdownButton<int>(
+                    value: _startMonth,
+                    underline: const SizedBox.shrink(),
+                    items: [
+                      for (int m = 1; m <= 12; m++)
+                        DropdownMenuItem(
+                            value: m,
+                            child: Text(_months[m - 1],
+                                style: const TextStyle(fontSize: 13))),
+                    ],
+                    onChanged: _savingMonth
+                        ? null
+                        : (v) {
+                            if (v != null) _saveMonth(v);
+                          },
+                  ),
+                  if (_savingMonth) ...[
+                    const SizedBox(width: 10),
+                    const SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  ],
+                ]),
+                const SizedBox(height: 6),
+                Text(
+                    'Current fiscal year: ${_fmt(fy.start)} → ${_fmt(fy.end)}',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
+
+                const Divider(height: 28, color: AppTheme.border),
+
+                // Close status + actions
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Books closed through',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 3),
+                          Row(children: [
+                            Icon(
+                                _closedThrough == null
+                                    ? Icons.lock_open_outlined
+                                    : Icons.lock_outline,
+                                size: 15,
+                                color: _closedThrough == null
+                                    ? AppTheme.textSecondary
+                                    : AppTheme.danger),
+                            const SizedBox(width: 6),
+                            Text(
+                                _closedThrough == null
+                                    ? 'Open — nothing locked'
+                                    : _fmt(_closedThrough!),
+                                style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: _closedThrough == null
+                                        ? AppTheme.textSecondary
+                                        : AppTheme.danger)),
+                          ]),
+                        ],
+                      ),
+                    ),
+                    if (_busy)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 8),
+                        child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2)),
+                      ),
+                    if (_closedThrough != null) ...[
+                      OutlinedButton(
+                          onPressed: _busy ? null : _reopen,
+                          child: const Text('Reopen')),
+                      const SizedBox(width: 8),
+                    ],
+                    ElevatedButton.icon(
+                      onPressed: _busy ? null : _closeYear,
+                      icon: const Icon(Icons.lock_outline, size: 16),
+                      label: const Text('Close year…'),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary,
+                          foregroundColor: Colors.white),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+    );
+  }
+}
 
 /// Custom panel for the 'org.hide_main_groups_by_branch' toggle: pick a branch,
 /// tick the Main Groups to hide for it. Rows are stored in
