@@ -173,6 +173,10 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         }
         _pendingJobId = null;
       }
+      // Fresh-mount case for the global "Open & note" alert: if a job was
+      // requested before this screen existed, open it now.
+      final requested = ref.read(jobCardOpenRequestProvider);
+      if (requested != null && mounted) _openRequestedJob(requested);
     });
   }
 
@@ -441,6 +445,28 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _materials = []; _overheads = []; _baseComps = []; _baseOh = [];
       _origMatSig = ''; _origOhSig = '';
     });
+  }
+
+  /// Open a specific job by id (from the global "Open & note" alert) and show
+  /// its acknowledge modal. Works whether the job is already in the drawer list
+  /// or has to be fetched. Clears the request so it can fire again later.
+  Future<void> _openRequestedJob(String id) async {
+    ref.read(jobCardOpenRequestProvider.notifier).state = null;
+    final inList = _jobs.where((j) => j['id'] == id).toList();
+    if (inList.isNotEmpty) {
+      _loadJob(inList.first, promptAck: true);
+      return;
+    }
+    try {
+      final row = await Supabase.instance.client
+          .from('job_cards')
+          .select()
+          .eq('id', id)
+          .maybeSingle();
+      if (row != null && mounted) {
+        _loadJob(Map<String, dynamic>.from(row as Map), promptAck: true);
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadJob(Map<String, dynamic> j, {bool promptAck = false}) async {
@@ -1690,6 +1716,10 @@ $runSection
     final branchId = ref.watch(selectedBranchProvider)?['id'] as String?;
     ref.listen(selectedBranchProvider, (prev, next) {
       if ((prev?['id'] as String?) != (next?['id'] as String?)) _loadStock();
+    });
+    // "Open & note" from the app-global alert asks us to open a specific job.
+    ref.listen(jobCardOpenRequestProvider, (prev, next) {
+      if (next != null) _openRequestedJob(next);
     });
     final byBranch = branchId == null
         ? _jobs

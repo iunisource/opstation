@@ -10,6 +10,12 @@ import 'package:go_router/go_router.dart';
 import '../layout/main_layout.dart'; // jobAckPendingCountProvider
 import '../../features/auth/auth_controller.dart';
 
+/// Set by the global alert's "Open & note" button to the job the user should
+/// open. The Job Card screen watches this and opens that exact job (with its
+/// acknowledge modal) — works whether the screen is already mounted or is being
+/// navigated to fresh. The screen clears it back to null once consumed.
+final jobCardOpenRequestProvider = StateProvider<String?>((ref) => null);
+
 /// App-global "new job" alert. Mounted once in the shell so it runs on EVERY
 /// screen while the user is logged in — the buzzer and banner fire even when the
 /// Job Card screen is not open and even when the browser tab is minimised
@@ -42,6 +48,7 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
   bool _booted = false;
 
   Set<String> _alertIds = {}; // unacked queued jobs NOT created by me
+  String? _targetId; // the newest unacked job — what "Open & note" opens
   OverlayEntry? _banner;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -146,16 +153,23 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
     try {
       final rows = await Supabase.instance.client
           .from('job_cards')
-          .select('id, created_by')
+          .select('id, created_by, created_at')
           .eq('org_id', orgId)
           .eq('status', 'queued')
-          .filter('acknowledged_at', 'is', null);
+          .filter('acknowledged_at', 'is', null)
+          .order('created_at', ascending: false);
       final ids = <String>{};
+      String? newest;
       for (final j in rows as List) {
-        if ((j['created_by'] as String?) != uid) ids.add(j['id'] as String);
+        if ((j['created_by'] as String?) != uid) {
+          final id = j['id'] as String;
+          ids.add(id);
+          newest ??= id; // first row = newest (ordered desc)
+        }
       }
       final justArrived = ids.difference(_alertIds).isNotEmpty;
       _alertIds = ids;
+      _targetId = newest;
       ref.invalidate(jobAckPendingCountProvider); // keep the nav badge live
       if (ids.isEmpty) {
         _disarm();
@@ -278,7 +292,17 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
                 ),
                 TextButton(
                   onPressed: () {
-                    try { GoRouter.of(ctx).go('/manufacturing/job-card'); } catch (_) {}
+                    // Hand the exact job to the Job Card screen, then open it.
+                    final id = _targetId;
+                    if (id != null) {
+                      // Clear-then-set guarantees a change event even if the
+                      // same job was the previous request.
+                      ref.read(jobCardOpenRequestProvider.notifier).state = null;
+                      ref.read(jobCardOpenRequestProvider.notifier).state = id;
+                    }
+                    try {
+                      GoRouter.of(ctx).go('/manufacturing/job-card');
+                    } catch (_) {}
                   },
                   style: TextButton.styleFrom(
                       backgroundColor: Colors.white,
