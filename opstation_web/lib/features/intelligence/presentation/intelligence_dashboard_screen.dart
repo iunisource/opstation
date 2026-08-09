@@ -36,6 +36,15 @@ class _GroupScore {
   double get score => total == 0 ? 0 : present / total;
 }
 
+/// One SKU's on-shelf rate across the shops where it was checked.
+class _SkuStat {
+  final String name;
+  final int present;
+  final int shops;
+  _SkuStat(this.name, this.present, this.shops);
+  double get rate => shops == 0 ? 0 : present / shops;
+}
+
 class _IntelligenceDashboardScreenState
     extends ConsumerState<IntelligenceDashboardScreen> {
   bool _loading = true;
@@ -67,6 +76,12 @@ class _IntelligenceDashboardScreenState
   // Shop names for expanding the "Unassigned" rows, and which rows are open.
   Map<String, String> _custName = {};
   final Set<String> _expandedGroups = {};
+
+  // Auto-insights (narrative), computed each load from the same period's data.
+  List<_SkuStat> _skuStats = [];          // sorted best-placed first
+  String? _leadBrand;                     // most-spotted competitor overall
+  int _leadBrandShops = 0;
+  List<MapEntry<String, String>> _catLeaders = []; // category name -> top brand
 
   final _pct = NumberFormat('#,##0.0');
   final _int = NumberFormat('#,##0');
@@ -196,6 +211,16 @@ class _IntelligenceDashboardScreenState
           c['id'] as String: (c['shop_name'] as String? ?? 'Unnamed shop')
       };
 
+      // Product names, for SKU-level insight sentences.
+      final prodRaw = await client
+          .from('products')
+          .select('id, name')
+          .eq('org_id', orgId);
+      final prodName = {
+        for (final p in prodRaw as List)
+          p['id'] as String: (p['name'] as String? ?? 'Unnamed SKU')
+      };
+
       // ── 4. Aggregate ───────────────────────────────────────────────────
       final byRoute = <String, _GroupScore>{};
       final bySalesman = <String, _GroupScore>{};
@@ -255,6 +280,78 @@ class _IntelligenceDashboardScreenState
       final skusTracked =
           latest.values.map((a) => a['product_id'] as String?).whereType<String>().toSet().length;
 
+      // ── SKU on-shelf rates (from the same latest-per-pair set) ──────────
+      final skuPresent = <String, int>{};
+      final skuShops = <String, int>{};
+      for (final a in latest.values) {
+        final pid = a['product_id'] as String?;
+        if (pid == null) continue;
+        skuShops[pid] = (skuShops[pid] ?? 0) + 1;
+        if (a['is_present'] == true) skuPresent[pid] = (skuPresent[pid] ?? 0) + 1;
+      }
+      // Only rank SKUs checked in enough shops to be meaningful.
+      const kMinShops = 3;
+      final skuStats = <_SkuStat>[];
+      skuShops.forEach((pid, shops) {
+        if (shops < kMinShops) return;
+        skuStats.add(_SkuStat(prodName[pid] ?? 'SKU', skuPresent[pid] ?? 0, shops));
+      });
+      skuStats.sort((a, b) => b.rate.compareTo(a.rate));
+
+      // ── Competitor leaders (same date window) ───────────────────────────
+      String? leadBrand;
+      int leadBrandShops = 0;
+      final catLeaders = <MapEntry<String, String>>[];
+      try {
+        final compRaw = await client
+            .from('competitor_spotting')
+            .select('customer_id, category_id, brand_name, surveyed_at')
+            .eq('org_id', orgId);
+        // Date-filter to match the placement window.
+        final fromD = _from;
+        final toD = _to?.add(const Duration(days: 1));
+        bool inWindow(dynamic ts) {
+          if (fromD == null && toD == null) return true;
+          final d = DateTime.tryParse('$ts');
+          if (d == null) return false;
+          if (fromD != null && d.isBefore(fromD)) return false;
+          if (toD != null && !d.isBefore(toD)) return false;
+          return true;
+        }
+        final brandShops = <String, Set<String>>{};
+        final catBrandShops = <String, Map<String, Set<String>>>{};
+        for (final s in compRaw as List) {
+          if (!inWindow(s['surveyed_at'])) continue;
+          final brand = (s['brand_name'] as String?)?.trim();
+          final cid = s['customer_id'] as String?;
+          final cat = s['category_id'] as String?;
+          if (brand == null || brand.isEmpty || cid == null) continue;
+          (brandShops[brand] ??= {}).add(cid);
+          if (cat != null) {
+            ((catBrandShops[cat] ??= {})[brand] ??= {}).add(cid);
+          }
+        }
+        brandShops.forEach((brand, shops) {
+          if (shops.length > leadBrandShops) { leadBrandShops = shops.length; leadBrand = brand; }
+        });
+        if (catBrandShops.isNotEmpty) {
+          final catRows = await client
+              .from('competitor_categories')
+              .select('id, name')
+              .eq('org_id', orgId);
+          final catName = {
+            for (final c in catRows as List)
+              c['id'] as String: (c['name'] as String? ?? 'Category')
+          };
+          catBrandShops.forEach((cat, brands) {
+            String? top; int topN = 0;
+            brands.forEach((b, shops) { if (shops.length > topN) { topN = shops.length; top = b; } });
+            if (top != null) catLeaders.add(MapEntry(catName[cat] ?? 'Category', top!));
+          });
+          catLeaders.sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+        }
+      } catch (_) {/* competitor module may be off; insights just skip it */}
+
       if (!mounted) return;
       setState(() {
         _shopsAudited = auditedCustomers.length;
@@ -267,6 +364,10 @@ class _IntelligenceDashboardScreenState
         _routeNames = routeName;
         _custRoutes = custRoutes;
         _custName = custName;
+        _skuStats = skuStats;
+        _leadBrand = leadBrand;
+        _leadBrandShops = leadBrandShops;
+        _catLeaders = catLeaders;
         _loading = false;
       });
     } catch (e) {
@@ -467,6 +568,8 @@ class _IntelligenceDashboardScreenState
                           child: _scoreCard('By Market (Route)', 'markets',
                               Icons.route_outlined, _byRoute, mobile)),
                     ]),
+                  const SizedBox(height: 16),
+                  _insightsCard(),
                   const SizedBox(height: 24),
                 ],
               ],
@@ -1178,6 +1281,139 @@ class _IntelligenceDashboardScreenState
           ),
         ),
       ),
+    );
+  }
+
+  // ── Auto-insights: a plain-language read of this period's data ───────────
+  TextSpan _t(String s) => TextSpan(text: s);
+  TextSpan _b(String s) =>
+      TextSpan(text: s, style: const TextStyle(fontWeight: FontWeight.w800));
+  String _judge(double r) => r >= .75 ? 'strong' : (r >= .5 ? 'fair' : 'poor');
+
+  Widget _insightLine(IconData icon, Color color, List<InlineSpan> spans) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(padding: const EdgeInsets.only(top: 1), child: Icon(icon, size: 16, color: color)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text.rich(TextSpan(children: spans),
+              style: const TextStyle(fontSize: 13, height: 1.5, color: AppTheme.textPrimary)),
+        ),
+      ]),
+    );
+  }
+
+  Widget _insightsCard() {
+    final lines = <Widget>[];
+
+    // Overall availability opener.
+    final overall = _skuTotal == 0 ? 0.0 : _skuPresent / _skuTotal;
+    if (_skuTotal > 0) {
+      lines.add(_insightLine(Icons.insights_outlined, _scoreColor(overall), [
+        _t('Across all shelf checks this period, your tracked SKUs are on shelf '),
+        _b('${(overall * 100).round()}% of the time'),
+        _t(' — ${_judge(overall)} overall availability.'),
+      ]));
+    }
+
+    // Best-placed SKU.
+    if (_skuStats.isNotEmpty) {
+      final top = _skuStats.first;
+      lines.add(_insightLine(Icons.check_circle_outline, AppTheme.success, [
+        _b(top.name),
+        _t(' is your best-placed SKU — on shelf in '),
+        _b('${(top.rate * 100).round()}%'),
+        _t(' of ${top.shops} shops checked.'),
+      ]));
+    }
+
+    // SKUs that need attention (below half the shops).
+    final need = _skuStats.where((s) => s.rate < 0.5).toList()
+      ..sort((a, b) => a.rate.compareTo(b.rate));
+    if (need.isNotEmpty) {
+      final pick = need.take(3).toList();
+      final spans = <InlineSpan>[_t('Needs attention: ')];
+      for (var i = 0; i < pick.length; i++) {
+        if (i > 0) spans.add(_t(i == pick.length - 1 ? ' and ' : ', '));
+        spans.add(_b(pick[i].name));
+        spans.add(_t(' (${(pick[i].rate * 100).round()}%)'));
+      }
+      spans.add(_t(' — each on shelf in under half the shops surveyed.'));
+      lines.add(_insightLine(Icons.error_outline, AppTheme.danger, spans));
+    } else if (_skuStats.isNotEmpty) {
+      lines.add(_insightLine(Icons.thumb_up_outlined, AppTheme.success, [
+        _t('No tracked SKU is below 50% availability — placement is broadly healthy.'),
+      ]));
+    }
+
+    // Competitor: most-visible brand overall.
+    if (_leadBrand != null) {
+      lines.add(_insightLine(Icons.emoji_events_outlined, AppTheme.warning, [
+        _b(_leadBrand!),
+        _t(' is the most-visible competitor, spotted in '),
+        _b('$_leadBrandShops shop${_leadBrandShops == 1 ? '' : 's'}'),
+        _t(' this period.'),
+      ]));
+    }
+    // Competitor: category leaders.
+    if (_catLeaders.isNotEmpty) {
+      final spans = <InlineSpan>[_t('By category, ')];
+      final n = _catLeaders.length > 5 ? 5 : _catLeaders.length;
+      for (var i = 0; i < n; i++) {
+        if (i > 0) spans.add(_t(i == n - 1 ? ' and ' : ', '));
+        spans.add(_b(_catLeaders[i].value));
+        spans.add(_t(' leads in '));
+        spans.add(_b(_catLeaders[i].key));
+      }
+      spans.add(_t('.'));
+      lines.add(_insightLine(Icons.category_outlined, AppTheme.textSecondary, spans));
+    }
+
+    // Salesperson needing the most attention.
+    _GroupScore? weak;
+    for (final g in _bySalesman) {
+      if (g.name == 'Unassigned') continue;
+      if (g.customers.length < 2) continue; // ignore tiny samples
+      if (weak == null || g.score < weak.score) weak = g;
+    }
+    if (weak != null) {
+      lines.add(_insightLine(Icons.person_outline, _scoreColor(weak.score), [
+        _b(weak.name),
+        _t(' needs the most attention — placement across their routes is '),
+        _b('${(weak.score * 100).round()}%'),
+        _t(', the lowest on the team (${weak.customers.length} shops).'),
+      ]));
+    }
+
+    if (lines.isEmpty) {
+      lines.add(_insightLine(Icons.info_outline, AppTheme.textSecondary, [
+        _t('Not enough data in this period yet to generate insights. Try a wider date range.'),
+      ]));
+    }
+
+    return Container(
+      width: double.infinity,
+      decoration: _cardDeco,
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.auto_awesome_outlined, size: 16, color: AppTheme.primary),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text('What the data says',
+                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800)),
+          ),
+          Text('auto-generated', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+        ]),
+        const SizedBox(height: 6),
+        const Text('A plain-language read of this period’s shelf checks and competitor spottings.',
+            style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+        const SizedBox(height: 10),
+        const Divider(height: 1, color: AppTheme.border),
+        const SizedBox(height: 4),
+        ...lines,
+      ]),
     );
   }
 
