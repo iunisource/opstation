@@ -276,6 +276,57 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
   String get _periodLabel =>
       '${DateFormat('d MMM yyyy').format(_from)} – ${DateFormat('d MMM yyyy').format(_to)}';
 
+  // Is the current range exactly this named shortcut? (to highlight the chip)
+  bool _isQuickRange(String key) {
+    final r = _quickRange(key);
+    return _dateOnly(_from) == r.$1 && _dateOnly(_to) == r.$2;
+  }
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// (from, to) for a named shortcut, using local "now". Week starts Monday.
+  (DateTime, DateTime) _quickRange(String key) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    switch (key) {
+      case 'yesterday':
+        final y = today.subtract(const Duration(days: 1));
+        return (y, y);
+      case 'week':
+        // Monday..today (weekday: Mon=1 … Sun=7).
+        return (today.subtract(Duration(days: today.weekday - 1)), today);
+      case 'month':
+        return (DateTime(now.year, now.month, 1), today);
+      case 'today':
+      default:
+        return (today, today);
+    }
+  }
+
+  void _applyQuickRange(String key) {
+    final r = _quickRange(key);
+    setState(() {
+      _from = r.$1;
+      _to = r.$2;
+    });
+    _load(); // generate immediately — that's the point of a shortcut
+  }
+
+  Widget _quickChip(String label, String key) {
+    final selected = _isQuickRange(key);
+    return ActionChip(
+      label: Text(label,
+          style: TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? Colors.white : AppTheme.textPrimary)),
+      backgroundColor: selected ? AppTheme.primary : Colors.white,
+      side: BorderSide(color: selected ? AppTheme.primary : AppTheme.border),
+      visualDensity: VisualDensity.compact,
+      onPressed: _loading ? null : () => _applyQuickRange(key),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final role = ref.read(currentUserProvider)?.role;
@@ -321,6 +372,16 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
                 onPressed: _print,
                 style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
               ),
+          ]),
+        ),
+        // Quick date shortcuts — set the range and generate in one tap.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+          child: Wrap(spacing: 8, runSpacing: 8, children: [
+            _quickChip('Today', 'today'),
+            _quickChip('Yesterday', 'yesterday'),
+            _quickChip('This week', 'week'),
+            _quickChip('This month', 'month'),
           ]),
         ),
         Expanded(

@@ -1813,6 +1813,7 @@ class _IntelligenceDashboardScreenState
         'table.ref td,table.ref th{font-size:11px}'
         '.assign{margin:6px 0 2px;font-size:12px}'
         '.foot{margin-top:22px;font-size:10px;color:#888;border-top:1px solid #ccc;padding-top:8px}'
+        '@media print{.no-print{display:none}}'
         '@page{margin:0.7cm}</style></head><body>'
         '<div class="no-print" style="margin-bottom:12px">'
         '<button onclick="window.print()">Print / Save PDF</button></div>'
@@ -1832,8 +1833,36 @@ class _IntelligenceDashboardScreenState
         'period’s shelf checks and competitor spottings. Tick items as completed.</div>'
         '</body></html>';
 
-    final blob = html.Blob([doc], 'text/html;charset=utf-8');
-    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+    _printHtmlDoc(doc, 'Task Sheet');
+  }
+
+  /// Render an HTML string and bring up the print dialog. Uses a hidden,
+  /// same-origin iframe that prints itself on load — Safari renders documents
+  /// opened from a blob: URL as BLANK when printed, so we must not rely on a
+  /// blob tab. Falls back to a blob tab if the iframe can't be created.
+  void _printHtmlDoc(String doc, String title) {
+    try {
+      html.document.getElementById('ops-print-frame')?.remove();
+      final frame = html.IFrameElement()
+        ..id = 'ops-print-frame'
+        ..title = title
+        ..style.position = 'fixed'
+        ..style.left = '-9999px'
+        ..style.width = '0'
+        ..style.height = '0'
+        ..style.border = '0';
+      // Print the frame's OWN document once it has loaded.
+      final printable = doc.replaceFirst(
+          '</body>',
+          '<script>window.onload=function(){setTimeout(function(){'
+              'try{window.focus();window.print();}catch(e){}},350);};</script></body>');
+      frame.srcdoc = printable;
+      html.document.body!.append(frame);
+    } catch (_) {
+      // Last-resort fallback (non-Safari): open the doc in a new tab.
+      final blob = html.Blob([doc], 'text/html;charset=utf-8');
+      html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+    }
   }
 
   // ── Auto-insights: a plain-language read of this period's data ───────────
