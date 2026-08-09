@@ -11,6 +11,7 @@ import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
 import '../notifications/notifications_menu_tile.dart';
 import '../notifications/notification_bell.dart';
+import '../notifications/global_job_alert.dart';
 import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
@@ -435,23 +436,29 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: widget.child,
+        body: Stack(children: [widget.child, const GlobalJobAlert()]),
       );
     }
 
     final layout = ref.watch(navLayoutProvider);
     if (layout == NavLayout.side) {
       return Scaffold(
-        body: Row(children: [
-          _SideNav(user: user),
-          Expanded(child: widget.child),
+        body: Stack(children: [
+          Row(children: [
+            _SideNav(user: user),
+            Expanded(child: widget.child),
+          ]),
+          const GlobalJobAlert(),
         ]),
       );
     }
     return Scaffold(
-      body: Column(children: [
-        _TopNav(user: user),
-        Expanded(child: widget.child),
+      body: Stack(children: [
+        Column(children: [
+          _TopNav(user: user),
+          Expanded(child: widget.child),
+        ]),
+        const GlobalJobAlert(),
       ]),
     );
   }

@@ -14,6 +14,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/notifications/global_job_alert.dart';
 import '../../../core/permissions/access_control.dart';
 import 'package:go_router/go_router.dart';
 import 'running_dot.dart';
@@ -94,6 +95,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   bool _busy = false;
   RealtimeChannel? _channel;
   Timer? _rtDebounce;
+  StreamSubscription<html.Event>? _visSub; // catch up on tab re-focus
+  bool _resubscribing = false;
 
   // ── New-job alert / acknowledgement flow ─────────────────────────────────
   bool _ackFlowEnabled = false;      // org.job_ack_flow toggle
@@ -143,6 +146,15 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   @override
   void initState() {
     super.initState();
+    // When the tab is un-minimised / refocused, resync the drawer immediately
+    // instead of waiting for the next realtime event.
+    _visSub = html.document.onVisibilityChange.listen((_) {
+      if (html.document.visibilityState == 'visible') {
+        final o = _orgId;
+        if (o != null) _subscribe(o);
+        _refreshList();
+      }
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _pendingJobId = _jobIdFromUrl();
       _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCustomers(); _loadCheckpoints();
@@ -179,6 +191,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   @override
   void dispose() {
     _rtDebounce?.cancel();
+    _visSub?.cancel();
     _disarmBuzzer();
     try { _buzzEl?.pause(); } catch (_) {}
     final ch = _channel;
@@ -344,7 +357,34 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
           callback: (_) => _scheduleRefresh(),
         )
-        .subscribe();
+        .subscribe((status, [error]) {
+      // The socket often drops when a tab is backgrounded; rebuild it so the
+      // drawer resumes live sync on return instead of waiting for a refresh.
+      if (status == RealtimeSubscribeStatus.channelError ||
+          status == RealtimeSubscribeStatus.timedOut ||
+          status == RealtimeSubscribeStatus.closed) {
+        _scheduleResubscribe();
+      }
+    });
+  }
+
+  void _scheduleResubscribe() {
+    if (_resubscribing) return;
+    _resubscribing = true;
+    Future.delayed(const Duration(seconds: 2), () {
+      _resubscribing = false;
+      if (!mounted) return;
+      final ch = _channel;
+      if (ch != null) {
+        Supabase.instance.client.removeChannel(ch);
+        _channel = null;
+      }
+      final orgId = _orgId;
+      if (orgId != null) {
+        _subscribe(orgId);
+        _refreshList();
+      }
+    });
   }
 
   void _scheduleRefresh() {
@@ -824,7 +864,10 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   /// Decide whether the buzzer should be running, and buzz immediately when a
   /// brand-new un-acknowledged job appears. Called after every list refresh.
   void _evaluateBuzzer() {
-    if (!_ackFlowEnabled) {
+    // The app-global alert (mounted in the shell) owns the buzzer so it fires on
+    // every screen. Stand down here to avoid the alarm double-playing. The
+    // drawer's blinker, Completed section and acknowledge modal are unaffected.
+    if (GlobalJobAlert.isActive || !_ackFlowEnabled) {
       _disarmBuzzer();
       _prevUnackedIds = {};
       return;
