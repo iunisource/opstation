@@ -202,24 +202,36 @@ class _IntelligenceDashboardScreenState
       };
 
       // Shop names, so an "Unassigned" row can expand to show which shops.
-      final custRaw = await client
-          .from('customers')
-          .select('id, shop_name')
-          .eq('org_id', orgId);
-      final custName = {
-        for (final c in custRaw as List)
-          c['id'] as String: (c['shop_name'] as String? ?? 'Unnamed shop')
-      };
+      // Paginated — PostgREST caps a plain select at 1000 rows, and orgs have
+      // more than that, which would leave later shops/SKUs unnamed.
+      final custName = <String, String>{};
+      for (int from = 0;; from += 1000) {
+        final page = await client
+            .from('customers')
+            .select('id, shop_name')
+            .eq('org_id', orgId)
+            .range(from, from + 999);
+        final list = List<Map<String, dynamic>>.from(page);
+        for (final c in list) {
+          custName[c['id'] as String] = (c['shop_name'] as String? ?? 'Unnamed shop');
+        }
+        if (list.length < 1000 || from > 500000) break;
+      }
 
-      // Product names, for SKU-level insight sentences.
-      final prodRaw = await client
-          .from('products')
-          .select('id, name')
-          .eq('org_id', orgId);
-      final prodName = {
-        for (final p in prodRaw as List)
-          p['id'] as String: (p['name'] as String? ?? 'Unnamed SKU')
-      };
+      // Product names, for SKU-level insight sentences (paginated too).
+      final prodName = <String, String>{};
+      for (int from = 0;; from += 1000) {
+        final page = await client
+            .from('products')
+            .select('id, name')
+            .eq('org_id', orgId)
+            .range(from, from + 999);
+        final list = List<Map<String, dynamic>>.from(page);
+        for (final p in list) {
+          prodName[p['id'] as String] = (p['name'] as String? ?? 'Unnamed SKU');
+        }
+        if (list.length < 1000 || from > 500000) break;
+      }
 
       // ── 4. Aggregate ───────────────────────────────────────────────────
       final byRoute = <String, _GroupScore>{};
@@ -303,10 +315,17 @@ class _IntelligenceDashboardScreenState
       int leadBrandShops = 0;
       final catLeaders = <MapEntry<String, String>>[];
       try {
-        final compRaw = await client
-            .from('competitor_spotting')
-            .select('customer_id, category_id, brand_name, surveyed_at')
-            .eq('org_id', orgId);
+        final compRaw = <Map<String, dynamic>>[];
+        for (int from = 0;; from += 1000) {
+          final page = await client
+              .from('competitor_spotting')
+              .select('customer_id, category_id, brand_name, surveyed_at')
+              .eq('org_id', orgId)
+              .range(from, from + 999);
+          final list = List<Map<String, dynamic>>.from(page);
+          compRaw.addAll(list);
+          if (list.length < 1000 || from > 500000) break;
+        }
         // Date-filter to match the placement window.
         final fromD = _from;
         final toD = _to?.add(const Duration(days: 1));
