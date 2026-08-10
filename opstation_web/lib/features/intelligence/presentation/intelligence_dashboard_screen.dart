@@ -172,6 +172,12 @@ class _IntelligenceDashboardScreenState
   Map<String, String> _custName = {};
   final Set<String> _expandedGroups = {};
 
+  // Shop code, and per-shop missing SKUs (latest check not on shelf) + how many
+  // SKUs were checked there — feeds the task sheet's per-shop targets page.
+  Map<String, String> _custCode = {};
+  Map<String, List<String>> _custMissing = {};
+  Map<String, int> _custChecks = {};
+
   // Section-wide market/route filter. null = All routes.
   String? _filterRouteId;
 
@@ -246,7 +252,7 @@ class _IntelligenceDashboardScreenState
         pageAll((f, t) => client.from('route_stops').select('route_id, customer_id').range(f, t)),
         pageAll((f, t) => client.from('route_assignments').select('user_id, route_id').range(f, t)),
         client.from('users').select('id, name').eq('org_id', orgId),
-        pageAll((f, t) => client.from('customers').select('id, shop_name').eq('org_id', orgId).range(f, t)),
+        pageAll((f, t) => client.from('customers').select('id, shop_name, code').eq('org_id', orgId).range(f, t)),
         pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
         pageAll((f, t) => client
             .from('competitor_spotting')
@@ -374,6 +380,23 @@ class _IntelligenceDashboardScreenState
         for (final c in catRaw)
           c['id'] as String: (c['name'] as String? ?? 'Category')
       };
+      // Shop code (surveyor-facing identifier) for the task sheet targets page.
+      final custCode = <String, String>{
+        for (final c in custRaw)
+          c['id'] as String: (c['code'] as String? ?? '')
+      };
+      // Per-shop missing SKUs = latest check per (shop, SKU) that was NOT on
+      // shelf. Names resolved from the survey SKU list; sorted for a clean sheet.
+      final custMissing = <String, List<String>>{};
+      for (final a in latest.values) {
+        if (a['is_present'] == true) continue;
+        final cid = a['customer_id'] as String;
+        final pid = a['product_id'] as String?;
+        (custMissing[cid] ??= []).add(prodName[pid] ?? 'Unnamed SKU');
+      }
+      for (final l in custMissing.values) {
+        l.sort();
+      }
 
       // ── 4. Aggregate ───────────────────────────────────────────────────
       final byRoute = <String, _GroupScore>{};
@@ -530,6 +553,9 @@ class _IntelligenceDashboardScreenState
         _routeNames = routeName;
         _custRoutes = custRoutes;
         _custName = custName;
+        _custCode = custCode;
+        _custMissing = custMissing;
+        _custChecks = custTotal;
         _skuStats = skuStats;
         _leadBrand = leadBrand;
         _leadBrandShops = leadBrandShops;
@@ -1812,6 +1838,60 @@ class _IntelligenceDashboardScreenState
       return b.toString();
     }
 
+    // ── Page 2: per-shop missing-SKU targets ────────────────────────────────
+    // Every shop in scope that had at least one tracked SKU off-shelf on its
+    // last check, biggest gaps first, with the exact SKUs to place.
+    String shopTargets() {
+      bool inScope(String cid) =>
+          !marketMode || (_custRoutes[cid]?.contains(_filterRouteId) ?? false);
+      final rows = _custMissing.entries
+          .where((e) => e.value.isNotEmpty && inScope(e.key))
+          .toList()
+        ..sort((a, b) {
+          final byCount = b.value.length.compareTo(a.value.length);
+          if (byCount != 0) return byCount;
+          return (_custName[a.key] ?? '').toLowerCase()
+              .compareTo((_custName[b.key] ?? '').toLowerCase());
+        });
+
+      final b = StringBuffer()
+        ..write('<div style="page-break-before:always"></div>')
+        ..write('<h1>Shop Targets — Missing SKUs</h1>')
+        ..write('<div class="info"><b>Scope:</b> ${_esc(scopeName)}</div>')
+        ..write('<div class="info"><b>Period:</b> $periodLabel</div>');
+
+      if (rows.isEmpty) {
+        b.write('<div class="kpi">No off-shelf SKUs in scope this period — '
+            'every audited shop had its tracked SKUs on shelf. Keep it up.</div>');
+        return b.toString();
+      }
+
+      final totalGaps = rows.fold<int>(0, (s, e) => s + e.value.length);
+      b
+        ..write('<div class="kpi"><b>${rows.length}</b> shop'
+            '${rows.length == 1 ? '' : 's'} with gaps · '
+            '<b>$totalGaps</b> SKU placement${totalGaps == 1 ? '' : 's'} to win. '
+            'Biggest gaps first.</div>')
+        ..write('<table class="ref"><tr>'
+            '<th class="cbx">✓</th><th>Shop</th><th>Code</th>'
+            '<th class="num">Missing</th><th>SKUs to place on shelf</th></tr>');
+      for (final e in rows) {
+        final cid = e.key;
+        final miss = e.value;
+        final checked = _custChecks[cid] ?? miss.length;
+        final skuList = miss.map(_esc).join(', ');
+        b.write('<tr>'
+            '<td class="cbx">☐</td>'
+            '<td><b>${_esc(_custName[cid] ?? 'Unnamed shop')}</b></td>'
+            '<td>${_esc(_custCode[cid] ?? '')}</td>'
+            '<td class="num">${miss.length} of $checked</td>'
+            '<td>$skuList</td>'
+            '</tr>');
+      }
+      b.write('</table>');
+      return b.toString();
+    }
+
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
         '<title>Task Sheet — ${_esc(scopeName)}</title><style>'
         'body{font-family:Arial,sans-serif;padding:22px;color:#111;font-size:12px}'
@@ -1843,6 +1923,7 @@ class _IntelligenceDashboardScreenState
         '<table>${actions.toString()}</table>'
         '${marketMode ? '' : marketTable()}'
         '${marketMode ? '' : salesTable()}'
+        '${shopTargets()}'
         '<div class="foot">Auto-generated by Opstation Intelligence from this '
         'period’s shelf checks and competitor spottings. Tick items as completed.</div>'
         '</body></html>';
