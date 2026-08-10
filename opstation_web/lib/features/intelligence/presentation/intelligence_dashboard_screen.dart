@@ -254,6 +254,7 @@ class _IntelligenceDashboardScreenState
             .eq('org_id', orgId)
             .range(f, t)),
         client.from('competitor_categories').select('id, name').eq('org_id', orgId),
+        client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId),
       ]);
       final audits = List<Map<String, dynamic>>.from(res[0] as List);
       final routesRaw = res[1] as List;
@@ -264,6 +265,18 @@ class _IntelligenceDashboardScreenState
       final prodRaw = res[6] as List; // intelligence_products (the audited SKUs)
       final compRaw = List<Map<String, dynamic>>.from(res[7] as List);
       final catRaw = res[8] as List;
+      // Brand alias map (lowercased/trimmed variant -> correct brand). Applied
+      // to every spotting's brand before it is tallied, so typos roll up under
+      // the correct name (and with the correct label, not just merged).
+      final brandAlias = <String, String>{
+        for (final a in (res[9] as List))
+          (a['alias'] as String? ?? '').toLowerCase().trim():
+              (a['canonical'] as String? ?? '')
+      };
+      String canonBrand(String b) {
+        final c = brandAlias[b.toLowerCase().trim()];
+        return (c == null || c.isEmpty) ? b : c;
+      }
 
       // Optional date-range restriction (then latest-per-pair within it).
       Iterable<Map<String, dynamic>> rows = audits;
@@ -475,7 +488,8 @@ class _IntelligenceDashboardScreenState
         final catBrandShops = <String, Map<String, Set<String>>>{};
         for (final s in compRaw as List) {
           if (!inWindow(s['surveyed_at'])) continue;
-          final brand = (s['brand_name'] as String?)?.trim();
+          final raw = (s['brand_name'] as String?)?.trim();
+          final brand = (raw == null || raw.isEmpty) ? raw : canonBrand(raw);
           final cid = s['customer_id'] as String?;
           final cat = s['category_id'] as String?;
           if (brand == null || brand.isEmpty || cid == null) continue;

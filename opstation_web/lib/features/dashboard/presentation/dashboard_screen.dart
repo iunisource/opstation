@@ -167,6 +167,10 @@ class _DashboardStatsState extends State<_DashboardStats> {
             .from('competitor_spotting')
             .select('customer_id, brand_name, surveyed_at')
             .eq('org_id', widget.orgId),
+        client
+            .from('competitor_brand_aliases')
+            .select('alias, canonical')
+            .eq('org_id', widget.orgId),
       ]);
       final users = results[0] as List;
       final customerCount = results[1];
@@ -176,6 +180,13 @@ class _DashboardStatsState extends State<_DashboardStats> {
       final todayVisits = results[5] as List;
       final paRows = results[6] as List;
       final csRows = results[7] as List;
+      // Brand alias map (variant -> correct brand) to canonicalize spottings
+      // before the distinct-brand count.
+      final brandAlias = <String, String>{
+        for (final a in (results[8] as List))
+          (a['alias'] as String? ?? '').toLowerCase().trim():
+              (a['canonical'] as String? ?? '')
+      };
 
       int totalCollection = 0;
       // Shops visited — matches the app's admin_dashboard_stats formula:
@@ -201,10 +212,16 @@ class _DashboardStatsState extends State<_DashboardStats> {
       // a single space. (Genuinely different spellings still count separately —
       // those are data-entry variants to clean up in competitor management.)
       final brandsTracked = csRows
-          .map((r) => (r['brand_name'] as String? ?? '')
-              .toLowerCase()
-              .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
-              .trim())
+          .map((r) {
+            final raw = (r['brand_name'] as String? ?? '');
+            // Apply the alias map first (roll typos up to the correct brand),
+            // then normalise for the distinct count.
+            final canon = brandAlias[raw.toLowerCase().trim()] ?? raw;
+            return canon
+                .toLowerCase()
+                .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+                .trim();
+          })
           .where((b) => b.isNotEmpty)
           .toSet();
 

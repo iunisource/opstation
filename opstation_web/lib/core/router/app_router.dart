@@ -46,6 +46,7 @@ import '../../features/customers/presentation/erp_tasks_screen.dart';
 import '../../features/customers/presentation/erp_supplier_360_screen.dart';
 import '../../features/products/presentation/products_screen.dart';
 import '../../features/competitor_categories/presentation/competitor_categories_screen.dart';
+import '../../features/competitor_categories/presentation/competitor_brand_aliases_screen.dart';
 import '../../features/intelligence/presentation/intelligence_placement_screen.dart';
 import '../../features/intelligence/presentation/intelligence_dashboard_screen.dart';
 import '../../features/intelligence/presentation/intelligence_competitors_screen.dart';
@@ -273,6 +274,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/crm/supplier-profile', builder: (_, __) => const ErpSupplier360Screen()),
           GoRoute(path: '/products', builder: (_, __) => const ProductsScreen()),
           GoRoute(path: '/competitor-categories', builder: (_, __) => const CompetitorCategoriesScreen()),
+          GoRoute(path: '/competitor-brand-aliases', builder: (_, __) => const CompetitorBrandAliasesScreen()),
           GoRoute(path: '/intelligence/dashboard', builder: (_, __) => const IntelligenceDashboardScreen()),
           GoRoute(path: '/intelligence/placement', builder: (_, __) => const IntelligencePlacementScreen()),
           GoRoute(path: '/intelligence/competitors', builder: (_, __) => const IntelligenceCompetitorsScreen()),
