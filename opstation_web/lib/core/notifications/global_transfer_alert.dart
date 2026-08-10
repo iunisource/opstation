@@ -48,8 +48,34 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
   String? _targetId; // newest pending transfer -> what "Open & Accept" opens
   OverlayEntry? _banner;
 
+  bool _skipAdmin = false; // org.transfer_alert_skip_admin
+  bool _muted = false; // session-persistent: silence the sound, keep the banner
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _uid => ref.read(currentUserProvider)?.id;
+
+  // Admins can opt out of the buzzer/banner (badge still shows).
+  bool get _suppressForMe {
+    if (!_skipAdmin) return false;
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin ||
+        r == WebUserRole.masterAdmin ||
+        r == WebUserRole.superAdmin;
+  }
+
+  Future<void> _loadConfig() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final row = await Supabase.instance.client
+          .from('app_config')
+          .select('value')
+          .eq('org_id', orgId)
+          .eq('key', 'org.transfer_alert_skip_admin')
+          .maybeSingle();
+      _skipAdmin = (row?['value'] as String?)?.trim() == 'true';
+    } catch (_) {/* default off */}
+  }
 
   @override
   void initState() {
@@ -73,6 +99,7 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
       return;
     }
     _booted = true;
+    await _loadConfig();
     await _refresh();
     _subscribe(orgId);
     _safety = Timer.periodic(const Duration(seconds: 90), (_) => _refresh());
@@ -152,8 +179,9 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
       final justArrived = ids.difference(_alertIds).isNotEmpty;
       _alertIds = ids;
       _targetId = newest;
-      ref.invalidate(transferPendingCountProvider); // keep the nav badge live
-      if (ids.isEmpty) {
+      ref.invalidate(transferPendingCountProvider); // badge stays regardless
+      // Admins with the skip toggle on: keep the badge, silence buzzer + banner.
+      if (ids.isEmpty || _suppressForMe) {
         _disarm();
         _hideBanner();
       } else {
@@ -184,6 +212,7 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
   }
 
   void _buzz() {
+    if (_muted) return; // muted for the session — banner still shows, no sound
     try {
       if (_buzzUri.isEmpty) _buzzUri = _buildBuzzerWav();
       final el = (_buzzEl ??= html.AudioElement()
@@ -236,6 +265,18 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
   }
 
   // ── Banner ──────────────────────────────────────────────────────────────
+  // Mute the SOUND for the rest of the session. Unlike Ignore (which clears the
+  // current transfers), mute keeps the banner and badge but stays silent even
+  // when the 5-minute buzzer re-fires or a new transfer arrives — until unmuted.
+  void _toggleMute() {
+    _muted = !_muted;
+    if (_muted) {
+      _buzzStop?.cancel();
+      try { _buzzEl?.pause(); } catch (_) {}
+    }
+    _banner?.markNeedsBuild();
+  }
+
   void _onIgnore() {
     _ignored.addAll(_alertIds); // silence exactly what's showing now
     _alertIds = {};
@@ -294,6 +335,15 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
                   child: Text(
                       '$n stock transfer${n == 1 ? '' : 's'} awaiting acceptance',
                       style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                ),
+                // Mute: silence the sound for the session (banner stays). Stays
+                // muted even when it re-triggers every 5 min or a new one lands.
+                IconButton(
+                  tooltip: _muted ? 'Unmute buzzer' : 'Mute buzzer',
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(_muted ? Icons.volume_off : Icons.volume_up,
+                      color: Colors.white, size: 19),
+                  onPressed: _toggleMute,
                 ),
                 TextButton(
                   onPressed: _onIgnore,
