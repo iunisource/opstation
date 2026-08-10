@@ -272,7 +272,11 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
         child: Center(
           child: Material(
             color: Colors.transparent,
-            child: Container(
+            child: GestureDetector(
+              onVerticalDragEnd: (d) {
+                if ((d.primaryVelocity ?? 0) < 0) _onIgnore(); // swipe up = ignore
+              },
+              child: Container(
               constraints: const BoxConstraints(maxWidth: 560),
               margin: const EdgeInsets.symmetric(horizontal: 12),
               padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
@@ -307,7 +311,14 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
                   child: const Text('Open & Accept', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
                 ),
+                IconButton(
+                  tooltip: 'Dismiss',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close, color: Colors.white70, size: 18),
+                  onPressed: _onIgnore,
+                ),
               ]),
+            ),
             ),
           ),
         ),

@@ -235,6 +235,24 @@ final piReviewPendingProvider  = _reviewPendingProvider('purchase_invoices', 'or
 final priReviewPendingProvider = _reviewPendingProvider('purchase_return_invoices', 'org.doc_review_flow_pri');
 final siReviewPendingProvider  = _reviewPendingProvider('sales_invoices', 'org.doc_review_flow_si');
 
+// Count of GRNs that are RECEIVED but not yet invoiced — i.e. awaiting a
+// Purchase Invoice. Drives a pendency badge on Purchase Invoices (and the
+// Purchase top-nav) so nobody forgets to invoice a received GRN.
+final grnPendingInvoiceCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('purchase_grns')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .inFilter('status', ['received', 'saved']);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // Count of received GRNs still awaiting admin supervision (non-blocking review
 // layer), gated by org.grn_supervise_flow. Drives the GRN menu pendency badge.
 final grnSupervisePendingProvider = FutureProvider<int>((ref) async {
@@ -580,6 +598,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
   final piReviewPending = ref.watch(piReviewPendingProvider).valueOrNull ?? 0;
+  final grnPendingInvoice = ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0;
   final priReviewPending = ref.watch(priReviewPendingProvider).valueOrNull ?? 0;
   final siReviewPending = ref.watch(siReviewPendingProvider).valueOrNull ?? 0;
   final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
@@ -624,7 +643,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
         if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
         if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location, badge: grnSupervisePending),
-        if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending),
+        if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending + grnPendingInvoice),
         _menuDivider(),
         if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
         if (show('/erp/purchase-return-vouchers')) _menuItem(context, 'Purchase Return Invoices', Icons.description_outlined,       '/erp/purchase-return-vouchers', location, badge: priReviewPending),
@@ -755,7 +774,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
            '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
            '/erp/supplier-ledger', '/erp/supplier-aging'],
-          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending),
+          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',

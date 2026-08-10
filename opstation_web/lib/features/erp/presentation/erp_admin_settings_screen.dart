@@ -116,6 +116,22 @@ const List<_AdminToggle> _toggles = [
         '(and when) is recorded in the job\'s audit trail. Adds a "Note & Print" '
         'button that acknowledges and prints in one step.',
   ),
+  _AdminToggle(
+    'org.job_ack_skip_admin',
+    'Skip admins for the new-job buzzer',
+    'When ON, admin and master-admin users are NOT interrupted by the new-job '
+        'buzzer and banner — the pendency count still shows on their menu so they '
+        'can see pending jobs, but the loud alert is left to the floor/operational '
+        'users. Only applies when the new-job alert above is ON.',
+  ),
+  _AdminToggle(
+    'org.po_approval_skip_admin',
+    'Skip admins for Purchase Order approval notifications',
+    'When ON, admin users do not receive the push/bell notification when a '
+        'Purchase Order is submitted for approval — master admins still do, and '
+        'the pending count on the Purchase menu still shows for everyone. Only '
+        'applies when "Require approval for Purchase Orders" is ON.',
+  ),
 
   _AdminToggle(
     'org.customer_edit_alert',

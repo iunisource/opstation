@@ -705,6 +705,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     ref.listen(selectedBranchProvider, (_, __) { _selectedId = null; _detail = {}; _items = []; _loadList(); });
     return Container(color: AppTheme.background, child: CollapsibleListPane(
       paneWidth: 360,
+      detailActive: _selectedId != null,
+      onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
       listChild: _buildList(),
       detailChild: _selectedId == null
           ? const Center(child: Text('Select or create a Purchase Order', style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))

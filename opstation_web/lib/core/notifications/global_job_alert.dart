@@ -48,6 +48,7 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
   bool _booted = false;
 
   Set<String> _alertIds = {}; // unacked queued jobs NOT created by me
+  final Set<String> _dismissed = {}; // banner dismissed (X / swipe) this session
   String? _targetId; // the newest unacked job — what "Open & note" opens
   OverlayEntry? _banner;
 
@@ -85,17 +86,31 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
     _safety = Timer.periodic(const Duration(seconds: 90), (_) => _refresh());
   }
 
+  bool _skipAdmin = false; // org.job_ack_skip_admin — admins get badge, no buzzer
+
+  // Admins can opt out of the buzzer/banner (badge still shows) via the toggle.
+  bool get _suppressForMe {
+    if (!_skipAdmin) return false;
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin ||
+        r == WebUserRole.masterAdmin ||
+        r == WebUserRole.superAdmin;
+  }
+
   Future<void> _loadConfig() async {
     final orgId = _orgId;
     if (orgId == null) return;
     try {
-      final row = await Supabase.instance.client
+      final rows = await Supabase.instance.client
           .from('app_config')
-          .select('value')
+          .select('key, value')
           .eq('org_id', orgId)
-          .eq('key', 'org.job_ack_flow')
-          .maybeSingle();
-      _enabled = (row?['value'] as String?)?.trim() == 'true';
+          .inFilter('key', ['org.job_ack_flow', 'org.job_ack_skip_admin']);
+      for (final r in rows as List) {
+        final v = (r['value'] as String?)?.trim() == 'true';
+        if (r['key'] == 'org.job_ack_flow') _enabled = v;
+        if (r['key'] == 'org.job_ack_skip_admin') _skipAdmin = v;
+      }
     } catch (_) {/* default off */}
   }
 
@@ -161,17 +176,18 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
       final ids = <String>{};
       String? newest;
       for (final j in rows as List) {
-        if ((j['created_by'] as String?) != uid) {
-          final id = j['id'] as String;
-          ids.add(id);
-          newest ??= id; // first row = newest (ordered desc)
-        }
+        final id = j['id'] as String;
+        if ((j['created_by'] as String?) == uid) continue; // not my own
+        if (_dismissed.contains(id)) continue; // dismissed this session
+        ids.add(id);
+        newest ??= id; // first row = newest (ordered desc)
       }
       final justArrived = ids.difference(_alertIds).isNotEmpty;
       _alertIds = ids;
       _targetId = newest;
-      ref.invalidate(jobAckPendingCountProvider); // keep the nav badge live
-      if (ids.isEmpty) {
+      ref.invalidate(jobAckPendingCountProvider); // badge stays regardless
+      // Admins with the skip toggle on: keep the badge, silence buzzer + banner.
+      if (ids.isEmpty || _suppressForMe) {
         _disarm();
         _hideBanner();
       } else {
@@ -271,7 +287,12 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
         child: Center(
           child: Material(
             color: Colors.transparent,
-            child: Container(
+            child: GestureDetector(
+              // Swipe up to dismiss.
+              onVerticalDragEnd: (d) {
+                if ((d.primaryVelocity ?? 0) < 0) _onDismiss();
+              },
+              child: Container(
               constraints: const BoxConstraints(maxWidth: 520),
               margin: const EdgeInsets.symmetric(horizontal: 12),
               padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
@@ -310,7 +331,16 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
                   child: const Text('Open & note', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
                 ),
+                // Dismiss (also swipe up). Silences the banner + buzzer for these
+                // jobs this session; the pending badge still shows.
+                IconButton(
+                  tooltip: 'Dismiss',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close, color: Colors.white70, size: 18),
+                  onPressed: _onDismiss,
+                ),
               ]),
+            ),
             ),
           ),
         ),
@@ -319,6 +349,13 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
     overlay.insert(_banner!);
     // ignore: unused_local_variable
     final _ = count;
+  }
+
+  void _onDismiss() {
+    _dismissed.addAll(_alertIds);
+    _alertIds = {};
+    _disarm();
+    _hideBanner();
   }
 
   void _hideBanner() {
