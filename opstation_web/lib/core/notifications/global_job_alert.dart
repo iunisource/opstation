@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import '../layout/main_layout.dart'; // jobAckPendingCountProvider
+import '../permissions/access_control.dart'; // accessSyncProvider
 import '../../features/auth/auth_controller.dart';
 
 /// Set by the global alert's "Open & note" button to the job the user should
@@ -87,6 +88,11 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
   }
 
   bool _skipAdmin = false; // org.job_ack_skip_admin — admins get badge, no buzzer
+
+  // Only users who can actually open the Job Card screen should be alerted.
+  bool get _hasAccess =>
+      ref.read(accessSyncProvider)?.canAccessRoute('/manufacturing/job-card') ??
+      false;
 
   // Admins can opt out of the buzzer/banner (badge still shows) via the toggle.
   bool get _suppressForMe {
@@ -186,8 +192,9 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
       _alertIds = ids;
       _targetId = newest;
       ref.invalidate(jobAckPendingCountProvider); // badge stays regardless
-      // Admins with the skip toggle on: keep the badge, silence buzzer + banner.
-      if (ids.isEmpty || _suppressForMe) {
+      // No Job Card access, or admins with the skip toggle on: keep the badge,
+      // silence buzzer + banner.
+      if (ids.isEmpty || !_hasAccess || _suppressForMe) {
         _disarm();
         _hideBanner();
       } else {
@@ -378,5 +385,11 @@ class _GlobalJobAlertState extends ConsumerState<GlobalJobAlert> {
   }
 
   @override
-  Widget build(BuildContext context) => const SizedBox.shrink();
+  Widget build(BuildContext context) {
+    // Re-evaluate once access finishes resolving (it loads asynchronously).
+    ref.listen(accessSyncProvider, (_, __) {
+      if (mounted) _refresh();
+    });
+    return const SizedBox.shrink();
+  }
 }

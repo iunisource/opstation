@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import '../layout/main_layout.dart'; // transferPendingCountProvider, userBranchIdsProvider
+import '../permissions/access_control.dart'; // accessSyncProvider
 import '../../features/auth/auth_controller.dart';
 
 /// Set by the transfer alert's "Open & Accept" button to the transfer id the
@@ -54,6 +55,11 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _uid => ref.read(currentUserProvider)?.id;
+
+  // Only users who can open the Stock Transfers screen should be alerted.
+  bool get _hasAccess =>
+      ref.read(accessSyncProvider)?.canAccessRoute('/erp/stock-transfers') ??
+      false;
 
   // Admins can opt out of the buzzer/banner (badge still shows).
   bool get _suppressForMe {
@@ -181,8 +187,9 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
       _alertIds = ids;
       _targetId = newest;
       ref.invalidate(transferPendingCountProvider); // badge stays regardless
-      // Admins with the skip toggle on: keep the badge, silence buzzer + banner.
-      if (ids.isEmpty || _suppressForMe) {
+      // No Stock Transfers access, or admins with the skip toggle on: keep the
+      // badge, silence buzzer + banner.
+      if (ids.isEmpty || !_hasAccess || _suppressForMe) {
         _disarm();
         _hideBanner();
       } else {
@@ -415,5 +422,10 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
   }
 
   @override
-  Widget build(BuildContext context) => const SizedBox.shrink();
+  Widget build(BuildContext context) {
+    ref.listen(accessSyncProvider, (_, __) {
+      if (mounted) _refresh();
+    });
+    return const SizedBox.shrink();
+  }
 }
