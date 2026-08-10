@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
@@ -222,22 +223,39 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
       el.currentTime = 0;
       el.play();
       _buzzStop?.cancel();
-      _buzzStop = Timer(const Duration(seconds: 12), () {
+      _buzzStop = Timer(const Duration(seconds: 3), () {
         try { _buzzEl?.pause(); } catch (_) {}
       });
     } catch (_) {}
   }
 
   String _buildBuzzerWav() {
+    // A soft, friendly two-note chime (gentle rising D5 -> G5, sine tones with a
+    // bell-like decay) — deliberately NOT the harsh klaxon the Job Card uses.
+    // ~1s clip; looped and stopped after 3 seconds.
     const sr = 11025;
     const n = sr;
+    const twoPi = 2 * math.pi;
     final samples = Int16List(n);
     for (var i = 0; i < n; i++) {
       final t = i / sr;
-      final hi = (((t * 1000) ~/ 150) % 2) == 0;
-      final f = hi ? 900.0 : 640.0;
-      final phase = (t * f) % 1.0;
-      samples[i] = (phase < 0.5 ? 26000 : -26000);
+      // Two notes: D5 then G5 (a pleasant rising fourth).
+      final double freq, tSeg;
+      if (t < 0.45) {
+        freq = 587.33; // D5
+        tSeg = t;
+      } else {
+        freq = 783.99; // G5
+        tSeg = t - 0.45;
+      }
+      // Soft attack (8ms) + exponential decay = a mellow bell, not a blare.
+      final attack = tSeg < 0.008 ? tSeg / 0.008 : 1.0;
+      final decay = math.exp(-tSeg * 5.0);
+      // Fade the very end to zero for a click-free loop.
+      final tail = t > 0.96 ? (1.0 - t) / 0.04 : 1.0;
+      final env = attack * decay * (tail < 0 ? 0.0 : tail);
+      final v = math.sin(twoPi * freq * tSeg) * env * 15000.0; // ~46% amplitude
+      samples[i] = v.round().clamp(-32767, 32767);
     }
     final pcm = samples.buffer.asUint8List();
     final dataLen = pcm.length;
