@@ -136,9 +136,13 @@ class _CompetitorBrandAliasesScreenState
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: aliasCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Misspelling / variant *',
-                hintText: 'e.g. Excal, Semco, Brihtoo',
+              decoration: InputDecoration(
+                labelText: alias == null
+                    ? 'Misspelling(s) / variant(s) *'
+                    : 'Misspelling / variant *',
+                hintText: alias == null
+                    ? 'e.g. Excal, Ecxal  (comma-separated)'
+                    : 'e.g. Excal',
               ),
               autofocus: true,
             ),
@@ -151,12 +155,17 @@ class _CompetitorBrandAliasesScreenState
               ),
             ),
             const SizedBox(height: 10),
-            const Align(
+            Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                  'Matching is case- and space-insensitive. New spottings roll '
-                  'up automatically; use "Apply to existing" to fix old ones.',
-                  style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                  alias == null
+                      ? 'Separate multiple variants with commas — each maps to the '
+                          'correct brand. Matching is case- and space-insensitive. '
+                          'New spottings roll up automatically; use "Apply to '
+                          'existing" to fix old ones.'
+                      : 'Matching is case- and space-insensitive. New spottings roll '
+                          'up automatically; use "Apply to existing" to fix old ones.',
+                  style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
             ),
           ]),
         ),
@@ -167,36 +176,55 @@ class _CompetitorBrandAliasesScreenState
           ),
           ElevatedButton(
             onPressed: () async {
-              final aliasTxt = aliasCtrl.text.trim();
+              final rawAlias = aliasCtrl.text.trim();
               final canonTxt = canonCtrl.text.trim();
-              if (aliasTxt.isEmpty || canonTxt.isEmpty) {
+              if (rawAlias.isEmpty || canonTxt.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                     content: Text('Both the variant and the correct brand are required')));
                 return;
               }
               final orgId = ref.read(currentUserProvider)?.orgId;
-              final data = {
-                'org_id': orgId,
-                'alias': aliasTxt,
-                'canonical': canonTxt,
-              };
+              final client = Supabase.instance.client;
               try {
                 if (alias == null) {
-                  final id = 'cba_${DateTime.now().millisecondsSinceEpoch}';
-                  await Supabase.instance.client
-                      .from('competitor_brand_aliases')
-                      .insert({...data, 'id': id});
+                  // Comma-separated variants -> one row each, same canonical.
+                  final seen = <String>{};
+                  final variants = rawAlias
+                      .split(',')
+                      .map((s) => s.trim())
+                      .where((s) => s.isNotEmpty && seen.add(s.toLowerCase()))
+                      .toList();
+                  var added = 0;
+                  for (final v in variants) {
+                    try {
+                      await client.from('competitor_brand_aliases').insert({
+                        'id': 'cba_${DateTime.now().microsecondsSinceEpoch}_$added',
+                        'org_id': orgId,
+                        'alias': v,
+                        'canonical': canonTxt,
+                      });
+                      added++;
+                    } catch (_) {/* already exists — skip */}
+                  }
+                  if (context.mounted) {
+                    Navigator.of(context, rootNavigator: true).pop();
+                  }
+                  _showSnack(added == 0
+                      ? 'Nothing added — those variants already exist.'
+                      : 'Added $added alias${added == 1 ? '' : 'es'} → $canonTxt');
+                  _load();
                 } else {
-                  await Supabase.instance.client
-                      .from('competitor_brand_aliases')
-                      .update(data)
-                      .eq('id', alias['id']);
+                  await client.from('competitor_brand_aliases').update({
+                    'org_id': orgId,
+                    'alias': rawAlias,
+                    'canonical': canonTxt,
+                  }).eq('id', alias['id']);
+                  if (context.mounted) {
+                    Navigator.of(context, rootNavigator: true).pop();
+                  }
+                  _showSnack('Alias updated');
+                  _load();
                 }
-                if (context.mounted) {
-                  Navigator.of(context, rootNavigator: true).pop();
-                }
-                _showSnack(alias == null ? 'Alias added' : 'Alias updated');
-                _load();
               } catch (e) {
                 _showSnack('Failed: ${e.toString().split('\n').first}');
               }
