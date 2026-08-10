@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart'; // orgModulesProvider
 import '../../auth/auth_controller.dart';
 
 /// Expand a receipt-number field into every slip number it represents.
@@ -75,6 +76,7 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
   bool _loaded = false;
   Map<String, dynamic>? _data;
   List<_Usage> _usage = [];
+  Map<String, dynamic>? _mfg; // manufacturing overview (null = module off / no load)
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String get _orgName => ref.read(currentUserProvider)?.orgName ?? '';
@@ -104,10 +106,17 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
         'p_org': orgId, 'p_from': fromS, 'p_to': toS,
       });
       final usage = await _loadUsage(client, orgId);
+      // Manufacturing overview — only for orgs that have the Manufacturing
+      // ('production') module enabled.
+      final modules = ref.read(orgModulesProvider).valueOrNull ?? const <String>{};
+      final mfg = modules.contains('production')
+          ? await _loadManufacturing(client, orgId)
+          : null;
       if (mounted) {
         setState(() {
           _data = Map<String, dynamic>.from(res as Map);
           _usage = usage;
+          _mfg = mfg;
           _loaded = true;
           _loading = false;
         });
@@ -276,6 +285,154 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
   String get _periodLabel =>
       '${DateFormat('d MMM yyyy').format(_from)} – ${DateFormat('d MMM yyyy').format(_to)}';
 
+  // ── Manufacturing overview (jobs, production, delays, efficiency) ──────────
+  // Jobs are a live snapshot (open/queued/in-progress now); production units and
+  // reject rate are for the selected period (from job_card_runs). A job is
+  // flagged "behind" when it has been open more than 7 days and isn't finished.
+  static const int _kDelayDays = 7;
+
+  Future<Map<String, dynamic>?> _loadManufacturing(
+      SupabaseClient client, String orgId) async {
+    try {
+      final fromStr = DateFormat('yyyy-MM-dd').format(_from);
+      final toStrExcl =
+          DateFormat('yyyy-MM-dd').format(_to.add(const Duration(days: 1)));
+
+      final jobsRaw = await client
+          .from('job_cards')
+          .select(
+              'id, job_number, product_id, status, planned_qty, produced_qty, is_open_ended, created_at, updated_at')
+          .eq('org_id', orgId)
+          .order('created_at', ascending: false)
+          .limit(4000);
+      final jobs = List<Map<String, dynamic>>.from(jobsRaw as List);
+
+      // Product names for the delayed-job list.
+      final pids = <String>{
+        for (final j in jobs)
+          if (j['product_id'] != null) j['product_id'] as String
+      };
+      final prodName = <String, String>{};
+      if (pids.isNotEmpty) {
+        final prows = await client
+            .from('products')
+            .select('id, name, sku')
+            .inFilter('id', pids.toList());
+        for (final p in prows as List) {
+          final sku = (p['sku'] as String?) ?? '';
+          prodName[p['id'] as String] =
+              (sku.isNotEmpty ? '$sku — ' : '') + ((p['name'] as String?) ?? '');
+        }
+      }
+
+      // Production batches in the period (RLS scopes job_card_runs to the org).
+      num unitsProduced = 0, rejected = 0;
+      int batches = 0;
+      try {
+        final runs = await client
+            .from('job_card_runs')
+            .select('produced_qty, rejected_qty, run_date')
+            .gte('run_date', fromStr)
+            .lt('run_date', toStrExcl);
+        for (final r in runs as List) {
+          unitsProduced += (r['produced_qty'] as num? ?? 0);
+          rejected += (r['rejected_qty'] as num? ?? 0);
+          batches++;
+        }
+      } catch (_) {/* runs table/date column optional */}
+
+      DateTime? parse(dynamic s) => s == null ? null : DateTime.tryParse('$s');
+      final periodEnd = _to.add(const Duration(days: 1));
+      bool inPeriod(DateTime? d) =>
+          d != null && !d.isBefore(_from) && d.isBefore(periodEnd);
+
+      final now = DateTime.now();
+      int created = 0, completedInPeriod = 0, queued = 0, inProgress = 0;
+      int openCount = 0;
+      double progressSum = 0;
+      final delayed = <Map<String, dynamic>>[];
+
+      for (final j in jobs) {
+        final st = (j['status'] as String?) ?? 'queued';
+        final cAt = parse(j['created_at']);
+        if (inPeriod(cAt)) created++;
+        if (st == 'completed' && inPeriod(parse(j['updated_at']))) {
+          completedInPeriod++;
+        }
+        if (st == 'queued' || st == 'in_progress') {
+          if (st == 'queued') {
+            queued++;
+          } else {
+            inProgress++;
+          }
+          openCount++;
+          final planned = (j['planned_qty'] as num? ?? 0).toDouble();
+          final produced = (j['produced_qty'] as num? ?? 0).toDouble();
+          final openEnded = (j['is_open_ended'] as bool?) ?? false;
+          final prog = (!openEnded && planned > 0)
+              ? (produced / planned).clamp(0.0, 1.0)
+              : (produced > 0 ? 1.0 : 0.0);
+          progressSum += prog;
+          final ageDays = cAt == null ? 0 : now.difference(cAt).inDays;
+          final behind = openEnded || planned <= 0 || produced < planned;
+          if (ageDays >= _kDelayDays && behind) {
+            delayed.add({
+              'job_number': (j['job_number'] as String?) ?? '',
+              'product': prodName[j['product_id']] ?? '',
+              'age': ageDays,
+              'progress': (prog * 100).round(),
+              'open_ended': openEnded,
+            });
+          }
+        }
+      }
+      delayed.sort((a, b) => (b['age'] as int).compareTo(a['age'] as int));
+      final avgOpenProgress = openCount > 0 ? progressSum / openCount : 0.0;
+      final rejectRate = unitsProduced > 0 ? rejected / unitsProduced : 0.0;
+
+      final insights = <String>[];
+      if (delayed.isNotEmpty) {
+        final w = delayed.first;
+        insights.add(
+            '${delayed.length} job${delayed.length == 1 ? '' : 's'} running behind — open over a week and not yet complete. Oldest: ${w['job_number']} at ${w['age']} days'
+            '${(w['open_ended'] as bool? ?? false) ? '' : ', ${w['progress']}% done'}.');
+      } else if (openCount > 0) {
+        insights.add('No jobs are stuck beyond a week — the floor is keeping pace.');
+      }
+      if (unitsProduced > 0) {
+        final rr = rejectRate * 100;
+        final word = rr <= 2 ? 'tight' : (rr <= 5 ? 'acceptable' : 'high');
+        insights.add(
+            'Reject rate is ${rr.toStringAsFixed(1)}% this period ($word) — ${_money.format(rejected)} of ${_money.format(unitsProduced)} units scrapped across $batches batch${batches == 1 ? '' : 'es'}.');
+      }
+      if (created > 0 || completedInPeriod > 0 || openCount > 0) {
+        insights.add(
+            '$completedInPeriod job${completedInPeriod == 1 ? '' : 's'} completed vs $created created this period'
+            '${openCount > 0 ? '; $openCount still open (avg ${(avgOpenProgress * 100).round()}% done)' : ''}.');
+      }
+      if (insights.isEmpty) {
+        insights.add('No manufacturing activity in this period.');
+      }
+
+      return {
+        'created': created,
+        'completed': completedInPeriod,
+        'open': openCount,
+        'queued': queued,
+        'in_progress': inProgress,
+        'units': unitsProduced,
+        'batches': batches,
+        'rejected': rejected,
+        'rejectRate': rejectRate,
+        'avgOpenProgress': avgOpenProgress,
+        'delayed': delayed,
+        'insights': insights,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
   // Is the current range exactly this named shortcut? (to highlight the chip)
   bool _isQuickRange(String key) {
     final r = _quickRange(key);
@@ -411,6 +568,10 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
                       _card('Placement Score by Market', 460, _placementByMarket()),
                       _card('Usage — ERP Users', 380, _usageErp()),
                     ]),
+                    if (_mfg != null) ...[
+                      const SizedBox(height: 24),
+                      _manufacturingSection(),
+                    ],
                     const SizedBox(height: 24),
                     const Text('Salesperson — App Usage', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                     const Text('How each salesperson uses the field app — the same read as their Team 360 profile.',
@@ -453,6 +614,92 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
 
   TextStyle get _th => const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondary);
   TextStyle get _td => const TextStyle(fontSize: 12.5);
+
+  Widget _manufacturingSection() {
+    final m = _mfg!;
+    final delayed = [
+      for (final d in (m['delayed'] as List? ?? const []))
+        Map<String, dynamic>.from(d as Map)
+    ];
+    final insights = [
+      for (final s in (m['insights'] as List? ?? const [])) s.toString()
+    ];
+    final rr = (m['rejectRate'] as num? ?? 0).toDouble() * 100;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: const [
+        Icon(Icons.precision_manufacturing_outlined, size: 18, color: AppTheme.primary),
+        SizedBox(width: 8),
+        Text('Manufacturing', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+      ]),
+      const SizedBox(height: 2),
+      Text(
+          'Jobs, production and operational efficiency for $_periodLabel. Open-job counts are a live snapshot.',
+          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      const SizedBox(height: 12),
+      Row(children: [
+        _tile('Open Jobs', '${m['open'] ?? 0}', AppTheme.primary),
+        const SizedBox(width: 12),
+        _tile('Completed', '${m['completed'] ?? 0}', Colors.green.shade700),
+        const SizedBox(width: 12),
+        _tile('Units Produced', _money.format((m['units'] as num? ?? 0)), Colors.indigo),
+        const SizedBox(width: 12),
+        _tile('Reject Rate', '${rr.toStringAsFixed(1)}%',
+            rr <= 5 ? Colors.green.shade700 : Colors.red.shade700),
+        const SizedBox(width: 12),
+        _tile('Running Behind', '${delayed.length}',
+            delayed.isEmpty ? Colors.green.shade700 : Colors.orange.shade800),
+      ]),
+      const SizedBox(height: 16),
+      Wrap(spacing: 20, runSpacing: 20, children: [
+        _card('What to watch', 560,
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          for (final s in insights)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Padding(
+                    padding: EdgeInsets.only(top: 5, right: 8),
+                    child: Icon(Icons.circle, size: 6, color: AppTheme.textSecondary)),
+                Expanded(child: Text(s, style: const TextStyle(fontSize: 12.5, height: 1.4))),
+              ]),
+            ),
+        ])),
+        _card('Jobs Running Behind (>$_kDelayDays days)', 520,
+            delayed.isEmpty
+                ? const Text('None — no job has been open longer than a week.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))
+                : Column(children: [
+                    Row(children: [
+                      Expanded(flex: 3, child: Text('Job', style: _th)),
+                      Expanded(flex: 4, child: Text('Product', style: _th)),
+                      SizedBox(width: 52, child: Text('Age', textAlign: TextAlign.right, style: _th)),
+                      SizedBox(width: 64, child: Text('Progress', textAlign: TextAlign.right, style: _th)),
+                    ]),
+                    const Divider(height: 12),
+                    for (final d in delayed.take(12))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(children: [
+                          Expanded(flex: 3, child: Text('${d['job_number']}', style: _td.copyWith(fontWeight: FontWeight.w700))),
+                          Expanded(flex: 4, child: Text('${d['product']}', style: _td, overflow: TextOverflow.ellipsis)),
+                          SizedBox(width: 52, child: Text('${d['age']}d', textAlign: TextAlign.right, style: _td)),
+                          SizedBox(
+                              width: 64,
+                              child: Text(
+                                  (d['open_ended'] as bool? ?? false) ? '—' : '${d['progress']}%',
+                                  textAlign: TextAlign.right, style: _td)),
+                        ]),
+                      ),
+                    if (delayed.length > 12)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text('+${delayed.length - 12} more',
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      ),
+                  ])),
+      ]),
+    ]);
+  }
 
   Widget _emptyRow() => const Padding(padding: EdgeInsets.symmetric(vertical: 12),
       child: Text('No data for this period.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)));
@@ -781,6 +1028,50 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
       usg.write('</div></div>');
     }
 
+    // Manufacturing section (only present for orgs with the module).
+    String mfg = '';
+    if (_mfg != null) {
+      final m = _mfg!;
+      final delayed = [
+        for (final d in (m['delayed'] as List? ?? const []))
+          Map<String, dynamic>.from(d as Map)
+      ];
+      final insights = [
+        for (final s in (m['insights'] as List? ?? const [])) s.toString()
+      ];
+      final rr = (m['rejectRate'] as num? ?? 0).toDouble() * 100;
+      final mkpi = '<div class="kpis">'
+          '<div class="kpi kb"><div class="kl">Open Jobs</div><div class="kv">${m['open'] ?? 0}</div></div>'
+          '<div class="kpi kg"><div class="kl">Completed</div><div class="kv">${m['completed'] ?? 0}</div></div>'
+          '<div class="kpi ki"><div class="kl">Units Produced</div><div class="kv">${_money.format((m['units'] as num? ?? 0))}</div></div>'
+          '<div class="kpi ko"><div class="kl">Reject Rate</div><div class="kv">${rr.toStringAsFixed(1)}%</div></div>'
+          '<div class="kpi kp"><div class="kl">Running Behind</div><div class="kv">${delayed.length}</div></div>'
+          '</div>';
+      final ins = StringBuffer('<ul class="ins">');
+      for (final s in insights) {
+        ins.write('<li>${esc(s)}</li>');
+      }
+      ins.write('</ul>');
+      String delTbl;
+      if (delayed.isEmpty) {
+        delTbl = '<p class="muted">No job has been open longer than a week.</p>';
+      } else {
+        final rows = StringBuffer();
+        for (final d in delayed.take(20)) {
+          final prog =
+              (d['open_ended'] as bool? ?? false) ? '—' : '${d['progress']}%';
+          rows.write(
+              '<tr><td>${esc('${d['job_number']}')}</td><td>${esc('${d['product']}')}</td>'
+              '<td class="r">${d['age']}d</td><td class="r">$prog</td></tr>');
+        }
+        delTbl =
+            '<table><thead><tr><th>Job</th><th>Product</th><th class="r">Age</th><th class="r">Progress</th></tr></thead><tbody>$rows</tbody></table>';
+      }
+      mfg = '<div class="sec"><h2>Manufacturing</h2>$mkpi'
+          '<h3 class="sub">What to watch</h3>$ins'
+          '<h3 class="sub">Jobs Running Behind (&gt;$_kDelayDays days)</h3>$delTbl</div>';
+    }
+
     final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
     final kpi = '<div class="kpis">'
         '<div class="kpi kb"><div class="kl">Total Sale</div><div class="kv">${rs(totals['sales'] as num?)}</div></div>'
@@ -802,7 +1093,9 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
         '.kpi { flex:1; border-radius:10px; padding:10px 12px; color:#fff; } '
         '.kpi .kl { font-size:9.5px; text-transform:uppercase; letter-spacing:.5px; opacity:.9; } '
         '.kpi .kv { font-size:16px; font-weight:800; margin-top:3px; } '
-        '.kb { background:#1e40af; } .ki { background:#3730a3; } .kg { background:#15803d; } .ko { background:#c2410c; } '
+        '.kb { background:#1e40af; } .ki { background:#3730a3; } .kg { background:#15803d; } .ko { background:#c2410c; } .kp { background:#7c3aed; } '
+        '.sub { font-size:11px; margin:10px 0 4px; color:#444; text-transform:uppercase; letter-spacing:.4px; } '
+        '.ins { margin:2px 0 4px; padding-left:16px; } .ins li { font-size:10.5px; line-height:1.5; margin-bottom:2px; } '
         '.sec { margin-top:16px; break-inside:avoid; } '
         'h2 { font-size:13px; margin:0 0 6px; color:#1e2a78; } '
         '.muted { color:#999; } '
@@ -823,7 +1116,7 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
         '</style></head><body>'
         '<div class="hd"><div><h1>Org-Wide Super Summary</h1><div class="org">${esc(_orgName)}</div></div>'
         '<div class="meta">Period: ${esc(_periodLabel)}<br>Generated: $gen</div></div>'
-        '$kpi$collSp$collGrp$payAcc$exp$plc$erp$usg'
+        '$kpi$collSp$collGrp$payAcc$exp$plc$erp$mfg$usg'
         '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},350);};</script>'
         '</body></html>';
 
