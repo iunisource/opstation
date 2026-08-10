@@ -125,12 +125,12 @@ const List<_AdminToggle> _toggles = [
         'users. Only applies when the new-job alert above is ON.',
   ),
   _AdminToggle(
-    'org.po_approval_skip_admin',
-    'Skip admins for Purchase Order approval notifications',
-    'When ON, admin users do not receive the push/bell notification when a '
-        'Purchase Order is submitted for approval — master admins still do, and '
-        'the pending count on the Purchase menu still shows for everyone. Only '
-        'applies when "Require approval for Purchase Orders" is ON.',
+    'org.transfer_alert_skip_admin',
+    'Skip admins for the stock-transfer buzzer',
+    'When ON, admin and master-admin users are NOT interrupted by the '
+        'stock-transfer acceptance buzzer and banner — the pendency count still '
+        'shows on their Inventory menu, but the loud alert is left to the branch '
+        'users who accept transfers.',
   ),
 
   _AdminToggle(
@@ -334,6 +334,62 @@ const List<_AdminToggle> _toggles = [
         'created from now on appear. Supervision is non-blocking — the customer '
         'can still be used for orders while pending. When OFF, no counter shows.',
   ),
+];
+
+/// A module-wise grouping of the flat [_toggles] list, so Admin Settings reads
+/// as organised sections instead of one long wall of switches. Each toggle key
+/// appears in exactly one group; any key not listed here falls into "Other".
+class _ToggleGroup {
+  final String title;
+  final IconData icon;
+  final List<String> keys;
+  const _ToggleGroup(this.title, this.icon, this.keys);
+}
+
+const List<_ToggleGroup> _toggleGroupsOrder = [
+  _ToggleGroup('Sales & Customers', Icons.storefront_outlined, [
+    'org.credit_limit_alert',
+    'org.aging_alert',
+    'org.si_price_editable',
+    'org.delivery_flow_enabled',
+    'org.foc_enabled',
+    'org.customer_targets_enabled',
+    'org.srn_date_editable',
+    'org.doc_review_flow_si',
+    'org.customer_supervise_flow',
+    'org.customer_edit_alert',
+    'org.quotation_custom_company',
+    'org.cbr_collection_columns',
+    'org.show_product_images',
+  ]),
+  _ToggleGroup('Purchase & GRN', Icons.shopping_cart_outlined, [
+    'org.po_approval_required',
+    'org.po_show_stock_consumption',
+    'org.pi_updates_cost_price',
+    'org.pri_price_editable',
+    'org.doc_review_flow_pi',
+    'org.doc_review_flow_pri',
+    'org.grn_supervise_flow',
+  ]),
+  _ToggleGroup('Manufacturing', Icons.precision_manufacturing_outlined, [
+    'org.job_ack_flow',
+    'org.job_ack_skip_admin',
+    'feature.qc_station',
+  ]),
+  _ToggleGroup('Inventory & Products', Icons.inventory_2_outlined, [
+    'org.transfer_alert_skip_admin',
+    'org.consignment_enabled',
+    'org.hide_main_groups_by_branch',
+  ]),
+  _ToggleGroup('Documents & Printing', Icons.description_outlined, [
+    'org.show_org_name_sales',
+    'org.show_org_name_purchase',
+    'org.voucher_dates_editable',
+  ]),
+  _ToggleGroup('Alerts, Data & Assets', Icons.notifications_active_outlined, [
+    'org.asset_maintenance_reminder',
+    'org.backup_enabled',
+  ]),
 ];
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
@@ -621,6 +677,98 @@ class _ErpAdminSettingsScreenState
     );
   }
 
+  // One switch row (+ its optional number/text companion when ON).
+  Widget _toggleTile(_AdminToggle t) {
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      SwitchListTile(
+        activeColor: AppTheme.primary,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        title: Row(children: [
+          Flexible(
+            child: Text(t.title,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          ),
+          if (_saving.contains(t.key)) ...[
+            const SizedBox(width: 10),
+            const SizedBox(
+                width: 13,
+                height: 13,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+          ],
+        ]),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(t.subtitle,
+              style: const TextStyle(
+                  fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
+        ),
+        value: _values[t.key] ?? false,
+        onChanged: (v) => _setToggle(t.key, v),
+      ),
+      if (t.number != null && (_values[t.key] ?? false)) _numberRow(t.number!),
+      if (t.text != null && (_values[t.key] ?? false)) _textRow(t.text!),
+    ]);
+  }
+
+  // The full set of toggles, rendered as module-wise sections (a titled header
+  // + a card of switches per group). Order follows [_toggleGroupsOrder]; any
+  // toggle not assigned to a group is collected into a trailing "Other" card.
+  List<Widget> _buildGroupedToggles() {
+    final byKey = {for (final t in _toggles) t.key: t};
+    final assigned = <String>{};
+    final out = <Widget>[];
+
+    void section(String title, IconData icon, List<_AdminToggle> items) {
+      if (items.isEmpty) return;
+      out.add(Padding(
+        padding: const EdgeInsets.only(top: 2, bottom: 8),
+        child: Row(children: [
+          Icon(icon, size: 16, color: AppTheme.primary),
+          const SizedBox(width: 8),
+          Text(title.toUpperCase(),
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.primary,
+                  letterSpacing: 0.6)),
+        ]),
+      ));
+      out.add(Container(
+        constraints: const BoxConstraints(maxWidth: 760),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Column(children: [
+          for (int i = 0; i < items.length; i++) ...[
+            if (i > 0) const Divider(height: 1, color: AppTheme.border),
+            _toggleTile(items[i]),
+          ],
+        ]),
+      ));
+      out.add(const SizedBox(height: 18));
+    }
+
+    for (final g in _toggleGroupsOrder) {
+      final items = <_AdminToggle>[];
+      for (final k in g.keys) {
+        final t = byKey[k];
+        if (t != null) {
+          items.add(t);
+          assigned.add(k);
+        }
+      }
+      section(g.title, g.icon, items);
+    }
+    final leftover = [
+      for (final t in _toggles)
+        if (!assigned.contains(t.key)) t
+    ];
+    section('Other', Icons.tune, leftover);
+    return out;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -642,61 +790,7 @@ class _ErpAdminSettingsScreenState
                         TextStyle(fontSize: 13, color: AppTheme.textSecondary),
                   ),
                   const SizedBox(height: 20),
-                  Container(
-                    constraints: const BoxConstraints(maxWidth: 760),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppTheme.border),
-                    ),
-                    child: Column(
-                      children: [
-                        for (int i = 0; i < _toggles.length; i++) ...[
-                          if (i > 0)
-                            const Divider(height: 1, color: AppTheme.border),
-                          SwitchListTile(
-                            activeColor: AppTheme.primary,
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 6),
-                            title: Row(
-                              children: [
-                                Flexible(
-                                  child: Text(_toggles[i].title,
-                                      style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600)),
-                                ),
-                                if (_saving.contains(_toggles[i].key)) ...[
-                                  const SizedBox(width: 10),
-                                  const SizedBox(
-                                      width: 13,
-                                      height: 13,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2)),
-                                ],
-                              ],
-                            ),
-                            subtitle: Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Text(_toggles[i].subtitle,
-                                  style: const TextStyle(
-                                      fontSize: 12.5,
-                                      color: AppTheme.textSecondary,
-                                      height: 1.35)),
-                            ),
-                            value: _values[_toggles[i].key] ?? false,
-                            onChanged: (v) => _setToggle(_toggles[i].key, v),
-                          ),
-                          if (_toggles[i].number != null &&
-                              (_values[_toggles[i].key] ?? false))
-                            _numberRow(_toggles[i].number!),
-                          if (_toggles[i].text != null &&
-                              (_values[_toggles[i].key] ?? false))
-                            _textRow(_toggles[i].text!),
-                        ],
-                      ],
-                    ),
-                  ),
+                  ..._buildGroupedToggles(),
                   if (ref.read(currentUserProvider)?.role ==
                           WebUserRole.masterAdmin ||
                       ref.read(currentUserProvider)?.role ==
