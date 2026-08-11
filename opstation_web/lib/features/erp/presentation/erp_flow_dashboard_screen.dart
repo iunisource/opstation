@@ -40,7 +40,10 @@ class _Stage {
   final String table;
   final String route; // screen to open
   final int step;     // 1=order, 2=grn/do, 3=invoice
-  const _Stage(this.key, this.label, this.sub, this.noun, this.table, this.route, this.step);
+  final bool done;    // true = a completed "done" count (posted invoices),
+                      // not a pending to-do bucket. Changes count + footer.
+  const _Stage(this.key, this.label, this.sub, this.noun, this.table, this.route, this.step,
+      {this.done = false});
 }
 
 class _FlowDashboard extends ConsumerStatefulWidget {
@@ -72,9 +75,9 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
           _Stage('pi', 'Unposted Invoices', 'Entered, not yet locked', 'Purchase Invoice', 'purchase_invoices', '/erp/purchase-invoices', 3),
         ]
       : const [
-          _Stage('so', 'Awaiting Delivery', 'Confirmed, not yet delivered', 'Sales Order', 'sales_orders', '/erp/sales', 1),
-          _Stage('do', 'Awaiting Invoice', 'Delivered, not yet billed', 'Delivery Order', 'delivery_orders', '/erp/delivery-orders', 2),
-          _Stage('si', 'Unposted Invoices', 'Entered, not yet locked', 'Sales Invoice', 'sales_invoices', '/erp/sales-invoices', 3),
+          _Stage('so', 'SOs Awaiting Delivery', 'Confirmed, not yet delivered', 'Sales Order', 'sales_orders', '/erp/sales', 1),
+          _Stage('do', 'DOs Awaiting Invoice', 'Delivered, not yet billed', 'Delivery Order', 'delivery_orders', '/erp/delivery-orders', 2),
+          _Stage('si', 'Invoiced', 'Billed & posted', 'Sales Invoice', 'sales_invoices', '/erp/sales-invoices', 3, done: true),
         ];
 
   // The drafts bucket is a housekeeping list, not a work queue — it sits
@@ -198,7 +201,10 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
 
           final keep = st.step == 2
               ? !invoicedLinks.contains('${r['id']}')
-              : r['is_locked'] != true;
+              // Step 3: a "done" card counts posted/locked invoices (the
+              // finished end of the pipeline); otherwise it's the unposted
+              // to-do bucket.
+              : (st.done ? r['is_locked'] == true : r['is_locked'] != true);
           if (!keep) continue;
           pending.add(entry());
         }
@@ -384,6 +390,14 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
             const SizedBox(height: 6),
             if (_loading)
               const Text(' ', style: TextStyle(fontSize: 11))
+            else if (st.done)
+              // A completed/"done" count: no to-do framing, no stale warning.
+              Row(children: [
+                const Icon(Icons.check_circle, size: 13, color: Colors.teal),
+                const SizedBox(width: 5),
+                Text(docs.isEmpty ? 'None yet' : 'Completed',
+                    style: const TextStyle(fontSize: 11, color: Colors.teal, fontWeight: FontWeight.w600)),
+              ])
             else if (docs.isEmpty)
               const Row(children: [
                 Icon(Icons.check_circle_outline, size: 13, color: Colors.teal),

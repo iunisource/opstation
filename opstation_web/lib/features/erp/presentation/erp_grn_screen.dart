@@ -211,18 +211,24 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         'status': 'draft', 'is_locked': false,
         'created_by': ref.read(currentUserProvider)?.id,
       });
+      final grniRows = <Map<String, dynamic>>[];
+      var seq = 0;
       for (final item in poItems) {
         final pid = item['id'] as String;
         final ordered  = (item['quantity_ordered'] as num?)?.toDouble() ?? 0;
         final alreadyReceived = (item['quantity_received'] as num?)?.toDouble() ?? 0;
         final remaining = ordered - alreadyReceived;
         if (remaining <= 0) continue;  // already fully received — skip
-        await Supabase.instance.client.from('purchase_grn_items').insert({
-          'id': 'grni_${DateTime.now().microsecondsSinceEpoch}_${(item['product_id'] as String).substring(0, 4)}',
+        grniRows.add({
+          'id': 'grni_${DateTime.now().microsecondsSinceEpoch}_${seq++}',
           'grn_id': grnId, 'po_item_id': pid,
           'product_id': item['product_id'], 'uom_id': item['uom_id'],
           'qty_ordered': remaining, 'qty_received': remaining,  // both = remaining unfulfilled qty
         });
+      }
+      // Batched: one insert for all GRN lines instead of one per line.
+      if (grniRows.isNotEmpty) {
+        await Supabase.instance.client.from('purchase_grn_items').insert(grniRows);
       }
       await _logAudit(grnId, 'created', 'GRN $vNum from PO ${po['voucher_number']}');
       _showSnack('$vNum created — adjust received qtys then confirm');
@@ -246,6 +252,48 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     } catch (e) { _showSnack('Failed to save: $e'); }
   }
 
+  /// Batched equivalent of looping [_saveReceivedQty] over every line: one
+  /// upsert for all changed lines + one audit insert, instead of ~2 round trips
+  /// per line. Only changed lines are written.
+  Future<void> _saveAllReceivedQty() async {
+    final userId = ref.read(currentUserProvider)?.id;
+    final updates = <Map<String, dynamic>>[];
+    final audits = <Map<String, dynamic>>[];
+    for (final row in _items) {
+      final itemId = row['id'] as String;
+      final qty = double.tryParse(_receivedCtrl[itemId]?.text ?? '') ?? 0;
+      final old = (row['qty_received'] as num?)?.toDouble() ?? 0;
+      if (old == qty) continue; // no change — skip write + log
+      updates.add({'id': itemId, 'qty_received': qty});
+      final pname = (row['products']?['name'] as String? ?? 'item');
+      audits.add({
+        'org_id': _orgId, 'voucher_id': _detail['id'], 'voucher_type': 'GRN',
+        'action': 'edited',
+        'details': '$pname received qty: ${old.toStringAsFixed(2)} -> ${qty.toStringAsFixed(2)}',
+        'performed_by': userId,
+      });
+    }
+    if (updates.isEmpty) return;
+    try {
+      await Supabase.instance.client
+          .from('purchase_grn_items')
+          .upsert(updates, onConflict: 'id');
+      setState(() {
+        for (final u in updates) {
+          final idx = _items.indexWhere((i) => i['id'] == u['id']);
+          if (idx >= 0) _items[idx]['qty_received'] = u['qty_received'];
+        }
+      });
+      if (audits.isNotEmpty) {
+        try {
+          await Supabase.instance.client.from('voucher_audit_log').insert(audits);
+        } catch (_) {}
+      }
+    } catch (e) {
+      _showSnack('Failed to save: $e');
+    }
+  }
+
   Future<void> _confirmReceipt() async {
     if (_items.isEmpty) { _showSnack('No items to receive'); return; }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
@@ -255,8 +303,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Confirm'))],
     ));
     if (ok != true) return;
-    // Save any pending received qty edits first
-    for (final it in _items) await _saveReceivedQty(it['id'] as String);
+    // Save any pending received qty edits first (batched).
+    await _saveAllReceivedQty();
     if (_confirmBusy) return;
     setState(() => _confirmBusy = true);
     final grnId = _detail['id'] as String;

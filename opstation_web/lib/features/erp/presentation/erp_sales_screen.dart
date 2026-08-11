@@ -1746,6 +1746,26 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     final branchId = _detail['branch_id'] as String;
     final userId = ref.read(currentUserProvider)?.id;
 
+    // Batched: fetch on-hand for every product being delivered in ONE query,
+    // then reuse it for both validation and line-building (was 2 reads/line).
+    final stockMap = <String, double>{};
+    final deliverPids = <String>{};
+    for (final entry in _deliverQtyCtrl.entries) {
+      if ((double.tryParse(entry.value.text.trim()) ?? 0) <= 0) continue;
+      final so = _soItems.firstWhere((i) => i['id'] == entry.key, orElse: () => {});
+      if (so.isNotEmpty) deliverPids.add(so['product_id'] as String);
+    }
+    if (deliverPids.isNotEmpty) {
+      final stocks = await Supabase.instance.client.from('inventory_stock')
+          .select('product_id, quantity')
+          .eq('org_id', orgId!).eq('branch_id', branchId)
+          .inFilter('product_id', deliverPids.toList());
+      for (final s in stocks as List) {
+        stockMap[s['product_id'] as String] = (s['quantity'] as num?)?.toDouble() ?? 0;
+      }
+    }
+    double stockOf(String pid) => stockMap[pid] ?? 0;
+
     for (final entry in _deliverQtyCtrl.entries) {
       final soItemId = entry.key;
       final deliverQty = double.tryParse(entry.value.text.trim()) ?? 0;
@@ -1757,10 +1777,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       final pending = ordered - alreadyDelivered;
       if (deliverQty > pending) { _showSnack('${soItem['products']?['name']}: qty exceeds pending (${_n4(pending)})'); return; }
       // Check stock
-      final stock = await Supabase.instance.client.from('inventory_stock').select('quantity')
-          .eq('org_id', orgId!).eq('product_id', soItem['product_id'] as String)
-          .eq('branch_id', branchId).maybeSingle();
-      final available = (stock?['quantity'] as num?)?.toDouble() ?? 0;
+      final available = stockOf(soItem['product_id'] as String);
       if (deliverQty > available) { _showSnack('${soItem['products']?['name']}: insufficient stock (${_n4(available)} available)'); return; }
     }
 
@@ -1773,15 +1790,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       final soItem = _soItems.firstWhere((i) => i['id'] == soItemId, orElse: () => {});
       if (soItem.isEmpty) continue;
       final ordered = (soItem['quantity'] as num?)?.toDouble() ?? 0;
-      final stock = await Supabase.instance.client.from('inventory_stock').select('quantity')
-          .eq('org_id', orgId!).eq('product_id', soItem['product_id'] as String)
-          .eq('branch_id', branchId).maybeSingle();
       lines.add({
         'so_item_id': soItemId,
         'product_id': soItem['product_id'],
         'uom_id': soItem['uom_id'],
         'qty_ordered': ordered,
-        'qty_available': (stock?['quantity'] as num?)?.toDouble() ?? 0,
+        'qty_available': stockOf(soItem['product_id'] as String),
         'qty_delivered': deliverQty,
         'is_foc': soItem['is_foc'] == true,
       });
@@ -1836,10 +1850,14 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       final siId = 'si_${DateTime.now().millisecondsSinceEpoch}';
       double subtotal = 0;
       final Map<String, double> priceMap = {};
-      for (final item in _items) {
-        final pid = item['product_id'] as String;
-        final prod = await Supabase.instance.client.from('products').select('selling_price').eq('id', pid).single();
-        priceMap[pid] = (prod['selling_price'] as num?)?.toDouble() ?? 0;
+      // Batched: one read for all line prices instead of one per line.
+      final pids = _items.map((i) => i['product_id'] as String).toSet().toList();
+      if (pids.isNotEmpty) {
+        final prods = await Supabase.instance.client
+            .from('products').select('id, selling_price').inFilter('id', pids);
+        for (final p in prods as List) {
+          priceMap[p['id'] as String] = (p['selling_price'] as num?)?.toDouble() ?? 0;
+        }
       }
       final siItems = _items.asMap().entries.map((e) {
         final i = e.key; final item = e.value;
@@ -1860,8 +1878,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'remarks': _detail['remarks'],
         'is_locked': false, 'created_by': userId,
       });
-      for (int i = 0; i < siItems.length; i++) {
-        await Supabase.instance.client.from('sales_invoice_items').insert({...siItems[i], 'invoice_id': siId});
+      // Batched: one insert for all invoice lines instead of one per line.
+      if (siItems.isNotEmpty) {
+        await Supabase.instance.client.from('sales_invoice_items')
+            .insert([for (final it in siItems) {...it, 'invoice_id': siId}]);
       }
       // Update DO status based on SO fulfillment
       await Supabase.instance.client.from('delivery_orders').update({

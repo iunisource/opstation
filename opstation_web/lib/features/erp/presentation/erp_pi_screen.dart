@@ -219,17 +219,23 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         for (final p in (prods as List)) { costMap[p['id'] as String] = (p['cost_price'] as num?)?.toDouble() ?? 0; }
       }
       double seedSubtotal = 0;
+      final piiRows = <Map<String, dynamic>>[];
+      var seq = 0;
       for (final item in grnItems) {
         final pid = item['product_id'] as String;
         final qty = (item['qty_received'] as num?)?.toDouble() ?? 0;
         final cost = costMap[pid] ?? 0;
         final lt = qty * cost; // no discount at creation
         seedSubtotal += lt;
-        await Supabase.instance.client.from('purchase_invoice_items').insert({
-          'id': 'pii_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
+        piiRows.add({
+          'id': 'pii_${DateTime.now().microsecondsSinceEpoch}_${seq++}',
           'invoice_id': piId, 'product_id': pid, 'uom_id': item['uom_id'],
           'qty_received': item['qty_received'], 'unit_cost': cost, 'discount': 0, 'line_total': lt,
         });
+      }
+      // Batched: one insert for all invoice lines instead of one per line.
+      if (piiRows.isNotEmpty) {
+        await Supabase.instance.client.from('purchase_invoice_items').insert(piiRows);
       }
       if (seedSubtotal > 0) {
         await Supabase.instance.client.from('purchase_invoices').update({
@@ -263,6 +269,63 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         await _logAudit(_detail['id'] as String, 'edited', '$pname cost: ${oldCost.toStringAsFixed(2)} -> ${cost.toStringAsFixed(2)}, disc: ${oldDisc.toStringAsFixed(0)}% -> ${disc.toStringAsFixed(0)}%');
       }
     } catch (e) { _showSnack('Save error: $e'); }
+  }
+
+  /// Batched equivalent of looping [_saveItemCost] over every line. Instead of
+  /// ~3 round trips per line (item update + header recalc + audit), this does
+  /// ONE upsert for all lines, ONE header recalc, and ONE audit insert. Used by
+  /// the save/post paths where every line is persisted at once.
+  Future<void> _saveAllItemCosts() async {
+    if (_items.isEmpty) return;
+    final userId = ref.read(currentUserProvider)?.id;
+    final updates = <Map<String, dynamic>>[];
+    final audits = <Map<String, dynamic>>[];
+    for (final row in _items) {
+      final itemId = row['id'] as String;
+      final cost = double.tryParse(_costCtrl[itemId]?.text ?? '') ?? 0;
+      final disc = (double.tryParse(_discCtrl[itemId]?.text ?? '') ?? 0).clamp(0.0, 100.0);
+      final oldCost = (row['unit_cost'] as num?)?.toDouble() ?? 0;
+      final oldDisc = (row['discount'] as num?)?.toDouble() ?? 0;
+      final qty = (row['qty_received'] as num?)?.toDouble() ?? 0;
+      final lt = qty * cost * (1 - disc / 100);
+      updates.add({'id': itemId, 'unit_cost': cost, 'discount': disc, 'line_total': lt});
+      if (cost != oldCost || disc != oldDisc) {
+        final pname = (row['products']?['name'] as String?) ?? 'item';
+        audits.add({
+          'org_id': _orgId, 'voucher_id': _detail['id'], 'voucher_type': 'PI',
+          'action': 'edited',
+          'details': '$pname cost: ${oldCost.toStringAsFixed(2)} -> ${cost.toStringAsFixed(2)}, '
+              'disc: ${oldDisc.toStringAsFixed(0)}% -> ${disc.toStringAsFixed(0)}%',
+          'performed_by': userId,
+        });
+      }
+    }
+    try {
+      // One upsert updates every edited line (rows already exist — id conflict
+      // takes the UPDATE path, changing only the provided columns).
+      await Supabase.instance.client
+          .from('purchase_invoice_items')
+          .upsert(updates, onConflict: 'id');
+      // Reflect in memory, then recompute the header total ONCE.
+      setState(() {
+        for (final u in updates) {
+          final idx = _items.indexWhere((i) => i['id'] == u['id']);
+          if (idx >= 0) {
+            _items[idx]['unit_cost'] = u['unit_cost'];
+            _items[idx]['discount'] = u['discount'];
+            _items[idx]['line_total'] = u['line_total'];
+          }
+        }
+      });
+      await _recalcTotals();
+      if (audits.isNotEmpty) {
+        try {
+          await Supabase.instance.client.from('voucher_audit_log').insert(audits);
+        } catch (_) {}
+      }
+    } catch (e) {
+      _showSnack('Save error: $e');
+    }
   }
 
   /// Live totals computed straight from the edit fields (draft only) so the
@@ -304,7 +367,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   // Persists any edited costs and checks every line has a cost > 0.
   Future<bool> _prepAndValidate() async {
     if (_items.isEmpty) { _showSnack('No items'); return false; }
-    for (final it in _items) await _saveItemCost(it['id'] as String);
+    await _saveAllItemCosts();
     for (final it in _items) {
       final cost = (it['unit_cost'] as num?)?.toDouble() ?? 0;
       if (cost <= 0) { _showSnack('Unit cost for "${it['products']?['name'] ?? 'item'}" must be > 0'); return false; }
@@ -365,7 +428,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   // Review flow: park the invoice as pending (no posting) and save its edits.
   Future<void> _sendForReview() async {
     if (_items.isEmpty) { _showSnack('No items'); return; }
-    for (final it in _items) await _saveItemCost(it['id'] as String);
+    await _saveAllItemCosts();
     final piId = _detail['id'] as String;
     final now = DateTime.now().toUtc().toIso8601String();
     try {

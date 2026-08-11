@@ -41,6 +41,7 @@ class _AgingRow {
 class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen> {
   DateTime _asOf = DateTime.now();
   bool _loading = true;
+  String? _err; // surfaced inline so an RPC failure never silently blanks
   List<_AgingRow> _rows = [];
   String _search = '';
   String _sortBy = 'total';
@@ -57,18 +58,45 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
 
+  /// Call a supplier-aging RPC resiliently: try WITH the branch filter first,
+  /// and if the function signature doesn't accept p_branch_id (PostgREST can't
+  /// resolve the overload — PGRST202 / "function ... does not exist"), retry
+  /// WITHOUT it. This mirrors customer aging (org + as_of only), which ties to
+  /// the balance-sheet AP, and makes the screen robust to an RPC signature that
+  /// changed on the server. Any OTHER error is rethrown so it surfaces.
+  Future<List> _callAgingRpc(
+      SupabaseClient client, String fn, String orgId, String asOf, String? branchId) async {
+    try {
+      final r = await client.rpc(fn, params: {
+        'p_org_id': orgId, 'p_as_of': asOf, 'p_branch_id': branchId,
+      });
+      return (r as List? ?? const []);
+    } on PostgrestException catch (e) {
+      final msg = e.message.toLowerCase();
+      final signatureMismatch = e.code == 'PGRST202' ||
+          (msg.contains('function') &&
+              (msg.contains('does not exist') || msg.contains('could not find')));
+      if (!signatureMismatch) rethrow;
+      final r = await client.rpc(fn, params: {
+        'p_org_id': orgId, 'p_as_of': asOf,
+      });
+      return (r as List? ?? const []);
+    }
+  }
+
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() { _loading = true; _err = null; });
     final orgId = _orgId;
     if (orgId == null) { setState(() => _loading = false); return; }
-    try {
-      final client = Supabase.instance.client;
-      final branchId = _branchId;
-      final asOfStr = DateFormat('yyyy-MM-dd').format(_asOf);
+    final client = Supabase.instance.client;
+    final branchId = _branchId;
+    final asOfStr = DateFormat('yyyy-MM-dd').format(_asOf);
 
-      // Supplier master (names/codes) — seed the full roster so zero-balance
-      // suppliers still appear.
-      final Map<String, Map<String, dynamic>> supInfo = {};
+    // Supplier master (names/codes) — seed the full roster so zero-balance
+    // suppliers still appear. A failure HERE is the only thing that should
+    // leave the list empty, so it's handled on its own.
+    final Map<String, Map<String, dynamic>> supInfo = {};
+    try {
       for (int from = 0; ; from += 1000) {
         final page = List.from(await client.from('suppliers')
             .select('id, name, code').eq('org_id', orgId).range(from, from + 999));
@@ -78,20 +106,36 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
         }
         if (page.length < 1000 || from > 200000) break;
       }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[SupplierAging] suppliers error: $e');
+      if (mounted) setState(() {
+        _err = 'Could not load suppliers: ${e.toString().split('\n').first}';
+        _loading = false;
+      });
+      return;
+    }
 
+    try {
       // Aging buckets straight from the GL Accounts-Payable account, so the
       // total reconciles to the balance sheet (same as customer aging on AR).
-      final aging = await client.rpc('rpc_supplier_aging', params: {
-        'p_org_id': orgId, 'p_as_of': asOfStr, 'p_branch_id': branchId,
-      });
+      // Wrapped so an RPC failure shows the roster (with zeros) + an inline
+      // message instead of blanking the whole screen.
+      List aging = const [];
+      try {
+        aging = await _callAgingRpc(client, 'rpc_supplier_aging', orgId, asOfStr, branchId);
+      } catch (e) {
+        // ignore: avoid_print
+        print('[SupplierAging] aging error: $e');
+        _err = 'Aging balances unavailable: ${e.toString().split('\n').first}';
+      }
 
       // Open-item detail — powers the single-supplier panel + invoice count.
       final Map<String, List<Map<String, dynamic>>> detail = {};
       try {
-        final det = await client.rpc('rpc_supplier_aging_detail', params: {
-          'p_org_id': orgId, 'p_as_of': asOfStr, 'p_branch_id': branchId,
-        });
-        for (final d in (det as List? ?? const [])) {
+        final det = await _callAgingRpc(
+            client, 'rpc_supplier_aging_detail', orgId, asOfStr, branchId);
+        for (final d in det) {
           final m = d as Map;
           final sid = m['supplier_id'] as String?;
           if (sid == null) continue;
@@ -331,6 +375,23 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
             const SizedBox(width: 12),
             _summary('Total Outstanding', totalAll, AppTheme.primary, bold: true),
           ]),
+        if (_err != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppTheme.warning.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.warning.withOpacity(0.4)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.warning_amber_rounded, size: 18, color: AppTheme.warning),
+              const SizedBox(width: 8),
+              Expanded(child: Text(_err!, style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary))),
+            ]),
+          ),
+        ],
         const SizedBox(height: 16),
 
         Expanded(
