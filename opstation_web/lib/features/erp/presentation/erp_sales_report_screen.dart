@@ -37,6 +37,12 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   List<String> _mainGroupOpts = [];
   List<String> _prodGroupOpts = [];
   List<String> _subGroupOpts = [];
+  // Cascading: the group hierarchy isn't stored as parent→child anywhere, so we
+  // learn it from the products themselves — which (main, group, sub) values
+  // actually co-occur. Selecting a main group then narrows the group/sub lists.
+  final Map<String, Set<String>> _mainToGroups = {};
+  final Map<String, Set<String>> _mainToSubs = {};
+  final Map<String, Set<String>> _groupToSubs = {};
 
   // filters
   DateTime _from = DateTime(DateTime.now().year, DateTime.now().month, 1);
@@ -130,6 +136,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       // Product group hierarchy values, for the "More filters" pickers.
       final mgs = <String>{}, pgs = <String>{}, sgs = <String>{};
       _productGroups.clear();
+      _mainToGroups.clear();
+      _mainToSubs.clear();
+      _groupToSubs.clear();
       for (final p in prods) {
         final mg = (p['product_main_group'] as String?)?.trim() ?? '';
         final pg = (p['product_group'] as String?)?.trim() ?? '';
@@ -138,6 +147,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         if (mg.isNotEmpty) mgs.add(mg);
         if (pg.isNotEmpty) pgs.add(pg);
         if (sg.isNotEmpty) sgs.add(sg);
+        if (mg.isNotEmpty && pg.isNotEmpty) (_mainToGroups[mg] ??= {}).add(pg);
+        if (mg.isNotEmpty && sg.isNotEmpty) (_mainToSubs[mg] ??= {}).add(sg);
+        if (pg.isNotEmpty && sg.isNotEmpty) (_groupToSubs[pg] ??= {}).add(sg);
       }
 
       // best-effort POS extras (walk-in customer names + session->branch)
@@ -180,6 +192,40 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
 
   bool get _productFilterActive =>
       _fMainGroups.isNotEmpty || _fProdGroups.isNotEmpty || _fSubGroups.isNotEmpty;
+
+  // Cascading choices: Product Group narrows to what co-occurs with the selected
+  // Main Group(s); Sub Group narrows to what co-occurs with the selected Main
+  // Group(s) AND Group(s). Empty parent selection = show everything.
+  List<String> get _prodGroupChoices {
+    if (_fMainGroups.isEmpty) return _prodGroupOpts;
+    final allowed = <String>{};
+    for (final mg in _fMainGroups) allowed.addAll(_mainToGroups[mg] ?? const {});
+    return _prodGroupOpts.where(allowed.contains).toList();
+  }
+
+  List<String> get _subGroupChoices {
+    Set<String>? allowed;
+    if (_fMainGroups.isNotEmpty) {
+      allowed = <String>{};
+      for (final mg in _fMainGroups) allowed.addAll(_mainToSubs[mg] ?? const {});
+    }
+    if (_fProdGroups.isNotEmpty) {
+      final byGroup = <String>{};
+      for (final g in _fProdGroups) byGroup.addAll(_groupToSubs[g] ?? const {});
+      allowed = allowed == null ? byGroup : allowed.intersection(byGroup);
+    }
+    if (allowed == null) return _subGroupOpts;
+    return _subGroupOpts.where(allowed.contains).toList();
+  }
+
+  // After a parent selection changes, drop any child selections that are no
+  // longer valid under the new parent(s).
+  void _reconcileCascade() {
+    final g = _prodGroupChoices.toSet();
+    _fProdGroups.removeWhere((x) => !g.contains(x));
+    final s = _subGroupChoices.toSet();
+    _fSubGroups.removeWhere((x) => !s.contains(x));
+  }
 
   /// Line-level product filter. Empty selection = all. A line whose product is
   /// unknown (e.g. a name-only POS item) can't match a group, so it is excluded
@@ -542,8 +588,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         ),
         if (_moreFilters) ...[
           _multiField('Product Main Group', _mainGroupOpts, _fMainGroups),
-          _multiField('Product Group', _prodGroupOpts, _fProdGroups),
-          _multiField('Product Sub Group', _subGroupOpts, _fSubGroups),
+          _multiField('Product Group', _prodGroupChoices, _fProdGroups),
+          _multiField('Product Sub Group', _subGroupChoices, _fSubGroups),
         ],
         ElevatedButton.icon(
           icon: _running
@@ -746,6 +792,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
                   selected
                     ..clear()
                     ..addAll(work);
+                  // Keep child selections valid when a parent changes.
+                  _reconcileCascade();
                 });
                 Navigator.pop(ctx);
               },

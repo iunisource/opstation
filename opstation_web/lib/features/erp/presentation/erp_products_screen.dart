@@ -4,6 +4,7 @@ import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:excel/excel.dart' as xls;
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/catalog_image_uploader.dart';
@@ -30,7 +31,15 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   Set<String> _posProductIds = {};   // product_ids in ANY branch's pos_catalog (drives the POS icon + filter)
   Map<String, Set<String>> _posByBranch = {};   // branch_id -> product_ids in that branch (drives the duplicate check)
   String _posFilter = 'all';         // all | in | out
+  String? _fMain;                    // product_main_group filter (null = all)
+  String? _fGroup;                   // product_group filter (null = all)
   String? _fSub;                     // product_sub_group filter (null = all)
+  // Cascading is learned from the products themselves — the group hierarchy is
+  // not stored as parent→child, so we use which (main, group, sub) values
+  // actually co-occur to narrow the child dropdowns.
+  final Map<String, Set<String>> _mainToGroups = {};
+  final Map<String, Set<String>> _mainToSubs = {};
+  final Map<String, Set<String>> _groupToSubs = {};
   bool _hideGroupsEnabled = false;                 // org.hide_main_groups_by_branch
   Map<String, Set<String>> _hiddenByBranch = {};   // branchId -> hidden main_groups
 
@@ -134,6 +143,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         _posProductIds = posIds;
         _posByBranch = posByBranch;
         _products = List<Map<String, dynamic>>.from(products);
+        _buildCascadeMaps();
         _hideGroupsEnabled = hideGroupsOn;
         _hiddenByBranch = hiddenByBranch;
         _filtered = _filterList(List<Map<String, dynamic>>.from(products),
@@ -160,12 +170,117 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }
       if (posFilter == 'in' && !posIds.contains(p['id'])) return false;
       if (posFilter == 'out' && posIds.contains(p['id'])) return false;
+      if (_fMain != null && p['product_main_group'] != _fMain) return false;
+      if (_fGroup != null && p['product_group'] != _fGroup) return false;
       if (_fSub != null && p['product_sub_group'] != _fSub) return false;
       if (q.isEmpty) return true;
       return (p['name'] as String? ?? '').toLowerCase().contains(q) ||
           (p['sku'] as String? ?? '').toLowerCase().contains(q) ||
           (p['barcode'] as String? ?? '').toLowerCase().contains(q);
     }).toList();
+  }
+
+  // Learn the group hierarchy from co-occurring (main, group, sub) values on
+  // products, so the child dropdowns can cascade.
+  void _buildCascadeMaps() {
+    _mainToGroups.clear();
+    _mainToSubs.clear();
+    _groupToSubs.clear();
+    for (final p in _products) {
+      final mg = (p['product_main_group'] as String?)?.trim() ?? '';
+      final pg = (p['product_group'] as String?)?.trim() ?? '';
+      final sg = (p['product_sub_group'] as String?)?.trim() ?? '';
+      if (mg.isNotEmpty && pg.isNotEmpty) (_mainToGroups[mg] ??= {}).add(pg);
+      if (mg.isNotEmpty && sg.isNotEmpty) (_mainToSubs[mg] ??= {}).add(sg);
+      if (pg.isNotEmpty && sg.isNotEmpty) (_groupToSubs[pg] ??= {}).add(sg);
+    }
+  }
+
+  // The taxonomy option names, optionally narrowed by a chosen parent. `main`
+  // narrows the group list; `main`+`group` narrow the sub-group list.
+  List<String> _groupChoices({String? main, String? group}) {
+    final all = (_taxonomies['group'] ?? []).map((t) => t['name'] as String).toList();
+    if (main == null) return all;
+    final allowed = _mainToGroups[main] ?? const <String>{};
+    return all.where(allowed.contains).toList();
+  }
+
+  List<String> _subChoices({String? main, String? group}) {
+    final all = (_taxonomies['sub_group'] ?? []).map((t) => t['name'] as String).toList();
+    Set<String>? allowed;
+    if (main != null) allowed = {...(_mainToSubs[main] ?? const {})};
+    if (group != null) {
+      final byGroup = {...(_groupToSubs[group] ?? const {})};
+      allowed = allowed == null ? byGroup : allowed.intersection(byGroup);
+    }
+    if (allowed == null) return all;
+    return all.where(allowed.contains).toList();
+  }
+
+  // Export to Excel. Exports the checkbox-selected products if any are ticked;
+  // otherwise exports exactly what the current filters/search show.
+  Future<void> _exportExcel() async {
+    final source = _selected.isNotEmpty
+        ? _products.where((p) => _selected.contains('${p['id']}')).toList()
+        : _filtered;
+    if (source.isEmpty) { _showSnack('Nothing to export'); return; }
+    try {
+      double numOf(dynamic v) => (v as num?)?.toDouble() ?? 0;
+      final excel = xls.Excel.createExcel();
+      const sheetName = 'Products';
+      final sheet = excel[sheetName];
+      final def = excel.getDefaultSheet();
+      if (def != null && def != sheetName) excel.delete(def);
+      sheet.appendRow([
+        xls.TextCellValue('Name'), xls.TextCellValue('SKU'), xls.TextCellValue('Barcode'),
+        xls.TextCellValue('Main Group'), xls.TextCellValue('Group'), xls.TextCellValue('Sub Group'),
+        xls.TextCellValue('Class'), xls.TextCellValue('Movement Category'), xls.TextCellValue('UOM'),
+        xls.TextCellValue('Cost Price'), xls.TextCellValue('Selling Price'),
+      ]);
+      for (final p in source) {
+        sheet.appendRow([
+          xls.TextCellValue('${p['name'] ?? ''}'),
+          xls.TextCellValue('${p['sku'] ?? ''}'),
+          xls.TextCellValue('${p['barcode'] ?? ''}'),
+          xls.TextCellValue('${p['product_main_group'] ?? ''}'),
+          xls.TextCellValue('${p['product_group'] ?? ''}'),
+          xls.TextCellValue('${p['product_sub_group'] ?? ''}'),
+          xls.TextCellValue('${p['product_class'] ?? ''}'),
+          xls.TextCellValue('${p['product_movement_category'] ?? ''}'),
+          xls.TextCellValue('${p['uoms']?['abbreviation'] ?? p['uoms']?['name'] ?? ''}'),
+          xls.DoubleCellValue(numOf(p['cost_price'])),
+          xls.DoubleCellValue(numOf(p['selling_price'])),
+        ]);
+      }
+      excel.save(fileName:
+          'products-${DateTime.now().toIso8601String().split('T').first}.xlsx');
+      _showSnack('Exported ${source.length} product${source.length == 1 ? '' : 's'}');
+    } catch (e) {
+      _showSnack('Export failed: $e');
+    }
+  }
+
+  // A compact labelled filter dropdown for the group hierarchy. `value` is
+  // shown as null (=All) if it isn't among the current cascaded [options].
+  Widget _grpFilter(String label, String? value, List<String> options,
+      void Function(String?) onChanged) {
+    final val = (value != null && options.contains(value)) ? value : null;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Text('$label:',
+          style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+      const SizedBox(width: 6),
+      SizedBox(width: 160, child: DropdownButtonFormField<String?>(
+        value: val,
+        isExpanded: true,
+        decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
+        items: [
+          const DropdownMenuItem<String?>(value: null, child: Text('All')),
+          ...options.map((n) => DropdownMenuItem<String?>(
+              value: n, child: Text(n, overflow: TextOverflow.ellipsis))),
+        ],
+        onChanged: onChanged,
+      )),
+    ]);
   }
 
   void _runFilter() {
@@ -966,7 +1081,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          Row(children: [
+          Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
             const Text('POS:',
                 style: TextStyle(
                     fontSize: 13,
@@ -998,25 +1113,31 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
               ),
               const SizedBox(width: 6),
             ],
-            const SizedBox(width: 16),
-            const Text('Sub Group:',
-                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 8),
-            SizedBox(width: 200, child: DropdownButtonFormField<String?>(
-              value: _fSub,
-              isExpanded: true,
-              decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
-              items: [
-                const DropdownMenuItem<String?>(value: null, child: Text('All')),
-                ...(_taxonomies['sub_group'] ?? []).map((t) => DropdownMenuItem<String?>(
-                    value: t['name'] as String, child: Text(t['name'] as String, overflow: TextOverflow.ellipsis))),
-              ],
-              onChanged: (v) { _fSub = v; _runFilter(); },
-            )),
-            if (_fSub != null) ...[
-              const SizedBox(width: 4),
-              TextButton(onPressed: () { _fSub = null; _runFilter(); }, child: const Text('Clear')),
-            ],
+            _grpFilter('Main Group', _fMain,
+                (_taxonomies['main_group'] ?? []).map((t) => t['name'] as String).toList(),
+                (v) {
+              _fMain = v;
+              // Cascade: drop child selections no longer valid under the new main.
+              if (_fGroup != null && !_groupChoices(main: _fMain).contains(_fGroup)) _fGroup = null;
+              if (_fSub != null && !_subChoices(main: _fMain, group: _fGroup).contains(_fSub)) _fSub = null;
+              _runFilter();
+            }),
+            _grpFilter('Group', _fGroup, _groupChoices(main: _fMain), (v) {
+              _fGroup = v;
+              if (_fSub != null && !_subChoices(main: _fMain, group: _fGroup).contains(_fSub)) _fSub = null;
+              _runFilter();
+            }),
+            _grpFilter('Sub Group', _fSub, _subChoices(main: _fMain, group: _fGroup), (v) {
+              _fSub = v;
+              _runFilter();
+            }),
+            if (_fMain != null || _fGroup != null || _fSub != null)
+              TextButton(onPressed: () { _fMain = null; _fGroup = null; _fSub = null; _runFilter(); }, child: const Text('Clear groups')),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.grid_on_outlined, size: 16),
+              label: Text(_selected.isNotEmpty ? 'Export ${_selected.length} selected' : 'Export ${_filtered.length}'),
+              onPressed: _exportExcel,
+            ),
           ]),
           if (_selected.isNotEmpty) ...[
             const SizedBox(height: 12),
