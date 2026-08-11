@@ -28,11 +28,15 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   // reference data
   final Map<String, Map<String, dynamic>> _customers = {}; // id -> row
   final Map<String, String> _productNames = {};
+  final Map<String, Map<String, String>> _productGroups = {}; // id -> {mg, g, sg}
   final Map<String, String> _posCustomerNames = {};
   final Map<String, String> _sessionBranch = {}; // pos session -> branch_id
   List<Map<String, dynamic>> _branches = [];
   List<String> _categories = [];
   List<String> _groups = [];
+  List<String> _mainGroupOpts = [];
+  List<String> _prodGroupOpts = [];
+  List<String> _subGroupOpts = [];
 
   // filters
   DateTime _from = DateTime(DateTime.now().year, DateTime.now().month, 1);
@@ -42,6 +46,11 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   String _category = 'all';
   String _group = 'all';
   String _breakdown = 'product'; // product | customer
+  // Product-side filters (multi-select; empty set = all). Behind "More filters".
+  bool _moreFilters = false;
+  final Set<String> _fMainGroups = {};
+  final Set<String> _fProdGroups = {};
+  final Set<String> _fSubGroups = {};
 
   // result
   List<Map<String, dynamic>> _rows = [];
@@ -85,7 +94,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           .from('customers')
           .select('id, shop_name, code, category, group_name')
           .eq('org_id', orgId);
-      final prods = await c.from('products').select('id, name').eq('org_id', orgId);
+      final prods = await c.from('products')
+          .select('id, name, product_main_group, product_group, product_sub_group')
+          .eq('org_id', orgId);
       final branches = await c
           .from('branches')
           .select('id, name')
@@ -106,6 +117,18 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       _productNames
         ..clear()
         ..addEntries(prods.map((p) => MapEntry(p['id'] as String, '${p['name']}')));
+      // Product group hierarchy values, for the "More filters" pickers.
+      final mgs = <String>{}, pgs = <String>{}, sgs = <String>{};
+      _productGroups.clear();
+      for (final p in prods) {
+        final mg = (p['product_main_group'] as String?)?.trim() ?? '';
+        final pg = (p['product_group'] as String?)?.trim() ?? '';
+        final sg = (p['product_sub_group'] as String?)?.trim() ?? '';
+        _productGroups[p['id'] as String] = {'mg': mg, 'g': pg, 'sg': sg};
+        if (mg.isNotEmpty) mgs.add(mg);
+        if (pg.isNotEmpty) pgs.add(pg);
+        if (sg.isNotEmpty) sgs.add(sg);
+      }
 
       // best-effort POS extras (walk-in customer names + session->branch)
       try {
@@ -128,6 +151,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         _branches = List<Map<String, dynamic>>.from(branches);
         _categories = cats.toList()..sort();
         _groups = grps.toList()..sort();
+        _mainGroupOpts = mgs.toList()..sort();
+        _prodGroupOpts = pgs.toList()..sort();
+        _subGroupOpts = sgs.toList()..sort();
         _loading = false;
       });
     } catch (e) {
@@ -140,6 +166,23 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   void _snack(String m) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  bool get _productFilterActive =>
+      _fMainGroups.isNotEmpty || _fProdGroups.isNotEmpty || _fSubGroups.isNotEmpty;
+
+  /// Line-level product filter. Empty selection = all. A line whose product is
+  /// unknown (e.g. a name-only POS item) can't match a group, so it is excluded
+  /// while any product filter is active.
+  bool _prodPassesFilter(String? pid) {
+    if (!_productFilterActive) return true;
+    if (pid == null) return false;
+    final g = _productGroups[pid];
+    if (g == null) return false;
+    if (_fMainGroups.isNotEmpty && !_fMainGroups.contains(g['mg'])) return false;
+    if (_fProdGroups.isNotEmpty && !_fProdGroups.contains(g['g'])) return false;
+    if (_fSubGroups.isNotEmpty && !_fSubGroups.contains(g['sg'])) return false;
+    return true;
   }
 
   bool _custPassesFilter(String? customerId) {
@@ -177,6 +220,10 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
     final cells = <Map<String, dynamic>>[];
     final orderSets = <String, Set<String>>{}; // customer key -> distinct doc ids
     var docs = 0;
+    // With a product filter active, doc/order counts must reflect only the
+    // documents that actually contributed a surviving line — tracked here.
+    final liveDocs = <String>{};
+    final liveOrderSets = <String, Set<String>>{};
 
     Map<String, String> custInfo(String? cid, {String? posCustId, bool pos = false}) {
       if (cid != null) {
@@ -226,6 +273,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             final ci = docCust[it['invoice_id']];
             if (ci == null) continue;
             final pid = it['product_id'] as String?;
+            if (!_prodPassesFilter(pid)) continue;
+            liveDocs.add('${it['invoice_id']}');
+            liveOrderSets.putIfAbsent(ci['k']!, () => {}).add('${it['invoice_id']}');
             cells.add({
               'ck': ci['k'], 'cn': ci['n'], 'cs': ci['s'],
               'pk': pid ?? 'unknown',
@@ -271,6 +321,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             final ci = docCust[it['transaction_id']];
             if (ci == null) continue;
             final pid = it['product_id'] as String?;
+            if (!_prodPassesFilter(pid)) continue;
+            liveDocs.add('${it['transaction_id']}');
+            liveOrderSets.putIfAbsent(ci['k']!, () => {}).add('${it['transaction_id']}');
             final qty = _d(it['quantity']);
             final gross = qty * _d(it['unit_price']);
             final disc = '${it['discount_type']}'.toLowerCase() == 'percent'
@@ -288,6 +341,16 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             });
           }
         }
+      }
+
+      // With a product filter, replace the document-level counts with the
+      // line-accurate ones so "Documents" and per-customer "Orders" don't
+      // include documents whose every line was filtered out.
+      if (_productFilterActive) {
+        docs = liveDocs.length;
+        orderSets
+          ..clear()
+          ..addAll(liveOrderSets);
       }
 
       // ───────── roll up to top rows + children ─────────
@@ -416,6 +479,18 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           'product': 'Product-wise',
           'customer': 'Customer-wise',
         }, (v) => setState(() => _breakdown = v)),
+        TextButton.icon(
+          icon: Icon(_moreFilters ? Icons.expand_less : Icons.tune, size: 18),
+          label: Text(_moreFilters
+              ? 'Fewer filters'
+              : 'More filters${_productFilterActive ? ' •' : ''}'),
+          onPressed: () => setState(() => _moreFilters = !_moreFilters),
+        ),
+        if (_moreFilters) ...[
+          _multiField('Product Main Group', _mainGroupOpts, _fMainGroups),
+          _multiField('Product Group', _prodGroupOpts, _fProdGroups),
+          _multiField('Product Sub Group', _subGroupOpts, _fSubGroups),
+        ],
         ElevatedButton.icon(
           icon: _running
               ? const SizedBox(
@@ -426,6 +501,147 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         ),
       ]),
     );
+  }
+
+  /// A multi-select filter field: shows "All" / "N selected", opens a
+  /// searchable checkbox picker. Empty selection means "all".
+  Widget _multiField(String label, List<String> options, Set<String> selected) {
+    final summary = selected.isEmpty
+        ? 'All'
+        : (selected.length == 1
+            ? selected.first
+            : '${selected.length} selected');
+    return SizedBox(
+      width: 190,
+      child: InkWell(
+        onTap: options.isEmpty
+            ? null
+            : () => _openMultiPicker(label, options, selected),
+        child: InputDecorator(
+          decoration: InputDecoration(
+              labelText: label, isDense: true, border: const OutlineInputBorder()),
+          child: Row(children: [
+            Expanded(
+              child: Text(options.isEmpty ? 'None defined' : summary,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: options.isEmpty
+                          ? AppTheme.textSecondary
+                          : (selected.isEmpty ? null : AppTheme.primary),
+                      fontWeight:
+                          selected.isEmpty ? null : FontWeight.w600)),
+            ),
+            const Icon(Icons.arrow_drop_down, size: 20),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openMultiPicker(
+      String title, List<String> options, Set<String> selected) async {
+    final work = Set<String>.from(selected);
+    final searchCtrl = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setDlg) {
+        final q = searchCtrl.text.trim().toLowerCase();
+        final visible = q.isEmpty
+            ? options
+            : options.where((o) => o.toLowerCase().contains(q)).toList();
+        return AlertDialog(
+          title: Text(title, style: const TextStyle(fontSize: 17)),
+          content: SizedBox(
+            width: 380,
+            height: 420,
+            child: Column(children: [
+              TextField(
+                controller: searchCtrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Search…',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  isDense: true,
+                  border: const OutlineInputBorder(),
+                  suffixIcon: searchCtrl.text.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.clear, size: 16),
+                          onPressed: () => setDlg(() => searchCtrl.clear())),
+                ),
+                onChanged: (_) => setDlg(() {}),
+              ),
+              const SizedBox(height: 8),
+              Row(children: [
+                Text(
+                    work.isEmpty
+                        ? 'All included'
+                        : '${work.length} of ${options.length} selected',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
+                const Spacer(),
+                TextButton(
+                  onPressed:
+                      work.isEmpty ? null : () => setDlg(() => work.clear()),
+                  child: const Text('All', style: TextStyle(fontSize: 12)),
+                ),
+                TextButton(
+                  onPressed: visible.isEmpty
+                      ? null
+                      : () => setDlg(() => work.addAll(visible)),
+                  child: const Text('Select shown',
+                      style: TextStyle(fontSize: 12)),
+                ),
+              ]),
+              const Divider(height: 1),
+              Expanded(
+                child: visible.isEmpty
+                    ? const Center(
+                        child: Text('No matches',
+                            style: TextStyle(color: AppTheme.textSecondary)))
+                    : ListView.builder(
+                        itemCount: visible.length,
+                        itemBuilder: (_, i) {
+                          final o = visible[i];
+                          return CheckboxListTile(
+                            dense: true,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 4),
+                            title: Text(o,
+                                style: const TextStyle(fontSize: 13),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis),
+                            value: work.contains(o),
+                            onChanged: (v) => setDlg(() =>
+                                v == true ? work.add(o) : work.remove(o)),
+                          );
+                        },
+                      ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  selected
+                    ..clear()
+                    ..addAll(work);
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        );
+      }),
+    );
+    searchCtrl.dispose();
   }
 
   Widget _dateField(String label, DateTime value, ValueChanged<DateTime> onPick) {
@@ -722,6 +938,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         'Branch: ${_branches.firstWhere((b) => b['id'] == _branch, orElse: () => {'name': _branch})['name']}',
       if (_category != 'all') 'Category: $_category',
       if (_group != 'all') 'Group: $_group',
+      if (_fMainGroups.isNotEmpty) 'Main Group: ${_fMainGroups.join(', ')}',
+      if (_fProdGroups.isNotEmpty) 'Product Group: ${_fProdGroups.join(', ')}',
+      if (_fSubGroups.isNotEmpty) 'Sub Group: ${_fSubGroups.join(', ')}',
     ];
 
     final headers = productMode
