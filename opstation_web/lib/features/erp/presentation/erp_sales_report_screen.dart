@@ -46,6 +46,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   String _category = 'all';
   String _group = 'all';
   String _breakdown = 'product'; // product | customer
+  // Collapse the filter card after a run so results get the vertical space.
+  bool _filtersCollapsed = false;
   // Product-side filters (multi-select; empty set = all). Behind "More filters".
   bool _moreFilters = false;
   final Set<String> _fMainGroups = {};
@@ -90,10 +92,18 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
     _orgId = orgId;
     try {
       final c = Supabase.instance.client;
-      final custs = await c
-          .from('customers')
-          .select('id, shop_name, code, category, group_name')
-          .eq('org_id', orgId);
+      // Paginate so orgs with >1000 customers load their full roster (a single
+      // fetch is capped at 1000), otherwise many customers show as "(customer)".
+      final custs = <Map<String, dynamic>>[];
+      for (int from = 0;; from += 1000) {
+        final page = await c
+            .from('customers')
+            .select('id, shop_name, code, category, group_name')
+            .eq('org_id', orgId)
+            .range(from, from + 999);
+        custs.addAll(List<Map<String, dynamic>>.from(page as List));
+        if ((page).length < 1000 || from > 200000) break;
+      }
       final prods = await c.from('products')
           .select('id, name, product_main_group, product_group, product_sub_group')
           .eq('org_id', orgId);
@@ -353,6 +363,45 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           ..addAll(liveOrderSets);
       }
 
+      // Resolve any customer that wasn't in the pre-loaded roster. Imported
+      // customers can carry a different org tag (so an org-scoped roster misses
+      // them), and a large roster is capped on first load — either way the cell
+      // shows "(customer)". Look those ids up directly (org-agnostic) and patch
+      // the names/codes into the cells before rollup, so on-screen children AND
+      // the PDF show the real customer name.
+      final unresolved = <String>{
+        for (final cell in cells)
+          if (cell['cn'] == '(customer)') cell['ck'] as String
+      };
+      if (unresolved.isNotEmpty) {
+        final fix = <String, Map<String, String>>{};
+        for (final part in _chunk(unresolved.toList(), 300)) {
+          if (part.isEmpty) continue;
+          try {
+            final crows = await c
+                .from('customers')
+                .select('id, shop_name, code')
+                .inFilter('id', part);
+            for (final r in crows) {
+              fix[r['id'] as String] = {
+                'n': '${r['shop_name'] ?? '(customer)'}',
+                's': '${r['code'] ?? ''}',
+              };
+            }
+          } catch (_) {/* leave as (customer) if the lookup fails */}
+        }
+        if (fix.isNotEmpty) {
+          for (final cell in cells) {
+            if (cell['cn'] != '(customer)') continue;
+            final f = fix[cell['ck']];
+            if (f != null) {
+              cell['cn'] = f['n'];
+              cell['cs'] = f['s'];
+            }
+          }
+        }
+      }
+
       // ───────── roll up to top rows + children ─────────
       final topAgg = <String, Map<String, dynamic>>{};
       final childAgg = <String, Map<String, Map<String, dynamic>>>{};
@@ -401,6 +450,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         _docCount = docs;
         _ran = true;
         _running = false;
+        _filtersCollapsed = true; // reclaim space for the results
         _searchCtrl.clear();
       });
     } catch (e) {
@@ -426,14 +476,18 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       color: AppTheme.background,
       padding: const EdgeInsets.all(28),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Sales Report',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 4),
-        const Text('Sales across invoices and POS for any period',
-            style: TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 16),
-        _filterBar(),
-        const SizedBox(height: 16),
+        // Compact the title once results are showing so the table gets room.
+        Text('Sales Report',
+            style: TextStyle(
+                fontSize: _ran ? 20 : 28, fontWeight: FontWeight.w800)),
+        if (!_ran) ...[
+          const SizedBox(height: 4),
+          const Text('Sales across invoices and POS for any period',
+              style: TextStyle(color: AppTheme.textSecondary)),
+        ],
+        const SizedBox(height: 12),
+        (_ran && _filtersCollapsed) ? _compactFilterBar() : _filterBar(),
+        const SizedBox(height: 12),
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
@@ -498,6 +552,66 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
               : const Icon(Icons.play_arrow, size: 18),
           label: Text(_running ? 'Running…' : 'Run report'),
           onPressed: _running ? null : _run,
+        ),
+      ]),
+    );
+  }
+
+  // A one-line summary of the active filters shown after a run, with an "Edit
+  // filters" button to bring the full form back. Frees vertical space for the
+  // results table.
+  Widget _compactFilterBar() {
+    final srcLabel = {
+      'both': 'Invoices + POS',
+      'invoice': 'Invoices only',
+      'pos': 'POS only',
+    }[_source];
+    final branchLabel = _branch == 'all'
+        ? 'All branches'
+        : _branches.firstWhere((b) => b['id'] == _branch,
+            orElse: () => {'name': _branch})['name'];
+    final chips = <String>[
+      '${DateFormat('d MMM').format(_from)} – ${DateFormat('d MMM y').format(_to)}',
+      '$srcLabel',
+      '$branchLabel',
+      _breakdown == 'product' ? 'Product-wise' : 'Customer-wise',
+      if (_category != 'all') 'Cat: $_category',
+      if (_group != 'all') 'Grp: $_group',
+      if (_fMainGroups.isNotEmpty) 'Main: ${_fMainGroups.length}',
+      if (_fProdGroups.isNotEmpty) 'Group: ${_fProdGroups.length}',
+      if (_fSubGroups.isNotEmpty) 'Sub: ${_fSubGroups.length}',
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(children: [
+        const Icon(Icons.filter_list, size: 16, color: AppTheme.textSecondary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final ch in chips)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppTheme.background,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(ch,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textPrimary)),
+              ),
+          ]),
+        ),
+        const SizedBox(width: 10),
+        TextButton.icon(
+          icon: const Icon(Icons.tune, size: 16),
+          label: const Text('Edit filters'),
+          onPressed: () => setState(() => _filtersCollapsed = false),
         ),
       ]),
     );
