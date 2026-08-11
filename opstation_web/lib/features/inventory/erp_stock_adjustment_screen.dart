@@ -115,6 +115,8 @@ class _ErpStockAdjustmentScreenState
 
   bool _loading = true; // products loading
   bool _saving = false;
+  bool _openingVoucher = false;
+  static const int _maxRenderRows = 400; // cap for huge bulk vouchers
 
   @override
   void initState() {
@@ -240,7 +242,60 @@ class _ErpStockAdjustmentScreenState
     return _CostQty(layerCost ?? profileCost, onHand);
   }
 
+  // Current cost + on-hand for MANY products at once (chunked to keep the URL
+  // small). Returns one _CostQty per requested product id.
+  Future<Map<String, _CostQty>> _fetchCostQtyBatch(List<String> pids) async {
+    final result = <String, _CostQty>{};
+    final branch = _branchId;
+    final layerQty = <String, double>{};
+    final layerVal = <String, double>{};
+    final onHand = <String, double>{};
+    if (branch != null && pids.isNotEmpty) {
+      for (var i = 0; i < pids.length; i += 200) {
+        final end = (i + 200) < pids.length ? (i + 200) : pids.length;
+        final chunk = pids.sublist(i, end);
+        try {
+          final layers = await _supa
+              .from('inventory_cost_layers')
+              .select('product_id, qty_remaining, unit_cost')
+              .eq('org_id', _orgId)
+              .eq('branch_id', branch)
+              .inFilter('product_id', chunk)
+              .gt('qty_remaining', 0);
+          for (final l in (layers as List)) {
+            final pid = l['product_id'] as String;
+            final q = (l['qty_remaining'] as num?)?.toDouble() ?? 0;
+            final c = (l['unit_cost'] as num?)?.toDouble() ?? 0;
+            layerQty[pid] = (layerQty[pid] ?? 0) + q;
+            layerVal[pid] = (layerVal[pid] ?? 0) + q * c;
+          }
+          final stk = await _supa
+              .from('inventory_stock')
+              .select('product_id, quantity')
+              .eq('org_id', _orgId)
+              .eq('branch_id', branch)
+              .inFilter('product_id', chunk);
+          for (final s in (stk as List)) {
+            final pid = s['product_id'] as String;
+            onHand[pid] =
+                (onHand[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
+          }
+        } catch (_) {/* best-effort per chunk */}
+      }
+    }
+    for (final pid in pids) {
+      final lq = layerQty[pid] ?? 0;
+      final cost = lq > 0
+          ? (layerVal[pid]! / lq)
+          : ((_prodById[pid]?['cost_price'] as num?)?.toDouble() ?? 0);
+      result[pid] = _CostQty(cost, onHand[pid] ?? 0);
+    }
+    return result;
+  }
+
   Future<void> _loadVoucher(Map<String, dynamic> v) async {
+    if (_openingVoucher) return;
+    setState(() => _openingVoucher = true);
     try {
       final items = await _supa
           .from('stock_adjustment_voucher_items')
@@ -269,13 +324,24 @@ class _ErpStockAdjustmentScreenState
         }
       }
 
+      final locked = (v['is_locked'] == true) || (v['status'] == 'posted');
+      // Batch the cost/on-hand lookup for ALL products in ONE pass (chunked),
+      // instead of two queries per line — bulk vouchers have hundreds of items
+      // and the per-line version made the voucher take forever to open.
+      final costQty = await _fetchCostQtyBatch(byProduct.keys.toList());
+
       final newLines = <_AdjLine>[];
       for (final entry in byProduct.entries) {
         final pid = entry.key;
         final m = entry.value;
         final prod = _prodById[pid];
-        final cq = await _fetchCostAndQty(pid);
+        final cq = costQty[pid] ?? const _CostQty(0, 0);
         final qtyDelta = m['qty_delta'] as double;
+        // For a POSTED voucher the on-hand already reflects the adjustment, so
+        // current = "New Quantity" and the pre value = current − delta. For a
+        // DRAFT the adjustment hasn't applied yet, so current = "Quantity".
+        final baseQty = locked ? cq.onHand - qtyDelta : cq.onHand;
+        final newQty = locked ? cq.onHand : cq.onHand + qtyDelta;
         final newCost = (m['new_cost'] as double?) ?? cq.cost;
         newLines.add(_AdjLine(
           productId: pid,
@@ -283,15 +349,14 @@ class _ErpStockAdjustmentScreenState
           uomId: (m['uom_id'] ?? prod?['base_uom_id']) as String?,
           uomName: ((m['uom_id'] ?? prod?['base_uom_id']) ?? '') as String,
           baseCost: cq.cost,
-          baseQty: cq.onHand,
+          baseQty: baseQty,
           newCost: newCost,
-          newQty: cq.onHand + qtyDelta,
+          newQty: newQty,
           note: m['note'] as String?,
         ));
       }
 
       final ds = v['voucher_date'] as String?;
-      final locked = (v['is_locked'] == true) || (v['status'] == 'posted');
       if (mounted) {
         setState(() {
           _clearLines();
@@ -311,6 +376,8 @@ class _ErpStockAdjustmentScreenState
       }
     } catch (e) {
       _toast('Load failed: $e');
+    } finally {
+      if (mounted) setState(() => _openingVoucher = false);
     }
   }
 
@@ -730,7 +797,7 @@ class _ErpStockAdjustmentScreenState
 
   // ── main content ──────────────────────────────────────────────────
   Widget _buildContent() {
-    if (_loading) {
+    if (_loading || _openingVoucher) {
       return const Center(child: CircularProgressIndicator());
     }
     final totalAmount = _lines.fold<double>(0, (s, l) => s + l.amount);
@@ -968,7 +1035,27 @@ class _ErpStockAdjustmentScreenState
                   _Th(''),
                 ],
               ),
-              for (var i = 0; i < _lines.length; i++) _lineRow(i),
+              for (var i = 0;
+                  i < _lines.length && i < _maxRenderRows;
+                  i++)
+                _lineRow(i),
+              if (_lines.length > _maxRenderRows)
+                TableRow(
+                  decoration: const BoxDecoration(color: Color(0xFFFFF6E5)),
+                  children: [
+                    const _Td(''),
+                    _Td(
+                        'Showing first $_maxRenderRows of ${_lines.length} items — totals below cover all items.'),
+                    const _Td(''),
+                    const _Td(''),
+                    const _Td(''),
+                    const _Td(''),
+                    const _Td(''),
+                    const _Td(''),
+                    const _Td(''),
+                    const _Td(''),
+                  ],
+                ),
               TableRow(
                 decoration: const BoxDecoration(color: Color(0xFFF2F2F2)),
                 children: [
