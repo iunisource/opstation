@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
+import '../../intelligence/widgets/searchable_dropdown.dart';
 
 class ErpStockValueReportScreen extends ConsumerStatefulWidget {
   const ErpStockValueReportScreen({super.key});
@@ -16,10 +17,11 @@ class ErpStockValueReportScreen extends ConsumerStatefulWidget {
 
 class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportScreen> {
   bool _loading = true;
-  List<Map<String, dynamic>> _rows = [];      // valued stock rows for the branch
+  List<Map<String, dynamic>> _rows = [];      // valued stock rows for the selection
   List<Map<String, dynamic>> _branches = [];
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
-  String? _branchId;
+  // Branch multi-select: empty set = ALL branches; else any 1..N branches.
+  Set<String> _selBranches = {};
   String? _fMain, _fGroup, _fClass, _fMov, _fSub;
   bool _hideZero = false;
   String _search = '';
@@ -29,11 +31,13 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
   @override
   void initState() {
     super.initState();
-    _branchId = ref.read(selectedBranchProvider)?['id'] as String?;
+    final bid = ref.read(selectedBranchProvider)?['id'] as String?;
+    if (bid != null) _selBranches = {bid};
     _load();
   }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _isAdmin => ref.read(currentUserProvider)?.role != WebUserRole.erpUser;
 
   Future<void> _load() async {
     final orgId = _orgId;
@@ -41,9 +45,19 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
     setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
-      final branches = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
-      final branchList = List<Map<String, dynamic>>.from(branches);
-      _branchId ??= branchList.isNotEmpty ? branchList.first['id'] as String : null;
+      // Branch visibility: admins see all active branches; other users only the
+      // branches they have access to (same scoping as Customer Balance Report).
+      List<Map<String, dynamic>> branchList;
+      if (_isAdmin) {
+        final branches = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
+        branchList = List<Map<String, dynamic>>.from(branches);
+      } else {
+        branchList = List<Map<String, dynamic>>.from(
+            ref.read(userBranchesProvider).valueOrNull ?? []);
+      }
+      // Drop selections that are no longer allowed.
+      final allowedIds = branchList.map((b) => b['id'] as String).toSet();
+      _selBranches = _selBranches.where(allowedIds.contains).toSet();
 
       final taxonomies = await client.from('product_taxonomies').select().eq('org_id', orgId).order('name');
       final Map<String, List<Map<String, dynamic>>> grouped = {};
@@ -51,36 +65,55 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         grouped.putIfAbsent(t['taxonomy_type'] as String, () => []).add(Map<String, dynamic>.from(t));
       }
 
+      final targets = _selBranches.isEmpty
+          ? branchList.map((b) => b['id'] as String).toList()
+          : branchList.map((b) => b['id'] as String).where(_selBranches.contains).toList();
+
       final List<Map<String, dynamic>> rows = [];
-      if (_branchId != null) {
+      if (targets.isNotEmpty) {
         final products = await client.from('products')
             .select('id, name, sku, cost_price, selling_price, product_main_group, product_group, product_sub_group, product_class, product_movement_category, uoms(abbreviation)')
             .eq('org_id', orgId).eq('is_active', true).limit(5000);
         final byId = {for (final p in products as List) p['id'] as String: Map<String, dynamic>.from(p)};
 
-        // Engine-costed unit costs from the cost layers (weighted-average of remaining
-        // layers, matching current_unit_cost). One RPC call for the whole branch.
-        final Map<String, double> costMap = {};
-        try {
-          final costs = await client.rpc('rpc_stock_unit_costs', params: {'p_org': orgId, 'p_branch': _branchId});
-          for (final c in costs as List) {
-            final pid = c['product_id'] as String?;
-            if (pid != null) costMap[pid] = (c['unit_cost'] as num?)?.toDouble() ?? 0;
+        // Aggregate across the selected branches: total qty per product, and
+        // total VALUE per product (each branch's qty valued at that branch's
+        // engine cost). Displayed unit cost = value / qty (weighted average).
+        final Map<String, double> qtyMap = {};
+        final Map<String, double> valMap = {};
+        final Map<String, double> anyCost = {}; // fallback display cost
+        for (final bid in targets) {
+          final Map<String, double> costMap = {};
+          try {
+            final costs = await client.rpc('rpc_stock_unit_costs', params: {'p_org': orgId, 'p_branch': bid});
+            for (final c in costs as List) {
+              final pid = c['product_id'] as String?;
+              if (pid != null) {
+                final uc = (c['unit_cost'] as num?)?.toDouble() ?? 0;
+                costMap[pid] = uc;
+                anyCost[pid] = uc;
+              }
+            }
+          } catch (_) { /* RPC unavailable -> fall back to cost_price below */ }
+          final stock = await client.from('inventory_stock')
+              .select('product_id, quantity').eq('org_id', orgId).eq('branch_id', bid);
+          for (final s in stock as List) {
+            final pid = s['product_id'] as String?;
+            if (pid == null) continue;
+            final q = (s['quantity'] as num?)?.toDouble() ?? 0;
+            final cost = costMap[pid] ?? (byId[pid]?['cost_price'] as num?)?.toDouble() ?? 0;
+            qtyMap[pid] = (qtyMap[pid] ?? 0) + q;
+            valMap[pid] = (valMap[pid] ?? 0) + q * cost;
           }
-        } catch (_) { /* RPC unavailable -> fall back to cost_price below */ }
-
-        final stock = await client.from('inventory_stock')
-            .select('product_id, quantity').eq('org_id', orgId).eq('branch_id', _branchId!);
-        final Map<String, double> stockMap = {};
-        for (final s in stock as List) {
-          final pid = s['product_id'] as String?;
-          if (pid != null) stockMap[pid] = (s['quantity'] as num?)?.toDouble() ?? 0;
         }
         for (final p in byId.values) {
           final pid = p['id'] as String;
-          final qty = stockMap[pid] ?? 0;               // 0 when no stock at branch
-          // engine cost first; fall back to product cost_price when no remaining layers
-          final cost = costMap[pid] ?? (p['cost_price'] as num?)?.toDouble() ?? 0;
+          final qty = qtyMap[pid] ?? 0;
+          final value = valMap[pid] ?? 0;
+          // Weighted-average cost across branches; fallbacks for zero stock.
+          final cost = qty.abs() > 1e-9
+              ? value / qty
+              : (anyCost[pid] ?? (p['cost_price'] as num?)?.toDouble() ?? 0);
           final sell = (p['selling_price'] as num?)?.toDouble() ?? 0;
           rows.add({
             'name': p['name'], 'sku': p['sku'],
@@ -89,7 +122,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
             'class': p['product_class'], 'mov': p['product_movement_category'],
             'uom': p['uoms']?['abbreviation'] ?? '',
             'qty': qty, 'cost': cost, 'sell': sell,
-            'value': qty * cost, 'retail': qty * sell,
+            'value': value, 'retail': qty * sell,
           });
         }
         rows.sort((a, b) => (b['value'] as double).compareTo(a['value'] as double));
@@ -147,7 +180,16 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
   double get _totalValue => _filtered.fold(0.0, (s, r) => s + (r['value'] as double));
   double get _totalRetail => _filtered.fold(0.0, (s, r) => s + (r['retail'] as double));
 
-  String get _branchName => (_branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {})['name'] as String?) ?? '-';
+  String get _branchName {
+    if (_selBranches.isEmpty) return _isAdmin ? 'All branches' : 'All my branches';
+    final names = [
+      for (final b in _branches)
+        if (_selBranches.contains(b['id'])) (b['name'] as String? ?? '-')
+    ];
+    if (names.length == 1) return names.first;
+    if (names.length <= 3) return names.join(', ');
+    return '${names.length} branches';
+  }
 
   String _money(double v) => money(v);
 
@@ -169,16 +211,30 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
 
   Widget _filterDropdown(String label, String type, String? value, void Function(String?) onChanged) {
     final items = _taxonomies[type] ?? [];
-    return SizedBox(width: 190, child: DropdownButtonFormField<String?>(
+    return SizedBox(width: 190, child: SearchableDropdown(
+      label: label,
       value: value,
-      isExpanded: true,
-      decoration: InputDecoration(labelText: label, isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
-      items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('All')),
-        ...items.map((t) => DropdownMenuItem<String?>(value: t['name'] as String, child: Text(t['name'] as String, overflow: TextOverflow.ellipsis))),
+      allLabel: 'All',
+      options: [
+        for (final t in items) MapEntry(t['name'] as String?, t['name'] as String),
       ],
       onChanged: onChanged,
     ));
+  }
+
+  // Branch multi-select: checkbox dialog with search. Empty selection = All.
+  Future<void> _pickBranches() async {
+    final picked = await showDialog<Set<String>>(
+      context: context,
+      builder: (_) => _BranchMultiSelectDialog(
+        branches: _branches,
+        selected: Set<String>.from(_selBranches),
+        allLabel: _isAdmin ? 'All branches' : 'All my branches',
+      ),
+    );
+    if (picked == null) return; // cancelled
+    setState(() => _selBranches = picked);
+    _load();
   }
 
   void _print() {
@@ -258,12 +314,17 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
             style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          SizedBox(width: 220, child: DropdownButtonFormField<String>(
-            value: _branchId,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Branch', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
-            items: _branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))).toList(),
-            onChanged: (v) { setState(() => _branchId = v); _load(); },
+          SizedBox(width: 220, child: InkWell(
+            onTap: _pickBranches,
+            borderRadius: BorderRadius.circular(4),
+            child: InputDecorator(
+              decoration: const InputDecoration(
+                labelText: 'Branch', isDense: true, border: OutlineInputBorder(),
+                suffixIcon: Icon(Icons.arrow_drop_down),
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
+              child: Text(_branchName, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14)),
+            ),
           )),
           SizedBox(width: 240, child: TextField(
             decoration: const InputDecoration(
@@ -346,4 +407,91 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
       Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),
     ]),
   );
+}
+
+/// Checkbox multi-select for branches with a search box.
+/// Pops with the chosen id set — an EMPTY set means "All".
+class _BranchMultiSelectDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> branches;
+  final Set<String> selected;
+  final String allLabel;
+  const _BranchMultiSelectDialog({required this.branches, required this.selected, required this.allLabel});
+  @override
+  State<_BranchMultiSelectDialog> createState() => _BranchMultiSelectDialogState();
+}
+
+class _BranchMultiSelectDialogState extends State<_BranchMultiSelectDialog> {
+  late Set<String> _sel;
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void initState() { super.initState(); _sel = Set<String>.from(widget.selected); }
+
+  @override
+  void dispose() { _searchCtrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    final matches = q.isEmpty
+        ? widget.branches
+        : widget.branches.where((b) => (b['name'] as String? ?? '').toLowerCase().contains(q)).toList();
+    return AlertDialog(
+      title: const Text('Select branches', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      content: SizedBox(
+        width: 380,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          TextField(
+            controller: _searchCtrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Search branch...', isDense: true,
+              prefixIcon: Icon(Icons.search, size: 18), border: OutlineInputBorder()),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 8),
+          CheckboxListTile(
+            dense: true,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: Text(widget.allLabel, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+            value: _sel.isEmpty,
+            onChanged: (_) => setState(() => _sel.clear()),
+          ),
+          const Divider(height: 1),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final b in matches)
+                    CheckboxListTile(
+                      dense: true,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: Text(b['name'] as String? ?? '-', style: const TextStyle(fontSize: 13.5)),
+                      value: _sel.contains(b['id']),
+                      onChanged: (v) => setState(() {
+                        if (v == true) { _sel.add(b['id'] as String); }
+                        else { _sel.remove(b['id']); }
+                      }),
+                    ),
+                  if (matches.isEmpty)
+                    const Padding(padding: EdgeInsets.all(20),
+                        child: Text('No matches.', textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 13, color: Colors.grey))),
+                ],
+              ),
+            ),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _sel),
+          child: Text(_sel.isEmpty ? 'Apply (All)' : 'Apply (${_sel.length})'),
+        ),
+      ],
+    );
+  }
 }
