@@ -98,11 +98,14 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
     final Map<String, Map<String, dynamic>> supInfo = {};
     try {
       for (int from = 0; ; from += 1000) {
+        // NOTE: the suppliers table has no `code` column (unlike customers),
+        // so selecting it throws 42703 and blanks the report. Select id+name
+        // only; code stays null (rendered as "-").
         final page = List.from(await client.from('suppliers')
-            .select('id, name, code').eq('org_id', orgId).range(from, from + 999));
+            .select('id, name').eq('org_id', orgId).range(from, from + 999));
         for (final s in page) {
           final m = s as Map;
-          supInfo[m['id'] as String] = {'name': m['name'], 'code': m['code']};
+          supInfo[m['id'] as String] = {'name': m['name'], 'code': null};
         }
         if (page.length < 1000 || from > 200000) break;
       }
