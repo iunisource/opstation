@@ -32,6 +32,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   final Map<String, String> _posCustomerNames = {};
   final Map<String, String> _sessionBranch = {}; // pos session -> branch_id
   List<Map<String, dynamic>> _branches = [];
+  List<Map<String, dynamic>> _routes = []; // {id, name} for the Route filter
+  final Map<String, Set<String>> _custRoutes = {}; // customer id -> route ids
   List<String> _categories = [];
   List<String> _groups = [];
   List<String> _mainGroupOpts = [];
@@ -49,6 +51,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   DateTime _to = DateTime.now();
   String _source = 'both'; // both | invoice | pos
   String _branch = 'all';
+  String _route = 'all';
   String _category = 'all';
   String _group = 'all';
   String _breakdown = 'product'; // product | customer
@@ -120,6 +123,24 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           .eq('is_active', true)
           .order('name');
 
+      // Routes (markets) + which customers sit on each, for the Route filter.
+      List<Map<String, dynamic>> routes = [];
+      _custRoutes.clear();
+      try {
+        routes = List<Map<String, dynamic>>.from(
+            await c.from('sales_routes').select('id, name').eq('org_id', orgId).order('name'));
+        final rids = [for (final r in routes) r['id'] as String];
+        if (rids.isNotEmpty) {
+          final stops = await c.from('route_stops')
+              .select('route_id, customer_id').inFilter('route_id', rids);
+          for (final s in stops as List) {
+            final cid = s['customer_id'] as String?;
+            final rid = s['route_id'] as String?;
+            if (cid != null && rid != null) (_custRoutes[cid] ??= {}).add(rid);
+          }
+        }
+      } catch (_) {/* routes are best-effort */}
+
       final cats = <String>{};
       final grps = <String>{};
       _customers.clear();
@@ -171,6 +192,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       if (!mounted) return;
       setState(() {
         _branches = List<Map<String, dynamic>>.from(branches);
+        _routes = routes;
         _categories = cats.toList()..sort();
         _groups = grps.toList()..sort();
         _mainGroupOpts = mgs.toList()..sort();
@@ -242,6 +264,10 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   }
 
   bool _custPassesFilter(String? customerId) {
+    if (_route != 'all') {
+      final rids = customerId == null ? null : _custRoutes[customerId];
+      if (rids == null || !rids.contains(_route)) return false;
+    }
     if (_category == 'all' && _group == 'all') return true;
     final cust = customerId == null ? null : _customers[customerId];
     final cat = (cust?['category'] as String?)?.trim() ?? '';
@@ -567,6 +593,11 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           'all': 'All branches',
           for (final b in _branches) b['id'] as String: '${b['name']}',
         }, (v) => setState(() => _branch = v)),
+        if (_routes.isNotEmpty)
+          _dropdown('Route / Market', _route, {
+            'all': 'All routes',
+            for (final r in _routes) r['id'] as String: '${r['name']}',
+          }, (v) => setState(() => _route = v)),
         _dropdown('Customer Category', _category, {
           'all': 'All categories',
           for (final c in _categories) c: c,
@@ -620,6 +651,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       '${DateFormat('d MMM').format(_from)} – ${DateFormat('d MMM y').format(_to)}',
       '$srcLabel',
       '$branchLabel',
+      if (_route != 'all')
+        'Route: ${_routes.firstWhere((r) => r['id'] == _route, orElse: () => {'name': _route})['name']}',
       _breakdown == 'product' ? 'Product-wise' : 'Customer-wise',
       if (_category != 'all') 'Cat: $_category',
       if (_group != 'all') 'Grp: $_group',
@@ -1098,6 +1131,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       'Source: $srcLabel',
       if (_branch != 'all')
         'Branch: ${_branches.firstWhere((b) => b['id'] == _branch, orElse: () => {'name': _branch})['name']}',
+      if (_route != 'all')
+        'Route: ${_routes.firstWhere((r) => r['id'] == _route, orElse: () => {'name': _route})['name']}',
       if (_category != 'all') 'Category: $_category',
       if (_group != 'all') 'Group: $_group',
       if (_fMainGroups.isNotEmpty) 'Main Group: ${_fMainGroups.join(', ')}',
