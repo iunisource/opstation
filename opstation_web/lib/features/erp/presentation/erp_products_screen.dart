@@ -231,25 +231,34 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       final sheet = excel[sheetName];
       final def = excel.getDefaultSheet();
       if (def != null && def != sheetName) excel.delete(def);
+      // MASTER import format — same columns/order as the import template and
+      // the full-catalog export, so a selection export round-trips: export ->
+      // edit prices -> save as CSV -> re-import in "Update existing" mode.
+      // opening_qty is left blank so a re-import can never post opening stock.
       sheet.appendRow([
-        xls.TextCellValue('Name'), xls.TextCellValue('SKU'), xls.TextCellValue('Barcode'),
-        xls.TextCellValue('Main Group'), xls.TextCellValue('Group'), xls.TextCellValue('Sub Group'),
-        xls.TextCellValue('Class'), xls.TextCellValue('Movement Category'), xls.TextCellValue('UOM'),
-        xls.TextCellValue('Cost Price'), xls.TextCellValue('Selling Price'),
+        xls.TextCellValue('name'), xls.TextCellValue('sku'), xls.TextCellValue('barcode'),
+        xls.TextCellValue('uom'), xls.TextCellValue('product_type'),
+        xls.TextCellValue('main_group'), xls.TextCellValue('group'), xls.TextCellValue('sub_group'),
+        xls.TextCellValue('class'), xls.TextCellValue('movement_category'),
+        xls.TextCellValue('selling_price'), xls.TextCellValue('cost_price'),
+        xls.TextCellValue('low_stock_limit'), xls.TextCellValue('opening_qty'),
       ]);
       for (final p in source) {
         sheet.appendRow([
           xls.TextCellValue('${p['name'] ?? ''}'),
           xls.TextCellValue('${p['sku'] ?? ''}'),
           xls.TextCellValue('${p['barcode'] ?? ''}'),
+          xls.TextCellValue('${p['uoms']?['abbreviation'] ?? p['uoms']?['name'] ?? ''}'),
+          xls.TextCellValue('${p['product_type'] ?? ''}'),
           xls.TextCellValue('${p['product_main_group'] ?? ''}'),
           xls.TextCellValue('${p['product_group'] ?? ''}'),
           xls.TextCellValue('${p['product_sub_group'] ?? ''}'),
           xls.TextCellValue('${p['product_class'] ?? ''}'),
           xls.TextCellValue('${p['product_movement_category'] ?? ''}'),
-          xls.TextCellValue('${p['uoms']?['abbreviation'] ?? p['uoms']?['name'] ?? ''}'),
-          xls.DoubleCellValue(numOf(p['cost_price'])),
           xls.DoubleCellValue(numOf(p['selling_price'])),
+          xls.DoubleCellValue(numOf(p['cost_price'])),
+          xls.DoubleCellValue(numOf(p['low_stock_limit'])),
+          xls.TextCellValue(''), // opening_qty intentionally blank
         ]);
       }
       excel.save(fileName:
@@ -268,21 +277,27 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         : _filtered;
     if (source.isEmpty) { _showSnack('Nothing to export'); return; }
     String esc(Object? v) {
-      final s = (v ?? '').toString().replaceAll('"', '""');
-      return '"' + s + '"';
+      final s = (v ?? '').toString();
+      if (s.contains(',') || s.contains('"') || s.contains('\n')) {
+        return '"' + s.replaceAll('"', '""') + '"';
+      }
+      return s;
     }
     double numOf(dynamic v) => (v as num?)?.toDouble() ?? 0;
+    // MASTER import format — identical header/order to the import template and
+    // the full-catalog export, so this file round-trips straight back through
+    // "Import CSV -> Update existing". opening_qty left blank on purpose.
     final sb = StringBuffer();
-    sb.writeln(['Name', 'SKU', 'Barcode', 'Main Group', 'Group', 'Sub Group',
-      'Class', 'Movement Category', 'UOM', 'Cost Price', 'Selling Price']
-        .map(esc).join(','));
+    sb.writeln('name,sku,barcode,uom,product_type,main_group,group,sub_group,class,movement_category,selling_price,cost_price,low_stock_limit,opening_qty');
     for (final p in source) {
       sb.writeln([
         p['name'] ?? '', p['sku'] ?? '', p['barcode'] ?? '',
+        p['uoms']?['abbreviation'] ?? p['uoms']?['name'] ?? '',
+        p['product_type'] ?? '',
         p['product_main_group'] ?? '', p['product_group'] ?? '', p['product_sub_group'] ?? '',
         p['product_class'] ?? '', p['product_movement_category'] ?? '',
-        p['uoms']?['abbreviation'] ?? p['uoms']?['name'] ?? '',
-        numOf(p['cost_price']), numOf(p['selling_price']),
+        numOf(p['selling_price']), numOf(p['cost_price']), numOf(p['low_stock_limit']),
+        '', // opening_qty intentionally blank
       ].map(esc).join(','));
     }
     final content = '\u{FEFF}' + sb.toString(); // BOM so Excel reads UTF-8
