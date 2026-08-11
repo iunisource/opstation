@@ -86,6 +86,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('sales_return', 'Sales Return Notes', PermKind.doc, '/erp/sales-returns'),
     PermItem('sales_return_invoice', 'Sales Return Invoices', PermKind.doc, '/erp/sales-return-invoices'),
     PermItem('sales_report', 'Sales Report', PermKind.report, '/erp/sales-report'),
+    PermItem('sales_return_report', 'Sales Return Report', PermKind.report, '/erp/sales-return-report'),
   ]),
   PermModule('pos', 'POS', Icons.storefront_outlined, [
     PermItem('pos_config', 'Configuration', PermKind.doc, '/erp/pos-config'),
