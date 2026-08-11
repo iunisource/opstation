@@ -107,8 +107,15 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
       });
       final usage = await _loadUsage(client, orgId);
       // Manufacturing overview — only for orgs that have the Manufacturing
-      // ('production') module enabled.
-      final modules = ref.read(orgModulesProvider).valueOrNull ?? const <String>{};
+      // ('production') module enabled. Await the provider's FUTURE so a cold
+      // load (provider still resolving) doesn't wrongly report "no module" and
+      // drop the section from both screen and PDF.
+      Set<String> modules = const <String>{};
+      try {
+        modules = await ref.read(orgModulesProvider.future);
+      } catch (_) {
+        modules = ref.read(orgModulesProvider).valueOrNull ?? const <String>{};
+      }
       final mfg = modules.contains('production')
           ? await _loadManufacturing(client, orgId)
           : null;

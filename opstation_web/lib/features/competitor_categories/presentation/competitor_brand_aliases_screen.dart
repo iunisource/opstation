@@ -184,6 +184,11 @@ class _CompetitorBrandAliasesScreenState
                 return;
               }
               final orgId = ref.read(currentUserProvider)?.orgId;
+              if (orgId == null) {
+                _showSnack('Could not determine your organization — please '
+                    'reload and try again.');
+                return;
+              }
               final client = Supabase.instance.client;
               try {
                 if (alias == null) {
@@ -195,23 +200,43 @@ class _CompetitorBrandAliasesScreenState
                       .where((s) => s.isNotEmpty && seen.add(s.toLowerCase()))
                       .toList();
                   var added = 0;
+                  var skipped = 0;
+                  String? lastErr;
+                  var i = 0;
                   for (final v in variants) {
                     try {
                       await client.from('competitor_brand_aliases').insert({
-                        'id': 'cba_${DateTime.now().microsecondsSinceEpoch}_$added',
+                        'id': 'cba_${DateTime.now().microsecondsSinceEpoch}_${i++}',
                         'org_id': orgId,
                         'alias': v,
                         'canonical': canonTxt,
                       });
                       added++;
-                    } catch (_) {/* already exists — skip */}
+                    } on PostgrestException catch (e) {
+                      // 23505 = unique_violation -> this variant already exists.
+                      // Anything else is a real failure we must not hide.
+                      if (e.code == '23505') {
+                        skipped++;
+                      } else {
+                        lastErr = e.message;
+                      }
+                    } catch (e) {
+                      lastErr = e.toString().split('\n').first;
+                    }
                   }
                   if (context.mounted) {
                     Navigator.of(context, rootNavigator: true).pop();
                   }
-                  _showSnack(added == 0
-                      ? 'Nothing added — those variants already exist.'
-                      : 'Added $added alias${added == 1 ? '' : 'es'} → $canonTxt');
+                  if (added > 0) {
+                    _showSnack('Added $added alias${added == 1 ? '' : 'es'} '
+                        '→ $canonTxt');
+                  } else if (lastErr != null) {
+                    _showSnack('Failed: $lastErr');
+                  } else if (skipped > 0) {
+                    _showSnack('Nothing added — those variants already exist.');
+                  } else {
+                    _showSnack('Nothing to add.');
+                  }
                   _load();
                 } else {
                   await client.from('competitor_brand_aliases').update({

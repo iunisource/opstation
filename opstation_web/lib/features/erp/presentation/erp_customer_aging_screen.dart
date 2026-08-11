@@ -9,6 +9,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../intelligence/widgets/searchable_dropdown.dart';
 
 /// Customer Aging: outstanding receivables grouped by customer with 0-30 /
 /// 31-60 / 61-90 / 90+ day buckets. Sources unpaid sales_invoices.
@@ -365,23 +366,23 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
               onChanged: (v) => setState(() => _search = v),
             ),
           ),
-          SizedBox(width: 200, child: DropdownButtonFormField<String?>(
+          SizedBox(width: 220, child: SearchableDropdown(
+            label: 'Route / Market',
             value: _fRoute,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Route / Market', isDense: true),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All routes')),
-              ..._routes.map((r) => DropdownMenuItem<String?>(value: r['id'] as String, child: Text(r['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))),
+            allLabel: 'All routes',
+            options: [
+              for (final r in _routes)
+                MapEntry(r['id'] as String?, (r['name'] as String?) ?? '-'),
             ],
             onChanged: (v) => setState(() => _fRoute = v),
           )),
-          SizedBox(width: 200, child: DropdownButtonFormField<String?>(
+          SizedBox(width: 220, child: SearchableDropdown(
+            label: 'Salesperson',
             value: _fSalesperson,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Salesperson', isDense: true),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All salespersons')),
-              ..._salespeople.map((u) => DropdownMenuItem<String?>(value: u['id'] as String, child: Text(u['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))),
+            allLabel: 'All salespersons',
+            options: [
+              for (final u in _salespeople)
+                MapEntry(u['id'] as String?, (u['name'] as String?) ?? '-'),
             ],
             onChanged: (v) => setState(() => _fSalesperson = v),
           )),

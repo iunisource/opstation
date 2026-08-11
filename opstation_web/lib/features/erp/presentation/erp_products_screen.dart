@@ -254,33 +254,66 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }
       excel.save(fileName:
           'products-${DateTime.now().toIso8601String().split('T').first}.xlsx');
-      _showSnack('Exported ${source.length} product${source.length == 1 ? '' : 's'}');
+      _showSnack('Exported ${source.length} product${source.length == 1 ? '' : 's'} (Excel)');
     } catch (e) {
       _showSnack('Export failed: $e');
     }
   }
 
-  // A compact labelled filter dropdown for the group hierarchy. `value` is
-  // shown as null (=All) if it isn't among the current cascaded [options].
+  // Same scope/columns as the filtered Excel export, but as CSV. (Distinct from
+  // the full-catalog import-template _exportCsv used by the top-right button.)
+  void _exportFilteredCsv() {
+    final source = _selected.isNotEmpty
+        ? _products.where((p) => _selected.contains('${p['id']}')).toList()
+        : _filtered;
+    if (source.isEmpty) { _showSnack('Nothing to export'); return; }
+    String esc(Object? v) {
+      final s = (v ?? '').toString().replaceAll('"', '""');
+      return '"' + s + '"';
+    }
+    double numOf(dynamic v) => (v as num?)?.toDouble() ?? 0;
+    final sb = StringBuffer();
+    sb.writeln(['Name', 'SKU', 'Barcode', 'Main Group', 'Group', 'Sub Group',
+      'Class', 'Movement Category', 'UOM', 'Cost Price', 'Selling Price']
+        .map(esc).join(','));
+    for (final p in source) {
+      sb.writeln([
+        p['name'] ?? '', p['sku'] ?? '', p['barcode'] ?? '',
+        p['product_main_group'] ?? '', p['product_group'] ?? '', p['product_sub_group'] ?? '',
+        p['product_class'] ?? '', p['product_movement_category'] ?? '',
+        p['uoms']?['abbreviation'] ?? p['uoms']?['name'] ?? '',
+        numOf(p['cost_price']), numOf(p['selling_price']),
+      ].map(esc).join(','));
+    }
+    final content = '\u{FEFF}' + sb.toString(); // BOM so Excel reads UTF-8
+    final blob = html.Blob([content], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final a = html.AnchorElement(href: url)
+      ..download = 'products-${DateTime.now().toIso8601String().split('T').first}.csv';
+    html.document.body!.append(a);
+    a.click();
+    a.remove();
+    html.Url.revokeObjectUrl(url);
+    _showSnack('Exported ${source.length} product${source.length == 1 ? '' : 's'} (CSV)');
+  }
+
+  // A compact searchable filter for the group hierarchy. Reuses _SearchSelect
+  // (type-to-filter). `value` shows as All if it isn't in the current cascaded
+  // [options]. The key includes the option count so it rebuilds on cascade.
   Widget _grpFilter(String label, String? value, List<String> options,
       void Function(String?) onChanged) {
     final val = (value != null && options.contains(value)) ? value : null;
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Text('$label:',
-          style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-      const SizedBox(width: 6),
-      SizedBox(width: 160, child: DropdownButtonFormField<String?>(
+    return SizedBox(
+      width: 190,
+      child: _SearchSelect(
+        key: ValueKey('filt_${label}_${options.length}'),
+        label: label,
+        hint: 'All',
         value: val,
-        isExpanded: true,
-        decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
-        items: [
-          const DropdownMenuItem<String?>(value: null, child: Text('All')),
-          ...options.map((n) => DropdownMenuItem<String?>(
-              value: n, child: Text(n, overflow: TextOverflow.ellipsis))),
-        ],
+        items: [for (final n in options) <String, String>{'value': n, 'label': n}],
         onChanged: onChanged,
-      )),
-    ]);
+      ),
+    );
   }
 
   void _runFilter() {
@@ -1133,10 +1166,17 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             }),
             if (_fMain != null || _fGroup != null || _fSub != null)
               TextButton(onPressed: () { _fMain = null; _fGroup = null; _fSub = null; _runFilter(); }, child: const Text('Clear groups')),
+            Text(_selected.isNotEmpty ? 'Export ${_selected.length} selected:' : 'Export ${_filtered.length} shown:',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             OutlinedButton.icon(
               icon: const Icon(Icons.grid_on_outlined, size: 16),
-              label: Text(_selected.isNotEmpty ? 'Export ${_selected.length} selected' : 'Export ${_filtered.length}'),
+              label: const Text('Excel'),
               onPressed: _exportExcel,
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.description_outlined, size: 16),
+              label: const Text('CSV'),
+              onPressed: _exportFilteredCsv,
             ),
           ]),
           if (_selected.isNotEmpty) ...[
