@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../intelligence/widgets/searchable_dropdown.dart';
 
 /// Sales Report — all sales in a date range, from Sales Invoices and/or POS,
 /// filterable by customer Category and Group, broken down Product-wise or
@@ -594,10 +595,16 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           for (final b in _branches) b['id'] as String: '${b['name']}',
         }, (v) => setState(() => _branch = v)),
         if (_routes.isNotEmpty)
-          _dropdown('Route / Market', _route, {
-            'all': 'All routes',
-            for (final r in _routes) r['id'] as String: '${r['name']}',
-          }, (v) => setState(() => _route = v)),
+          SizedBox(width: 190, child: SearchableDropdown(
+            label: 'Route / Market',
+            value: _route == 'all' ? null : _route,
+            allLabel: 'All routes',
+            options: [
+              for (final r in _routes)
+                MapEntry(r['id'] as String?, '${r['name']}'),
+            ],
+            onChanged: (v) => setState(() => _route = v ?? 'all'),
+          )),
         _dropdown('Customer Category', _category, {
           'all': 'All categories',
           for (final c in _categories) c: c,

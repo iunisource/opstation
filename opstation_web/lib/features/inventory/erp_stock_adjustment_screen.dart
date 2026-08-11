@@ -1,15 +1,20 @@
 // lib/features/inventory/erp_stock_adjustment_screen.dart
 //
-// Stock Adjustment Voucher — modeled on the legacy UniSource screen.
-//   • No branch selector: branch is inherited from the global header
-//     (selectedBranchProvider), same as your other inventory screens.
-//   • In Qty / Out Qty columns. Stored as a single signed `quantity`
-//     (In => +, Out => -). The DB posting trigger handles the GL.
-//   • Save = draft (is_locked false). Post = is_locked true => the DB
-//     trigger posts the GL automatically.
-//   • Side drawer lists all saved vouchers; click to load. New starts a
-//     blank one. Drafts can be deleted; posted vouchers are locked
-//     (reverse via Void once that path is wired to trg_void_on_flag).
+// Stock Adjustment Voucher — unified "correct to target" grid.
+//   • One row per item: Cost + Quantity are auto-fetched (current state),
+//     New Cost + New Quantity are the correction fields the user edits.
+//   • Cost basis = weighted-avg of positive cost layers at this branch;
+//     falls back to the product profile cost (products.cost_price) when the
+//     item has no layers. Quantity = current on-hand at this branch.
+//   • Amount = Cost × Qty, New Amount = New Cost × New Qty,
+//     Difference = New Amount − Amount. Column totals + Total Difference show
+//     the net inventory/GL impact of the voucher.
+//   • On post, each row is translated to the existing posting engine:
+//       – a QUANTITY line for (New Qty − Qty), valued at current cost, and
+//       – a REVALUATION line to New Cost.
+//     The two net to exactly the row Difference, so the GL impact equals the
+//     Total Difference shown. Rows with no change are skipped.
+//   • Save = draft (is_locked false). Post = lock + post_stock_adjustment_voucher.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,31 +33,55 @@ class ErpStockAdjustmentScreen extends ConsumerStatefulWidget {
       _ErpStockAdjustmentScreenState();
 }
 
+String _fmtNum(double v) =>
+    v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+class _CostQty {
+  final double cost;
+  final double onHand;
+  const _CostQty(this.cost, this.onHand);
+}
+
 class _AdjLine {
   final String productId;
   final String productName;
   final String? uomId;
   final String uomName;
-  double inQty;
-  double outQty;
+  final double baseCost; // current unit cost (layer avg, fallback cost_price)
+  final double baseQty;  // current on-hand at this branch
+  final TextEditingController newCostCtrl;
+  final TextEditingController newQtyCtrl;
   String? note;
-  String lineType;      // 'quantity' | 'revaluation'
-  double? newUnitCost;  // for revaluation lines
+
   _AdjLine({
     required this.productId,
     required this.productName,
     this.uomId,
     this.uomName = '',
-    this.inQty = 0,
-    this.outQty = 0,
+    this.baseCost = 0,
+    this.baseQty = 0,
     this.note,
-    this.lineType = 'quantity',
-    this.newUnitCost,
-  });
+    double? newCost,
+    double? newQty,
+  })  : newCostCtrl =
+            TextEditingController(text: _fmtNum(newCost ?? baseCost)),
+        newQtyCtrl =
+            TextEditingController(text: _fmtNum(newQty ?? baseQty));
 
-  // Signed quantity persisted to stock_adjustment_voucher_items.quantity.
-  // Revaluation lines carry 0 (quantity is not meaningful for them).
-  double get signedQty => lineType == 'revaluation' ? 0 : (inQty - outQty);
+  double get newCost => double.tryParse(newCostCtrl.text.trim()) ?? baseCost;
+  double get newQty => double.tryParse(newQtyCtrl.text.trim()) ?? baseQty;
+  double get amount => baseCost * baseQty;
+  double get newAmount => newCost * newQty;
+  double get difference => newAmount - amount;
+
+  bool get qtyChanged => (newQty - baseQty).abs() > 1e-6;
+  bool get costChanged => (newCost - baseCost).abs() > 1e-6;
+  bool get hasChange => qtyChanged || costChanged;
+
+  void dispose() {
+    newCostCtrl.dispose();
+    newQtyCtrl.dispose();
+  }
 }
 
 class _ErpStockAdjustmentScreenState
@@ -76,13 +105,7 @@ class _ErpStockAdjustmentScreenState
   Map<String, Map<String, dynamic>> _prodById = {};
   String? _pickProductId;
   TextEditingController? _pickProductCtrl; // bound by the Autocomplete field
-  final TextEditingController _pickIn = TextEditingController();
-  final TextEditingController _pickOut = TextEditingController();
-  final TextEditingController _pickNewCost = TextEditingController();
-  String _pickType = 'quantity';   // 'quantity' | 'revaluation'
-  double? _pickCurCost;            // current unit cost of picked product (revalue mode)
-  double? _pickOnHand;            // current on-hand qty of picked product
-  bool _pickCostLoading = false;
+  bool _addingLine = false;
 
   // saved-voucher list (side drawer)
   List<Map<String, dynamic>> _vouchers = [];
@@ -96,7 +119,6 @@ class _ErpStockAdjustmentScreenState
   @override
   void initState() {
     super.initState();
-    // orgId may be null at initState; defer until the first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadProducts();
       _loadVouchers();
@@ -106,9 +128,9 @@ class _ErpStockAdjustmentScreenState
   @override
   void dispose() {
     _remarks.dispose();
-    _pickIn.dispose();
-    _pickOut.dispose();
-    _pickNewCost.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     super.dispose();
   }
 
@@ -120,10 +142,9 @@ class _ErpStockAdjustmentScreenState
 
   Future<void> _loadProducts() async {
     try {
-      // products(id, name, base_uom_id, is_active, org_id)
       final rows = await _supa
           .from('products')
-          .select('id, name, sku, base_uom_id')
+          .select('id, name, sku, base_uom_id, cost_price')
           .eq('org_id', _orgId)
           .eq('is_active', true)
           .order('name');
@@ -156,6 +177,13 @@ class _ErpStockAdjustmentScreenState
     }
   }
 
+  void _clearLines() {
+    for (final l in _lines) {
+      l.dispose();
+    }
+    _lines.clear();
+  }
+
   void _newVoucher() {
     setState(() {
       _voucherId = null;
@@ -165,11 +193,51 @@ class _ErpStockAdjustmentScreenState
       _isVoided = false;
       _date = DateTime.now();
       _remarks.clear();
-      _lines.clear();
+      _clearLines();
       _pickProductId = null;
-      _pickIn.clear();
-      _pickOut.clear();
+      _pickProductCtrl?.clear();
     });
+  }
+
+  // Current unit cost (weighted-avg positive layers, fallback cost_price) and
+  // on-hand for a product at the active branch.
+  Future<_CostQty> _fetchCostAndQty(String productId) async {
+    final branch = _branchId;
+    double? layerCost;
+    double onHand = 0;
+    if (branch != null) {
+      try {
+        final layers = await _supa
+            .from('inventory_cost_layers')
+            .select('qty_remaining, unit_cost')
+            .eq('org_id', _orgId)
+            .eq('product_id', productId)
+            .eq('branch_id', branch)
+            .gt('qty_remaining', 0);
+        double posQty = 0, valSum = 0;
+        for (final l in (layers as List)) {
+          final q = (l['qty_remaining'] as num?)?.toDouble() ?? 0;
+          final c = (l['unit_cost'] as num?)?.toDouble() ?? 0;
+          posQty += q;
+          valSum += q * c;
+        }
+        if (posQty > 0) layerCost = valSum / posQty;
+
+        final stk = await _supa
+            .from('inventory_stock')
+            .select('quantity')
+            .eq('org_id', _orgId)
+            .eq('product_id', productId)
+            .eq('branch_id', branch);
+        for (final s in (stk as List)) {
+          onHand += (s['quantity'] as num?)?.toDouble() ?? 0;
+        }
+      } catch (_) {/* best-effort */}
+    }
+    // Fallback to the product profile cost when there is no positive layer.
+    final profileCost =
+        (_prodById[productId]?['cost_price'] as num?)?.toDouble() ?? 0;
+    return _CostQty(layerCost ?? profileCost, onHand);
   }
 
   Future<void> _loadVoucher(Map<String, dynamic> v) async {
@@ -179,42 +247,66 @@ class _ErpStockAdjustmentScreenState
           .select()
           .eq('voucher_id', v['id'] as String)
           .order('id');
-      final newLines = <_AdjLine>[];
+
+      // Merge persisted (quantity / revaluation) items back into one row per
+      // product: qty delta => New Qty, revaluation => New Cost.
+      final byProduct = <String, Map<String, dynamic>>{};
       for (final r in (items as List)) {
         final pid = r['product_id'] as String?;
         if (pid == null) continue;
-        final prod = _prodById[pid];
-        final qty = (r['quantity'] as num? ?? 0).toDouble();
         final lt = (r['line_type'] as String?) ?? 'quantity';
+        final m = byProduct.putIfAbsent(pid, () => {
+              'uom_id': r['uom_id'],
+              'qty_delta': 0.0,
+              'new_cost': null,
+              'note': r['notes'],
+            });
+        if (lt == 'revaluation') {
+          m['new_cost'] = (r['new_unit_cost'] as num?)?.toDouble();
+        } else {
+          m['qty_delta'] =
+              (m['qty_delta'] as double) + ((r['quantity'] as num?)?.toDouble() ?? 0);
+        }
+      }
+
+      final newLines = <_AdjLine>[];
+      for (final entry in byProduct.entries) {
+        final pid = entry.key;
+        final m = entry.value;
+        final prod = _prodById[pid];
+        final cq = await _fetchCostAndQty(pid);
+        final qtyDelta = m['qty_delta'] as double;
+        final newCost = (m['new_cost'] as double?) ?? cq.cost;
         newLines.add(_AdjLine(
           productId: pid,
           productName: (prod?['name'] ?? pid) as String,
-          uomId: (r['uom_id'] ?? prod?['base_uom_id']) as String?,
-          uomName: ((r['uom_id'] ?? prod?['base_uom_id']) ?? '') as String,
-          inQty: qty > 0 ? qty : 0,
-          outQty: qty < 0 ? -qty : 0,
-          note: r['notes'] as String?,
-          lineType: lt,
-          newUnitCost: (r['new_unit_cost'] as num?)?.toDouble(),
+          uomId: (m['uom_id'] ?? prod?['base_uom_id']) as String?,
+          uomName: ((m['uom_id'] ?? prod?['base_uom_id']) ?? '') as String,
+          baseCost: cq.cost,
+          baseQty: cq.onHand,
+          newCost: newCost,
+          newQty: cq.onHand + qtyDelta,
+          note: m['note'] as String?,
         ));
       }
+
       final ds = v['voucher_date'] as String?;
       final locked = (v['is_locked'] == true) || (v['status'] == 'posted');
       if (mounted) {
         setState(() {
+          _clearLines();
           _voucherId = v['id'] as String?;
           _voucherNumber = v['voucher_number'] as String?;
           _status = v['status'] as String? ?? 'draft';
           _isLocked = locked;
           _isVoided = v['is_voided'] == true;
-          _date = ds != null ? (DateTime.tryParse(ds) ?? DateTime.now()) : DateTime.now();
+          _date = ds != null
+              ? (DateTime.tryParse(ds) ?? DateTime.now())
+              : DateTime.now();
           _remarks.text = v['remarks'] as String? ?? '';
-          _lines
-            ..clear()
-            ..addAll(newLines);
+          _lines.addAll(newLines);
           _pickProductId = null;
-          _pickIn.clear();
-          _pickOut.clear();
+          _pickProductCtrl?.clear();
         });
       }
     } catch (e) {
@@ -222,101 +314,36 @@ class _ErpStockAdjustmentScreenState
     }
   }
 
-  // Fetch current unit cost + on-hand for the picked product (revalue preview).
-  Future<void> _loadPickCost(String productId) async {
-    setState(() { _pickCostLoading = true; _pickCurCost = null; _pickOnHand = null; });
-    final branch = _branchId;
-    if (branch == null) { setState(() => _pickCostLoading = false); return; }
-    try {
-      // Cost basis = weighted avg of POSITIVE layers at THIS branch.
-      final layers = await _supa
-          .from('inventory_cost_layers')
-          .select('qty_remaining, unit_cost')
-          .eq('org_id', _orgId)
-          .eq('product_id', productId)
-          .eq('branch_id', branch)
-          .gt('qty_remaining', 0);
-      double posQty = 0, valSum = 0;
-      for (final l in (layers as List)) {
-        final q = (l['qty_remaining'] as num?)?.toDouble() ?? 0;
-        final c = (l['unit_cost'] as num?)?.toDouble() ?? 0;
-        posQty += q; valSum += q * c;
-      }
-      final curCost = posQty > 0 ? valSum / posQty : null;
-      // TRUE net on-hand (can be NEGATIVE) from the stock balance at this branch
-      // — so the preview reflects reality instead of showing 0 for negative stock.
-      final stk = await _supa
-          .from('inventory_stock')
-          .select('quantity')
-          .eq('org_id', _orgId)
-          .eq('product_id', productId)
-          .eq('branch_id', branch);
-      double net = 0;
-      for (final s in (stk as List)) {
-        net += (s['quantity'] as num?)?.toDouble() ?? 0;
-      }
-      if (!mounted) return;
-      setState(() { _pickOnHand = net; _pickCurCost = curCost; _pickCostLoading = false; });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() { _pickCostLoading = false; });
-    }
-  }
-
-
-  void _addLine() {
+  Future<void> _addLine() async {
     if (_pickProductId == null) {
       _toast('Pick a product first');
       return;
     }
-    final p = _products.firstWhere((e) => e['id'] == _pickProductId);
-    if (_pickType == 'revaluation') {
-      final nc = double.tryParse(_pickNewCost.text.trim()) ?? 0;
-      if (nc <= 0) {
-        _toast('Enter the new unit cost (greater than 0)');
-        return;
-      }
-      setState(() {
-        _lines.add(_AdjLine(
-          productId: p['id'] as String,
-          productName: (p['name'] ?? '') as String,
-          uomId: p['base_uom_id'] as String?,
-          uomName: (p['base_uom_id'] ?? '') as String,
-          lineType: 'revaluation',
-          newUnitCost: nc,
-        ));
-        _pickProductId = null;
-        _pickProductCtrl?.clear();
-        _pickIn.clear();
-        _pickOut.clear();
-        _pickNewCost.clear();
-      });
+    if (_branchId == null) {
+      _toast('Select a branch in the header first');
       return;
     }
-    final inQ = double.tryParse(_pickIn.text.trim()) ?? 0;
-    final outQ = double.tryParse(_pickOut.text.trim()) ?? 0;
-    if (inQ == 0 && outQ == 0) {
-      _toast('Enter an In or Out quantity');
+    if (_lines.any((l) => l.productId == _pickProductId)) {
+      _toast('That item is already in the list');
       return;
     }
-    if (inQ > 0 && outQ > 0) {
-      _toast('A line is either In or Out, not both');
-      return;
-    }
+    final p = _prodById[_pickProductId!];
+    if (p == null) return;
+    setState(() => _addingLine = true);
+    final cq = await _fetchCostAndQty(_pickProductId!);
+    if (!mounted) return;
     setState(() {
       _lines.add(_AdjLine(
         productId: p['id'] as String,
         productName: (p['name'] ?? '') as String,
         uomId: p['base_uom_id'] as String?,
         uomName: (p['base_uom_id'] ?? '') as String,
-        inQty: inQ,
-        outQty: outQ,
+        baseCost: cq.cost,
+        baseQty: cq.onHand,
       ));
       _pickProductId = null;
       _pickProductCtrl?.clear();
-      _pickIn.clear();
-      _pickOut.clear();
-      _pickNewCost.clear();
+      _addingLine = false;
     });
   }
 
@@ -333,12 +360,16 @@ class _ErpStockAdjustmentScreenState
       _toast('Select a branch in the header first');
       return;
     }
+    final changed = _lines.where((l) => l.hasChange).toList();
+    if (changed.isEmpty) {
+      _toast('Nothing to adjust — set a New Qty or New Cost that differs');
+      return;
+    }
     setState(() => _saving = true);
     try {
       final id = _voucherId ?? 'sav_${DateTime.now().millisecondsSinceEpoch}';
       final number = _voucherNumber ?? await _nextVoucherNumber();
 
-      // upsert header
       await _supa.from('stock_adjustment_vouchers').upsert({
         'id': id,
         'org_id': _orgId,
@@ -346,38 +377,49 @@ class _ErpStockAdjustmentScreenState
         'voucher_number': number,
         'voucher_date': _dateStr(_date),
         'remarks': _remarks.text.trim().isEmpty ? null : _remarks.text.trim(),
-        // Stay 'draft' until the lines are safely inserted; the status flips to
-        // 'posted' in the lock update below. This avoids leaving a header marked
-        // posted with no items when a line insert fails (the Vr7 "no effect /
-        // reopens empty" symptom).
         'status': 'draft',
-        'is_locked': false, // flip separately below so the trigger fires on the transition
+        'is_locked': false,
         'created_by': _userId,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
 
-      // replace lines. The item id MUST be unique per line — the same product
-      // can appear twice (a Qty line + a Revalue line). Keying the id off the
-      // product id (plus a web-clamped microsecond clock) collided and raised
-      // duplicate_key. Use the voucher id + line index, which is always unique.
       await _supa
           .from('stock_adjustment_voucher_items')
           .delete()
           .eq('voucher_id', id);
+
+      // Translate each unified row to the posting engine's items. A row can
+      // emit up to two items (quantity + revaluation); emit the quantity line
+      // FIRST so the revaluation reprices the post-adjustment on-hand.
       final items = <Map<String, dynamic>>[];
-      for (var i = 0; i < _lines.length; i++) {
-        final l = _lines[i];
-        items.add({
-          'id': 'savi_${id}_$i',
-          'voucher_id': id,
-          'org_id': _orgId,
-          'product_id': l.productId,
-          'uom_id': l.uomId,
-          'quantity': l.signedQty, // In => +, Out => -; revaluation => 0
-          'line_type': l.lineType,
-          'new_unit_cost': l.lineType == 'revaluation' ? l.newUnitCost : null,
-          'notes': l.note,
-        });
+      var seq = 0;
+      for (final l in changed) {
+        if (l.qtyChanged) {
+          items.add({
+            'id': 'savi_${id}_${seq++}',
+            'voucher_id': id,
+            'org_id': _orgId,
+            'product_id': l.productId,
+            'uom_id': l.uomId,
+            'quantity': l.newQty - l.baseQty, // signed delta
+            'line_type': 'quantity',
+            'new_unit_cost': null,
+            'notes': l.note,
+          });
+        }
+        if (l.costChanged) {
+          items.add({
+            'id': 'savi_${id}_${seq++}',
+            'voucher_id': id,
+            'org_id': _orgId,
+            'product_id': l.productId,
+            'uom_id': l.uomId,
+            'quantity': 0,
+            'line_type': 'revaluation',
+            'new_unit_cost': l.newCost,
+            'notes': l.note,
+          });
+        }
       }
       await _supa.from('stock_adjustment_voucher_items').insert(items);
 
@@ -388,7 +430,6 @@ class _ErpStockAdjustmentScreenState
       });
 
       if (lock) {
-        // Flip is_locked false->true. The DB trigger posts the GL.
         await _supa.from('stock_adjustment_vouchers').update({
           'is_locked': true,
           'status': 'posted',
@@ -396,22 +437,22 @@ class _ErpStockAdjustmentScreenState
           'locked_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', id);
 
-        // The lock flip alone does NOT post — there is no trigger that calls the
-        // poster (the only trigger fires on is_voided). So invoke the poster
-        // explicitly, the same way the other voucher screens do.
         try {
           final res = await _supa
               .rpc('post_stock_adjustment_voucher', params: {'p_id': id});
           setState(() => _isLocked = true);
           _toast(res?.toString() ?? 'Posted');
         } catch (e) {
-          // GL posting failed AFTER the header was flipped to posted/locked
-          // above. Revert the lock so the voucher isn't stranded locked-with-no-GL
-          // and can be edited/retried, then surface the error.
           await _supa.from('stock_adjustment_vouchers').update({
-            'is_locked': false, 'status': 'draft', 'locked_by': null, 'locked_at': null,
+            'is_locked': false,
+            'status': 'draft',
+            'locked_by': null,
+            'locked_at': null,
           }).eq('id', id);
-          setState(() { _isLocked = false; _status = 'draft'; });
+          setState(() {
+            _isLocked = false;
+            _status = 'draft';
+          });
           rethrow;
         }
       } else {
@@ -428,7 +469,8 @@ class _ErpStockAdjustmentScreenState
   Future<void> _delete() async {
     if (_voucherId == null) return;
     if (_isLocked || _status == 'posted') {
-      _toast('Posted vouchers cannot be deleted — enter a new adjustment voucher with opposite lines to reverse the effect');
+      _toast(
+          'Posted vouchers cannot be deleted — enter a new adjustment voucher with opposite corrections to reverse the effect');
       return;
     }
     final ok = await showDialog<bool>(
@@ -438,7 +480,9 @@ class _ErpStockAdjustmentScreenState
         content: const Text(
             'This draft adjustment voucher and its lines will be permanently deleted. (Drafts have not posted, so nothing in the GL is affected.)'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(c, true),
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
@@ -450,7 +494,10 @@ class _ErpStockAdjustmentScreenState
     if (ok != true) return;
     try {
       final id = _voucherId!;
-      await _supa.from('stock_adjustment_voucher_items').delete().eq('voucher_id', id);
+      await _supa
+          .from('stock_adjustment_voucher_items')
+          .delete()
+          .eq('voucher_id', id);
       await _supa.from('stock_adjustment_vouchers').delete().eq('id', id);
       _toast('Draft deleted');
       _newVoucher();
@@ -469,7 +516,9 @@ class _ErpStockAdjustmentScreenState
         content: const Text(
             'Voiding reverses the GL entry and the cost layers, and restores on-hand to what it was before this voucher. This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(c, true),
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
@@ -498,7 +547,6 @@ class _ErpStockAdjustmentScreenState
     }
   }
 
-  // simple fallback numbering
   Future<String> _nextVoucherNumber() async {
     final rows = await _supa
         .from('stock_adjustment_vouchers')
@@ -541,7 +589,9 @@ class _ErpStockAdjustmentScreenState
         ? _vouchers
         : _vouchers.where((v) {
             final q = _listSearch.toLowerCase();
-            return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
+            return (v['voucher_number'] as String? ?? '')
+                    .toLowerCase()
+                    .contains(q) ||
                 (v['remarks'] as String? ?? '').toLowerCase().contains(q);
           }).toList();
 
@@ -564,13 +614,15 @@ class _ErpStockAdjustmentScreenState
                   children: [
                     const Expanded(
                       child: Text('Adjustment Vouchers',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700)),
                     ),
                     FilledButton.icon(
                       icon: const Icon(Icons.add, size: 14),
                       label: const Text('New', style: TextStyle(fontSize: 11)),
                       style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         minimumSize: Size.zero,
                       ),
                       onPressed: _newVoucher,
@@ -596,7 +648,8 @@ class _ErpStockAdjustmentScreenState
                 : filtered.isEmpty
                     ? const Center(
                         child: Text('No vouchers yet',
-                            style: TextStyle(fontSize: 12, color: Colors.black54)))
+                            style:
+                                TextStyle(fontSize: 12, color: Colors.black54)))
                     : ListView.builder(
                         itemCount: filtered.length,
                         itemBuilder: (_, i) {
@@ -604,9 +657,12 @@ class _ErpStockAdjustmentScreenState
                           final sel = _voucherId == v['id'];
                           final voided = v['is_voided'] == true;
                           final posted = !voided &&
-                              ((v['status'] as String? ?? 'draft') == 'posted' ||
+                              ((v['status'] as String? ?? 'draft') ==
+                                      'posted' ||
                                   v['is_locked'] == true);
-                          final badgeText = voided ? 'Voided' : (posted ? 'Posted' : 'Draft');
+                          final badgeText = voided
+                              ? 'Voided'
+                              : (posted ? 'Posted' : 'Draft');
                           final badgeColor = voided
                               ? Colors.red
                               : (posted ? Colors.green : Colors.orange);
@@ -614,24 +670,31 @@ class _ErpStockAdjustmentScreenState
                             onTap: () => _loadVoucher(v),
                             child: Container(
                               color: sel ? const Color(0x113366FF) : null,
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 8),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Row(
                                     children: [
                                       Expanded(
-                                        child: Text(v['voucher_number'] as String? ?? '(draft)',
+                                        child: Text(
+                                            v['voucher_number'] as String? ??
+                                                '(draft)',
                                             style: TextStyle(
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.w700,
-                                                color: sel ? const Color(0xFF3366FF) : Colors.black87)),
+                                                color: sel
+                                                    ? const Color(0xFF3366FF)
+                                                    : Colors.black87)),
                                       ),
                                       Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 5, vertical: 1),
                                         decoration: BoxDecoration(
                                           color: badgeColor.withOpacity(0.13),
-                                          borderRadius: BorderRadius.circular(3),
+                                          borderRadius:
+                                              BorderRadius.circular(3),
                                         ),
                                         child: Text(badgeText,
                                             style: TextStyle(
@@ -647,9 +710,12 @@ class _ErpStockAdjustmentScreenState
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                           fontSize: 11,
-                                          color: sel ? const Color(0xFF3366FF) : Colors.black54)),
+                                          color: sel
+                                              ? const Color(0xFF3366FF)
+                                              : Colors.black54)),
                                   Text('${v['voucher_date'] ?? ''}',
-                                      style: const TextStyle(fontSize: 10, color: Colors.black45)),
+                                      style: const TextStyle(
+                                          fontSize: 10, color: Colors.black45)),
                                 ],
                               ),
                             ),
@@ -667,8 +733,9 @@ class _ErpStockAdjustmentScreenState
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
-    final totalIn = _lines.fold<double>(0, (s, l) => s + l.inQty);
-    final totalOut = _lines.fold<double>(0, (s, l) => s + l.outQty);
+    final totalAmount = _lines.fold<double>(0, (s, l) => s + l.amount);
+    final totalNewAmount = _lines.fold<double>(0, (s, l) => s + l.newAmount);
+    final totalDiff = totalNewAmount - totalAmount;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -679,7 +746,9 @@ class _ErpStockAdjustmentScreenState
           Row(
             children: [
               IconButton(
-                icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 20),
+                icon: Icon(
+                    _drawerOpen ? Icons.chevron_left : Icons.chevron_right,
+                    size: 20),
                 onPressed: () => setState(() => _drawerOpen = !_drawerOpen),
                 padding: EdgeInsets.zero,
                 visualDensity: VisualDensity.compact,
@@ -687,20 +756,23 @@ class _ErpStockAdjustmentScreenState
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(_voucherNumber == null ? 'Stock Adjustment Voucher' : 'Adjustment $_voucherNumber',
+                child: Text(
+                    _voucherNumber == null
+                        ? 'Stock Adjustment Voucher'
+                        : 'Adjustment $_voucherNumber',
                     style: Theme.of(context).textTheme.headlineSmall),
               ),
               if (_isVoided)
                 const Padding(
                   padding: EdgeInsets.only(right: 8),
-                  child: Chip(label: Text('VOIDED'), backgroundColor: Color(0xFFFDE2E1)),
+                  child: Chip(
+                      label: Text('VOIDED'),
+                      backgroundColor: Color(0xFFFDE2E1)),
                 ),
-              // Void is intentionally removed: a posted adjustment writes cost
-              // layers and GL, so it must not be reversed in place. To undo an
-              // effect, enter a NEW adjustment voucher with the opposite lines.
               if (_isDraft && _voucherId != null)
                 IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.red, size: 22),
                   tooltip: 'Delete draft',
                   onPressed: _delete,
                 ),
@@ -719,7 +791,8 @@ class _ErpStockAdjustmentScreenState
                 SizedBox(
                   width: 200,
                   child: Text(
-                    (ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—',
+                    (ref.watch(selectedBranchProvider)?['name'] as String?) ??
+                        '—',
                     style: const TextStyle(fontSize: 16),
                   ),
                 ),
@@ -728,7 +801,8 @@ class _ErpStockAdjustmentScreenState
                 'Voucher No.',
                 SizedBox(
                   width: 140,
-                  child: Text(_voucherNumber ?? '(auto)', style: const TextStyle(fontSize: 16)),
+                  child: Text(_voucherNumber ?? '(auto)',
+                      style: const TextStyle(fontSize: 16)),
                 ),
               ),
               _field(
@@ -756,47 +830,56 @@ class _ErpStockAdjustmentScreenState
                   child: TextField(
                     controller: _remarks,
                     enabled: !_isLocked,
-                    decoration: const InputDecoration(hintText: 'Remarks', isDense: true),
+                    decoration: const InputDecoration(
+                        hintText: 'Remarks', isDense: true),
                   ),
                 ),
               ),
               if (_isLocked)
-                const Chip(label: Text('POSTED'), backgroundColor: Color(0xFFDFF5E1)),
+                const Chip(
+                    label: Text('POSTED'),
+                    backgroundColor: Color(0xFFDFF5E1)),
             ],
           ),
           const Divider(height: 32),
 
-          // ── line entry ──────────────────────────────────────────────
+          // ── line entry: pick a product, Add ─────────────────────────
           if (!_isLocked)
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Expanded(
-                  flex: 4,
                   child: Autocomplete<Map<String, dynamic>>(
                     displayStringForOption: (p) => (p['name'] ?? '') as String,
                     optionsBuilder: (TextEditingValue tev) {
                       final q = tev.text.trim().toLowerCase();
                       if (q.isEmpty) return _products;
                       return _products.where((p) =>
-                          ((p['name'] ?? '') as String).toLowerCase().contains(q) ||
-                          ((p['sku'] ?? '') as String).toLowerCase().contains(q));
+                          ((p['name'] ?? '') as String)
+                              .toLowerCase()
+                              .contains(q) ||
+                          ((p['sku'] ?? '') as String)
+                              .toLowerCase()
+                              .contains(q));
                     },
-                    onSelected: (p) {
-                      setState(() => _pickProductId = p['id'] as String);
-                      if (_pickType == 'revaluation') _loadPickCost(p['id'] as String);
-                    },
+                    onSelected: (p) =>
+                        setState(() => _pickProductId = p['id'] as String),
                     fieldViewBuilder: (context, ctrl, focus, onSubmit) {
                       _pickProductCtrl = ctrl;
                       return TextField(
                         controller: ctrl,
                         focusNode: focus,
                         decoration: const InputDecoration(
-                          labelText: 'Product', isDense: true,
+                          labelText: 'Add item',
+                          isDense: true,
                           hintText: 'Search name or SKU…',
                           prefixIcon: Icon(Icons.search, size: 18),
                         ),
-                        onChanged: (_) { if (_pickProductId != null) setState(() => _pickProductId = null); },
+                        onChanged: (_) {
+                          if (_pickProductId != null) {
+                            setState(() => _pickProductId = null);
+                          }
+                        },
                       );
                     },
                     optionsViewBuilder: (context, onSelected, options) {
@@ -805,7 +888,8 @@ class _ErpStockAdjustmentScreenState
                         child: Material(
                           elevation: 4,
                           child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 320, maxWidth: 420),
+                            constraints: const BoxConstraints(
+                                maxHeight: 320, maxWidth: 420),
                             child: ListView.builder(
                               padding: EdgeInsets.zero,
                               shrinkWrap: true,
@@ -814,8 +898,14 @@ class _ErpStockAdjustmentScreenState
                                 final p = options.elementAt(i);
                                 return ListTile(
                                   dense: true,
-                                  title: Text((p['name'] ?? '') as String, style: const TextStyle(fontSize: 13)),
-                                  subtitle: ((p['sku'] ?? '') as String).isEmpty ? null : Text(p['sku'] as String, style: const TextStyle(fontSize: 11)),
+                                  title: Text((p['name'] ?? '') as String,
+                                      style: const TextStyle(fontSize: 13)),
+                                  subtitle:
+                                      ((p['sku'] ?? '') as String).isEmpty
+                                          ? null
+                                          : Text(p['sku'] as String,
+                                              style: const TextStyle(
+                                                  fontSize: 11)),
                                   onTap: () => onSelected(p),
                                 );
                               },
@@ -827,98 +917,23 @@ class _ErpStockAdjustmentScreenState
                   ),
                 ),
                 const SizedBox(width: 12),
-                SizedBox(
-                  width: 130,
-                  child: DropdownButtonFormField<String>(
-                    value: _pickType,
-                    isDense: true,
-                    decoration: const InputDecoration(labelText: 'Type', isDense: true),
-                    items: const [
-                      DropdownMenuItem(value: 'quantity', child: Text('Adjust Qty')),
-                      DropdownMenuItem(value: 'revaluation', child: Text('Revalue')),
-                    ],
-                    onChanged: (v) => setState(() {
-                      _pickType = v ?? 'quantity';
-                      _pickIn.clear(); _pickOut.clear(); _pickNewCost.clear();
-                      _pickCurCost = null; _pickOnHand = null;
-                      if (_pickType == 'revaluation' && _pickProductId != null) {
-                        _loadPickCost(_pickProductId!);
-                      }
-                    }),
-                  ),
+                FilledButton(
+                  onPressed: _addingLine ? null : _addLine,
+                  child: _addingLine
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('Add'),
                 ),
-                const SizedBox(width: 12),
-                if (_pickType == 'revaluation')
-                  Expanded(
-                    child: TextField(
-                      controller: _pickNewCost,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'New Unit Cost', isDense: true,
-                        hintText: 'Correct cost/unit'),
-                    ),
-                  )
-                else ...[
-                  Expanded(
-                    child: TextField(
-                      controller: _pickIn,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                      decoration: const InputDecoration(labelText: 'In Qty', isDense: true),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _pickOut,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                      decoration: const InputDecoration(labelText: 'Out Qty', isDense: true),
-                    ),
-                  ),
-                ],
-                const SizedBox(width: 12),
-                FilledButton(onPressed: _addLine, child: const Text('Add')),
               ],
             ),
-          // Revaluation preview: current cost/on-hand + resulting value delta.
-          if (!_isLocked && _pickType == 'revaluation' && _pickProductId != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Builder(builder: (_) {
-                if (_pickCostLoading) {
-                  return const Text('Loading current cost…', style: TextStyle(fontSize: 12, color: Colors.black54));
-                }
-                final onHand = _pickOnHand ?? 0;
-                if (onHand <= 0) {
-                  final q = onHand.toStringAsFixed(onHand % 1 == 0 ? 0 : 2);
-                  return Text(
-                      'On hand: $q  —  cannot revalue ${onHand < 0 ? 'negative' : 'zero'} stock. Fix the quantity first with a Qty adjustment, then revalue. '
-                      '(Posting a revalue here will still set the product\'s cost reference for POS, but reprices no layers.)',
-                      style: const TextStyle(fontSize: 12, color: Colors.orange));
-                }
-                final cur = _pickCurCost ?? 0;
-                final nc = double.tryParse(_pickNewCost.text.trim()) ?? 0;
-                final delta = (nc - cur) * onHand;
-                final deltaStr = (delta >= 0 ? '+' : '') + money(delta);
-                final onHandStr = onHand.toStringAsFixed(onHand % 1 == 0 ? 0 : 2);
-                final curValStr = money(cur * onHand);
-                final newValStr = money(nc * onHand);
-                final tail = nc > 0
-                    ? '   \u2192   New value: $newValStr   (GL impact $deltaStr)'
-                    : '';
-                final line1 = 'On hand: $onHandStr   \u2022   Current cost: ${cur.toStringAsFixed(2)}   \u2022   Current value: $curValStr';
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(color: const Color(0xFFF2F6FF), borderRadius: BorderRadius.circular(8)),
-                  child: Text(
-                    line1 + tail,
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1A3D7C)),
-                  ),
-                );
-              }),
+          const SizedBox(height: 6),
+          if (!_isLocked)
+            const Text(
+              'Cost and Quantity are the current values. Enter the corrected '
+              'New Cost / New Quantity — the Difference is the value change that posts.',
+              style: TextStyle(fontSize: 11.5, color: Colors.black54),
             ),
           const SizedBox(height: 16),
 
@@ -926,44 +941,34 @@ class _ErpStockAdjustmentScreenState
           Table(
             border: TableBorder.all(color: Colors.black12),
             columnWidths: const {
-              0: FixedColumnWidth(40),
-              3: FixedColumnWidth(90),
-              4: FixedColumnWidth(100),
-              5: FixedColumnWidth(100),
-              6: FixedColumnWidth(48),
+              0: FixedColumnWidth(38),
+              2: FixedColumnWidth(96),
+              3: FixedColumnWidth(110),
+              4: FixedColumnWidth(96),
+              5: FixedColumnWidth(110),
+              6: FixedColumnWidth(110),
+              7: FixedColumnWidth(110),
+              8: FixedColumnWidth(120),
+              9: FixedColumnWidth(44),
             },
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
             children: [
               const TableRow(
                 decoration: BoxDecoration(color: Color(0xFF111111)),
                 children: [
                   _Th('#'),
-                  _Th('Product'),
-                  _Th('Unit'),
-                  _Th('Type'),
-                  _Th('In Qty'),
-                  _Th('Out Qty / New Cost'),
+                  _Th('Item'),
+                  _Th('Cost'),
+                  _Th('New Cost'),
+                  _Th('Quantity'),
+                  _Th('New Quantity'),
+                  _Th('Amount'),
+                  _Th('New Amount'),
+                  _Th('Difference'),
                   _Th(''),
                 ],
               ),
-              for (var i = 0; i < _lines.length; i++)
-                TableRow(children: [
-                  _Td('${i + 1}'),
-                  _Td(_lines[i].productName),
-                  _Td(_lines[i].uomName),
-                  _Td(_lines[i].lineType == 'revaluation' ? 'Revalue' : 'Qty'),
-                  _Td(_lines[i].lineType == 'revaluation'
-                      ? '—'
-                      : (_lines[i].inQty == 0 ? '' : '${_lines[i].inQty}')),
-                  _Td(_lines[i].lineType == 'revaluation'
-                      ? '@ ${_lines[i].newUnitCost?.toStringAsFixed(2) ?? '-'}'
-                      : (_lines[i].outQty == 0 ? '' : '${_lines[i].outQty}')),
-                  _isLocked
-                      ? const _Td('')
-                      : IconButton(
-                          icon: const Icon(Icons.close, size: 16),
-                          onPressed: () => setState(() => _lines.removeAt(i)),
-                        ),
-                ]),
+              for (var i = 0; i < _lines.length; i++) _lineRow(i),
               TableRow(
                 decoration: const BoxDecoration(color: Color(0xFFF2F2F2)),
                 children: [
@@ -971,12 +976,55 @@ class _ErpStockAdjustmentScreenState
                   const _Td('Total'),
                   const _Td(''),
                   const _Td(''),
-                  _Td('$totalIn'),
-                  _Td('$totalOut'),
+                  const _Td(''),
+                  const _Td(''),
+                  _Td(money(totalAmount), bold: true, right: true),
+                  _Td(money(totalNewAmount), bold: true, right: true),
+                  _Td(money(totalDiff), bold: true, right: true),
                   const _Td(''),
                 ],
               ),
             ],
+          ),
+          const SizedBox(height: 16),
+
+          // ── total difference callout ────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: totalDiff == 0
+                  ? const Color(0xFFF2F2F2)
+                  : (totalDiff > 0
+                      ? const Color(0xFFE9F7EC)
+                      : const Color(0xFFFDECEC)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                const Text('Total Difference',
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                const SizedBox(width: 16),
+                Text((totalDiff >= 0 ? '+' : '') + money(totalDiff),
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: totalDiff > 0
+                            ? const Color(0xFF1B7F3B)
+                            : (totalDiff < 0
+                                ? const Color(0xFFB3261E)
+                                : Colors.black87))),
+                const SizedBox(width: 12),
+                Text(
+                    totalDiff == 0
+                        ? 'no net change'
+                        : (totalDiff > 0
+                            ? 'inventory value increase'
+                            : 'inventory value decrease'),
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.black54)),
+              ],
+            ),
           ),
           const SizedBox(height: 24),
 
@@ -991,7 +1039,10 @@ class _ErpStockAdjustmentScreenState
               FilledButton(
                 onPressed: _saving ? null : () => _confirmPost(),
                 child: _saving
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
                     : const Text('Post (lock)'),
               ),
             ]),
@@ -1000,16 +1051,73 @@ class _ErpStockAdjustmentScreenState
     );
   }
 
+  TableRow _lineRow(int i) {
+    final l = _lines[i];
+    return TableRow(children: [
+      _Td('${i + 1}'),
+      _Td(l.productName),
+      _Td(_fmtNum(l.baseCost), right: true),
+      _isLocked
+          ? _Td(_fmtNum(l.newCost), right: true)
+          : _editCell(l.newCostCtrl),
+      _Td(_fmtNum(l.baseQty), right: true),
+      _isLocked
+          ? _Td(_fmtNum(l.newQty), right: true)
+          : _editCell(l.newQtyCtrl),
+      _Td(money(l.amount), right: true),
+      _Td(money(l.newAmount), right: true),
+      _Td((l.difference >= 0 ? '+' : '') + money(l.difference),
+          right: true,
+          color: l.difference > 0
+              ? const Color(0xFF1B7F3B)
+              : (l.difference < 0 ? const Color(0xFFB3261E) : null)),
+      _isLocked
+          ? const _Td('')
+          : IconButton(
+              icon: const Icon(Icons.close, size: 16),
+              onPressed: () => setState(() {
+                _lines[i].dispose();
+                _lines.removeAt(i);
+              }),
+            ),
+    ]);
+  }
+
+  Widget _editCell(TextEditingController ctrl) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: TextField(
+          controller: ctrl,
+          textAlign: TextAlign.right,
+          keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]'))
+          ],
+          onChanged: (_) => setState(() {}),
+          decoration: const InputDecoration(
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            border: OutlineInputBorder(),
+          ),
+        ),
+      );
+
   Future<void> _confirmPost() async {
+    final changed = _lines.where((l) => l.hasChange).length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('Post adjustment?'),
-        content: const Text(
-            'Posting locks the voucher and writes the GL entry (Inventory vs 5150). This cannot be undone from here.'),
+        content: Text(
+            'Posting locks the voucher and writes the GL entry for $changed '
+            'corrected item${changed == 1 ? '' : 's'} (Inventory vs 5150). '
+            'This cannot be undone from here.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Post')),
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Post')),
         ],
       ),
     );
@@ -1019,7 +1127,9 @@ class _ErpStockAdjustmentScreenState
   Widget _field(String label, Widget child) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(label,
+              style:
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 4),
           child,
         ],
@@ -1032,14 +1142,26 @@ class _Th extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.all(8),
-        child: Text(t, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        child: Text(t,
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
       );
 }
 
 class _Td extends StatelessWidget {
   final String t;
-  const _Td(this.t);
+  final bool bold;
+  final bool right;
+  final Color? color;
+  const _Td(this.t, {this.bold = false, this.right = false, this.color});
   @override
-  Widget build(BuildContext context) =>
-      Padding(padding: const EdgeInsets.all(8), child: Text(t));
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.all(8),
+        child: Text(t,
+            textAlign: right ? TextAlign.right : TextAlign.left,
+            style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                color: color)),
+      );
 }
