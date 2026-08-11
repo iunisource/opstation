@@ -635,7 +635,6 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/inventory-integrity')) _menuItem(context, 'Inventory Integrity', Icons.rule_outlined, '/erp/inventory-integrity', location),
       if (show('/erp/purchase-variance')) _menuItem(context, 'Purchase Price Variance', Icons.trending_up_outlined, '/erp/purchase-variance', location),
       if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
-      if (show('/erp/fg-without-bom')) _menuItem(context, 'Finished Goods without BOM', Icons.account_tree_outlined, '/erp/fg-without-bom', location),
     ];
     final inventoryItems = <Widget>[
       if (modules.contains('inventory')) ...[
@@ -763,6 +762,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final mfgReportItems = <Widget>[
       if (show('/manufacturing/production-waste-report')) _menuItem(context, 'Production Waste Report', Icons.recycling_outlined, '/manufacturing/production-waste-report', location),
       if (show('/manufacturing/overheads-summary')) _menuItem(context, 'Overheads Summary', Icons.summarize_outlined, '/manufacturing/overheads-summary', location),
+      if (show('/erp/fg-without-bom')) _menuItem(context, 'Finished Goods without BOM', Icons.account_tree_outlined, '/erp/fg-without-bom', location),
     ];
     final manufacturingItems = <Widget>[
       ...mfgTopItems,
@@ -838,7 +838,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/purchase-variance',
-           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan', '/erp/fg-without-bom'],
+           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan'],
           _trimDividers(inventoryItems), badge: transferPending),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
@@ -863,7 +863,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
           ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
-           '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary'],
+           '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary', '/erp/fg-without-bom'],
           _trimDividers(manufacturingItems), badge: jobAckPending),
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,

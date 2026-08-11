@@ -63,7 +63,6 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('stock_transfer', 'Stock Transfers', PermKind.doc, '/erp/stock-transfers'),
     PermItem('stock_adjustment', 'Stock Adjustment', PermKind.doc, '/erp/stock-adjustment'),
     PermItem('demand_plan', 'Demand Planner', PermKind.report, '/erp/demand-plan'),
-    PermItem('fg_without_bom', 'Finished Goods without BOM', PermKind.report, '/erp/fg-without-bom'),
   ]),
   PermModule('purchase', 'Purchase', Icons.shopping_cart_outlined, [
     PermItem('purchase_dashboard', 'Purchase Dashboard', PermKind.report, '/erp/purchase-dashboard'),
@@ -129,6 +128,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
     PermItem('production_waste', 'Production Waste Report', PermKind.report, '/manufacturing/production-waste-report'),
     PermItem('overheads_summary', 'Overheads Summary', PermKind.report, '/manufacturing/overheads-summary'),
+    PermItem('fg_without_bom', 'Finished Goods without BOM', PermKind.report, '/erp/fg-without-bom'),
     // Capability (not a navigable screen): who may SEE costing on the Production
     // Voucher & Job Card. Admins always can; grant this to specific users.
     // Editing/adding cost is separately restricted to master admins in-screen.

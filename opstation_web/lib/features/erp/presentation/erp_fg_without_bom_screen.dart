@@ -9,11 +9,16 @@ import 'package:printing/printing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
-/// Finished Goods without BOM — lists products classed as finished goods that
-/// are NOT the output of any *active* Product Assembly (BOM). Such an item
+/// Finished Goods without BOM — products that ought to be produced (grouped as
+/// finished goods) but have no *active* Product Assembly (BOM). Such an item
 /// can't be produced or drive raw-material planning, and its stock can only
-/// arrive via manual adjustment — so it usually means an assembly was never
-/// set up. Mirrors the reason the PO "FG on-hand" figure goes blank.
+/// arrive via manual adjustment — the same reason a PO's "FG on-hand" figure
+/// goes blank.
+///
+/// Products are filtered/labelled by their product GROUP (product_main_group),
+/// because that's the field this data actually uses to mark "Finished Goods" /
+/// "Pre-Production/Raw Material" etc. Raw-material groups are excluded outright
+/// — raws don't need a BOM.
 class ErpFgWithoutBomScreen extends ConsumerStatefulWidget {
   const ErpFgWithoutBomScreen({super.key});
   @override
@@ -24,18 +29,17 @@ class _Row {
   final String id;
   final String name;
   final String sku;
-  final String cls;
   final String group;
   final double stock;
-  _Row(this.id, this.name, this.sku, this.cls, this.group, this.stock);
+  _Row(this.id, this.name, this.sku, this.group, this.stock);
 }
 
 class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
   bool _loading = true;
   String? _error;
   List<_Row> _rows = [];
-  List<String> _classes = [];
-  String _class = 'all';
+  List<String> _groups = [];
+  String _group = 'all';
   final _searchCtrl = TextEditingController();
   final _qty = NumberFormat('#,##0.##');
 
@@ -50,6 +54,13 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  // A raw material / pre-production input never needs a BOM, so it's excluded
+  // from this finished-goods report. Detected by the group or class label.
+  bool _isRaw(String cls, String grp) {
+    final s = '$cls $grp'.toLowerCase();
+    return s.contains('raw') || s.contains('pre-produc') || s.contains('pre produc');
   }
 
   Future<List<Map<String, dynamic>>> _pageAll(
@@ -70,7 +81,6 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
     try {
       final c = Supabase.instance.client;
 
-      // All products (with their taxonomy).
       final prods = await _pageAll((f, t) => c.from('products')
           .select('id, name, sku, product_class, product_main_group')
           .eq('org_id', orgId).range(f, t));
@@ -92,42 +102,41 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         stock[pid] = (stock[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
       }
 
-      // Distinct classes, and the rows for products that lack an active BOM.
-      final classes = <String>{};
+      final groups = <String>{};
       final rows = <_Row>[];
       for (final p in prods) {
         final id = p['id'] as String;
-        final cls = (p['product_class'] as String?)?.trim() ?? '';
-        if (cls.isNotEmpty) classes.add(cls);
         if (withBom.contains(id)) continue; // has an assembly — fine
+        final cls = (p['product_class'] as String?)?.trim() ?? '';
+        final grp = (p['product_main_group'] as String?)?.trim() ?? '';
+        if (_isRaw(cls, grp)) continue; // raw / pre-production — not a finished good
+        if (grp.isNotEmpty) groups.add(grp);
         rows.add(_Row(
           id,
           (p['name'] as String?) ?? '(unnamed)',
           (p['sku'] as String?) ?? '',
-          cls.isEmpty ? '—' : cls,
-          (p['product_main_group'] as String?)?.trim() ?? '',
+          grp.isEmpty ? '—' : grp,
           stock[id] ?? 0,
         ));
       }
 
-      final classList = classes.toList()..sort();
-      // Default the class filter to the "finished"-goods class if one exists,
-      // so the report opens on exactly the items that should have a BOM.
-      String def = _class;
+      final groupList = groups.toList()..sort();
+      // Default to the "finished goods" group so the report opens on exactly
+      // the items that should have a BOM. Clamp so a stale selection can't trip
+      // the dropdown assertion.
+      String def = _group;
       if (def == 'all') {
-        final fin = classList.firstWhere(
-            (c) => c.toLowerCase().contains('finish'), orElse: () => '');
+        final fin = groupList.firstWhere(
+            (g) => g.toLowerCase().contains('finish'), orElse: () => '');
         if (fin.isNotEmpty) def = fin;
       }
-      // Never leave the dropdown on a class that no longer exists (would trip
-      // the DropdownButtonFormField value-must-match-an-item assertion).
-      if (def != 'all' && !classList.contains(def)) def = 'all';
+      if (def != 'all' && !groupList.contains(def)) def = 'all';
 
       if (!mounted) return;
       setState(() {
         _rows = rows;
-        _classes = classList;
-        _class = def;
+        _groups = groupList;
+        _group = def;
         _loading = false;
       });
     } catch (e) {
@@ -139,7 +148,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
   List<_Row> get _visible {
     final q = _searchCtrl.text.trim().toLowerCase();
     return _rows.where((r) {
-      if (_class != 'all' && r.cls != _class) return false;
+      if (_group != 'all' && r.group != _group) return false;
       if (q.isEmpty) return true;
       return r.name.toLowerCase().contains(q) || r.sku.toLowerCase().contains(q);
     }).toList()
@@ -164,22 +173,22 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
             style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
         pw.Text(
-            'Class: ${_class == 'all' ? 'All' : _class}     |     ${rows.length} item(s)     |     ${DateFormat('d MMM y').format(DateTime.now())}',
+            'Group: ${_group == 'all' ? 'All (raw materials excluded)' : _group}     |     ${rows.length} item(s)     |     ${DateFormat('d MMM y').format(DateTime.now())}',
             style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
-          headers: const ['#', 'Product', 'SKU', 'Class', 'Group', 'In Stock'],
+          headers: const ['#', 'Product', 'SKU', 'Group', 'In Stock'],
           data: [
             for (var i = 0; i < rows.length; i++)
               [
-                '${i + 1}', rows[i].name, rows[i].sku, rows[i].cls,
-                rows[i].group, _qty.format(rows[i].stock),
+                '${i + 1}', rows[i].name, rows[i].sku, rows[i].group,
+                _qty.format(rows[i].stock),
               ],
           ],
           headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
           cellStyle: const pw.TextStyle(fontSize: 9),
           headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-          cellAlignments: const {0: pw.Alignment.centerLeft, 5: pw.Alignment.centerRight},
+          cellAlignments: const {0: pw.Alignment.centerLeft, 4: pw.Alignment.centerRight},
         ),
       ],
     ));
@@ -210,25 +219,25 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         ]),
         const SizedBox(height: 4),
         const Text(
-            'Finished-goods products with no active Product Assembly (BOM). Until one is set up they can\'t be produced or planned, and their stock can only come from manual adjustments.',
+            'Products (by group) with no active Product Assembly (BOM). Raw materials are excluded — they don\'t need a BOM. Until an assembly is set up these items can\'t be produced or planned, and their stock can only come from manual adjustments.',
             style: TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
 
         // Filters
         Row(children: [
           SizedBox(
-            width: 240,
+            width: 260,
             child: DropdownButtonFormField<String>(
-              value: _class,
+              value: _group,
               isExpanded: true,
               decoration: const InputDecoration(
-                  labelText: 'Class', isDense: true, border: OutlineInputBorder()),
+                  labelText: 'Group', isDense: true, border: OutlineInputBorder()),
               items: [
-                const DropdownMenuItem(value: 'all', child: Text('All classes')),
-                for (final c in _classes)
-                  DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis)),
+                const DropdownMenuItem(value: 'all', child: Text('All groups (no raw materials)')),
+                for (final g in _groups)
+                  DropdownMenuItem(value: g, child: Text(g, overflow: TextOverflow.ellipsis)),
               ],
-              onChanged: (v) => setState(() => _class = v ?? 'all'),
+              onChanged: (v) => setState(() => _group = v ?? 'all'),
             ),
           ),
           const SizedBox(width: 12),
@@ -275,7 +284,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
                         style: const TextStyle(color: AppTheme.danger)))
                     : rows.isEmpty
                         ? const Center(
-                            child: Text('Every finished good has an active BOM. Nothing to set up.',
+                            child: Text('Nothing here — every finished good in this group has an active BOM.',
                                 style: TextStyle(color: AppTheme.textSecondary)))
                         : Column(children: [
                             _header(),
@@ -310,8 +319,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
       child: Row(children: const [
         SizedBox(width: 36, child: Text('#', style: s)),
         Expanded(flex: 5, child: Text('Product', style: s)),
-        Expanded(flex: 2, child: Text('Class', style: s)),
-        Expanded(flex: 2, child: Text('Group', style: s)),
+        Expanded(flex: 3, child: Text('Group', style: s)),
         Expanded(flex: 2, child: Text('In Stock', style: s, textAlign: TextAlign.right)),
       ]),
     );
@@ -331,8 +339,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
               Text(r.sku, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ]),
         ),
-        Expanded(flex: 2, child: Text(r.cls, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis)),
-        Expanded(flex: 2, child: Text(r.group.isEmpty ? '—' : r.group, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis)),
+        Expanded(flex: 3, child: Text(r.group, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis)),
         Expanded(
           flex: 2,
           child: Text(_qty.format(r.stock),
