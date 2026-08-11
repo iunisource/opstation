@@ -139,6 +139,13 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       routerConfig: router,
+      // Make all on-screen text selectable + copyable app-wide. Flutter renders
+      // to <canvas>, so text isn't natively selectable; SelectionArea provides
+      // drag-to-select and Ctrl+C (plus a floating Copy button) everywhere.
+      // Text fields, buttons and other gestures keep working — they claim their
+      // own gestures ahead of the selection.
+      builder: (context, child) =>
+          SelectionArea(child: child ?? const SizedBox.shrink()),
     );
   }
 }
