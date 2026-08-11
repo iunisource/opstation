@@ -111,21 +111,10 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         }
       }
 
-      // Open GL lines per customer for the drill-down (best-effort).
-      final detailByCust = <String, List<Map<String, dynamic>>>{};
-      try {
-        final det = await client.rpc('rpc_customer_aging_detail', params: params).limit(10000) as List;
-        for (final d in det) {
-          final m = d as Map;
-          final key = (m['customer_id'] as String?) ?? '__unallocated__';
-          (detailByCust[key] ??= []).add({
-            'voucher_number': (m['reference_number'] as String?) ?? '-',
-            'voucher_date': DateTime.tryParse('${m['ref_date']}') ?? _asOf,
-            'outstanding': (m['open_amt'] as num?)?.toDouble() ?? 0,
-            'ageDays': (m['age_days'] as num?)?.toInt() ?? 0,
-          });
-        }
-      } catch (e) { /* detail is optional */ }
+      // Per-invoice open lines (the drill-down detail) are the heaviest payload
+      // and are only needed when you narrow to a single customer. Skip them here
+      // so the table paints fast; they load in the background right after (see
+      // _loadDetail) and fill in the Invoices count + drill-down panel.
 
       final rows = <_AgingRow>[];
       for (final a in agg) {
@@ -146,15 +135,6 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         // (overpaid) balances which carry no open debits.
         row.current = net - b1 - b2 - b3 - b4;
         row.bucket1 = b1; row.bucket2 = b2; row.bucket3 = b3; row.bucket4 = b4;
-        final lines = detailByCust[key] ?? const <Map<String, dynamic>>[];
-        row.openInvoices.addAll(lines);
-        row.invoiceCount = lines.length;
-        for (final ln in lines) {
-          final dt = ln['voucher_date'] as DateTime;
-          if (row.oldestInvoiceDate == null || dt.isBefore(row.oldestInvoiceDate!)) {
-            row.oldestInvoiceDate = dt;
-          }
-        }
         rows.add(row);
       }
       // Route (market) + salesperson mapping for filters.
@@ -191,11 +171,53 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         _routeToSalesperson = routeToSp;
         _loading = false;
       });
+      // Load per-invoice detail in the background so the table is usable now.
+      _loadDetail();
     } catch (e) {
       // ignore: avoid_print
       print('[CustomerAging] load error: $e');
       setState(() => _loading = false);
     }
+  }
+
+  // Background pass: fetch per-invoice open lines and fill in the Invoices count
+  // + drill-down panel without blocking the initial table paint.
+  Future<void> _loadDetail() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final client = Supabase.instance.client;
+      final asOfStr = DateFormat('yyyy-MM-dd').format(_asOf);
+      final det = await client.rpc('rpc_customer_aging_detail',
+          params: {'p_org_id': orgId, 'p_as_of': asOfStr}).limit(20000) as List;
+      final byCust = <String, List<Map<String, dynamic>>>{};
+      for (final d in det) {
+        final m = d as Map;
+        final key = (m['customer_id'] as String?) ?? '__unallocated__';
+        (byCust[key] ??= []).add({
+          'voucher_number': (m['reference_number'] as String?) ?? '-',
+          'voucher_date': DateTime.tryParse('${m['ref_date']}') ?? _asOf,
+          'outstanding': (m['open_amt'] as num?)?.toDouble() ?? 0,
+          'ageDays': (m['age_days'] as num?)?.toInt() ?? 0,
+        });
+      }
+      if (!mounted) return;
+      for (final row in _rows) {
+        final lines = byCust[row.customerId] ?? const <Map<String, dynamic>>[];
+        row.openInvoices
+          ..clear()
+          ..addAll(lines);
+        row.invoiceCount = lines.length;
+        row.oldestInvoiceDate = null;
+        for (final ln in lines) {
+          final dt = ln['voucher_date'] as DateTime;
+          if (row.oldestInvoiceDate == null || dt.isBefore(row.oldestInvoiceDate!)) {
+            row.oldestInvoiceDate = dt;
+          }
+        }
+      }
+      setState(() {});
+    } catch (_) {/* detail is optional */}
   }
   List<_AgingRow> get _filteredSorted {
     final q = _search.toLowerCase().trim();

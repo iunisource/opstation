@@ -308,6 +308,11 @@ class _ErpCustomerBalanceReportScreenState
     final items = <Map<String, dynamic>>[];
     int dataRow = 0;
     final q = _search.trim().toLowerCase();
+    // Grand total across all groups, counting each customer once (a customer on
+    // two routes appears in two groups but must not be double-counted here so
+    // the grand total ties to Customer Aging / the AR control account).
+    final seen = <String>{};
+    double g1 = 0, g2 = 0, g3 = 0;
     for (final g in _rawGroups) {
       final name = g['name'] as String;
       final rows = <Map<String, dynamic>>[];
@@ -327,6 +332,12 @@ class _ErpCustomerBalanceReportScreenState
         t1 += (r['bal1'] as num).toDouble();
         t2 += (r['bal2'] as num).toDouble();
         t3 += (r['bal3'] as num).toDouble();
+        final cid = r['customer_id'] as String?;
+        if (cid != null && seen.add(cid)) {
+          g1 += (r['bal1'] as num).toDouble();
+          g2 += (r['bal2'] as num).toDouble();
+          g3 += (r['bal3'] as num).toDouble();
+        }
       }
       items.add({'type': 'header', 'name': name, 'count': rows.length});
       for (final r in rows) {
@@ -334,6 +345,15 @@ class _ErpCustomerBalanceReportScreenState
         dataRow++;
       }
       items.add({'type': 'footer', 'name': name, 't1': t1, 't2': t2, 't3': t3});
+    }
+    if (items.isNotEmpty) {
+      items.add({
+        'type': 'grand',
+        'count': seen.length,
+        't1': g1,
+        't2': g2,
+        't3': g3,
+      });
     }
     setState(() => _items = items);
   }
@@ -401,6 +421,12 @@ class _ErpCustomerBalanceReportScreenState
             '<td class="num">${_money(it['t2'] as num)}</td>'
             '<td class="num">${_money(it['t3'] as num)}</td>'
             '$extraCell</tr>');
+      } else if (it['type'] == 'grand') {
+        buf.write('<tr class="grand"><td>GRAND TOTAL — all customers (${it['count']})</td><td></td>'
+            '<td class="num">${_money(it['t1'] as num)}</td>'
+            '<td class="num">${_money(it['t2'] as num)}</td>'
+            '<td class="num">${_money(it['t3'] as num)}</td>'
+            '$extraCell</tr>');
       } else {
         final code = (it['code'] as String?) ?? '';
         final name = (it['shop_name'] as String?) ?? '';
@@ -429,6 +455,7 @@ class _ErpCustomerBalanceReportScreenState
         'th { background: #f0f4ff; font-weight: 700; } '
         '.num { text-align: right; } '
         '.grp td { background: #e8edff; font-weight: 700; } '
+        '.grand td { background: #1f2a44; color: #fff; font-weight: 800; } '
         '.tot td { background: #f3f6ff; font-weight: 700; border-top: 2px solid #333; } '
         '.rcpt { width: 11%; } '
         '</style></head><body>'
@@ -833,6 +860,28 @@ class _ErpCustomerBalanceReportScreenState
         ]),
       );
     }
+    if (it['type'] == 'grand') {
+      return Container(
+        decoration: const BoxDecoration(
+            color: Color(0xFF1F2A44),
+            border: Border(top: BorderSide(color: Color(0xFF1F2A44), width: 2))),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          Expanded(
+              flex: 3,
+              child: Text('GRAND TOTAL — all customers (${it['count']})',
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white),
+                  overflow: TextOverflow.ellipsis)),
+          const SizedBox(width: 110),
+          _amt(it['t1'] as num, 110, bold: true, onDark: true),
+          _amt(it['t2'] as num, 110, bold: true, onDark: true),
+          _amt(it['t3'] as num, 120, bold: true, onDark: true),
+        ]),
+      );
+    }
     final code = (it['code'] as String?) ?? '';
     final name = (it['shop_name'] as String?) ?? '';
     final disp = code.isNotEmpty ? '$code — $name' : name;
@@ -854,7 +903,8 @@ class _ErpCustomerBalanceReportScreenState
     );
   }
 
-  Widget _amt(num v, double w, {bool bold = false, bool muted = false}) {
+  Widget _amt(num v, double w,
+      {bool bold = false, bool muted = false, bool onDark = false}) {
     final neg = v.toDouble() < 0;
     return SizedBox(
       width: w,
@@ -863,11 +913,13 @@ class _ErpCustomerBalanceReportScreenState
           style: TextStyle(
               fontSize: 12.5,
               fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-              color: muted
-                  ? AppTheme.textSecondary
-                  : neg
-                      ? Colors.green
-                      : AppTheme.textPrimary)),
+              color: onDark
+                  ? (neg ? const Color(0xFF8BE9A0) : Colors.white)
+                  : muted
+                      ? AppTheme.textSecondary
+                      : neg
+                          ? Colors.green
+                          : AppTheme.textPrimary)),
     );
   }
 }
