@@ -114,6 +114,7 @@ import '../../features/erp/presentation/erp_receipt_vouchers_screen.dart';
 import '../../features/erp/presentation/erp_supplier_ledger_screen.dart';
 import '../../features/erp/presentation/erp_customer_ledger_screen.dart';
 import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
+import '../../features/erp/presentation/erp_fg_without_bom_screen.dart';
 import '../../features/erp/presentation/erp_quotation_screen.dart';
 import '../../features/erp/presentation/erp_demand_plan_screen.dart';
 import '../../features/erp/presentation/erp_pos_catalog_screen.dart';
@@ -359,6 +360,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/hr/leave', builder: (_, __) => const HrLeaveScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, __) => const ErpInventoryLedgerScreen()),
+          GoRoute(path: '/erp/fg-without-bom', builder: (_, __) => const ErpFgWithoutBomScreen()),
           GoRoute(path: '/erp/quotation', builder: (_, __) => const ErpQuotationScreen()),
           GoRoute(path: '/erp/demand-plan', builder: (_, __) => const ErpDemandPlanScreen()),
           GoRoute(path: '/erp/pos-config', builder: (_, __) => const ErpPosConfigScreen()),

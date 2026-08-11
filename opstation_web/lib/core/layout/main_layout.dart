@@ -616,85 +616,133 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final isErpUser = user?.role == WebUserRole.erpUser;
 
     // ── ERP Inventory submenu ─────────────────────────────────────────────
+    final invManage = <Widget>[
+      if (show('/erp/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/erp/products', location),
+      if (show('/erp/product-classifications')) _menuItem(context, 'Product Classifications', Icons.label_outline, '/erp/product-classifications', location),
+      if (show('/erp/stock')) _menuItem(context, 'Stock Levels', Icons.stacked_bar_chart_outlined, '/erp/stock', location),
+      if (show('/erp/inventory-ledger')) _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
+    ];
+    final invMovements = <Widget>[
+      if (show('/erp/opening-stock')) _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
+      if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location, badge: transferPending),
+      if (show('/erp/stock-adjustment')) _menuItem(context, 'Stock Adjustment', Icons.tune_outlined, '/erp/stock-adjustment', location),
+    ];
+    final invReports = <Widget>[
+      if (show('/erp/low-stock-report')) _menuItem(context, 'Low Stock Report', Icons.warning_amber_outlined, '/erp/low-stock-report', location),
+      if (show('/erp/stock-value-report')) _menuItem(context, 'Stock Value Report', Icons.payments_outlined, '/erp/stock-value-report', location),
+      if (show('/erp/stock-balance-report')) _menuItem(context, 'Stock Balance Report', Icons.inventory_outlined, '/erp/stock-balance-report', location),
+      if (show('/erp/stock-aging-report')) _menuItem(context, 'Stock Aging Report', Icons.hourglass_bottom_outlined, '/erp/stock-aging-report', location),
+      if (show('/erp/inventory-integrity')) _menuItem(context, 'Inventory Integrity', Icons.rule_outlined, '/erp/inventory-integrity', location),
+      if (show('/erp/purchase-variance')) _menuItem(context, 'Purchase Price Variance', Icons.trending_up_outlined, '/erp/purchase-variance', location),
+      if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
+      if (show('/erp/fg-without-bom')) _menuItem(context, 'Finished Goods without BOM', Icons.account_tree_outlined, '/erp/fg-without-bom', location),
+    ];
     final inventoryItems = <Widget>[
       if (modules.contains('inventory')) ...[
-        if (show('/erp/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/erp/products', location),
-        if (show('/erp/stock')) _menuItem(context, 'Stock Levels', Icons.stacked_bar_chart_outlined, '/erp/stock', location),
-        if (show('/erp/low-stock-report')) _menuItem(context, 'Low Stock Report', Icons.warning_amber_outlined, '/erp/low-stock-report', location),
-        if (show('/erp/stock-value-report')) _menuItem(context, 'Stock Value Report', Icons.payments_outlined, '/erp/stock-value-report', location),
-        if (show('/erp/stock-balance-report')) _menuItem(context, 'Stock Balance Report', Icons.inventory_outlined, '/erp/stock-balance-report', location),
-        if (show('/erp/stock-aging-report')) _menuItem(context, 'Stock Aging Report', Icons.hourglass_bottom_outlined, '/erp/stock-aging-report', location),
-        if (show('/erp/inventory-integrity')) _menuItem(context, 'Inventory Integrity', Icons.rule_outlined, '/erp/inventory-integrity', location),
-        if (show('/erp/purchase-variance')) _menuItem(context, 'Purchase Price Variance', Icons.trending_up_outlined, '/erp/purchase-variance', location),
-        if (show('/erp/product-classifications')) _menuItem(context, 'Product Classifications', Icons.label_outline, '/erp/product-classifications', location),
-        if (show('/erp/opening-stock')) _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
-        if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location, badge: transferPending),
-        if (show('/erp/stock-adjustment')) _menuItem(context, 'Stock Adjustment', Icons.tune_outlined, '/erp/stock-adjustment', location),
-        if (show('/erp/inventory-ledger')) _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
-        if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
+        ...invManage,
+        if (invMovements.isNotEmpty) _menuLabel('Movements'),
+        ...invMovements,
+        if (invReports.isNotEmpty) _menuLabel('Reports'),
+        ...invReports,
       ],
     ];
 
     // ── Per-section item lists ───────────────────────────────────────────
+    final purDocs = <Widget>[
+      if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
+      if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
+      if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location, badge: grnSupervisePending),
+      if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending + grnPendingInvoice),
+    ];
+    final purReturns = <Widget>[
+      if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
+      if (show('/erp/purchase-return-vouchers')) _menuItem(context, 'Purchase Return Invoices', Icons.description_outlined,       '/erp/purchase-return-vouchers', location, badge: priReviewPending),
+    ];
+    final purLedgersReports = <Widget>[
+      if (show('/erp/supplier-ledger')) _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
+      if (show('/erp/supplier-aging')) _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
+      if (show('/erp/purchase-dashboard')) _menuItem(context, 'Purchase Dashboard',      Icons.dashboard_outlined,         '/erp/purchase-dashboard',       location),
+      if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
+    ];
     final purchaseItems = <Widget>[
       if (modules.contains('purchase')) ...[
-        if (show('/erp/purchase-dashboard')) _menuItem(context, 'Purchase Dashboard',      Icons.dashboard_outlined,         '/erp/purchase-dashboard',       location),
-        if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
-        if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
-        if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
-        if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location, badge: grnSupervisePending),
-        if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending + grnPendingInvoice),
-        _menuDivider(),
-        if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
-        if (show('/erp/purchase-return-vouchers')) _menuItem(context, 'Purchase Return Invoices', Icons.description_outlined,       '/erp/purchase-return-vouchers', location, badge: priReviewPending),
-        _menuDivider(),
-        if (show('/erp/supplier-ledger')) _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
-        if (show('/erp/supplier-aging')) _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
+        ...purDocs,
+        if (purReturns.isNotEmpty) _menuLabel('Returns'),
+        ...purReturns,
+        if (purLedgersReports.isNotEmpty) _menuLabel('Ledgers & Reports'),
+        ...purLedgersReports,
       ],
     ];
 
+    final salesDocs = <Widget>[
+      if (show('/customers')) _menuItem(context, 'Customers',             Icons.store_outlined,             '/customers',                 location, badge: customerSupervisePending),
+      if (show('/erp/quotation')) _menuItem(context, 'Quotation',            Icons.request_quote_outlined,     '/erp/quotation',             location),
+      if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
+      if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
+      if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
+      if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
+      if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending),
+    ];
+    final salesReturns = <Widget>[
+      if (show('/erp/sales-returns')) _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
+      if (show('/erp/sales-return-invoices')) _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location),
+    ];
+    final salesLedgersReports = <Widget>[
+      if (show('/erp/customer-ledger')) _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
+      if (show('/erp/customer-aging')) _menuItem(context, 'Customer Aging', Icons.hourglass_bottom_outlined, '/erp/customer-aging', location),
+      if (show('/erp/sales-dashboard')) _menuItem(context, 'Sales Dashboard',         Icons.dashboard_outlined,         '/erp/sales-dashboard',          location),
+      if (show('/erp/sales-report')) _menuItem(context, 'Sales Report',         Icons.assessment_outlined,        '/erp/sales-report',          location),
+      if (show('/erp/sales-return-report')) _menuItem(context, 'Sales Return Report',  Icons.summarize_outlined,         '/erp/sales-return-report',    location),
+    ];
     final salesItems = <Widget>[
       if (modules.contains('sales')) ...[
-        if (show('/erp/sales-dashboard')) _menuItem(context, 'Sales Dashboard',         Icons.dashboard_outlined,         '/erp/sales-dashboard',          location),
-        if (show('/customers')) _menuItem(context, 'Customers',             Icons.store_outlined,             '/customers',                 location, badge: customerSupervisePending),
-        if (show('/erp/quotation')) _menuItem(context, 'Quotation',            Icons.request_quote_outlined,     '/erp/quotation',             location),
-        if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
-        if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
-        if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
-        if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
-        if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending),
-        _menuDivider(),
-        if (show('/erp/sales-returns')) _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
-        if (show('/erp/sales-return-invoices')) _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location),
-        if (show('/erp/sales-report')) _menuItem(context, 'Sales Report',         Icons.assessment_outlined,        '/erp/sales-report',          location),
-        if (show('/erp/sales-return-report')) _menuItem(context, 'Sales Return Report',  Icons.summarize_outlined,         '/erp/sales-return-report',    location),
-        _menuDivider(),
-        if (show('/erp/customer-ledger')) _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
-        if (show('/erp/customer-aging')) _menuItem(context, 'Customer Aging', Icons.hourglass_bottom_outlined, '/erp/customer-aging', location),
-        
+        ...salesDocs,
+        if (salesReturns.isNotEmpty) _menuLabel('Returns'),
+        ...salesReturns,
+        if (salesLedgersReports.isNotEmpty) _menuLabel('Ledgers & Reports'),
+        ...salesLedgersReports,
       ],
     ];
 
+    final posMain = <Widget>[
+      if (show('/erp/pos')) _menuItem(context, 'POS',         Icons.storefront_outlined, '/erp/pos',         location),
+      if (show('/erp/pos-catalog')) _menuItem(context, 'POS Catalog',    Icons.list_alt_outlined,     '/erp/pos-catalog',           location),
+    ];
+    final posSetup = <Widget>[
+      if (show('/erp/pos-config')) _menuItem(context, 'Configuration', Icons.tune_outlined, '/erp/pos-config', location),
+      if (show('/erp/promoters')) _menuItem(context, 'Promoters', Icons.badge_outlined, '/erp/promoters', location),
+      if (show('/erp/promoter-ledger')) _menuItem(context, 'Promoter Ledger', Icons.account_balance_wallet_outlined, '/erp/promoter-ledger', location),
+      if (show('/erp/pos-expense-management')) _menuItem(context, 'Expense Management',  Icons.receipt_outlined,          '/erp/pos-expense-management',  location),
+    ];
+    final posReports = <Widget>[
+      if (show('/erp/pos-customer-history')) _menuItem(context, 'Customer History', Icons.manage_accounts_outlined, '/erp/pos-customer-history', location),
+      if (show('/erp/pos-held-bills')) _menuItem(context, 'Bills on Hold',       Icons.pause_circle_outlined,    '/erp/pos-held-bills',          location),
+    ];
     final posItems = <Widget>[
       if (modules.contains('pos')) ...[
-        if (show('/erp/pos-config')) _menuItem(context, 'Configuration', Icons.tune_outlined, '/erp/pos-config', location),
-        if (show('/erp/promoters')) _menuItem(context, 'Promoters', Icons.badge_outlined, '/erp/promoters', location),
-        if (show('/erp/promoter-ledger')) _menuItem(context, 'Promoter Ledger', Icons.account_balance_wallet_outlined, '/erp/promoter-ledger', location),
-        if (show('/erp/pos')) _menuItem(context, 'POS',         Icons.storefront_outlined, '/erp/pos',         location),
-        if (show('/erp/pos-catalog')) _menuItem(context, 'POS Catalog',    Icons.list_alt_outlined,     '/erp/pos-catalog',           location),
-        if (show('/erp/pos-customer-history')) _menuItem(context, 'Customer History', Icons.manage_accounts_outlined, '/erp/pos-customer-history', location),
-        if (show('/erp/pos-held-bills')) _menuItem(context, 'Bills on Hold',       Icons.pause_circle_outlined,    '/erp/pos-held-bills',          location),
-        if (show('/erp/pos-expense-management')) _menuItem(context, 'Expense Management',  Icons.receipt_outlined,          '/erp/pos-expense-management',  location),
+        ...posMain,
+        if (posSetup.isNotEmpty) _menuLabel('Setup'),
+        ...posSetup,
+        if (posReports.isNotEmpty) _menuLabel('Reports'),
+        ...posReports,
       ],
     ];
 
     // Reports section items — gated per-user via show() like every other menu.
-    final reportItems = <Widget>[
-      if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
+    final repBalances = <Widget>[
       if (show('/reports/customer-balance')) _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location),
       if (show('/reports/supplier-balance')) _menuItem(context, 'Supplier Balance Report', Icons.account_balance_outlined, '/reports/supplier-balance', location),
+    ];
+    final repAnalysis = <Widget>[
+      if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
       if (show('/reports/skipped-receipts')) _menuItem(context, 'Skipped Receipts Report', Icons.receipt_long_outlined, '/reports/skipped-receipts', location),
+    ];
+    final reportItems = <Widget>[
       if (show('/reports/center')) _menuItem(context, 'Reports Center', Icons.grid_view_outlined, '/reports/center', location),
+      if (repBalances.isNotEmpty) _menuLabel('Balances'),
+      ...repBalances,
+      if (repAnalysis.isNotEmpty) _menuLabel('Analysis'),
+      ...repAnalysis,
     ];
 
     // Top-level production items (non-voucher)
@@ -724,26 +772,48 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       ...mfgReportItems,
     ];
 
-    final hrItems = <Widget>[
+    final hrDirectory = <Widget>[
       if (show('/hr/employees')) _menuItem(context, 'Employee Directory', Icons.groups_outlined, '/hr/employees', location),
+    ];
+    final hrAttendance = <Widget>[
       if (show('/hr/attendance')) _menuItem(context, 'Attendance', Icons.fact_check_outlined, '/hr/attendance', location),
       if (show('/hr/attendance-kiosk')) _menuItem(context, 'Attendance Kiosk', Icons.qr_code_scanner_outlined, '/hr/attendance-kiosk', location),
       if (show('/hr/attendance-board')) _menuItem(context, 'Attendance Board', Icons.grid_view_outlined, '/hr/attendance-board', location),
+    ];
+    final hrLeave = <Widget>[
       if (show('/hr/leave')) _menuItem(context, 'Leave', Icons.beach_access_outlined, '/hr/leave', location),
     ];
+    final hrItems = <Widget>[
+      ...hrDirectory,
+      if (hrAttendance.isNotEmpty) _menuLabel('Attendance'),
+      ...hrAttendance,
+      if (hrLeave.isNotEmpty) _menuLabel('Leave'),
+      ...hrLeave,
+    ];
 
-    final financialItems = <Widget>[
+    final finSetup = <Widget>[
       if (show('/erp/chart-of-accounts')) _menuItem(context, 'Chart of Accounts',  Icons.account_tree_outlined,    '/erp/chart-of-accounts',          location),
+    ];
+    final finVouchers = <Widget>[
       if (show('/financials/journal-vouchers')) _menuItem(context, 'Journal Vouchers',   Icons.edit_note_outlined,          '/financials/journal-vouchers',    location),
       if (show('/financials/opening-journal')) _menuItem(context, 'Opening Journal', Icons.flag_outlined, '/financials/opening-journal', location),
       if (show('/erp/payment-vouchers')) _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
       if (show('/erp/receipt-vouchers')) _menuItem(context, 'Receipt Vouchers', Icons.payments_outlined,     '/erp/receipt-vouchers',      location),
       if (show('/erp/pdc-voucher')) _menuItem(context, 'PDC Voucher', Icons.account_balance_wallet_outlined, '/erp/pdc-voucher', location),
+    ];
+    final finReports = <Widget>[
       if (show('/financials/trial-balance')) _menuItem(context, 'Trial Balance',    Icons.account_balance_outlined, '/financials/trial-balance',  location),
       if (show('/financials/account-activity')) _menuItem(context, 'Account Activity', Icons.receipt_long_outlined, '/financials/account-activity', location),
       if (show('/financials/cash-book')) _menuItem(context, 'Cash Book Report', Icons.menu_book_outlined, '/financials/cash-book', location),
       if (show('/financials/profit-loss')) _menuItem(context, 'Profit & Loss',    Icons.trending_up_outlined,     '/financials/profit-loss',    location),
       if (show('/financials/balance-sheet')) _menuItem(context, 'Balance Sheet',    Icons.balance_outlined,         '/financials/balance-sheet',  location),
+    ];
+    final financialItems = <Widget>[
+      ...finSetup,
+      if (finVouchers.isNotEmpty) _menuLabel('Vouchers'),
+      ...finVouchers,
+      if (finReports.isNotEmpty) _menuLabel('Reports'),
+      ...finReports,
     ];
 
     final erpAdminItems = <Widget>[
@@ -768,7 +838,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/purchase-variance',
-           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan'],
+           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan', '/erp/fg-without-bom'],
           _trimDividers(inventoryItems), badge: transferPending),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
@@ -821,7 +891,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
           if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
           if (show('/erp/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/erp/files', location),
-          if (_hasItems(erpAdminItems)) _menuDivider(),
+          if (_hasItems(erpAdminItems)) _menuLabel('Administration'),
           ..._trimDividers(erpAdminItems),
         ]),
     ];
@@ -848,11 +918,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Routes', Icons.route_outlined, '/routes', location),
               _menuItem(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
               _menuItem(context, 'Live Map', Icons.map_outlined, '/live-map', location),
+              _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
+              _menuLabel('Reports'),
               _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
               _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
+              _menuLabel('Setup'),
               _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
               _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
-              _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
               if (user?.role == WebUserRole.masterAdmin)
                 _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
             ],
@@ -872,13 +944,15 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
              if (targetsOn) '/intelligence/performance'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/intelligence/dashboard', location),
+              if (targetsOn)
+                _menuItem(context, 'Performance', Icons.leaderboard_outlined, '/intelligence/performance', location),
+              _menuLabel('Field Data'),
+              _menuItem(context, 'Placement Audit', Icons.checklist_outlined, '/intelligence/placement', location),
+              _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
+              _menuLabel('Setup'),
               _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
               _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
               _menuItem(context, 'Competitor Brand Aliases', Icons.spellcheck_outlined, '/competitor-brand-aliases', location),
-              _menuItem(context, 'Placement Audit', Icons.checklist_outlined, '/intelligence/placement', location),
-              _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
-              if (targetsOn)
-                _menuItem(context, 'Performance', Icons.leaderboard_outlined, '/intelligence/performance', location),
             ],
           ),
           ...splitErpMenus(),
