@@ -37,6 +37,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool _approvalRequired = false;       // per-open PO (detail)
   bool _orgApprovalRequired = false;   // org toggle (drives list pending chips)
   bool _showStockConsumption = false;
+  bool _showFgStock = false; // org.po_fg_stock — finished-goods stock per raw line
   Map<String, Map<String, dynamic>> _lineMetrics = {};
   bool _hasGrn = false; // true if any GRN exists against this PO (cascade lock)
   bool _listLoading = true;
@@ -214,12 +215,16 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       final items = await client.from('purchase_order_items').select('*,products(name,sku),uoms(abbreviation)').eq('purchase_order_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: po['created_by'] as String?);
       final cfg = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
-          .inFilter('key', ['org.po_approval_required', 'org.po_show_stock_consumption', 'org.voucher_dates_editable']);
-      bool approvalReq = false, showSC = false, datesEd = false;
+          .inFilter('key', ['org.po_approval_required', 'org.po_show_stock_consumption',
+            'org.voucher_dates_editable', 'org.po_fg_stock', 'org.po_fg_branch_id']);
+      bool approvalReq = false, showSC = false, datesEd = false, showFg = false;
+      String fgBranch = 'all';
       for (final r in cfg as List) {
         if (r['key'] == 'org.po_approval_required') approvalReq = r['value'] == 'true';
         if (r['key'] == 'org.po_show_stock_consumption') showSC = r['value'] == 'true';
         if (r['key'] == 'org.voucher_dates_editable') datesEd = r['value'] == 'true';
+        if (r['key'] == 'org.po_fg_stock') showFg = r['value'] == 'true';
+        if (r['key'] == 'org.po_fg_branch_id') fgBranch = (r['value'] as String? ?? 'all');
       }
       final itemList = List<Map<String, dynamic>>.from(items);
       Map<String, Map<String, dynamic>> metrics = {};
@@ -239,13 +244,76 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           } catch (_) {}
         }
       }
+      // ── Finished-goods stock per raw line (BOM reverse lookup) ────────────
+      // raw product -> BOM(s) using it as a component -> the BOM's finished
+      // product -> that FG's stock at the configured branch ('all' = summed).
+      // All batched: 3 queries total regardless of line count.
+      if (showFg) {
+        try {
+          final pids = itemList.map((it) => it['product_id'] as String).toSet().toList();
+          if (pids.isNotEmpty) {
+            final comps = await client.from('bom_components')
+                .select('bom_id, product_id').inFilter('product_id', pids)
+                .limit(10000);
+            final bomIds = <String>{
+              for (final c in (comps as List)) '${c['bom_id']}'
+            }.toList();
+            if (bomIds.isNotEmpty) {
+              // Active BOMs only — a superseded assembly must not link a raw
+              // to a finished good it no longer feeds.
+              final heads = await client.from('bom_headers')
+                  .select('id, product_id').eq('org_id', _orgId ?? '')
+                  .eq('status', 'active')
+                  .inFilter('id', bomIds);
+              final bomFg = <String, String>{
+                for (final h in (heads as List))
+                  '${h['id']}': h['product_id'] as String
+              };
+              // raw -> set of FG products (a raw may feed multiple BOMs).
+              final rawFgs = <String, Set<String>>{};
+              for (final c in comps) {
+                final fg = bomFg['${c['bom_id']}'];
+                if (fg != null) {
+                  (rawFgs[c['product_id'] as String] ??= {}).add(fg);
+                }
+              }
+              final fgIds = rawFgs.values.expand((s) => s).toSet().toList();
+              if (fgIds.isNotEmpty) {
+                var sq = client.from('inventory_stock')
+                    .select('product_id, quantity')
+                    .eq('org_id', _orgId ?? '')
+                    .inFilter('product_id', fgIds);
+                if (fgBranch != 'all' && fgBranch.isNotEmpty) {
+                  sq = sq.eq('branch_id', fgBranch);
+                }
+                final fgStock = <String, double>{};
+                for (final s in (await sq) as List) {
+                  final pid = s['product_id'] as String;
+                  fgStock[pid] = (fgStock[pid] ?? 0) +
+                      ((s['quantity'] as num?)?.toDouble() ?? 0);
+                }
+                rawFgs.forEach((raw, fgs) {
+                  double total = 0;
+                  for (final fg in fgs) {
+                    total += fgStock[fg] ?? 0;
+                  }
+                  final m = metrics.putIfAbsent(raw, () => {});
+                  m['fg_on_hand'] = total;
+                  m['fg_count'] = fgs.length;
+                });
+              }
+            }
+          }
+        } catch (_) {/* FG info is best-effort; the PO renders without it */}
+      }
       bool hasGrn = false;
       try {
         final g = await client.from('purchase_grns').select('id').eq('po_id', id).limit(1);
         hasGrn = (g as List).isNotEmpty;
       } catch (_) {}
       setState(() { _detail = Map<String, dynamic>.from(po); _items = itemList; _meta = meta;
-        _approvalRequired = approvalReq; _showStockConsumption = showSC; _lineMetrics = metrics; _datesEditable = datesEd;
+        _approvalRequired = approvalReq; _showStockConsumption = showSC; _showFgStock = showFg;
+        _lineMetrics = metrics; _datesEditable = datesEd;
         _hasGrn = hasGrn;
         _syncLineCtrls();
         _detailLoading = false; });
@@ -795,8 +863,11 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             if (_isLocked && _approvalRequired && _detail['approved_at'] == null && !_isVoided && _canApprove)
               ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve'),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.green), onPressed: _approve),
-            // Only offer short-close once at least one GRN exists.
-            if (_isLocked && !_isVoided && _hasGrn && _outstandingQty > 0 && _detail['status'] != 'invoiced')
+            // Only offer short-close once at least one GRN exists, and never
+            // after the PO is already marked received (short-close flips it to
+            // 'received' — offering it again just re-logged the same drop).
+            if (_isLocked && !_isVoided && _hasGrn && _outstandingQty > 0 &&
+                _detail['status'] != 'invoiced' && _detail['status'] != 'received')
               OutlinedButton.icon(icon: const Icon(Icons.playlist_add_check, size: 16), label: const Text('Close remaining'),
                   style: OutlinedButton.styleFrom(foregroundColor: Colors.orange.shade800), onPressed: _shortClose),
             if (_canEditDate)
@@ -921,12 +992,28 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                           )
                         : Text((it['description'] as String?)?.isNotEmpty == true ? it['description'] as String : '—',
                             style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppTheme.textSecondary))),
-                    if (_showStockConsumption) Builder(builder: (_) {
+                    if (_showStockConsumption || _showFgStock) Builder(builder: (_) {
                       final m = _lineMetrics[it['product_id']];
-                      final oh = (m?['on_hand'] as double?) ?? 0;
-                      final av = (m?['avg'] as double?) ?? 0;
+                      final parts = <String>[];
+                      if (_showStockConsumption) {
+                        final oh = (m?['on_hand'] as double?) ?? 0;
+                        final av = (m?['avg'] as double?) ?? 0;
+                        parts.add('On-hand: ${oh.toStringAsFixed(oh % 1 == 0 ? 0 : 1)}');
+                        parts.add('3-mo avg: ${av.toStringAsFixed(1)}/mo');
+                      }
+                      if (_showFgStock) {
+                        final fg = m?['fg_on_hand'] as double?;
+                        if (fg != null) {
+                          final n = (m?['fg_count'] as int?) ?? 1;
+                          parts.add('FG on-hand: ${fg.toStringAsFixed(fg % 1 == 0 ? 0 : 1)}'
+                              '${n > 1 ? ' ($n FGs)' : ''}');
+                        }
+                        // No BOM links this raw to a finished good -> show nothing
+                        // rather than a misleading zero.
+                      }
+                      if (parts.isEmpty) return const SizedBox.shrink();
                       return Padding(padding: const EdgeInsets.only(top: 2), child: Text(
-                        'On-hand: ${oh.toStringAsFixed(oh % 1 == 0 ? 0 : 1)}  ·  3-mo avg: ${av.toStringAsFixed(1)}/mo',
+                        parts.join('  ·  '),
                         style: const TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600)));
                     }),
                   ])),

@@ -27,6 +27,15 @@ class _TextSetting {
   const _TextSetting(this.key, this.label, {this.hint = ''});
 }
 
+/// An optional branch selector attached to a toggle (e.g. "which branch's
+/// stock to compare"). Shown (and saved) only while the parent toggle is ON.
+/// Stored in `app_config` as the branch id string, or 'all' for all branches.
+class _BranchField {
+  final String key; // app_config key, e.g. 'org.po_fg_branch_id'
+  final String label;
+  const _BranchField(this.key, this.label);
+}
+
 /// Definition of a single org-level admin toggle.
 /// To add a new setting, append one entry to [_toggles] below — the screen
 /// renders, loads, and persists it automatically. Boolean values are stored in
@@ -38,9 +47,10 @@ class _AdminToggle {
   final String subtitle;
   final _NumberField? number; // optional numeric companion
   final _TextSetting? text; // optional free-text companion
+  final _BranchField? branch; // optional branch-picker companion
   final bool defaultOn; // value used when no app_config row exists yet
   const _AdminToggle(this.key, this.title, this.subtitle,
-      {this.number, this.text, this.defaultOn = false});
+      {this.number, this.text, this.branch, this.defaultOn = false});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -103,6 +113,17 @@ const List<_AdminToggle> _toggles = [
     'On the Purchase Order screen, show each line item\'s current on-hand stock '
         'for the PO branch and its average monthly consumption (sales/issues) over '
         'the last 3 months — to guide ordering quantities.',
+  ),
+  _AdminToggle(
+    'org.po_fg_stock',
+    'Show finished-goods stock on Purchase Order',
+    'For factory branches buying raw materials: on each PO line, also show the '
+        'on-hand stock of the FINISHED product(s) whose BOM uses that raw item — '
+        'so you can assess finished availability before re-ordering raw. The '
+        'raw-to-finished link comes from your Product Assemblies (BOMs). Choose '
+        'below which branch\'s finished stock to compare (e.g. the central '
+        'warehouse), or all branches combined.',
+    branch: _BranchField('org.po_fg_branch_id', 'Compare finished-goods stock at'),
   ),
   // _AdminToggle('org.some_flag', 'Title shown to admin', 'What it does.'),
 
@@ -365,6 +386,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Purchase & GRN', Icons.shopping_cart_outlined, [
     'org.po_approval_required',
     'org.po_show_stock_consumption',
+    'org.po_fg_stock',
     'org.pi_updates_cost_price',
     'org.pri_price_editable',
     'org.doc_review_flow_pi',
@@ -405,6 +427,8 @@ class _ErpAdminSettingsScreenState
   final Map<String, bool> _values = {};
   final Map<String, TextEditingController> _numCtrls = {};
   final Map<String, TextEditingController> _textCtrls = {};
+  final Map<String, String> _branchValues = {}; // branch-picker companions ('all' or branch id)
+  List<Map<String, dynamic>> _branches = [];
   final Set<String> _saving = {};
   bool _loading = true;
   bool _backupRunning = false;
@@ -450,7 +474,17 @@ class _ErpAdminSettingsScreenState
       for (final r in rows as List) {
         cfg[r['key'] as String] = r['value'] as String? ?? '';
       }
+      // Branch roster for any branch-picker companions.
+      List<Map<String, dynamic>> branches = [];
+      try {
+        branches = List<Map<String, dynamic>>.from(await Supabase.instance.client
+            .from('branches')
+            .select('id, name')
+            .eq('org_id', orgId)
+            .order('name'));
+      } catch (_) {}
       setState(() {
+        _branches = branches;
         for (final t in _toggles) {
           _values[t.key] =
               cfg.containsKey(t.key) ? cfg[t.key] == 'true' : t.defaultOn;
@@ -467,6 +501,15 @@ class _ErpAdminSettingsScreenState
             if (storedT != null) {
               _textCtrls[tx.key]!.text = storedT;
             }
+          }
+          final b = t.branch;
+          if (b != null) {
+            final storedB = cfg[b.key]?.trim();
+            // Fall back to 'all' if unset or the stored branch no longer exists.
+            final valid = storedB != null &&
+                (storedB == 'all' ||
+                    branches.any((br) => br['id'] == storedB));
+            _branchValues[b.key] = valid ? storedB : 'all';
           }
         }
         _loading = false;
@@ -677,6 +720,68 @@ class _ErpAdminSettingsScreenState
     );
   }
 
+  Future<void> _saveBranch(_BranchField b, String value) async {
+    final old = _branchValues[b.key] ?? 'all';
+    setState(() {
+      _branchValues[b.key] = value;
+      _saving.add(b.key);
+    });
+    try {
+      await _persist(b.key, value);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _branchValues[b.key] = old); // revert on failure
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving.remove(b.key));
+    }
+  }
+
+  Widget _branchRow(_BranchField b) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Row(children: [
+        Text(b.label,
+            style:
+                const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 260,
+          child: DropdownButtonFormField<String>(
+            value: _branchValues[b.key] ?? 'all',
+            isExpanded: true,
+            style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              const DropdownMenuItem(
+                  value: 'all', child: Text('All branches (combined)')),
+              for (final br in _branches)
+                DropdownMenuItem(
+                    value: br['id'] as String, child: Text('${br['name']}')),
+            ],
+            onChanged: (v) {
+              if (v != null) _saveBranch(b, v);
+            },
+          ),
+        ),
+        if (_saving.contains(b.key)) ...[
+          const SizedBox(width: 10),
+          const SizedBox(
+              width: 13,
+              height: 13,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      ]),
+    );
+  }
+
   // One switch row (+ its optional number/text companion when ON).
   Widget _toggleTile(_AdminToggle t) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
@@ -707,6 +812,7 @@ class _ErpAdminSettingsScreenState
       ),
       if (t.number != null && (_values[t.key] ?? false)) _numberRow(t.number!),
       if (t.text != null && (_values[t.key] ?? false)) _textRow(t.text!),
+      if (t.branch != null && (_values[t.key] ?? false)) _branchRow(t.branch!),
     ]);
   }
 
