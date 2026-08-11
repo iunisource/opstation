@@ -583,8 +583,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         final wave = tasks.sublist(start, end);
         final results = await Future.wait(wave.map((t) async {
           try {
+            // Match by primary key only. Adding .eq('org_id', orgId) here can
+            // match ZERO rows for products whose stored org_id tag differs from
+            // the session org (a known data quirk), which made the update
+            // silently no-op — "success" with nothing changed. RLS still scopes
+            // access; the id is unique and came from this org's product list.
             await client.from('products').update(t['data'] as Map<String, dynamic>)
-                .eq('id', t['id'] as String).eq('org_id', orgId);
+                .eq('id', t['id'] as String);
             return true;
           } catch (_) { return false; }
         }));
@@ -1556,13 +1561,21 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       // Interpretation B: a blank/missing cell → null (skip on update, empty on
       // insert). A typed number (including 0) → that number. This lets update
       // mode preserve existing values for blank cells instead of zeroing them.
+      // Tolerant number parse: strip thousands separators, currency symbols and
+      // spaces (Excel often exports prices like "1,234.50" or "Rs 1234") so a
+      // valid price isn't silently dropped as null.
+      double? numOf(String s) {
+        final t = s.replaceAll(RegExp(r'[^0-9.\-]'), '');
+        if (t.isEmpty || t == '-' || t == '.') return null;
+        return double.tryParse(t);
+      }
       final sellStr = iSell >= 0 ? get(iSell).trim() : '';
       final costStr = iCost >= 0 ? get(iCost).trim() : '';
       final lowStr  = iLow  >= 0 ? get(iLow).trim()  : '';
-      final sell = sellStr.isEmpty ? null : double.tryParse(sellStr);
-      final cost = costStr.isEmpty ? null : double.tryParse(costStr);
-      final low  = lowStr.isEmpty  ? null : double.tryParse(lowStr);
-      final openQty = iQty >= 0 ? (double.tryParse(get(iQty)) ?? 0) : 0;
+      final sell = sellStr.isEmpty ? null : numOf(sellStr);
+      final cost = costStr.isEmpty ? null : numOf(costStr);
+      final low  = lowStr.isEmpty  ? null : numOf(lowStr);
+      final openQty = iQty >= 0 ? (numOf(get(iQty)) ?? 0) : 0;
       valid.add({
         'name': name,
         'sku': sku.isEmpty ? null : sku,
