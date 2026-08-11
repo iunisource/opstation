@@ -56,7 +56,6 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
   void dispose() { _listCtrl.dispose(); _detailCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
-  String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
 
   /// Call a supplier-aging RPC resiliently: try WITH the branch filter first,
   /// and if the function signature doesn't accept p_branch_id (PostgREST can't
@@ -89,7 +88,13 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
     final orgId = _orgId;
     if (orgId == null) { setState(() => _loading = false); return; }
     final client = Supabase.instance.client;
-    final branchId = _branchId;
+    // Org-wide (branch = null), exactly like Customer Aging and the Supplier
+    // Balance Report. The AP journal lines for a supplier can be tagged to any
+    // branch (a payment entered at another branch, an opening balance with no
+    // branch, etc.); branch-filtering them here dropped those lines and made the
+    // aging disagree with the ledger / balance sheet. Aging the full AP account
+    // makes the grand total reconcile to the Supplier Balance Report exactly.
+    const String? branchId = null;
     final asOfStr = DateFormat('yyyy-MM-dd').format(_asOf);
 
     // Supplier master (names/codes) — seed the full roster so zero-balance
@@ -226,7 +231,6 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
 
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
-    final branch = ref.read(selectedBranchProvider);
     final rows = _filteredSorted;
     final fmt = const MoneyFmt();
     List<List<String>> detailRows = [];
@@ -256,7 +260,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
         pw.Text(user?.orgName ?? 'Opstation', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 4),
         pw.Text('Supplier Aging Report', style: pw.TextStyle(fontSize: 13, color: PdfColors.grey700)),
-        if (branch != null) pw.Text('Branch: ${branch['name']}', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+        pw.Text('All branches (reconciles to balance-sheet Accounts Payable)', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
         pw.Text('As of: ${DateFormat('d MMM yyyy').format(_asOf)}', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
         pw.SizedBox(height: 12),
         pw.Table.fromTextArray(
@@ -308,9 +312,6 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
 
   @override
   Widget build(BuildContext context) {
-    final branch = ref.watch(selectedBranchProvider);
-    ref.listen(selectedBranchProvider, (_, __) => _load());
-
     final rows = _filteredSorted;
     final totalAll  = rows.fold<double>(0, (s, r) => s + r.total);
     final totalCur  = rows.fold<double>(0, (s, r) => s + r.current);
@@ -329,8 +330,8 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
           IconButton(onPressed: _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
         ]),
         const SizedBox(height: 4),
-        Text(branch == null ? 'All branches' : 'Branch: ${branch['name']}',
-            style: const TextStyle(color: AppTheme.textSecondary)),
+        const Text('All branches · reconciles to balance-sheet Accounts Payable',
+            style: TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 20),
 
         // Filters
