@@ -379,6 +379,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       branchName: _detail['branches']?['name'] as String?,
       date: date,
       customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
+      customerCode: cust?['code'] as String?,
       customerAddress: cust?['address'] as String?,
       customerContact: cust?['contact_person'] as String?,
       customerPhone: cust?['phone'] as String?,
@@ -969,7 +970,14 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                             } catch (_) {}
                           },
                         )
-                      : _InfoRow(label: 'Customer', value: _detail['customers']?['shop_name'] as String? ?? 'Walk-in')),
+                      : _InfoRow(
+                          label: 'Customer',
+                          value: _detail['customers']?['shop_name'] as String? ?? 'Walk-in',
+                          sub: () {
+                            final code = _detail['customers']?['code'] as String?;
+                            return (code != null && code.isNotEmpty) ? 'Code: $code' : null;
+                          }(),
+                        )),
                   const SizedBox(width: 16),
                   Expanded(child: _canEdit
                       ? TextField(
@@ -1397,6 +1405,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       branchName: _detail['branches']?['name'] as String?,
       date: date,
       customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
+      customerCode: cust?['code'] as String?,
       customerAddress: cust?['address'] as String?,
       customerContact: cust?['contact_person'] as String?,
       customerPhone: cust?['phone'] as String?,
@@ -2559,6 +2568,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       branchName: _detail['branches']?['name'] as String?,
       date: date,
       customerOrSupplier: cust?['shop_name'] as String? ?? 'Walk-in',
+      customerCode: cust?['code'] as String?,
       customerAddress: cust?['address'] as String?,
       customerContact: cust?['contact_person'] as String?,
       customerPhone: cust?['phone'] as String?,
@@ -2983,7 +2993,14 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 ]),
                 const SizedBox(height: 10),
                 Row(children: [
-                  Expanded(child: _InfoRow(label: 'Customer', value: _detail['customers']?['shop_name'] as String? ?? _detail['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in')),
+                  Expanded(child: _InfoRow(
+                    label: 'Customer',
+                    value: _detail['customers']?['shop_name'] as String? ?? _detail['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in',
+                    sub: () {
+                      final code = _detail['customers']?['code'] as String? ?? _detail['sales_orders']?['customers']?['code'] as String?;
+                      return (code != null && code.isNotEmpty) ? 'Code: $code' : null;
+                    }(),
+                  )),
                   const SizedBox(width: 16),
                   Expanded(child: _InfoRow(label: 'SO #', value: _detail['sales_orders']?['voucher_number'] as String? ?? '-')),
                   const SizedBox(width: 16),
@@ -3507,12 +3524,17 @@ class _LockedBadge extends StatelessWidget {
 class _InfoRow extends StatelessWidget {
   final String label;
   final String value;
-  const _InfoRow({required this.label, required this.value});
+  final String? sub; // optional secondary line (e.g. customer code)
+  const _InfoRow({required this.label, required this.value, this.sub});
   @override
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
     const SizedBox(height: 2),
     Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+    if (sub != null && sub!.isNotEmpty) ...[
+      const SizedBox(height: 1),
+      Text(sub!, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+    ],
   ]);
 }
 

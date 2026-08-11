@@ -56,6 +56,7 @@ class VoucherPdf {
     String? branchName,
     String? date,
     String? customerOrSupplier,
+    String? customerCode,
     String? customerAddress,
     String? customerContact,
     String? customerPhone,
@@ -95,7 +96,7 @@ class VoucherPdf {
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
       orgName: effectiveOrg, branchName: branchName, date: date,
-      customerOrSupplier: customerOrSupplier,
+      customerOrSupplier: customerOrSupplier, customerCode: customerCode,
       customerAddress: customerAddress, customerContact: customerContact, customerPhone: customerPhone,
       salespersonName: salespersonName,
       status: status, remarks: remarks, lines: lines, focLines: focLines,
@@ -247,6 +248,7 @@ class VoucherPdf {
     String? branchName,
     String? date,
     String? customerOrSupplier,
+    String? customerCode,
     String? customerAddress,
     String? customerContact,
     String? customerPhone,
@@ -284,7 +286,7 @@ class VoucherPdf {
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
       orgName: effectiveOrg, branchName: branchName, date: date,
-      customerOrSupplier: customerOrSupplier,
+      customerOrSupplier: customerOrSupplier, customerCode: customerCode,
       customerAddress: customerAddress, customerContact: customerContact, customerPhone: customerPhone,
       salespersonName: salespersonName,
       status: status, remarks: remarks, lines: lines, focLines: focLines,
@@ -307,6 +309,7 @@ class VoucherPdf {
     String? branchName,
     String? date,
     String? customerOrSupplier,
+    String? customerCode,
     String? customerAddress,
     String? customerContact,
     String? customerPhone,
@@ -487,7 +490,10 @@ class VoucherPdf {
           child: pw.Row(children: [
             if (date != null) _metaCell('Date', date),
             if (customerOrSupplier != null)
-              _metaCell(isPurchase ? 'Supplier' : 'Customer', customerOrSupplier),
+              _metaCell(isPurchase ? 'Supplier' : 'Customer', customerOrSupplier,
+                  sub: (customerCode != null && customerCode.isNotEmpty)
+                      ? 'Code: $customerCode'
+                      : null),
             if (branchName != null) _metaCell('Branch', branchName),
             if (salespersonName != null) _metaCell('Salesperson', salespersonName),
           ]),
@@ -679,13 +685,17 @@ class VoucherPdf {
     );
   }
 
-  static pw.Widget _metaCell(String label, String value) {
+  static pw.Widget _metaCell(String label, String value, {String? sub}) {
     return pw.Expanded(
       child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
         pw.Text(label.toUpperCase(),
             style: pw.TextStyle(fontSize: 8, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 0.8)),
         pw.SizedBox(height: 3),
         pw.Text(value, style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        if (sub != null && sub.isNotEmpty) ...[
+          pw.SizedBox(height: 2),
+          pw.Text(sub, style: pw.TextStyle(fontSize: 9, color: _muted)),
+        ],
       ]),
     );
   }
