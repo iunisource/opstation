@@ -1406,9 +1406,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num">' + dStr + '</td><td class="num">' + cStr + '</td><td class="num bold">Rs. ' + money(bal) + '</td></tr>');
       }
 
-      final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Customer Ledger - ' + customerName + '</title>'
+      // Download/print filename: Party_Date_DocType (e.g. "Ali ES_1 Aug 2026_Ledger")
+      final fileBase = (customerName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
+          .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
+      final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + fileBase + '</title>'
         '<style>'
         '@page { margin: 0.5cm; } '
+        '.no-print { margin-bottom: 10px; display: flex; gap: 8px; } '
+        '.no-print button { padding: 6px 14px; font-size: 13px; cursor: pointer; } '
+        '@media print { .no-print { display: none; } } '
         'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; margin: 0; } '
         '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
         'h1 { font-size: 18px; margin: 0 0 4px 0; } '
@@ -1433,6 +1439,11 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         '.pdc-table th, .pdc-table td { border-bottom: 1px solid #f0e0b0; font-size: 9px; padding: 3px 6px; text-align: left; } '
         '.pdc-table th { background: #fdf3d6; border-bottom: 1px solid #e0c060; } '
         '</style></head><body>'
+        '<div class="no-print">'
+        '<button onclick="window.print()">&#x1F5A8; Print / Save as PDF</button>'
+        '<button onclick="dlHtml()">&#x2B07; Download</button>'
+        '</div>'
+        '<script>function dlHtml(){var b=new Blob(["<!DOCTYPE html>"+document.documentElement.outerHTML],{type:"text/html"});var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="' + fileBase + '.html";a.click();}</script>'
         '<div class="header"><div><h1>Customer Ledger</h1>'
         '<div class="info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
         '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
@@ -1448,10 +1459,21 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + money(td) + '</td><td class="num credit">Rs. ' + money(tc) + '</td><td class="num bal">Rs. ' + money(netBal) + '</td></tr></tfoot>'
         '</table></body></html>';
 
-      // Original method used across vouchers: blob URL in new tab
       final blob = html.Blob([htmlDoc], 'text/html;charset=utf-8');
       final url = html.Url.createObjectUrlFromBlob(blob);
-      html.window.open(url, '_blank');
+      final ua = html.window.navigator.userAgent.toLowerCase();
+      final isMobile = ua.contains('android') || ua.contains('iphone') ||
+          ua.contains('ipad') || ua.contains('mobile');
+      if (isMobile) {
+        // Mobile browsers block the popup print tab — download the document
+        // instead (open it from Files/Downloads, then Print / Save as PDF).
+        final a = html.AnchorElement(href: url)..download = '$fileBase.html';
+        html.document.body!.append(a);
+        a.click();
+        a.remove();
+      } else {
+        html.window.open(url, '_blank');
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: ' + e.toString())));
     }

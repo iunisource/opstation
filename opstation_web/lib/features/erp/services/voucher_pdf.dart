@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
@@ -37,16 +39,42 @@ class VoucherPdf {
     }
   }
 
-  /// Builds the download/title base: VoucherType_Number_Date
-  /// e.g. "Purchase_Order_PO-2026-0001_14-Jul-2026".
-  static String _fileBase(String type, String number, String? date) {
-    final t = type.trim().replaceAll(RegExp(r'\s+'), '_');
-    final n = number.trim().replaceAll(RegExp(r'\s+'), '_');
-    final d = (date ?? '').trim().replaceAll(RegExp(r'[\/\s]+'), '-');
-    final base = [t, n, if (d.isNotEmpty) d].join('_');
-    // keep only filename-safe characters
-    final clean = base.replaceAll(RegExp(r'[^A-Za-z0-9_\-]'), '');
+  /// Builds the download/title base: Party_Date_DocType
+  /// e.g. "Ali ES_1 Aug 2026_Sales Invoice". Falls back to the voucher number
+  /// when no party is on the document (e.g. stock transfers use branches).
+  static String _fileBase(String type, String number, String? date,
+      {String? party}) {
+    final p = (party ?? '').trim();
+    final d = (date ?? '').trim();
+    final t = type.trim();
+    final base = p.isNotEmpty
+        ? [p, if (d.isNotEmpty) d, t].join('_')
+        : [t, number.trim(), if (d.isNotEmpty) d].join('_');
+    // keep filename-safe but readable characters (spaces and commas allowed)
+    final clean = base.replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
     return clean.isEmpty ? number : clean;
+  }
+
+  static bool get _isMobileWeb {
+    final ua = html.window.navigator.userAgent.toLowerCase();
+    return ua.contains('android') ||
+        ua.contains('iphone') ||
+        ua.contains('ipad') ||
+        ua.contains('mobile');
+  }
+
+  /// One output path for every voucher PDF:
+  ///   • Desktop: browser print preview (Print or Save-as-PDF, named [fileBase]).
+  ///   • Mobile: the print preview cannot open, so DOWNLOAD the PDF directly —
+  ///     sharePdf triggers the browser download / share sheet with the filename.
+  static Future<void> _output(Uint8List bytes, String fileBase) async {
+    if (_isMobileWeb) {
+      await Printing.sharePdf(bytes: bytes, filename: '$fileBase.pdf');
+    } else {
+      await Printing.layoutPdf(
+          onLayout: (PdfPageFormat format) async => bytes,
+          name: '$fileBase.pdf');
+    }
   }
 
   static Future<void> printVoucher({
@@ -92,7 +120,8 @@ class VoucherPdf {
     final isQuotation = voucherTypeLabel.toLowerCase().contains('quotation');
     final effectiveOrg =
         (isQuotation || await _showOrgName(isPurchase)) ? orgName : '';
-    final fileBase = _fileBase(voucherTypeLabel, voucherNumber, date);
+    final fileBase = _fileBase(voucherTypeLabel, voucherNumber, date,
+        party: customerOrSupplier);
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
       orgName: effectiveOrg, branchName: branchName, date: date,
@@ -109,10 +138,7 @@ class VoucherPdf {
       footerNote: footerNote, relatedRefs: relatedRefs,
       watermark: watermark, docTitle: fileBase,
     );
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => doc.save(),
-      name: '$fileBase.pdf',
-    );
+    await _output(await doc.save(), fileBase);
   }
 
   /// Stock transfer voucher (internal branch-to-branch; no pricing). Includes an
@@ -130,7 +156,8 @@ class VoucherPdf {
     String? dispatchedBy, String? dispatchedAt,
     String? approvedBy, String? approvedAt,
   }) async {
-    final fileBase = _fileBase('Stock_Transfer', voucherNumber, date);
+    final fileBase = _fileBase('Stock Transfer', voucherNumber, date,
+        party: '$fromBranch to $toBranch');
     final doc = pw.Document(title: fileBase, author: orgName);
 
     pw.Widget kv(String k, String v) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
@@ -225,7 +252,7 @@ class VoucherPdf {
       ]),
     ));
 
-    await Printing.layoutPdf(onLayout: (f) async => doc.save(), name: '$fileBase.pdf');
+    await _output(await doc.save(), fileBase);
   }
 
   static pw.Widget _stCell(String s, {bool header = false, pw.TextAlign align = pw.TextAlign.left}) => pw.Padding(
@@ -282,7 +309,8 @@ class VoucherPdf {
     final isQuotation = voucherTypeLabel.toLowerCase().contains('quotation');
     final effectiveOrg =
         (isQuotation || await _showOrgName(isPurchase)) ? orgName : '';
-    final fileBase = _fileBase(voucherTypeLabel, voucherNumber, date);
+    final fileBase = _fileBase(voucherTypeLabel, voucherNumber, date,
+        party: customerOrSupplier);
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
       orgName: effectiveOrg, branchName: branchName, date: date,
