@@ -167,9 +167,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     }
 
     // 1. Purchase Invoices -> Credit (increases what we owe the supplier)
+    // POSTED (locked) invoices only: drafts have no GL and must not appear as
+    // liabilities in the ledger (PI-2026-0048 showed while still a draft).
     try {
       final siQ = client.from('purchase_invoices').select('*')
-          .eq('org_id', orgId).eq('supplier_id', supplierId);
+          .eq('org_id', orgId).eq('supplier_id', supplierId)
+          .eq('is_locked', true);
       final sis = await siQ;
       for (final si in sis as List) {
         final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;

@@ -375,9 +375,22 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     return true;
   }
 
+  // Re-entrancy guard: Approve/Save clicked repeatedly while the async post is
+  // in flight fired _postCore multiple times (triple "approved" audit rows).
+  bool _postingCore = false;
+
   // The actual post: lock the invoice, mark the GRN invoiced, save header text.
   // When [approved] is true it also stamps the reviewer (Checked By).
   Future<void> _postCore({bool approved = false}) async {
+    if (_postingCore) return;
+    // Already posted? (Covers stacked confirm dialogs from rapid clicks — each
+    // resolves sequentially, so the in-flight flag alone can't catch them.)
+    if (_detail['is_locked'] == true &&
+        (!approved || _detail['review_status'] == 'approved')) {
+      _showSnack('Already posted');
+      return;
+    }
+    _postingCore = true;
     final userId = ref.read(currentUserProvider)?.id;
     final piId = _detail['id'] as String;
     final grnId = _detail['grn_id'] as String?;
@@ -406,10 +419,15 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         await Supabase.instance.client.from('purchase_grns').update({'status': 'invoiced', 'updated_at': now}).eq('id', grnId);
       }
       await _logAudit(piId, approved ? 'approved' : 'saved', approved ? 'Reviewed & posted' : 'Invoice saved and locked');
+      // Reflect the new state locally IMMEDIATELY so a queued duplicate call
+      // hits the already-posted guard even before _loadDetail returns.
+      _detail['is_locked'] = true;
+      if (approved) _detail['review_status'] = 'approved';
       _showSnack(approved ? 'Approved & posted' : 'Invoice saved and locked');
       _loadDetail(piId); _loadList();
       ref.invalidate(piReviewPendingProvider);
     } catch (e) { _showSnack('Failed: $e'); }
+    finally { _postingCore = false; }
   }
 
   // Direct save+lock (used when the review flow is OFF).
