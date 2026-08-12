@@ -64,8 +64,22 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       final coa  = List<Map<String, dynamic>>.from((data['coa']       as List?) ?? []);
       final sup  = List<Map<String, dynamic>>.from((data['suppliers'] as List?) ?? []);
       final cus  = List<Map<String, dynamic>>.from((data['customers'] as List?) ?? []);
+      // Postable accounts only — same rule as CPV. Show Level-4 detail accounts;
+      // a Level-3 only when it has no children. Hide L1/L2 and any parent, so an
+      // amount can never post to a group account (backed by the DB guard too).
+      final coaParentIds = <String>{
+        for (final a in coa) if (a['parent_id'] != null) a['parent_id'].toString()
+      };
+      int lvlOf(Map a) => a['level'] is num ? (a['level'] as num).toInt() : int.tryParse('${a['level']}') ?? 0;
+      bool isLeaf(Map a) => !coaParentIds.contains(a['id'].toString());
+      final coaPostable = coa.where((a) {
+        final lvl = lvlOf(a);
+        if (lvl >= 4) return isLeaf(a);
+        if (lvl == 3) return isLeaf(a);
+        return false;
+      }).toList();
       final all = <Map<String, dynamic>>[
-        ...coa.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
+        ...coaPostable.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
         ...sup.map((s) => {'id': s['id'], 'label': '${s['code'] != null ? '${s['code']} — ' : ''}${s['name']}', 'sub': 'Supplier', 'type': 'supplier'}),
         ...cus.map((c) => {'id': c['id'], 'label': '${c['code'] != null ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}', 'sub': 'Customer', 'type': 'customer'}),
       ];
@@ -415,6 +429,14 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
 
   @override
   Widget build(BuildContext context) {
+    // Branch toggle: reload the list scoped to the new branch and start fresh
+    // so a stale voucher from the previous branch is never edited/posted.
+    ref.listen(selectedBranchProvider, (prev, next) {
+      if (prev?['id'] != next?['id']) {
+        _newVoucher();
+        _loadVouchers();
+      }
+    });
     final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) { final q = _listSearch.toLowerCase(); return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || (v['cash_account_name'] as String? ?? '').toLowerCase().contains(q); }).toList();
     final cashFiltered = _cashAccSearch.isEmpty ? _cashAccounts : _cashAccounts.where((a) => (a['label'] as String).toLowerCase().contains(_cashAccSearch.toLowerCase())).toList();
 
@@ -577,13 +599,49 @@ class _LineWidget extends StatefulWidget {
 class _LineWidgetState extends State<_LineWidget> {
   bool _showDrop = false;
   String _q = '';
+  int _hl = 0; // keyboard-highlighted option index
   final _accFocus = FocusNode();
   final _descFocus = FocusNode();
   final _amtFocus = FocusNode();
   final _accCtrl = TextEditingController();
+  final _dropScroll = ScrollController();
 
   @override void initState() { super.initState(); _accCtrl.text = widget.line.accountName; _accFocus.addListener(() { if (!_accFocus.hasFocus) Future.delayed(const Duration(milliseconds: 160), () { if (mounted && !_accFocus.hasFocus) setState(() => _showDrop = false); }); }); if (widget.autoFocus) WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _accFocus.requestFocus(); }); }
-  @override void dispose() { _accFocus.dispose(); _descFocus.dispose(); _amtFocus.dispose(); _accCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _accFocus.dispose(); _descFocus.dispose(); _amtFocus.dispose(); _accCtrl.dispose(); _dropScroll.dispose(); super.dispose(); }
+
+  void _scrollToHl() {
+    if (!_dropScroll.hasClients) return;
+    const itemH = 32.0;
+    final target = (_hl * itemH - 64).clamp(0.0, _dropScroll.position.maxScrollExtent).toDouble();
+    _dropScroll.jumpTo(target);
+  }
+
+  // Arrow keys move the highlight, Enter selects (via onSubmitted), Escape
+  // closes — handled at the Focus level so the TextField never sees arrows.
+  KeyEventResult _onKey(FocusNode node, KeyEvent evt) {
+    if (evt is! KeyDownEvent && evt is! KeyRepeatEvent) return KeyEventResult.ignored;
+    final filtered = widget.filterFn(_q);
+    if (!_showDrop) {
+      if (evt.logicalKey == LogicalKeyboardKey.arrowDown) {
+        setState(() { _showDrop = true; _hl = 0; });
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+    if (evt.logicalKey == LogicalKeyboardKey.arrowDown) {
+      if (filtered.isNotEmpty) { setState(() => _hl = (_hl + 1) % filtered.length); _scrollToHl(); }
+      return KeyEventResult.handled;
+    }
+    if (evt.logicalKey == LogicalKeyboardKey.arrowUp) {
+      if (filtered.isNotEmpty) { setState(() => _hl = (_hl - 1 + filtered.length) % filtered.length); _scrollToHl(); }
+      return KeyEventResult.handled;
+    }
+    if (evt.logicalKey == LogicalKeyboardKey.escape) {
+      setState(() => _showDrop = false);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
 
   void _pick(Map<String, dynamic> a) {
     widget.line.accountId = a['id'] as String;
@@ -601,17 +659,32 @@ class _LineWidgetState extends State<_LineWidget> {
       SizedBox(width: 20, child: Center(child: Text('${widget.lineNum}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
       const SizedBox(width: 8),
       Expanded(flex: 4, child: Column(children: [
-        TextField(controller: _accCtrl, focusNode: _accFocus, enabled: !widget.locked,
-          decoration: InputDecoration(hintText: 'Search account, supplier, customer...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7), suffixIcon: widget.line.accountId != null ? const Icon(Icons.check_circle, color: Colors.green, size: 14) : null),
-          onChanged: (v) { setState(() { _q = v; _showDrop = v.isNotEmpty || _accFocus.hasFocus; }); },
-          onTap: () => setState(() => _showDrop = true),
-          onSubmitted: (_) { if (filtered.isNotEmpty) _pick(filtered.first); },
+        Focus(
+          onKeyEvent: _onKey,
+          child: TextField(controller: _accCtrl, focusNode: _accFocus, enabled: !widget.locked,
+            decoration: InputDecoration(hintText: 'Search account, supplier, customer...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7), suffixIcon: widget.line.accountId != null ? const Icon(Icons.check_circle, color: Colors.green, size: 14) : null),
+            onChanged: (v) { setState(() { _q = v; _hl = 0; _showDrop = v.isNotEmpty || _accFocus.hasFocus; }); },
+            onTap: () => setState(() { _showDrop = true; _hl = 0; }),
+            onSubmitted: (_) { if (filtered.isNotEmpty) _pick(filtered[_hl.clamp(0, filtered.length - 1).toInt()]); },
+          ),
         ),
-        if (_showDrop && filtered.isNotEmpty) Container(constraints: const BoxConstraints(maxHeight: 160), margin: const EdgeInsets.only(top: 2), decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 6)]), child: ListView(shrinkWrap: true, children: filtered.map((a) {
-          final t = a['type'] as String;
-          final c = t == 'supplier' ? Colors.blue : t == 'customer' ? Colors.purple : AppTheme.primary;
-          return InkWell(onTap: () => _pick(a), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), child: Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(a['sub'] as String? ?? t, style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))), const SizedBox(width: 6), Expanded(child: Tooltip(message: a['label'] as String, waitDuration: const Duration(milliseconds: 400), child: Text(a['label'] as String, style: const TextStyle(fontSize: 12), softWrap: true, maxLines: 2, overflow: TextOverflow.ellipsis)))])));
-        }).toList())),
+        if (_showDrop && filtered.isNotEmpty) Container(constraints: const BoxConstraints(maxHeight: 160), margin: const EdgeInsets.only(top: 2), decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 6)]), child: ListView(controller: _dropScroll, shrinkWrap: true, children: [
+          for (var oi = 0; oi < filtered.length; oi++)
+            Builder(builder: (_) {
+              final a = filtered[oi];
+              final t = a['type'] as String;
+              final c = t == 'supplier' ? Colors.blue : t == 'customer' ? Colors.purple : AppTheme.primary;
+              final hl = oi == _hl;
+              return MouseRegion(
+                onEnter: (_) => setState(() => _hl = oi),
+                child: InkWell(onTap: () => _pick(a), child: Container(
+                  color: hl ? AppTheme.primary.withOpacity(0.08) : null,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(a['sub'] as String? ?? t, style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))), const SizedBox(width: 6), Expanded(child: Tooltip(message: a['label'] as String, waitDuration: const Duration(milliseconds: 400), child: Text(a['label'] as String, style: TextStyle(fontSize: 12, fontWeight: hl ? FontWeight.w700 : FontWeight.w400), softWrap: true, maxLines: 2, overflow: TextOverflow.ellipsis)))]),
+                )),
+              );
+            }),
+        ])),
       ])),
       const SizedBox(width: 8),
       Expanded(flex: 3, child: TextField(controller: widget.line.descCtrl, focusNode: _descFocus, enabled: !widget.locked, decoration: const InputDecoration(hintText: 'Description', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7)), onChanged: (_) => widget.onChanged(), textInputAction: TextInputAction.next, onSubmitted: (_) => _amtFocus.requestFocus())),

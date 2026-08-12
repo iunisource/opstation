@@ -82,9 +82,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       bool isLeaf(Map a) => !coaParentIds.contains(a['id'].toString());
       final coaPostable = coa.where((a) {
         final lvl = lvlOf(a);
-        if (lvl >= 4) return true;          // Level-4 (or deeper) detail account
+        if (lvl >= 4) return isLeaf(a);     // detail account only if childless
         if (lvl == 3) return isLeaf(a);     // Level-3 only when it has no children
-        return false;                        // hide L1 / L2 and L3 parents
+        return false;                        // hide L1 / L2 and all parents
       }).toList();
       final all = <Map<String, dynamic>>[
         ...coaPostable.map((a) => {'id': a['id'], 'label': '${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}', 'sub': _typeLabel(a['account_type']), 'type': 'coa'}),
