@@ -301,11 +301,22 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       }
     }
     try {
-      // One upsert updates every edited line (rows already exist — id conflict
-      // takes the UPDATE path, changing only the provided columns).
-      await Supabase.instance.client
-          .from('purchase_invoice_items')
-          .upsert(updates, onConflict: 'id');
+      // CONCURRENT per-row UPDATEs — NOT an upsert. An upsert is an INSERT
+      // first, so RLS evaluated its insert-check against a row with no
+      // invoice_id and rejected it (42501 "violates row-level security policy
+      // for purchase_invoice_items") on every save/approve. Plain updates only
+      // face the USING check on the existing row, which passes.
+      await Future.wait([
+        for (final u in updates)
+          Supabase.instance.client
+              .from('purchase_invoice_items')
+              .update({
+                'unit_cost': u['unit_cost'],
+                'discount': u['discount'],
+                'line_total': u['line_total'],
+              })
+              .eq('id', u['id'] as String),
+      ]);
       // Reflect in memory, then recompute the header total ONCE.
       setState(() {
         for (final u in updates) {
