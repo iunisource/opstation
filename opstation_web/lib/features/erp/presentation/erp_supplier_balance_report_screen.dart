@@ -106,6 +106,78 @@ class _ErpSupplierBalanceReportScreenState
           if (v is num) r[k] = -v.toDouble();
         }
       }
+      // TRUE NET POSITION: the AP control alone hides prepayments (a supplier
+      // with a 1.15M advance showed as a small payable). Fold each supplier's
+      // balance on the "Advances to Suppliers" account into every period
+      // column, so the report matches the Supplier Ledger's bottom line.
+      try {
+        String? advId;
+        final byCode = await client
+            .from('chart_of_accounts')
+            .select('id')
+            .eq('org_id', orgId)
+            .eq('code', '1420')
+            .maybeSingle();
+        advId = byCode?['id'] as String?;
+        if (advId == null) {
+          final byName = await client
+              .from('chart_of_accounts')
+              .select('id')
+              .eq('org_id', orgId)
+              .ilike('name', '%advance%supplier%')
+              .limit(1);
+          if ((byName as List).isNotEmpty) {
+            advId = (byName.first as Map)['id'] as String?;
+          }
+        }
+        if (advId != null) {
+          final lines = await client
+              .from('journal_lines')
+              .select('party_id, debit, credit, journal_entries!inner(entry_date, status)')
+              .eq('org_id', orgId)
+              .eq('account_id', advId)
+              .not('party_id', 'is', null)
+              .limit(20000);
+          final adv = <String, List<double>>{}; // party -> [asOf d1, d2, d3]
+          for (final l in lines as List) {
+            final m = l as Map;
+            final je = m['journal_entries'] as Map?;
+            if (je == null || (je['status'] as String?) == 'draft') continue;
+            final d = DateTime.tryParse('${je['entry_date']}');
+            if (d == null) continue;
+            final net = ((m['debit'] as num?)?.toDouble() ?? 0) -
+                ((m['credit'] as num?)?.toDouble() ?? 0);
+            final a = adv.putIfAbsent(
+                m['party_id'] as String, () => [0.0, 0.0, 0.0]);
+            for (var i = 0; i < 3; i++) {
+              if (!d.isAfter(ends[i])) a[i] += net;
+            }
+          }
+          if (adv.isNotEmpty) {
+            // RPC rows may not carry the supplier id — resolve by name.
+            final sups = await client
+                .from('suppliers')
+                .select('id, name')
+                .eq('org_id', orgId)
+                .limit(10000);
+            final idByName = {
+              for (final s in sups as List)
+                ((s as Map)['name'] as String? ?? '').trim().toLowerCase():
+                    s['id'] as String
+            };
+            for (final r in rows) {
+              final sid = (r['supplier_id'] as String?) ??
+                  idByName[(r['name'] as String? ?? '').trim().toLowerCase()];
+              final a = sid == null ? null : adv[sid];
+              if (a == null) continue;
+              r['bal1'] = ((r['bal1'] as num?)?.toDouble() ?? 0) + a[0];
+              r['bal2'] = ((r['bal2'] as num?)?.toDouble() ?? 0) + a[1];
+              r['bal3'] = ((r['bal3'] as num?)?.toDouble() ?? 0) + a[2];
+              r['has_advance'] = true;
+            }
+          }
+        }
+      } catch (_) {/* advances are best-effort; AP-only is still a valid report */}
       if (mounted) {
         _rawRows = rows;
         _periodLabels = _labelsFor(ends);
@@ -268,7 +340,14 @@ class _ErpSupplierBalanceReportScreenState
           child: Row(children: [
             const Text('Supplier Balance Report',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const Spacer(),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Net position: payables + supplier advances (negative = we owe, positive = advance)',
+                style: TextStyle(fontSize: 11.5, color: Colors.black54),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             if (_loaded)
               OutlinedButton.icon(
                   icon: const Icon(Icons.print_outlined, size: 18),
