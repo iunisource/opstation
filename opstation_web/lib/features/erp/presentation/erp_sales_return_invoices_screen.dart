@@ -31,7 +31,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   String _search = '';
   String _filter = 'all';
 
-  @override void initState() { super.initState(); _loadList(); }
+  @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); }
   @override void dispose() { for (final c in _priceCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -41,6 +41,36 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+
+  // Admin toggle org.sri_price_edit: when ON, only the users listed in
+  // org.sri_price_edit_users may edit prices/discounts on a draft SRI.
+  // Admins/master admins always can. When OFF (default), everyone can.
+  bool _priceEditAllowed = true;
+  Future<void> _loadPriceEditPolicy() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', orgId)
+          .inFilter('key', ['org.sri_price_edit', 'org.sri_price_edit_users']);
+      final cfg = {for (final r in rows as List) r['key'] as String: (r['value'] as String? ?? '')};
+      bool allowed = true;
+      if (cfg['org.sri_price_edit'] == 'true') {
+        final role = ref.read(currentUserProvider)?.role;
+        if (role == WebUserRole.masterAdmin || role == WebUserRole.admin) {
+          allowed = true;
+        } else {
+          final uid = ref.read(currentUserProvider)?.id;
+          final ids = (cfg['org.sri_price_edit_users'] ?? '')
+              .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+          allowed = uid != null && ids.contains(uid);
+        }
+      }
+      if (mounted && allowed != _priceEditAllowed) setState(() => _priceEditAllowed = allowed);
+    } catch (_) {/* fail open: keep current behavior */}
+  }
+  bool get _canEditPrices => _isDraft && _priceEditAllowed;
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -149,6 +179,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   }
 
   Future<void> _saveItemPrice(String itemId) async {
+    if (!_canEditPrices) { _showSnack('Price editing is restricted — ask an admin for access'); return; }
     final price = double.tryParse(_priceCtrl[itemId]?.text ?? '') ?? 0;
     final disc  = (double.tryParse(_discCtrl[itemId]?.text ?? '') ?? 0).clamp(0.0, 100.0);
     final qty   = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => {})['quantity'] as num?)?.toDouble() ?? 0;
@@ -177,7 +208,11 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
 
   Future<void> _issueInvoice() async {
     if (_items.isEmpty) { _showSnack('No items'); return; }
-    for (final it in _items) await _saveItemPrice(it['id'] as String);
+    // Only flush edited prices when this user is allowed to edit them —
+    // otherwise the guard inside _saveItemPrice would snack once per line.
+    if (_canEditPrices) {
+      for (final it in _items) await _saveItemPrice(it['id'] as String);
+    }
     for (final it in _items) {
       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
       if (price <= 0) { _showSnack('Unit price for "${it['products']?['name'] ?? 'item'}" must be greater than 0'); return; }
@@ -392,8 +427,8 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
                   ])),
                   Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   Expanded(flex: 1, child: Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
-                  Expanded(flex: 2, child: _isDraft ? TextField(controller: _priceCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemPrice(id)) : Text(price.toStringAsFixed(2), textAlign: TextAlign.right)),
-                  Expanded(flex: 1, child: _isDraft ? TextField(controller: _discCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemPrice(id)) : Text('${disc.toStringAsFixed(0)}%', textAlign: TextAlign.right)),
+                  Expanded(flex: 2, child: _canEditPrices ? TextField(controller: _priceCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemPrice(id)) : Text(price.toStringAsFixed(2), textAlign: TextAlign.right)),
+                  Expanded(flex: 1, child: _canEditPrices ? TextField(controller: _discCtrl[id], decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemPrice(id)) : Text('${disc.toStringAsFixed(0)}%', textAlign: TextAlign.right)),
                   Expanded(flex: 2, child: Text(money(lt), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
                 ]));
             }),

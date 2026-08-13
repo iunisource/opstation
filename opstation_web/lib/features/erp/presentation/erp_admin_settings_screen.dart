@@ -36,6 +36,15 @@ class _BranchField {
   const _BranchField(this.key, this.label);
 }
 
+/// An optional USER multi-select attached to a toggle (e.g. "which users may
+/// edit prices"). Shown (and saved) only while the parent toggle is ON.
+/// Stored in `app_config` as a comma-separated list of user ids.
+class _UsersField {
+  final String key; // app_config key, e.g. 'org.sri_price_edit_users'
+  final String label;
+  const _UsersField(this.key, this.label);
+}
+
 /// Definition of a single org-level admin toggle.
 /// To add a new setting, append one entry to [_toggles] below — the screen
 /// renders, loads, and persists it automatically. Boolean values are stored in
@@ -48,9 +57,10 @@ class _AdminToggle {
   final _NumberField? number; // optional numeric companion
   final _TextSetting? text; // optional free-text companion
   final _BranchField? branch; // optional branch-picker companion
+  final _UsersField? users; // optional user multi-select companion
   final bool defaultOn; // value used when no app_config row exists yet
   const _AdminToggle(this.key, this.title, this.subtitle,
-      {this.number, this.text, this.branch, this.defaultOn = false});
+      {this.number, this.text, this.branch, this.users, this.defaultOn = false});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -97,6 +107,16 @@ const List<_AdminToggle> _toggles = [
     'When ON, the unit price on a Sales Invoice can be edited before it is saved/posted '
         '(in addition to the discount). When OFF (default), the price is fixed from the '
         'order and only the discount is adjustable.',
+  ),
+
+  _AdminToggle(
+    'org.sri_price_edit',
+    'Restrict price editing on Sales Return Invoices',
+    'When ON, only the users selected below can edit unit prices and discounts '
+        'on a draft Sales Return Invoice — everyone else sees them read-only. '
+        'Admins and master admins can always edit. When OFF (default), any user '
+        'can edit prices on a draft SRI.',
+    users: _UsersField('org.sri_price_edit_users', 'Users allowed to edit SRI prices'),
   ),
 
   _AdminToggle(
@@ -428,7 +448,9 @@ class _ErpAdminSettingsScreenState
   final Map<String, TextEditingController> _numCtrls = {};
   final Map<String, TextEditingController> _textCtrls = {};
   final Map<String, String> _branchValues = {}; // branch-picker companions ('all' or branch id)
+  final Map<String, Set<String>> _userValues = {}; // user multi-select companions
   List<Map<String, dynamic>> _branches = [];
+  List<Map<String, dynamic>> _orgUsers = [];
   final Set<String> _saving = {};
   bool _loading = true;
   bool _backupRunning = false;
@@ -483,8 +505,18 @@ class _ErpAdminSettingsScreenState
             .eq('org_id', orgId)
             .order('name'));
       } catch (_) {}
+      // User roster for any user multi-select companions.
+      List<Map<String, dynamic>> orgUsers = [];
+      try {
+        orgUsers = List<Map<String, dynamic>>.from(await Supabase.instance.client
+            .from('users')
+            .select('id, name, role')
+            .eq('org_id', orgId)
+            .order('name'));
+      } catch (_) {}
       setState(() {
         _branches = branches;
+        _orgUsers = orgUsers;
         for (final t in _toggles) {
           _values[t.key] =
               cfg.containsKey(t.key) ? cfg[t.key] == 'true' : t.defaultOn;
@@ -510,6 +542,17 @@ class _ErpAdminSettingsScreenState
                 (storedB == 'all' ||
                     branches.any((br) => br['id'] == storedB));
             _branchValues[b.key] = valid ? storedB : 'all';
+          }
+          final u = t.users;
+          if (u != null) {
+            final storedU = cfg[u.key]?.trim() ?? '';
+            _userValues[u.key] = storedU.isEmpty
+                ? <String>{}
+                : storedU
+                    .split(',')
+                    .map((s) => s.trim())
+                    .where((s) => s.isNotEmpty)
+                    .toSet();
           }
         }
         _loading = false;
@@ -782,6 +825,148 @@ class _ErpAdminSettingsScreenState
     );
   }
 
+  Future<void> _saveUsers(_UsersField u, Set<String> ids) async {
+    final old = Set<String>.from(_userValues[u.key] ?? {});
+    setState(() {
+      _userValues[u.key] = ids;
+      _saving.add(u.key);
+    });
+    try {
+      await _persist(u.key, ids.join(','));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _userValues[u.key] = old);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving.remove(u.key));
+    }
+  }
+
+  Future<void> _pickUsers(_UsersField u) async {
+    final sel = Set<String>.from(_userValues[u.key] ?? {});
+    final picked = await showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) {
+        final searchCtrl = TextEditingController();
+        return StatefulBuilder(builder: (ctx, setD) {
+          final q = searchCtrl.text.trim().toLowerCase();
+          final matches = q.isEmpty
+              ? _orgUsers
+              : _orgUsers
+                  .where((us) =>
+                      ((us['name'] as String? ?? '').toLowerCase().contains(q)))
+                  .toList();
+          return AlertDialog(
+            title: Text(u.label,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            content: SizedBox(
+              width: 380,
+              child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: searchCtrl,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                          hintText: 'Search user...',
+                          isDense: true,
+                          prefixIcon: Icon(Icons.search, size: 18),
+                          border: OutlineInputBorder()),
+                      onChanged: (_) => setD(() {}),
+                    ),
+                    const SizedBox(height: 8),
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 320),
+                        child: ListView(shrinkWrap: true, children: [
+                          for (final us in matches)
+                            CheckboxListTile(
+                              dense: true,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              title: Text(us['name'] as String? ?? '-',
+                                  style: const TextStyle(fontSize: 13.5)),
+                              subtitle: Text('${us['role'] ?? ''}',
+                                  style: const TextStyle(fontSize: 11)),
+                              value: sel.contains(us['id']),
+                              onChanged: (v) => setD(() {
+                                if (v == true) {
+                                  sel.add(us['id'] as String);
+                                } else {
+                                  sel.remove(us['id']);
+                                }
+                              }),
+                            ),
+                          if (matches.isEmpty)
+                            const Padding(
+                                padding: EdgeInsets.all(20),
+                                child: Text('No matches.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                        fontSize: 13, color: Colors.grey))),
+                        ]),
+                      ),
+                    ),
+                  ]),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, sel),
+                  child: Text('Apply (${sel.length})')),
+            ],
+          );
+        });
+      },
+    );
+    if (picked != null) _saveUsers(u, picked);
+  }
+
+  Widget _usersRow(_UsersField u) {
+    final sel = _userValues[u.key] ?? <String>{};
+    final names = [
+      for (final us in _orgUsers)
+        if (sel.contains(us['id'])) (us['name'] as String? ?? '-')
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Text(u.label,
+            style:
+                const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            names.isEmpty ? 'No users selected — nobody can edit' : names.join(', '),
+            style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: names.isEmpty ? Colors.orange : AppTheme.textPrimary),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 2,
+          ),
+        ),
+        const SizedBox(width: 10),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.group_outlined, size: 16),
+          label: Text(sel.isEmpty ? 'Select users' : 'Edit (${sel.length})'),
+          onPressed: () => _pickUsers(u),
+        ),
+        if (_saving.contains(u.key)) ...[
+          const SizedBox(width: 10),
+          const SizedBox(
+              width: 13,
+              height: 13,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+        ],
+      ]),
+    );
+  }
+
   // One switch row (+ its optional number/text companion when ON).
   Widget _toggleTile(_AdminToggle t) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
@@ -813,6 +998,7 @@ class _ErpAdminSettingsScreenState
       if (t.number != null && (_values[t.key] ?? false)) _numberRow(t.number!),
       if (t.text != null && (_values[t.key] ?? false)) _textRow(t.text!),
       if (t.branch != null && (_values[t.key] ?? false)) _branchRow(t.branch!),
+      if (t.users != null && (_values[t.key] ?? false)) _usersRow(t.users!),
     ]);
   }
 
