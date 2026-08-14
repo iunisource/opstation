@@ -455,7 +455,9 @@ class _ErpAdminSettingsScreenState
   bool _loading = true;
   bool _backupRunning = false;
   bool _blockNegStock = false; // inventory_settings.block_negative_stock (Serious Zone)
+  bool _blockZeroCostReceipt = false; // inventory_settings.block_zero_cost_receipt (Serious Zone)
   bool _savingSerious = false;
+  bool _savingSerious2 = false;
 
   @override
   void initState() {
@@ -518,18 +520,21 @@ class _ErpAdminSettingsScreenState
       } catch (_) {}
       // Serious Zone: negative-stock guard lives on inventory_settings.
       bool blockNeg = false;
+      bool blockZeroCost = false;
       try {
         final invs = await Supabase.instance.client
             .from('inventory_settings')
-            .select('block_negative_stock')
+            .select('block_negative_stock, block_zero_cost_receipt')
             .eq('org_id', orgId)
             .maybeSingle();
         blockNeg = (invs?['block_negative_stock'] as bool?) ?? false;
+        blockZeroCost = (invs?['block_zero_cost_receipt'] as bool?) ?? false;
       } catch (_) {}
       setState(() {
         _branches = branches;
         _orgUsers = orgUsers;
         _blockNegStock = blockNeg;
+        _blockZeroCostReceipt = blockZeroCost;
         for (final t in _toggles) {
           _values[t.key] =
               cfg.containsKey(t.key) ? cfg[t.key] == 'true' : t.defaultOn;
@@ -590,22 +595,50 @@ class _ErpAdminSettingsScreenState
     }, onConflict: 'key,org_id,branch_id');
   }
 
-  Future<void> _setBlockNegStock(bool v) async {
+  Future<void> _setSeriousFlag(String column, bool v) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
-    setState(() { _blockNegStock = v; _savingSerious = true; });
+    final neg = column == 'block_negative_stock';
+    setState(() {
+      if (neg) { _blockNegStock = v; _savingSerious = true; }
+      else { _blockZeroCostReceipt = v; _savingSerious2 = true; }
+    });
     try {
       await Supabase.instance.client
           .from('inventory_settings')
-          .update({'block_negative_stock': v}).eq('org_id', orgId);
+          .update({column: v}).eq('org_id', orgId);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _blockNegStock = !v); // revert on failure
+      setState(() { if (neg) _blockNegStock = !v; else _blockZeroCostReceipt = !v; });
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Could not save: $e')));
     } finally {
-      if (mounted) setState(() => _savingSerious = false);
+      if (mounted) setState(() { if (neg) _savingSerious = false; else _savingSerious2 = false; });
     }
+  }
+
+  Widget _seriousToggle(String title, String subtitle, bool value, bool saving,
+      ValueChanged<bool> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const SizedBox(height: 8),
+            Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(subtitle,
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
+            const SizedBox(height: 8),
+          ]),
+        ),
+        const SizedBox(width: 16),
+        if (saving)
+          const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+        else
+          Switch(value: value, activeColor: AppTheme.danger, onChanged: onChanged),
+      ]),
+    );
   }
 
   Widget _seriousZone() {
@@ -628,39 +661,30 @@ class _ErpAdminSettingsScreenState
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: AppTheme.danger.withOpacity(0.35)),
           ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const SizedBox(height: 8),
-                  const Text('Block negative stock',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'When ON, the system refuses any sale, issue, or production that would '
-                    'drive a product below zero stock at a branch — it asks you to post the '
-                    'receipt first. This prevents the negative cost layers that corrupt '
-                    'inventory valuation. Turn this on only AFTER cleaning up existing '
-                    'negative stock (Inventory Integrity), otherwise day-to-day postings '
-                    'that rely on overselling will be blocked.',
-                    style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35),
-                  ),
-                  const SizedBox(height: 8),
-                ]),
-              ),
-              const SizedBox(width: 16),
-              if (_savingSerious)
-                const SizedBox(width: 20, height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-              else
-                Switch(
-                  value: _blockNegStock,
-                  activeColor: AppTheme.danger,
-                  onChanged: (v) => _setBlockNegStock(v),
-                ),
-            ]),
-          ),
+          child: Column(children: [
+            _seriousToggle(
+              'Block negative stock',
+              'When ON, the system refuses any sale, issue, or production that would '
+              'drive a product below zero stock at a branch — it asks you to post the '
+              'receipt first. This prevents the negative cost layers that corrupt '
+              'inventory valuation. Turn this on only AFTER cleaning up existing '
+              'negative stock (Inventory Integrity), otherwise day-to-day postings '
+              'that rely on overselling will be blocked.',
+              _blockNegStock, _savingSerious,
+              (v) => _setSeriousFlag('block_negative_stock', v),
+            ),
+            const Divider(height: 1, color: AppTheme.border),
+            _seriousToggle(
+              'Block zero-cost receipts (GRN)',
+              'When ON, a Goods Receipt refuses any non-consignment line that has no '
+              'unit cost on the purchase order or the product — the buyer must enter a '
+              'cost before receiving. This stops zero-cost inventory layers at the '
+              'source, which are what corrupt product valuation and production costing. '
+              'Consignment items are exempt.',
+              _blockZeroCostReceipt, _savingSerious2,
+              (v) => _setSeriousFlag('block_zero_cost_receipt', v),
+            ),
+          ]),
         ),
         const SizedBox(height: 18),
       ]),
