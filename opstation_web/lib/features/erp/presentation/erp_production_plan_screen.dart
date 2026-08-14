@@ -24,6 +24,7 @@ class ErpProductionPlanScreen extends ConsumerStatefulWidget {
 
 class _ErpProductionPlanScreenState extends ConsumerState<ErpProductionPlanScreen> {
   String? _branchId; // null = all branches
+  String _mode = 'jobcard'; // 'jobcard' = explode scheduled job cards; 'forecast' = consumption forecast
   final _leadCtrl = TextEditingController(text: '14');
   final _targetCtrl = TextEditingController(text: '30');
 
@@ -84,6 +85,7 @@ class _ErpProductionPlanScreenState extends ConsumerState<ErpProductionPlanScree
         'p_branch_id': _branchId,
         'p_lead_days': double.tryParse(_leadCtrl.text.trim()) ?? 14,
         'p_target_cover': double.tryParse(_targetCtrl.text.trim()) ?? 30,
+        'p_mode': _mode,
       });
       setState(() {
         _rows = List<Map<String, dynamic>>.from(res as List);
@@ -281,6 +283,28 @@ class _ErpProductionPlanScreenState extends ConsumerState<ErpProductionPlanScree
             ],
             onChanged: (v) => setState(() => _branchId = v),
           )),
+          // Where demand comes from: scheduled job cards (deterministic) or the
+          // consumption forecast. Job Cards is the default.
+          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            const Padding(
+              padding: EdgeInsets.only(left: 2, bottom: 4),
+              child: Text('Demand source',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'jobcard', label: Text('Job Cards'), icon: Icon(Icons.assignment_outlined, size: 16)),
+                ButtonSegment(value: 'forecast', label: Text('Forecast'), icon: Icon(Icons.trending_up, size: 16)),
+              ],
+              selected: {_mode},
+              showSelectedIcon: false,
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
+              ),
+              onSelectionChanged: (s) => setState(() => _mode = s.first),
+            ),
+          ]),
           SizedBox(width: 120, child: TextField(
             controller: _leadCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
