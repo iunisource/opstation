@@ -41,6 +41,9 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
   // Per stock-transfer: {from_branch_id, to_branch_id, notes} — for the ledger
   // description "Transferred X to <branch>" / "Received X from <branch>".
   Map<String, Map<String, dynamic>> _transferInfo = {};
+  // Per production voucher: {name (finished good), output_qty} — for the ledger
+  // description "Produced X units of <finished good>".
+  Map<String, Map<String, dynamic>> _productionInfo = {};
 
   static const _availableTypes = [
     'All', 'purchase', 'sale', 'pos', 'pos return', 'sale return',
@@ -239,7 +242,20 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     }
     if (t.contains('adjust')) return 'Adjusted $qtyStr pcs$at';
     if (t.contains('opening')) return 'Opening stock $qtyStr pcs$at';
-    if (t.contains('production') || t.contains('manufactur') || t.contains('job')) return 'Produced $qtyStr pcs$at';
+    if (t.contains('production') || t.contains('manufactur') || t.contains('job')) {
+      final refId = m['reference_id'] as String?;
+      final info = refId != null ? _productionInfo[refId] : null;
+      final fg = (info?['name'] as String?)?.trim() ?? '';
+      if (fg.isNotEmpty) {
+        final oq = (info?['output_qty'] as num?)?.toDouble();
+        if (oq != null && oq > 0) {
+          final oqStr = oq == oq.roundToDouble() ? oq.toStringAsFixed(0) : oq.toStringAsFixed(2);
+          return 'Produced $oqStr units of $fg';
+        }
+        return 'Produced $fg';
+      }
+      return 'Produced $qtyStr pcs$at';
+    }
     return _friendlyRefLabel(m['reference_type'] as String?);
   }
 
@@ -286,6 +302,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     }
     final vMap = <String, String>{};
     final transferInfo = <String, Map<String, dynamic>>{};
+    final productionInfo = <String, Map<String, dynamic>>{};
     for (final entry in byTable.entries) {
       final tbl = entry.key;
       final ids = entry.value.toList();
@@ -311,10 +328,38 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
               'notes': r['notes'],
             };
           }
+          if (tbl == 'production_vouchers') {
+            productionInfo[id] = {
+              'product_id': r['product_id'],
+              'output_qty': r['output_qty'],
+            };
+          }
         }
       } catch (_) { }
     }
-    setState(() { _voucherNumbers = vMap; _voucherSourceTables = idToTable; _transferInfo = transferInfo; });
+    // Resolve the finished-good names for the production vouchers in one query,
+    // so the ledger can say "Produced X units of <finished good>".
+    final fgIds = productionInfo.values
+        .map((v) => v['product_id'] as String?)
+        .where((s) => s != null && s.isNotEmpty)
+        .cast<String>()
+        .toSet()
+        .toList();
+    if (fgIds.isNotEmpty) {
+      try {
+        final prods = await client.from('products').select('id, name').inFilter('id', fgIds);
+        final nameById = {for (final p in prods as List) p['id'] as String: p['name'] as String? ?? ''};
+        for (final info in productionInfo.values) {
+          info['name'] = nameById[info['product_id'] as String?] ?? '';
+        }
+      } catch (_) { }
+    }
+    setState(() {
+      _voucherNumbers = vMap;
+      _voucherSourceTables = idToTable;
+      _transferInfo = transferInfo;
+      _productionInfo = productionInfo;
+    });
   }
 
   String _displayType(Map m) {
