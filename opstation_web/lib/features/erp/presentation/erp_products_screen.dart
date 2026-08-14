@@ -752,6 +752,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     String? productClass = product?['product_class'] as String?;
     String? movementCategory = product?['product_movement_category'] as String?;
     bool isConsignment = product?['is_consignment'] == true;
+    bool isService = product?['is_service'] == true;
     bool freeText = product?['is_free_text'] == true;
     // Optional. Nullable by design — thousands of products exist with no image,
     // and every surface must render cleanly without one.
@@ -957,6 +958,20 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 ],
                 const SizedBox(height: 8),
                 CheckboxListTile(
+                  value: isService,
+                  onChanged: (v) => setS(() {
+                    isService = v ?? false;
+                    if (isService) isConsignment = false; // mutually exclusive
+                  }),
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  dense: true,
+                  title: const Text('Non-inventory (service / labour) item', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  subtitle: const Text('Not tracked in stock at all — no on-hand quantity, no cost layers, and never shown in the Inventory Integrity check. Its Cost Price is absorbed as a per-unit charge when used in a BOM (e.g. making / labour charges). Use for services and labour lines so they stop generating negative stock.',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                ),
+                const SizedBox(height: 8),
+                CheckboxListTile(
                   value: freeText,
                   onChanged: (v) => setS(() => freeText = v ?? false),
                   contentPadding: EdgeInsets.zero,
@@ -1010,7 +1025,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 // not owned so 0 cost is valid). Prevents costless products from
                 // being sold and booking zero/estimated COGS.
                 final _costVal = double.tryParse(costPriceCtrl.text.trim()) ?? 0;
-                if (!isConsignment && _costVal <= 0) {
+                if (!isConsignment && !isService && _costVal <= 0) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
                       const SnackBar(content: Text('Cost price is required (must be greater than 0)')));
                   return;
@@ -1032,6 +1047,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'cost_price': isConsignment ? 0 : (double.tryParse(costPriceCtrl.text.trim()) ?? 0),
                   'low_stock_limit': double.tryParse(lowStockCtrl.text.trim()) ?? 0,
                   'is_consignment': isConsignment,
+                  'is_service': isService,
                   'is_free_text': freeText,
                   'image_url': imageUrl,
                   'updated_at': DateTime.now().toUtc().toIso8601String(),

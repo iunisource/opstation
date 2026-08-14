@@ -454,6 +454,8 @@ class _ErpAdminSettingsScreenState
   final Set<String> _saving = {};
   bool _loading = true;
   bool _backupRunning = false;
+  bool _blockNegStock = false; // inventory_settings.block_negative_stock (Serious Zone)
+  bool _savingSerious = false;
 
   @override
   void initState() {
@@ -514,9 +516,20 @@ class _ErpAdminSettingsScreenState
             .eq('org_id', orgId)
             .order('name'));
       } catch (_) {}
+      // Serious Zone: negative-stock guard lives on inventory_settings.
+      bool blockNeg = false;
+      try {
+        final invs = await Supabase.instance.client
+            .from('inventory_settings')
+            .select('block_negative_stock')
+            .eq('org_id', orgId)
+            .maybeSingle();
+        blockNeg = (invs?['block_negative_stock'] as bool?) ?? false;
+      } catch (_) {}
       setState(() {
         _branches = branches;
         _orgUsers = orgUsers;
+        _blockNegStock = blockNeg;
         for (final t in _toggles) {
           _values[t.key] =
               cfg.containsKey(t.key) ? cfg[t.key] == 'true' : t.defaultOn;
@@ -575,6 +588,83 @@ class _ErpAdminSettingsScreenState
       'value': value,
       'org_id': orgId,
     }, onConflict: 'key,org_id,branch_id');
+  }
+
+  Future<void> _setBlockNegStock(bool v) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    setState(() { _blockNegStock = v; _savingSerious = true; });
+    try {
+      await Supabase.instance.client
+          .from('inventory_settings')
+          .update({'block_negative_stock': v}).eq('org_id', orgId);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _blockNegStock = !v); // revert on failure
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not save: $e')));
+    } finally {
+      if (mounted) setState(() => _savingSerious = false);
+    }
+  }
+
+  Widget _seriousZone() {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 760),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2, bottom: 8),
+          child: Row(children: [
+            const Icon(Icons.warning_amber_rounded, size: 16, color: AppTheme.danger),
+            const SizedBox(width: 8),
+            Text('SERIOUS ZONE',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800,
+                    color: AppTheme.danger, letterSpacing: 0.6)),
+          ]),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.danger.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppTheme.danger.withOpacity(0.35)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const SizedBox(height: 8),
+                  const Text('Block negative stock',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'When ON, the system refuses any sale, issue, or production that would '
+                    'drive a product below zero stock at a branch — it asks you to post the '
+                    'receipt first. This prevents the negative cost layers that corrupt '
+                    'inventory valuation. Turn this on only AFTER cleaning up existing '
+                    'negative stock (Inventory Integrity), otherwise day-to-day postings '
+                    'that rely on overselling will be blocked.',
+                    style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35),
+                  ),
+                  const SizedBox(height: 8),
+                ]),
+              ),
+              const SizedBox(width: 16),
+              if (_savingSerious)
+                const SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+              else
+                Switch(
+                  value: _blockNegStock,
+                  activeColor: AppTheme.danger,
+                  onChanged: (v) => _setBlockNegStock(v),
+                ),
+            ]),
+          ),
+        ),
+        const SizedBox(height: 18),
+      ]),
+    );
   }
 
   Future<void> _backupNow() async {
@@ -1152,6 +1242,8 @@ class _ErpAdminSettingsScreenState
                       ),
                     ),
                   ],
+                  const SizedBox(height: 8),
+                  _seriousZone(),
                 ],
               ),
             ),
