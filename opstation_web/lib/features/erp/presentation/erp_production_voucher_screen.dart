@@ -42,6 +42,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   List<Map<String, dynamic>> _products = [];
   Map<String, String> _prodLabel = {};
   Map<String, double> _prodCost = {};
+  Map<String, double> _compStock = {}; // component product_id -> on-hand at current branch
   bool _loadingProducts = true;
 
   // boms
@@ -223,6 +224,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
         _components = newComps; _overheads = newOh;
       });
       _fetchBase();
+      _loadCompStock();
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -252,6 +254,34 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
 
   Future<void> _loadBomBase() async { await _fetchBase(); _rescale(); }
 
+  /// Live on-hand at the current branch for every component on the voucher, so
+  /// the grid can show Stock in Hand and flag shortages before posting.
+  Future<void> _loadCompStock() async {
+    final orgId = _orgId, branch = _branchId;
+    final ids = _components
+        .map((l) => l.productId)
+        .where((p) => p != null && p.isNotEmpty)
+        .cast<String>()
+        .toSet()
+        .toList();
+    if (orgId == null || branch == null || ids.isEmpty) {
+      if (mounted) setState(() => _compStock = {});
+      return;
+    }
+    try {
+      final rows = await Supabase.instance.client.from('inventory_stock')
+          .select('product_id, quantity')
+          .eq('org_id', orgId).eq('branch_id', branch)
+          .inFilter('product_id', ids);
+      final oh = <String, double>{};
+      for (final s in rows as List) {
+        final pid = s['product_id'] as String;
+        oh[pid] = (oh[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
+      }
+      if (mounted) setState(() => _compStock = oh);
+    } catch (_) {}
+  }
+
   void _rescale() {
     final scale = _bomBaseQty > 0 ? (_outQty / _bomBaseQty) : 1;
     for (final l in _components) l.dispose();
@@ -272,6 +302,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       return l;
     }).toList();
     if (mounted) setState(() { _components = nc; _overheads = no; });
+    _loadCompStock();
   }
 
   // ---------- cost preview ----------
@@ -607,6 +638,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             const Expanded(child: Text('Product', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             const SizedBox(width: 12),
             const SizedBox(width: 110, child: Text('Quantity', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 12),
+            const SizedBox(width: 100, child: Text('In Hand', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             if (_canViewCost) ...[
               const SizedBox(width: 12),
               const SizedBox(width: 120, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
@@ -621,6 +654,16 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               Expanded(child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_components[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))),
               const SizedBox(width: 12),
               SizedBox(width: 110, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
+              const SizedBox(width: 12),
+              SizedBox(width: 100, child: Padding(padding: const EdgeInsets.only(top: 8), child: Builder(builder: (_) {
+                final pid = _components[i].productId;
+                final have = pid == null ? 0.0 : (_compStock[pid] ?? 0);
+                final short = _components[i].qty > have + 1e-9;
+                return Text(_trim(have), textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 12,
+                        color: short ? AppTheme.danger : AppTheme.textSecondary,
+                        fontWeight: short ? FontWeight.w700 : FontWeight.w400));
+              }))),
               if (_canViewCost) ...[
                 const SizedBox(width: 12),
                 SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
