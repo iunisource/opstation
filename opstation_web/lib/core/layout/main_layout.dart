@@ -351,6 +351,22 @@ final transferPendingCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of products flagged by the Inventory Integrity check (missing cost,
+// stock<>layers, negative or zero-cost layers). Drives the badge on the
+// Inventory -> Inventory Integrity menu item so anyone with access can see at a
+// glance that there are items to fix, without opening the report.
+final inventoryIntegrityCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .rpc('rpc_inventory_integrity', params: {'p_org': user.orgId});
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 /// Count of field orders awaiting review (status 'submitted') for the org.
 /// Drives the live nav badge on the Field Orders menu item. Invalidated by
 /// erp_field_orders_screen on approve/reject and realtime arrival.
@@ -607,6 +623,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
   final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
   final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
+  final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -632,7 +649,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/stock-value-report')) _menuItem(context, 'Stock Value Report', Icons.payments_outlined, '/erp/stock-value-report', location),
       if (show('/erp/stock-balance-report')) _menuItem(context, 'Stock Balance Report', Icons.inventory_outlined, '/erp/stock-balance-report', location),
       if (show('/erp/stock-aging-report')) _menuItem(context, 'Stock Aging Report', Icons.hourglass_bottom_outlined, '/erp/stock-aging-report', location),
-      if (show('/erp/inventory-integrity')) _menuItem(context, 'Inventory Integrity', Icons.rule_outlined, '/erp/inventory-integrity', location),
+      if (show('/erp/inventory-integrity')) _menuItem(context, 'Inventory Integrity', Icons.rule_outlined, '/erp/inventory-integrity', location, badge: integrityCount),
       if (show('/erp/purchase-variance')) _menuItem(context, 'Purchase Price Variance', Icons.trending_up_outlined, '/erp/purchase-variance', location),
       if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
     ];
@@ -839,7 +856,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/purchase-variance',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan'],
-          _trimDividers(inventoryItems), badge: transferPending),
+          _trimDividers(inventoryItems), badge: transferPending + integrityCount),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',

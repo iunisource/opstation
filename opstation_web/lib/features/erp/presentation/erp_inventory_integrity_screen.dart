@@ -148,6 +148,8 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     final gen = '${two(now.day)}/${two(now.month)}/${now.year} ${two(now.hour)}:${two(now.minute)}';
     String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     final body = list.map((r) {
+      final g = _fixGuide(r['issue'] as String?);
+      final fix = ([g.what, ...g.steps]).map(esc).join('<br>&bull; ');
       return '<tr>'
           '<td>${esc(r['name'])}</td>'
           '<td>${esc(r['sku'])}</td>'
@@ -155,6 +157,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
           '<td style="text-align:right">${_fmt(r['cost_price'] as num?)}</td>'
           '<td style="text-align:right">${_fmt(r['stock_qty'] as num?)}</td>'
           '<td style="text-align:right">${_fmt(r['layer_qty'] as num?)}</td>'
+          '<td style="font-size:11px">$fix</td>'
           '</tr>';
     }).join();
     final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Inventory Integrity</title>'
@@ -173,6 +176,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
         '<th style="text-align:right">Cost</th>'
         '<th style="text-align:right">Stock</th>'
         '<th style="text-align:right">Layers</th>'
+        '<th>How to fix</th>'
         '</tr></thead><tbody>$body</tbody></table>'
         '<script>window.onload=function(){window.print();}</script>'
         '</body></html>';
@@ -191,6 +195,145 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
       case 'ZERO-COST LAYERS': return Colors.brown;
       default: return Colors.grey;
     }
+  }
+
+  // Plain-language cause + step-by-step remedy for each issue type. Keyed on the
+  // exact issue string the RPC emits so the "How to fix" button can look it up.
+  ({String what, String why, List<String> steps}) _fixGuide(String? issue) {
+    switch (issue) {
+      case 'NO COST PRICE':
+        return (
+          what: 'This product has stock on hand but no cost value anywhere.',
+          why: 'No cost layer was ever created for it — usually opening stock was '
+              'entered without a cost, or the product was never received through a '
+              'Purchase Invoice. Until a cost exists, its inventory value and the '
+              'COGS on every sale of it are booked as ZERO, which understates cost '
+              'of goods sold and overstates profit.',
+          steps: [
+            'Open the product and confirm the correct unit cost.',
+            'If the stock came from opening balances: go to Opening Stock, edit '
+                'this product’s line and enter the unit cost, then re-post so a '
+                'cost layer is created.',
+            'If it should have been purchased: post the missing Purchase Invoice '
+                '(or GRN + PI) with the real unit cost so a cost layer is created.',
+            'As a last resort, set the cost on the Product profile and run a Stock '
+                'Adjustment (Revalue) to write the cost onto the on-hand quantity.',
+          ],
+        );
+      case 'STOCK <> LAYERS':
+        return (
+          what: 'The stock-on-hand quantity does not equal the total quantity held '
+              'in the cost layers.',
+          why: 'Something changed the on-hand quantity without creating (or '
+              'consuming) a matching cost layer — most often opening stock entered '
+              'as a quantity without a cost, a manual quantity edit, or a movement '
+              'that half-posted. The two ledgers have drifted apart, so valuation '
+              'will not tie to the quantity report.',
+          steps: [
+            'Open the Inventory Ledger for this product and compare movements '
+                'against the cost layers to find where they diverge.',
+            'If opening stock was entered without cost, fix the Opening Stock line '
+                '(add the cost) and re-post.',
+            'If a quantity was edited manually, reverse that edit or post a Stock '
+                'Adjustment so the on-hand quantity and the layers agree again.',
+            'Re-run this check — the product should drop off once quantity = layers.',
+          ],
+        );
+      case 'NEGATIVE LAYERS':
+        return (
+          what: 'The cost layers for this product have gone negative — more was '
+              'sold or issued than was ever received.',
+          why: 'Sales/issues were posted before the corresponding receipts, so the '
+              'FIFO layers ran below zero. COGS on those sales was booked with no '
+              'real cost behind it, so both inventory value and profit are wrong '
+              'until the receipts are in place.',
+          steps: [
+            'Post the missing receipt — the Purchase Invoice / GRN or Opening Stock '
+                'that should have brought this product in — dated on or before the '
+                'earliest sale.',
+            'Confirm the receipt quantity covers everything that was issued.',
+            'Let the system re-cost; the layers should return to zero-or-positive.',
+            'If the negative is genuinely a data error (not a missing receipt), post '
+                'a Stock Adjustment to correct the quantity.',
+          ],
+        );
+      case 'ZERO-COST LAYERS':
+        return (
+          what: 'A cost layer exists for this product but at a cost of zero.',
+          why: 'Goods were received without a unit cost — a GRN or Purchase Invoice '
+              'posted at 0, or an opening layer created with no value. The quantity '
+              'is right but its value is zero, so COGS when it sells will be zero '
+              'and profit will be overstated.',
+          steps: [
+            'Find the source document — open the product’s Inventory Ledger and '
+                'locate the receipt that created the zero-cost layer.',
+            'Open that GRN / Purchase Invoice, enter the correct unit cost, and '
+                're-post so the layer revalues.',
+            'If it was opening stock, edit the Opening Stock line with the real cost '
+                'and re-post.',
+            'Re-run this check to confirm the layer now carries a value.',
+          ],
+        );
+      default:
+        return (
+          what: 'This product was flagged by the integrity check.',
+          why: 'The stock data for this item is inconsistent.',
+          steps: [
+            'Review the product’s Inventory Ledger and cost layers.',
+            'Correct the source document or post a Stock Adjustment, then re-run '
+                'this check.',
+          ],
+        );
+    }
+  }
+
+  void _showFix(Map<String, dynamic> r) {
+    final issue = r['issue'] as String?;
+    final g = _fixGuide(issue);
+    final color = _issueColor(issue);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          Icon(Icons.build_circle_outlined, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(r['name'] as String? ?? '-',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              Text(issue ?? '-',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+            ]),
+          ),
+        ]),
+        content: SizedBox(
+          width: 460,
+          child: SingleChildScrollView(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(g.what, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              Text(g.why, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.4)),
+              const SizedBox(height: 16),
+              const Text('How to fix', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              ...List.generate(g.steps.length, (i) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(
+                    width: 20, height: 20, alignment: Alignment.center,
+                    decoration: BoxDecoration(color: color.withOpacity(0.14), shape: BoxShape.circle),
+                    child: Text('${i + 1}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color)),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(g.steps[i], style: const TextStyle(fontSize: 12.5, height: 1.4))),
+                ]),
+              )),
+            ]),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close'))],
+      ),
+    );
   }
 
   String _fmt(num? v) {
@@ -419,6 +562,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                       Expanded(flex: 1, child: Text('Cost', style: _h, textAlign: TextAlign.right)),
                       Expanded(flex: 1, child: Text('Stock', style: _h, textAlign: TextAlign.right)),
                       Expanded(flex: 1, child: Text('Layers', style: _h, textAlign: TextAlign.right)),
+                      Expanded(flex: 2, child: Text('How to fix', style: _h, textAlign: TextAlign.center)),
                     ])),
                   const Divider(height: 1),
                   ..._visible.map((r) => Padding(
@@ -434,6 +578,18 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                       Expanded(flex: 1, child: Text(_fmt(r['cost_price'] as num?), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
                       Expanded(flex: 1, child: Text(_fmt(r['stock_qty'] as num?), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
                       Expanded(flex: 1, child: Text(_fmt(r['layer_qty'] as num?), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+                      Expanded(flex: 2, child: Center(child: OutlinedButton.icon(
+                        onPressed: () => _showFix(r),
+                        icon: const Icon(Icons.help_outline, size: 15),
+                        label: const Text('How to fix', style: TextStyle(fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _issueColor(r['issue'] as String?),
+                          side: BorderSide(color: _issueColor(r['issue'] as String?).withOpacity(0.4)),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ))),
                     ]),
                   )),
                 ]),

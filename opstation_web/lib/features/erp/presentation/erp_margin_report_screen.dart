@@ -286,6 +286,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     b.write('<table><thead><tr>'
       '<th>Sr</th><th>Date</th><th>Sale Type</th><th>Sale #</th><th>Pur. Type</th><th>Pur. #</th>'
       '<th>Party</th><th>Product</th><th class="num">Qty</th><th class="num">Rate</th>'
+      '<th class="num">Disc %</th>'
       '<th class="num">Amount</th><th>Unit</th><th class="num">Unit Cost</th>'
       '<th class="num">Cost Amount</th><th class="num">Margin</th><th>Branch</th></tr></thead><tbody>');
     var i = 0;
@@ -304,6 +305,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         '<td>${_esc(prod)}</td>'
         '<td class="num">${_fmtQty(r['qty'] as num?)}</td>'
         '<td class="num">${_fmtMoney(r['rate'] as num?)}</td>'
+        '<td class="num">${_fmtDisc(r)}</td>'
         '<td class="num">${_fmtMoney(r['amount'] as num?)}</td>'
         '<td>${_esc((r['unit'] ?? '').toString())}</td>'
         '<td class="num">${_fmtMoney(r['unit_cost'] as num?)}</td>'
@@ -314,6 +316,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     }
     b.write('<tr class="total"><td colspan="8">Total (${rows.length} lines)</td>'
       '<td class="num">${_fmtQty(_totQty)}</td><td class="num"></td>'
+      '<td class="num">$_totDiscLabel</td>'
       '<td class="num">${_fmtMoney(_totAmount)}</td><td></td><td class="num"></td>'
       '<td class="num">${_fmtMoney(_totCost)}</td>'
       '<td class="num ${_totMargin < 0 ? 'neg' : ''}">${_fmtMoney(_totMargin)}</td><td></td></tr>');
@@ -331,14 +334,14 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       return '"${s.replaceAll('"', '""')}"';
     }
     final sb = StringBuffer();
-    sb.writeln(['Sr', 'Date', 'Sale Type', 'Sale #', 'Pur. Type', 'Pur. #', 'Party', 'Product', 'Qty', 'Rate', 'Amount', 'Unit', 'Unit Cost', 'Cost Amount', 'Margin', 'Branch'].map(c).join(','));
+    sb.writeln(['Sr', 'Date', 'Sale Type', 'Sale #', 'Pur. Type', 'Pur. #', 'Party', 'Product', 'Qty', 'Rate', 'Disc %', 'Amount', 'Unit', 'Unit Cost', 'Cost Amount', 'Margin', 'Branch'].map(c).join(','));
     var i = 0;
     for (final r in _visible) {
       i++;
       sb.writeln([
         i, _fmtDate(r['doc_date']), r['sale_type'] ?? '', r['sale_number'] ?? '', r['pu_type'] ?? '', r['pu_number'] ?? '',
         r['party'] ?? '', '${(r['sku'] ?? '') == '' ? '' : '${r['sku']} - '}${r['product'] ?? ''}',
-        _fmtQty(r['qty'] as num?), r['rate'] ?? 0, r['amount'] ?? 0, r['unit'] ?? '',
+        _fmtQty(r['qty'] as num?), r['rate'] ?? 0, _fmtDisc(r), r['amount'] ?? 0, r['unit'] ?? '',
         r['unit_cost'] ?? 0, r['cost_amount'] ?? 0, r['margin'] ?? 0, r['branch'] ?? '',
       ].map(c).join(','));
     }
@@ -347,6 +350,37 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     final safe = 'margin_report_${DateFormat('yyyyMMdd').format(_from)}_${DateFormat('yyyyMMdd').format(_to)}.csv';
     html.AnchorElement(href: url)..setAttribute('download', safe)..click();
     html.Url.revokeObjectUrl(url);
+  }
+
+  // Discount implied by the line: Rate is the gross list rate, Amount is the
+  // net booked on the invoice. gross = qty*rate; disc% = (gross-amount)/gross.
+  static double _discPct(Map<String, dynamic> r) {
+    final gross = ((r['qty'] as num?)?.toDouble() ?? 0) *
+        ((r['rate'] as num?)?.toDouble() ?? 0);
+    final amt = (r['amount'] as num?)?.toDouble() ?? 0;
+    if (gross.abs() < 0.005) return 0;
+    return (gross - amt) / gross * 100;
+  }
+
+  static String _fmtDisc(Map<String, dynamic> r) {
+    final p = _discPct(r);
+    if (p.abs() < 0.05) return '-';
+    return '${p.toStringAsFixed(1)}%';
+  }
+
+  double get _totGross => _visible.fold(
+      0.0,
+      (s, r) =>
+          s +
+          ((r['qty'] as num?)?.toDouble() ?? 0) *
+              ((r['rate'] as num?)?.toDouble() ?? 0));
+
+  String get _totDiscLabel {
+    final g = _totGross;
+    if (g.abs() < 0.005) return '';
+    final p = (g - _totAmount) / g * 100;
+    if (p.abs() < 0.05) return '';
+    return '${p.toStringAsFixed(1)}%';
   }
 
   static String _fmtDate(Object? v) {
@@ -573,6 +607,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
             DataColumn(label: _sortHeader('Product', 'product')),
             DataColumn(label: _sortHeader('Qty', 'qty', right: true), numeric: true),
             DataColumn(label: _sortHeader('Rate', 'rate', right: true), numeric: true),
+            DataColumn(label: Text('Disc %', style: _h), numeric: true),
             DataColumn(label: _sortHeader('Amount', 'amount', right: true), numeric: true),
             DataColumn(label: Text('Unit', style: _h)),
             DataColumn(label: _sortHeader('Unit Cost', 'unit_cost', right: true), numeric: true),
@@ -588,6 +623,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
               const DataCell(Text('')), const DataCell(Text('')), const DataCell(Text('')), const DataCell(Text('')),
               DataCell(Text(_fmtQty(_totQty), style: _bt)),
               const DataCell(Text('')),
+              DataCell(Text(_totDiscLabel, style: _bt)),
               DataCell(Text(_fmtMoney(_totAmount), style: _bt)),
               const DataCell(Text('')),
               const DataCell(Text('')),
@@ -619,6 +655,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: Text(prod, style: const TextStyle(fontSize: 12), softWrap: true, maxLines: 3, overflow: TextOverflow.ellipsis))),
         DataCell(t(_fmtQty(r['qty'] as num?), num: true)),
         DataCell(t(_fmtMoney(r['rate'] as num?), num: true)),
+        DataCell(t(_fmtDisc(r), num: true)),
         DataCell(t(_fmtMoney(r['amount'] as num?), num: true)),
         DataCell(t((r['unit'] ?? '').toString())),
         DataCell(t(_fmtMoney(r['unit_cost'] as num?), num: true)),
