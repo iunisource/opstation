@@ -353,6 +353,144 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     }
   }
 
+  // Per-branch reality for one product — the "review each" data. Read-only.
+  Future<List<Map<String, dynamic>>> _loadDetail(String productId) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return [];
+    final res = await Supabase.instance.client.rpc(
+      'rpc_inventory_integrity_detail',
+      params: {'p_org': orgId, 'p_product': productId},
+    );
+    return List<Map<String, dynamic>>.from(res as List);
+  }
+
+  static const _modeLabels = {
+    'consolidate': 'Consolidate layers — clean out negative layers, no value change',
+    'trust_physical': 'Trust physical stock — rebuild layers to on-hand (posts a GL adjustment)',
+    'trust_layers': 'Trust cost layers — move on-hand quantity to match the layers',
+  };
+
+  Future<void> _applyReconcile(BuildContext dialogCtx, String productId,
+      String productName, Map<String, dynamic> branchRow, String mode) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    final userId = ref.read(currentUserProvider)?.id;
+    final branchId = branchRow['branch_id'] as String?;
+    final branchName = branchRow['branch_name'] as String? ?? '—';
+    if (orgId == null || branchId == null) return;
+    final ok = await showDialog<bool>(
+      context: dialogCtx,
+      builder: (c) => AlertDialog(
+        title: const Text('Apply reconciliation?'),
+        content: Text('$productName\nBranch: $branchName\n\n${_modeLabels[mode]}\n\n'
+            'This is recorded in the reconciliation log and can be reviewed. Continue?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(c, true), child: const Text('Apply')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final res = await Supabase.instance.client.rpc('rpc_reconcile_inventory', params: {
+        'p_org': orgId, 'p_branch': branchId, 'p_product': productId,
+        'p_mode': mode, 'p_cost': null, 'p_user': userId,
+      });
+      if (!mounted) return;
+      Navigator.of(dialogCtx).pop(); // close the How-to-fix dialog
+      _load();
+      _loadDocs();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$res')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reconcile failed: $e')));
+    }
+  }
+
+  Widget _branchBreakdown(Map<String, dynamic> r) {
+    final pid = r['product_id'] as String?;
+    if (pid == null) return const SizedBox.shrink();
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _loadDetail(pid),
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+          );
+        }
+        final rows = snap.data ?? [];
+        if (rows.isEmpty) return const SizedBox.shrink();
+        Widget cell(String t, {bool bold = false, Color? color, TextAlign align = TextAlign.right}) =>
+            Text(t, textAlign: align, style: TextStyle(fontSize: 11.5,
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w400, color: color));
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('This product, branch by branch',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 2),
+          const Text('Where physical stock and cost layers disagree is where the fix goes.',
+              style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(
+                border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+            child: Column(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: const BoxDecoration(color: Color(0xFFF8F9FA)),
+                child: Row(children: [
+                  Expanded(flex: 3, child: cell('Branch', bold: true, align: TextAlign.left)),
+                  Expanded(flex: 2, child: cell('Stock', bold: true)),
+                  Expanded(flex: 2, child: cell('Layers', bold: true)),
+                  Expanded(flex: 3, child: cell('Layer value', bold: true)),
+                  Expanded(flex: 1, child: cell('Neg', bold: true)),
+                  const SizedBox(width: 44, child: Text('Fix', textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700))),
+                ]),
+              ),
+              const Divider(height: 1),
+              ...rows.map((d) {
+                final stock = (d['stock_qty'] as num?)?.toDouble() ?? 0;
+                final layer = (d['layer_qty'] as num?)?.toDouble() ?? 0;
+                final mismatch = (stock - layer).abs() > 0.001;
+                final neg = (d['neg_layers'] as num?)?.toInt() ?? 0;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: Row(children: [
+                    Expanded(flex: 3, child: cell(d['branch_name'] as String? ?? '—', align: TextAlign.left)),
+                    Expanded(flex: 2, child: cell(_fmt(stock))),
+                    Expanded(flex: 2, child: cell(_fmt(layer),
+                        bold: mismatch, color: mismatch ? AppTheme.danger : null)),
+                    Expanded(flex: 3, child: cell(_fmt(d['layer_value'] as num?))),
+                    Expanded(flex: 1, child: cell(neg == 0 ? '—' : '$neg',
+                        color: neg > 0 ? Colors.deepPurple : null)),
+                    SizedBox(width: 44, child: Center(
+                      child: (!mismatch && neg == 0)
+                        ? const Text('—', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))
+                        : PopupMenuButton<String>(
+                      icon: const Icon(Icons.build_outlined, size: 16),
+                      tooltip: 'Reconcile this branch',
+                      padding: EdgeInsets.zero,
+                      onSelected: (mode) => _applyReconcile(
+                          context, pid, r['name'] as String? ?? '-', d, mode),
+                      itemBuilder: (_) => [
+                        if (mismatch) const PopupMenuItem(value: 'trust_physical',
+                            child: Text('Trust physical stock', style: TextStyle(fontSize: 12))),
+                        if (mismatch) const PopupMenuItem(value: 'trust_layers',
+                            child: Text('Trust cost layers', style: TextStyle(fontSize: 12))),
+                        if (!mismatch && neg > 0) const PopupMenuItem(value: 'consolidate',
+                            child: Text('Consolidate layers', style: TextStyle(fontSize: 12))),
+                      ],
+                    ))),
+                  ]),
+                );
+              }),
+            ]),
+          ),
+        ]);
+      },
+    );
+  }
+
   void _showFix(Map<String, dynamic> r) {
     final issue = r['issue'] as String?;
     final g = _fixGuide(issue);
@@ -373,7 +511,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
           ),
         ]),
         content: SizedBox(
-          width: 460,
+          width: 560,
           child: SingleChildScrollView(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(g.what, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
@@ -394,6 +532,8 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                   Expanded(child: Text(g.steps[i], style: const TextStyle(fontSize: 12.5, height: 1.4))),
                 ]),
               )),
+              const SizedBox(height: 16),
+              _branchBreakdown(r),
             ]),
           ),
         ),
