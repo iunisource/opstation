@@ -114,15 +114,14 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
           final cost = qty.abs() > 1e-9
               ? value / qty
               : (anyCost[pid] ?? (p['cost_price'] as num?)?.toDouble() ?? 0);
-          final sell = (p['selling_price'] as num?)?.toDouble() ?? 0;
           rows.add({
             'name': p['name'], 'sku': p['sku'],
             'main': p['product_main_group'], 'group': p['product_group'],
             'sub': p['product_sub_group'],
             'class': p['product_class'], 'mov': p['product_movement_category'],
             'uom': p['uoms']?['abbreviation'] ?? '',
-            'qty': qty, 'cost': cost, 'sell': sell,
-            'value': value, 'retail': qty * sell,
+            'qty': qty, 'cost': cost,
+            'value': value,
           });
         }
         rows.sort((a, b) => (b['value'] as double).compareTo(a['value'] as double));
@@ -178,7 +177,6 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
   }
 
   double get _totalValue => _filtered.fold(0.0, (s, r) => s + (r['value'] as double));
-  double get _totalRetail => _filtered.fold(0.0, (s, r) => s + (r['retail'] as double));
 
   String get _branchName {
     if (_selBranches.isEmpty) return _isAdmin ? 'All branches' : 'All my branches';
@@ -251,7 +249,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
 
     String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     final body = list.map((r) {
-      final qty = (r['qty'] as double); final cost = (r['cost'] as double); final value = (r['value'] as double); final retail = (r['retail'] as double);
+      final qty = (r['qty'] as double); final cost = (r['cost'] as double); final value = (r['value'] as double);
       return '<tr>'
           '<td>${esc(r['name'])}</td>'
           '<td>${esc(r['sku'])}</td>'
@@ -261,7 +259,6 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
           '<td style="text-align:right">${qty.toStringAsFixed(0)}</td>'
           '<td style="text-align:right">${_money(cost)}</td>'
           '<td style="text-align:right;font-weight:bold">${_money(value)}</td>'
-          '<td style="text-align:right">${_money(retail)}</td>'
           '</tr>';
     }).join();
 
@@ -282,11 +279,10 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         '<div class="muted">Generated: $dateStr &middot; ${list.length} item(s) on hand</div>'
         '<table><thead><tr>'
         '<th>Product</th><th>SKU</th><th>Main Group</th><th>Group</th><th>Class</th>'
-        '<th style="text-align:right">On Hand</th><th style="text-align:right">Unit Cost</th><th style="text-align:right">Stock Value</th><th style="text-align:right">Retail Value</th>'
+        '<th style="text-align:right">On Hand</th><th style="text-align:right">Unit Cost</th><th style="text-align:right">Stock Value</th>'
         '</tr></thead><tbody>$body</tbody>'
         '<tfoot><tr><td colspan="7" style="text-align:right">Total</td>'
-        '<td style="text-align:right">${_money(_totalValue)}</td>'
-        '<td style="text-align:right">${_money(_totalRetail)}</td></tr></tfoot>'
+        '<td style="text-align:right">${_money(_totalValue)}</td></tr></tfoot>'
         '</table>'
         '<script>window.onload=function(){window.print();}</script>'
         '</body></html>';
@@ -350,8 +346,6 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         const SizedBox(height: 12),
         Row(children: [
           _summaryCard('Stock Value (cost)', 'Rs. ${_money(_totalValue)}', AppTheme.primary),
-          const SizedBox(width: 12),
-          _summaryCard('Retail Value', 'Rs. ${_money(_totalRetail)}', AppTheme.success),
         ]),
         const SizedBox(height: 16),
         Expanded(child: _loading
