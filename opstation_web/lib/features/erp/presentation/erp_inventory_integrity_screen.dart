@@ -140,6 +140,72 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
 
   int _count(String issue) => _rows.where((r) => r['issue'] == issue).length;
 
+  // Print whichever tab is showing — Products or Documents. The single header
+  // button previously always printed Products, so the Documents tab's print
+  // preview showed the wrong section.
+  void _printActive() {
+    if (_tabs.index == 1) {
+      if (_docRows.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Nothing to print — GL and inventory ledger agree')));
+        return;
+      }
+      _printDocs();
+    } else {
+      if (_rows.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Nothing to print — inventory is clean')));
+        return;
+      }
+      _print();
+    }
+  }
+
+  void _printDocs() {
+    final list = _docRows;
+    final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final gen = '${two(now.day)}/${two(now.month)}/${now.year} ${two(now.hour)}:${two(now.minute)}';
+    String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final body = list.map((r) {
+      final diff = (r['difference'] as num?)?.toDouble() ?? 0;
+      return '<tr>'
+          '<td>${esc(r['doc_type'])}</td>'
+          '<td>${esc(r['voucher_no'])}</td>'
+          '<td>${esc(r['voucher_date'])}</td>'
+          '<td style="text-align:right">${_fmt(r['gl_value'] as num?)}</td>'
+          '<td style="text-align:right">${_fmt(r['ledger_value'] as num?)}</td>'
+          '<td style="text-align:right">${_fmt(diff)}</td>'
+          '<td>${esc(r['note'])}</td>'
+          '</tr>';
+    }).join();
+    final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>GL vs Inventory Reconciliation</title>'
+        '<style>'
+        'body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px}'
+        'h1{font-size:18px;margin:0 0 2px}'
+        '.muted{color:#666;font-size:12px;margin:2px 0}'
+        'table{border-collapse:collapse;width:100%;margin-top:14px;font-size:12px}'
+        'th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}'
+        'th{background:#f4f5f7}'
+        '</style></head><body>'
+        '<h1>$orgName &mdash; GL vs Inventory Reconciliation</h1>'
+        '<div class="muted">Generated: $gen &middot; ${_d(_from)} to ${_d(_to)} &middot; ${list.length} document(s) disagree</div>'
+        '<table><thead><tr>'
+        '<th>Document</th><th>Voucher</th><th>Date</th>'
+        '<th style="text-align:right">GL value</th>'
+        '<th style="text-align:right">Ledger value</th>'
+        '<th style="text-align:right">Difference</th>'
+        '<th>What it means</th>'
+        '</tr></thead><tbody>$body</tbody></table>'
+        '<script>window.onload=function(){window.print();}</script>'
+        '</body></html>';
+    final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+    Future.delayed(const Duration(seconds: 4), () => html.Url.revokeObjectUrl(url));
+  }
+
   void _print() {
     final list = _visible;
     final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
@@ -354,7 +420,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                 style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           ])),
           IconButton(icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF',
-              onPressed: _rows.isEmpty ? null : _print),
+              onPressed: _printActive),
           IconButton(icon: const Icon(Icons.refresh), onPressed: () { _load(); _loadDocs(); }),
         ])),
       Container(

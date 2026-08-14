@@ -48,6 +48,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
   String _status = 'draft';
   bool _isVoided = false;
   List<_OsLine> _lines = [];
+  String _lineSearch = ''; // filters the voucher's product lines for review
   bool _saving = false;
   bool _posting = false;
 
@@ -148,6 +149,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
       _notesCtrl.clear();
       _branchId = (ref.read(selectedBranchProvider)?['id'] as String?) ?? (_branches.isNotEmpty ? _branches.first['id'] as String? : null);
       _lines = [_OsLine()];
+      _lineSearch = '';
     });
   }
 
@@ -177,6 +179,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
         _date = ds != null ? (DateTime.tryParse(ds) ?? DateTime.now()) : DateTime.now();
         _notesCtrl.text = v['notes'] as String? ?? '';
         _lines = newLines.isEmpty ? [_OsLine()] : newLines;
+        _lineSearch = '';
       });
     } catch (e) { _snack('Load error: $e'); }
   }
@@ -482,9 +485,40 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
   }
 
   Widget _linesSection() {
+    final q = _lineSearch.trim().toLowerCase();
+    final matches = [
+      for (var i = 0; i < _lines.length; i++)
+        if (q.isEmpty || _lines[i].productLabel.toLowerCase().contains(q)) i
+    ];
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: Column(children: [
+        if (_lines.length > 1)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+            child: Row(children: [
+              Expanded(child: TextField(
+                decoration: InputDecoration(
+                  hintText: 'Search product in this voucher',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                  border: const OutlineInputBorder(),
+                  suffixIcon: q.isEmpty ? null : IconButton(
+                    icon: const Icon(Icons.close, size: 16),
+                    onPressed: () => setState(() => _lineSearch = ''),
+                  ),
+                ),
+                style: const TextStyle(fontSize: 12),
+                onChanged: (v) => setState(() => _lineSearch = v),
+              )),
+              if (q.isNotEmpty) Padding(
+                padding: const EdgeInsets.only(left: 10),
+                child: Text('${matches.length} of ${_lines.length}',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ),
+            ]),
+          ),
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: const [
@@ -500,7 +534,11 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
             SizedBox(width: 110, child: Text('Value', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             SizedBox(width: 30),
           ])),
-        for (var i = 0; i < _lines.length; i++)
+        if (matches.isEmpty && q.isNotEmpty)
+          const Padding(padding: EdgeInsets.symmetric(vertical: 20),
+            child: Text('No product in this voucher matches your search',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+        for (final i in matches)
           Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
