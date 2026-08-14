@@ -19,6 +19,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
   bool _loading = true;
   List<Map<String, dynamic>> _rows = [];      // valued stock rows for the selection
   List<Map<String, dynamic>> _branches = [];
+  List<Map<String, dynamic>> _activeBranches = []; // branches covered by last load, ordered
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   // Branch multi-select: empty set = ALL branches; else any 1..N branches.
   Set<String> _selBranches = {};
@@ -82,6 +83,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         final Map<String, double> qtyMap = {};
         final Map<String, double> valMap = {};
         final Map<String, double> anyCost = {}; // fallback display cost
+        final Map<String, Map<String, double>> perBranchQty = {}; // pid -> {branch -> qty}
         for (final bid in targets) {
           final Map<String, double> costMap = {};
           try {
@@ -104,6 +106,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
             final cost = costMap[pid] ?? (byId[pid]?['cost_price'] as num?)?.toDouble() ?? 0;
             qtyMap[pid] = (qtyMap[pid] ?? 0) + q;
             valMap[pid] = (valMap[pid] ?? 0) + q * cost;
+            (perBranchQty[pid] ??= {})[bid] = q;
           }
         }
         for (final p in byId.values) {
@@ -122,6 +125,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
             'uom': p['uoms']?['abbreviation'] ?? '',
             'qty': qty, 'cost': cost,
             'value': value,
+            'branchQtys': perBranchQty[pid] ?? <String, double>{},
           });
         }
         rows.sort((a, b) => (b['value'] as double).compareTo(a['value'] as double));
@@ -131,6 +135,12 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         _branches = branchList;
         _taxonomies = grouped;
         _rows = rows;
+        // Branches actually covered by this load (in a stable order), used to
+        // render one qty column per branch when 2+ are selected.
+        _activeBranches = [
+          for (final b in branchList)
+            if (targets.contains(b['id'])) {'id': b['id'], 'name': b['name']}
+        ];
         _loading = false;
       });
     } catch (e) {
@@ -248,19 +258,36 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
     final filterLine = filters.isEmpty ? 'All categories' : filters.join(' &middot; ');
 
     String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final multi = _multiBranch;
     final body = list.map((r) {
       final qty = (r['qty'] as double); final cost = (r['cost'] as double); final value = (r['value'] as double);
+      final bq = (r['branchQtys'] as Map?)?.cast<String, double>() ?? const <String, double>{};
+      final branchCells = multi
+          ? _activeBranches.map((b) =>
+              '<td style="text-align:right">${(bq[b['id']] ?? 0).toStringAsFixed(0)}</td>').join()
+          : '';
       return '<tr>'
           '<td>${esc(r['name'])}</td>'
           '<td>${esc(r['sku'])}</td>'
-          '<td>${esc(r['main'])}</td>'
-          '<td>${esc(r['group'])}</td>'
-          '<td>${esc(r['class'])}</td>'
+          '${multi ? '' : '<td>${esc(r['main'])}</td><td>${esc(r['group'])}</td><td>${esc(r['class'])}</td>'}'
+          '$branchCells'
           '<td style="text-align:right">${qty.toStringAsFixed(0)}</td>'
           '<td style="text-align:right">${_money(cost)}</td>'
           '<td style="text-align:right;font-weight:bold">${_money(value)}</td>'
           '</tr>';
     }).join();
+    // Header + footer-colspan adapt to whether per-branch columns are shown.
+    final branchHeads = multi
+        ? _activeBranches.map((b) =>
+            '<th style="text-align:right">${esc(b['name'])}</th>').join()
+        : '';
+    final headCols = multi
+        ? '<th>Product</th><th>SKU</th>$branchHeads'
+            '<th style="text-align:right">Total Qty</th>'
+        : '<th>Product</th><th>SKU</th><th>Main Group</th><th>Group</th><th>Class</th>'
+            '<th style="text-align:right">On Hand</th>';
+    // Number of columns before the two money columns (Unit Cost, Stock Value).
+    final leadCols = multi ? (2 + _activeBranches.length + 1) : 6;
 
     final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Value Report</title>'
         '<style>'
@@ -278,10 +305,9 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         '<div class="muted">Filters: $filterLine</div>'
         '<div class="muted">Generated: $dateStr &middot; ${list.length} item(s) on hand</div>'
         '<table><thead><tr>'
-        '<th>Product</th><th>SKU</th><th>Main Group</th><th>Group</th><th>Class</th>'
-        '<th style="text-align:right">On Hand</th><th style="text-align:right">Unit Cost</th><th style="text-align:right">Stock Value</th>'
+        '$headCols<th style="text-align:right">Unit Cost</th><th style="text-align:right">Stock Value</th>'
         '</tr></thead><tbody>$body</tbody>'
-        '<tfoot><tr><td colspan="7" style="text-align:right">Total</td>'
+        '<tfoot><tr><td colspan="${leadCols + 1}" style="text-align:right">Total</td>'
         '<td style="text-align:right">${_money(_totalValue)}</td></tr></tfoot>'
         '</table>'
         '<script>window.onload=function(){window.print();}</script>'
@@ -359,8 +385,16 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
                     child: Row(children: [
                       Expanded(flex: 3, child: _sortHeader('Product', 'name')),
                       Expanded(flex: 2, child: _sortHeader('SKU', 'sku')),
-                      Expanded(flex: 2, child: _sortHeader('Group', 'group')),
-                      Expanded(flex: 1, child: _sortHeader('On Hand', 'qty', right: true)),
+                      if (!_multiBranch)
+                        Expanded(flex: 2, child: _sortHeader('Group', 'group')),
+                      // Per-branch qty columns when 2+ branches are selected.
+                      for (final b in _activeBranches)
+                        if (_multiBranch)
+                          Expanded(flex: 1, child: Align(alignment: Alignment.centerRight,
+                              child: Text(_shortBranch(b['name'] as String? ?? '-'),
+                                  textAlign: TextAlign.right, overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary)))),
+                      Expanded(flex: 1, child: _sortHeader(_multiBranch ? 'Total Qty' : 'On Hand', 'qty', right: true)),
                       Expanded(flex: 2, child: _sortHeader('Unit Cost', 'cost', right: true)),
                       Expanded(flex: 2, child: _sortHeader('Stock Value', 'value', right: true)),
                     ]),
@@ -373,13 +407,19 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
                           itemBuilder: (_, i) {
                             final r = list[i];
                             final qty = (r['qty'] as double); final cost = (r['cost'] as double); final value = (r['value'] as double);
+                            final bq = (r['branchQtys'] as Map?)?.cast<String, double>() ?? const <String, double>{};
                             return Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
                               child: Row(children: [
                                 Expanded(flex: 3, child: Text(r['name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
                                 Expanded(flex: 2, child: Text(r['sku'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
-                                Expanded(flex: 2, child: Text(r['group'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
-                                Expanded(flex: 1, child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+                                if (!_multiBranch)
+                                  Expanded(flex: 2, child: Text(r['group'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                                for (final b in _activeBranches)
+                                  if (_multiBranch)
+                                    Expanded(flex: 1, child: Text((bq[b['id']] ?? 0).toStringAsFixed(0),
+                                        textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                                Expanded(flex: 1, child: Text(qty.toStringAsFixed(0), textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: _multiBranch ? FontWeight.w700 : FontWeight.w400))),
                                 Expanded(flex: 2, child: Text(_money(cost), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                                 Expanded(flex: 2, child: Text(_money(value), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary))),
                               ]),
@@ -390,6 +430,17 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
               )),
       ]),
     );
+  }
+
+  bool get _multiBranch => _activeBranches.length > 1;
+
+  // Compact a branch name for a narrow column header (first two words / 14 chars).
+  String _shortBranch(String name) {
+    final n = name.trim();
+    if (n.length <= 14) return n;
+    final parts = n.split(RegExp(r'\s+'));
+    final two = parts.take(2).join(' ');
+    return two.length <= 16 ? two : '${n.substring(0, 13)}…';
   }
 
   Widget _summaryCard(String label, String value, Color color) => Container(
