@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../auth_controller.dart';
 import '../../../core/theme/app_theme.dart';
+import 'signup_wizard_screen.dart';
 
 /// Destination for the "Partner Retailer Portal" button.
 /// Opened in the same tab; swap for any URL (in-app hash route or external).
@@ -121,18 +122,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   Future<void> _openSignup() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => const _SignupDialog(),
+    await Navigator.of(context).push(
+      MaterialPageRoute(fullscreenDialog: true, builder: (_) => const SignupWizardScreen()),
     );
-    if (ok == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Thanks! Your request has been sent. We will be in touch shortly.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
   }
 
   OutlineInputBorder _border([Color? c]) => OutlineInputBorder(
@@ -188,19 +180,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget _brandPanel() {
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            AppTheme.primary,
-            Color.lerp(AppTheme.primary, const Color(0xFF0B1220), 0.55)!,
-          ],
+          colors: [Colors.white, Color(0xFFEEF3FF)],
         ),
+        border: Border(right: BorderSide(color: AppTheme.primary.withOpacity(0.08))),
       ),
       child: Stack(
         children: [
-          Positioned(top: -100, left: -80, child: _orb(360, 0.16)),
-          Positioned(bottom: -150, right: -110, child: _orb(470, 0.10)),
+          Positioned(top: -100, left: -80, child: _orb(360, 0.06)),
+          Positioned(bottom: -150, right: -110, child: _orb(470, 0.05)),
           Padding(
             padding: const EdgeInsets.all(56),
             child: Column(
@@ -211,23 +201,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.16),
+                      color: AppTheme.primary.withOpacity(0.10),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withOpacity(0.25)),
+                      border: Border.all(color: AppTheme.primary.withOpacity(0.20)),
                     ),
                     alignment: Alignment.center,
                     child: const Text('O',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
+                        style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w800, fontSize: 22)),
                   ),
                   const SizedBox(width: 12),
                   const Text('Opstation',
-                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                      style: TextStyle(color: _ink, fontSize: 20, fontWeight: FontWeight.w800)),
                 ]),
                 const Spacer(),
                 const Text(
-                  'Run your whole operation\nfrom a single panel.',
+                  'Most agile software on the planet,\nfor the trading and distribution industry.',
                   style: TextStyle(
-                      color: Colors.white,
+                      color: _ink,
                       fontSize: 34,
                       fontWeight: FontWeight.w800,
                       height: 1.15,
@@ -236,7 +226,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 const SizedBox(height: 16),
                 Text(
                   'Inventory, sales, POS, manufacturing, financials and facilities — unified across every branch, in real time.',
-                  style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 15, height: 1.5),
+                  style: TextStyle(color: _ink.withOpacity(0.60), fontSize: 15, height: 1.5),
                 ),
                 const SizedBox(height: 36),
                 _brandFeature(Icons.inventory_2_outlined, 'Multi-branch inventory, POS & delivery'),
@@ -245,7 +235,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 _brandFeature(Icons.verified_user_outlined, 'Role-based access & full audit trail'),
                 const Spacer(),
                 Text('© 2026 Opstation · All rights reserved',
-                    style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
+                    style: TextStyle(color: _ink.withOpacity(0.45), fontSize: 12)),
               ],
             ),
           ),
@@ -259,7 +249,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          gradient: RadialGradient(colors: [Colors.white.withOpacity(opacity), Colors.transparent]),
+          gradient: RadialGradient(colors: [AppTheme.primary.withOpacity(opacity), Colors.transparent]),
         ),
       );
 
@@ -270,17 +260,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             width: 34,
             height: 34,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.14),
+              color: AppTheme.primary.withOpacity(0.10),
               borderRadius: BorderRadius.circular(9),
             ),
             alignment: Alignment.center,
-            child: Icon(icon, color: Colors.white, size: 18),
+            child: Icon(icon, color: AppTheme.primary, size: 18),
           ),
           const SizedBox(width: 14),
           Expanded(
             child: Text(text,
                 style: TextStyle(
-                    color: Colors.white.withOpacity(0.95), fontSize: 14.5, fontWeight: FontWeight.w500)),
+                    color: _ink.withOpacity(0.80), fontSize: 14.5, fontWeight: FontWeight.w500)),
           ),
         ]),
       );
@@ -490,148 +480,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _SignupDialog extends StatefulWidget {
-  const _SignupDialog();
-  @override
-  State<_SignupDialog> createState() => _SignupDialogState();
-}
-
-class _SignupDialogState extends State<_SignupDialog> {
-  final _name = TextEditingController();
-  final _org = TextEditingController();
-  final _contact = TextEditingController();
-  final _email = TextEditingController();
-  String? _industry;
-  bool _submitting = false;
-  String? _error;
-
-  static const _industries = [
-    'Manufacturing',
-    'Retail',
-    'Wholesale & Distribution',
-    'Automotive & Parts',
-    'Textiles & Apparel',
-    'Food & Beverage',
-    'Pharmaceuticals & Healthcare',
-    'Construction & Building Materials',
-    'Electronics & Hardware',
-    'Chemicals',
-    'Logistics & Transport',
-    'Agriculture',
-    'Energy & Utilities',
-    'Services',
-    'Other',
-  ];
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _org.dispose();
-    _contact.dispose();
-    _email.dispose();
-    super.dispose();
-  }
-
-  bool _looksLikeEmail(String s) => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(s);
-
-  Future<void> _submit() async {
-    final name = _name.text.trim();
-    final org = _org.text.trim();
-    final email = _email.text.trim();
-    if (name.isEmpty || org.isEmpty || email.isEmpty) {
-      setState(() => _error = 'Name, organization and email are required.');
-      return;
-    }
-    if (!_looksLikeEmail(email)) {
-      setState(() => _error = 'Please enter a valid email address.');
-      return;
-    }
-    setState(() { _submitting = true; _error = null; });
-    try {
-      final res = await Supabase.instance.client.functions.invoke('signup-request', body: {
-        'name': name,
-        'orgName': org,
-        'contact': _contact.text.trim(),
-        'email': email,
-        'industry': _industry ?? '',
-      });
-      if (res.status != 200) {
-        setState(() { _submitting = false; _error = 'Could not submit (status ${res.status}). Please try again.'; });
-        return;
-      }
-      if (!mounted) return;
-      Navigator.of(context).pop(true);
-    } catch (e) {
-      setState(() {
-        _submitting = false;
-        _error = 'Could not submit: ${e.toString().split("\n").first}';
-      });
-    }
-  }
-
-  InputDecoration _dec(String label) =>
-      InputDecoration(labelText: label, isDense: true, border: const OutlineInputBorder());
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Sign up'),
-      content: SizedBox(
-        width: 420,
-        child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Text('Tell us a bit about your business and we will get you set up.',
-                  style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-            ),
-            const SizedBox(height: 16),
-            TextField(controller: _name, decoration: _dec('Name *'), textInputAction: TextInputAction.next),
-            const SizedBox(height: 12),
-            TextField(controller: _org, decoration: _dec('Organization name *'), textInputAction: TextInputAction.next),
-            const SizedBox(height: 12),
-            TextField(controller: _contact, decoration: _dec('Contact number'),
-                keyboardType: TextInputType.phone, textInputAction: TextInputAction.next),
-            const SizedBox(height: 12),
-            TextField(controller: _email, decoration: _dec('Email address *'),
-                keyboardType: TextInputType.emailAddress, textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _submit()),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _industry,
-              isExpanded: true,
-              decoration: _dec('Industry'),
-              items: [for (final i in _industries) DropdownMenuItem(value: i, child: Text(i))],
-              onChanged: (v) => setState(() => _industry = v),
-            ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(_error!, style: const TextStyle(color: AppTheme.danger, fontSize: 13)),
-                ),
-              ),
-          ]),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _submitting ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _submitting ? null : _submit,
-          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
-          child: _submitting
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : const Text('Submit request'),
-        ),
-      ],
     );
   }
 }
