@@ -31,6 +31,11 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
   String _status = 'draft';
 
   List<_VLine> _lines = [];
+  // Total on a notifier so typing an amount rebuilds ONLY the total, not the
+  // whole voucher — keeps long vouchers fast.
+  final ValueNotifier<double> _totalVN = ValueNotifier<double>(0);
+  void _refreshTotal() =>
+      _totalVN.value = _lines.fold(0.0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
   String? _pendingFocusId;
   List<Map<String, dynamic>> _auditTrail = [];
   List<Map<String, dynamic>> _coaList = [];
@@ -51,7 +56,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); });
     _addLine();
   }
-  @override void dispose() { _ctxOverlay?.remove(); _voucherDateCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
+  @override void dispose() { _ctxOverlay?.remove(); _voucherDateCtrl.dispose(); _totalVN.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -99,9 +104,9 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     } catch (_) { if (mounted) setState(() => _loadingList = false); }
   }
 
-  void _addLine() { final nl = _VLine(); setState(() { _lines.add(nl); _pendingFocusId = nl.id; }); WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) setState(() => _pendingFocusId = null); }); }
+  void _addLine() { final nl = _VLine(); setState(() { _lines.add(nl); _pendingFocusId = nl.id; }); _refreshTotal(); WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) setState(() => _pendingFocusId = null); }); }
 
-  void _removeLine(int i) { setState(() { _lines[i].dispose(); _lines.removeAt(i); }); if (_lines.isEmpty) _addLine(); }
+  void _removeLine(int i) { setState(() { _lines[i].dispose(); _lines.removeAt(i); }); _refreshTotal(); if (_lines.isEmpty) _addLine(); }
 
   double get _total => _lines.fold(0.0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
 
@@ -180,6 +185,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
   void _newVoucher() {
     for (final l in _lines) l.dispose();
     setState(() { _currentVoucher = null; _cashAccountId = null; _cashAccountName = ''; _status = 'draft'; _lines = [_VLine()]; _voucherDate = DateTime.now(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); });
+    _refreshTotal();
   }
 
   Future<void> _loadVoucher(Map<String, dynamic> v) async {
@@ -187,7 +193,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       final rows = await Supabase.instance.client.from('crv_voucher_lines').select().eq('voucher_id', v['id'] as String).order('line_order');
       for (final l in _lines) l.dispose();
       final newLines = (rows as List).map((r) { final l = _VLine(); l.accountId = r['account_id'] as String?; l.accountName = r['account_name'] as String? ?? ''; l.accountType = r['account_type'] as String? ?? 'coa'; l.descCtrl.text = r['description'] as String? ?? ''; l.amtCtrl.text = (r['amount'] as num?)?.toStringAsFixed(2) ?? ''; return l; }).toList();
-      if (mounted) { setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDate = (() { final s = (v['voucher_date'] as String?) ?? ''; final iso = DateTime.tryParse(s); if (iso != null) return iso; try { return DateFormat('dd MMM yyyy').parse(s); } catch (_) {} return DateTime.now(); })(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); }); _loadAudit(v['id'] as String); }
+      if (mounted) { setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDate = (() { final s = (v['voucher_date'] as String?) ?? ''; final iso = DateTime.tryParse(s); if (iso != null) return iso; try { return DateFormat('dd MMM yyyy').parse(s); } catch (_) {} return DateTime.now(); })(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); }); _refreshTotal(); _loadAudit(v['id'] as String); }
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -527,7 +533,8 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
                 autoFocus: _lines[i].id == _pendingFocusId,
                 onRemove: () => _removeLine(i),
                 onNextLine: i == _lines.length - 1 ? _addLine : () {},
-                onChanged: () => setState(() {}),
+                onChanged: () { setState(() {}); _refreshTotal(); },
+                onAmountChanged: _refreshTotal,
               ),
             )),
         // Footer
@@ -538,7 +545,11 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
           const SizedBox(width: 16),
           const Text('Total:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(width: 10),
-          Text('Rs. ${money(_total)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          ValueListenableBuilder<double>(
+            valueListenable: _totalVN,
+            builder: (_, v, __) => Text('Rs. ${money(v)}',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          ),
         ])),
       ])),
     ]));
@@ -591,8 +602,8 @@ class _LineWidget extends StatefulWidget {
   final List<Map<String, dynamic>> Function(String) filterFn;
   final bool locked;
   final bool autoFocus;
-  final VoidCallback onRemove, onNextLine, onChanged;
-  const _LineWidget({super.key, required this.line, required this.lineNum, required this.allAccounts, required this.filterFn, required this.locked, required this.onRemove, required this.onNextLine, required this.onChanged, this.autoFocus = false});
+  final VoidCallback onRemove, onNextLine, onChanged, onAmountChanged;
+  const _LineWidget({super.key, required this.line, required this.lineNum, required this.allAccounts, required this.filterFn, required this.locked, required this.onRemove, required this.onNextLine, required this.onChanged, required this.onAmountChanged, this.autoFocus = false});
   @override State<_LineWidget> createState() => _LineWidgetState();
 }
 
@@ -687,7 +698,7 @@ class _LineWidgetState extends State<_LineWidget> {
         ])),
       ])),
       const SizedBox(width: 8),
-      Expanded(flex: 3, child: TextField(controller: widget.line.descCtrl, focusNode: _descFocus, enabled: !widget.locked, decoration: const InputDecoration(hintText: 'Description', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7)), onChanged: (_) => widget.onChanged(), textInputAction: TextInputAction.next, onSubmitted: (_) => _amtFocus.requestFocus())),
+      Expanded(flex: 3, child: TextField(controller: widget.line.descCtrl, focusNode: _descFocus, enabled: !widget.locked, decoration: const InputDecoration(hintText: 'Description', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7)), textInputAction: TextInputAction.next, onSubmitted: (_) => _amtFocus.requestFocus())),
       const SizedBox(width: 8),
       SizedBox(width: 130, child: TextField(
         controller: widget.line.amtCtrl, focusNode: _amtFocus, enabled: !widget.locked,
@@ -695,7 +706,7 @@ class _LineWidgetState extends State<_LineWidget> {
         decoration: const InputDecoration(hintText: '0.00', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7), prefixText: 'Rs. ', prefixStyle: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-        onChanged: (_) => widget.onChanged(),
+        onChanged: (_) => widget.onAmountChanged(),
         onSubmitted: (_) => widget.onNextLine(),
       )),
       const SizedBox(width: 4),
