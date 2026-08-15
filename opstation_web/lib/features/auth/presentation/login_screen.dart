@@ -215,25 +215,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ]),
                 const Spacer(),
                 const Text(
-                  'Most agile software on the planet,\nfor the trading and distribution industry.',
+                  'Everything you run,\nin one place.',
                   style: TextStyle(
                       color: _ink,
-                      fontSize: 34,
+                      fontSize: 42,
                       fontWeight: FontWeight.w800,
-                      height: 1.15,
-                      letterSpacing: -0.5),
+                      height: 1.1,
+                      letterSpacing: -1.0),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 Text(
-                  'Inventory, sales, POS, manufacturing, financials and facilities — unified across every branch, in real time.',
-                  style: TextStyle(color: _ink.withOpacity(0.60), fontSize: 15, height: 1.5),
+                  'Sign in to pick up right where your team left off — every branch and every book, up to date.',
+                  style: TextStyle(
+                      color: _ink.withOpacity(0.58),
+                      fontSize: 16,
+                      height: 1.55,
+                      fontWeight: FontWeight.w400),
                 ),
-                const SizedBox(height: 36),
-                _brandFeature(Icons.inventory_2_outlined, 'Multi-branch inventory, POS & delivery'),
-                _brandFeature(Icons.account_balance_outlined, 'Real-time financials, ledgers & reports'),
-                _brandFeature(Icons.precision_manufacturing_outlined, 'Production, assets & facility upkeep'),
-                _brandFeature(Icons.verified_user_outlined, 'Role-based access & full audit trail'),
                 const Spacer(),
+                _reassurance(),
+                const SizedBox(height: 20),
                 Text('© 2026 Opstation · All rights reserved',
                     style: TextStyle(color: _ink.withOpacity(0.45), fontSize: 12)),
               ],
@@ -244,6 +245,27 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 
+  // A quiet trust line — what matters to someone signing in to run their
+  // business, not a feature pitch.
+  Widget _reassurance() => Row(
+        children: [
+          Icon(Icons.lock_outline_rounded, size: 16, color: _ink.withOpacity(0.45)),
+          const SizedBox(width: 8),
+          Text('Secured & encrypted',
+              style: TextStyle(color: _ink.withOpacity(0.55), fontSize: 13, fontWeight: FontWeight.w500)),
+          Container(
+            width: 3,
+            height: 3,
+            margin: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(color: _ink.withOpacity(0.25), shape: BoxShape.circle),
+          ),
+          Icon(Icons.cloud_done_outlined, size: 16, color: _ink.withOpacity(0.45)),
+          const SizedBox(width: 8),
+          Text('Backed up nightly',
+              style: TextStyle(color: _ink.withOpacity(0.55), fontSize: 13, fontWeight: FontWeight.w500)),
+        ],
+      );
+
   Widget _orb(double size, double opacity) => Container(
         width: size,
         height: size,
@@ -251,28 +273,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           shape: BoxShape.circle,
           gradient: RadialGradient(colors: [AppTheme.primary.withOpacity(opacity), Colors.transparent]),
         ),
-      );
-
-  Widget _brandFeature(IconData icon, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: Row(children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(9),
-            ),
-            alignment: Alignment.center,
-            child: Icon(icon, color: AppTheme.primary, size: 18),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(
-                    color: _ink.withOpacity(0.80), fontSize: 14.5, fontWeight: FontWeight.w500)),
-          ),
-        ]),
       );
 
   // ───────────────────────────── form panel (right) ─────────────────────────
@@ -319,7 +319,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       letterSpacing: -0.5,
                       color: _ink)),
               const SizedBox(height: 8),
-              const Text('Sign in to manage your organization',
+              const Text('Sign in to your workspace',
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
               const SizedBox(height: 36),
               const Text('Email',

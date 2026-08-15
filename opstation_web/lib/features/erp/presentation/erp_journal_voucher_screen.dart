@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -235,6 +236,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     final apId = 'coa_' + orgId + '_2110';   // Accounts Payable control account
     final arId = 'coa_' + orgId + '_1210';   // Accounts Receivable control account
     setState(() => _saving = true);
+    SavingOverlay.show(context, label: post ? 'Posting…' : 'Saving…');
     try {
       final client = Supabase.instance.client;
       final dateStr = DateFormat('yyyy-MM-dd').format(_date);
@@ -295,6 +297,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       _snack(post ? 'JV ' + eNum + ' posted ✓' : 'Draft saved');
       await _loadVouchers();
     } catch (e) { _snack('Save failed: ' + e.toString()); }
+    SavingOverlay.hide();
     if (mounted) setState(() => _saving = false);
   }
 

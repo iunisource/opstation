@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -213,6 +214,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final orgId = _orgId; final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id;
         final userName = ref.read(currentUserProvider)?.name ?? '';
     setState(() => _saving = true);
+    SavingOverlay.show(context, label: post ? 'Posting…' : 'Saving…');
     try {
       final client = Supabase.instance.client;
       final total = validLines.fold<double>(0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
@@ -238,6 +240,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       if (post && orgId != null) await _postCpvToGL(orgId!, bid, dateStr, validLines, total);
       await _loadVouchers();
     } catch (e) { _snack('Failed: $e'); }
+    SavingOverlay.hide();
     setState(() => _saving = false);
   }
 

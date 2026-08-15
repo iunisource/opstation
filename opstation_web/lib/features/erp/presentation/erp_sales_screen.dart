@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -428,6 +429,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   Future<void> _saveHeader() async {
     if (_detail.isEmpty) return;
+    SavingOverlay.show(context, label: 'Saving…');
     try {
       await Supabase.instance.client.from('sales_orders').update({
         'customer_id': _detail['customer_id'],
@@ -437,6 +439,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       _showSnack('Saved');
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   Future<bool> _addItem() async {
@@ -1733,20 +1736,25 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   }
 
   Future<void> _saveDeliveryOrder() async {
-    // Persist collect amount BEFORE _saveDelivery() — save_delivery_order locks
-    // the DO as its idempotency claim, and a locked DO can't change other
-    // columns (locked-DO rule), so this must happen while it's still unlocked.
+    SavingOverlay.show(context, label: 'Saving…');
     try {
-      await Supabase.instance.client.from('delivery_orders').update({
-        'collect_amount': _collectEnabled ? _collectAmount : null,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-    } catch (_) {}
-    await _saveDelivery(); // posts lines + locks atomically via the DB function
-    try { await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved'); } catch (_) {}
-    // Reload so the collect-amount chip and lock state reflect what was saved.
-    // (Invoice is NOT auto-created — use the explicit "Create Invoice" button.)
-    await _loadDetail(_detail['id'] as String);
+      // Persist collect amount BEFORE _saveDelivery() — save_delivery_order locks
+      // the DO as its idempotency claim, and a locked DO can't change other
+      // columns (locked-DO rule), so this must happen while it's still unlocked.
+      try {
+        await Supabase.instance.client.from('delivery_orders').update({
+          'collect_amount': _collectEnabled ? _collectAmount : null,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', _detail['id']);
+      } catch (_) {}
+      await _saveDelivery(); // posts lines + locks atomically via the DB function
+      try { await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved'); } catch (_) {}
+      // Reload so the collect-amount chip and lock state reflect what was saved.
+      // (Invoice is NOT auto-created — use the explicit "Create Invoice" button.)
+      await _loadDetail(_detail['id'] as String);
+    } finally {
+      SavingOverlay.hide();
+    }
   }
 
   Future<void> _saveDelivery() async {
@@ -1853,6 +1861,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     final orgId = _orgId; final branchId = _detail['branch_id'] as String;
     final userId = ref.read(currentUserProvider)?.id;
     final year = DateTime.now().year;
+    SavingOverlay.show(context, label: 'Creating invoice…');
     try {
       final voucherNum = await Supabase.instance.client.rpc('next_voucher_number',
           params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SI', 'p_year': year});
@@ -1910,6 +1919,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       await _loadList();
       _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   Future<void> _toggleLock() async {
@@ -2693,6 +2703,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Approve & Post'))],
     ));
     if (ok != true) return;
+    SavingOverlay.show(context, label: 'Posting…');
     try {
       final userId = ref.read(currentUserProvider)?.id;
       final now = DateTime.now().toUtc().toIso8601String();
@@ -2715,6 +2726,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       _loadDetail(_detail['id'] as String);
       ref.invalidate(siReviewPendingProvider);
     } catch (e) { _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   // Review flow: admin rejects a pending invoice back to the creator with a reason.

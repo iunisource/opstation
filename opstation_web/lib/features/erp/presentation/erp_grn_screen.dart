@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -194,6 +195,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) return;
     setState(() => _detailLoading = true);
+    SavingOverlay.show(context, label: 'Creating…');
     try {
       // Check existing GRN for this PO (allow multiple GRNs for partial)
       final poId = po['id'] as String;
@@ -235,6 +237,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       await _loadList();
       _loadDetail(grnId);
     } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   Future<void> _saveReceivedQty(String itemId) async {
@@ -274,6 +277,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       });
     }
     if (updates.isEmpty) return;
+    SavingOverlay.show(context, label: 'Saving…');
     try {
       await Supabase.instance.client
           .from('purchase_grn_items')
@@ -291,6 +295,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       }
     } catch (e) {
       _showSnack('Failed to save: $e');
+    } finally {
+      SavingOverlay.hide();
     }
   }
 
@@ -307,6 +313,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     await _saveAllReceivedQty();
     if (_confirmBusy) return;
     setState(() => _confirmBusy = true);
+    SavingOverlay.show(context, label: 'Posting…');
     final grnId = _detail['id'] as String;
     try {
       // Atomic + idempotent: confirm_grn claims the GRN (status guard + lock),
@@ -321,6 +328,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     } catch (e) {
       _showSnack('Failed: $e');
     } finally {
+      SavingOverlay.hide();
       if (mounted) setState(() => _confirmBusy = false);
     }
   }

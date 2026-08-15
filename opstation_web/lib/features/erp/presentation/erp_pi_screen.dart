@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -402,6 +403,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       return;
     }
     _postingCore = true;
+    SavingOverlay.show(context, label: approved ? 'Posting…' : 'Saving…');
     final userId = ref.read(currentUserProvider)?.id;
     final piId = _detail['id'] as String;
     final grnId = _detail['grn_id'] as String?;
@@ -438,7 +440,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       _loadDetail(piId); _loadList();
       ref.invalidate(piReviewPendingProvider);
     } catch (e) { _showSnack('Failed: $e'); }
-    finally { _postingCore = false; }
+    finally { SavingOverlay.hide(); _postingCore = false; }
   }
 
   // Direct save+lock (used when the review flow is OFF).

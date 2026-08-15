@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -451,6 +452,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final picked = await showDialog<Map<String, dynamic>?>(context: context, builder: (_) => _SupplierPickDialog(suppliers: _suppliers));
     if (picked == null) return;
     setState(() => _detailLoading = true);
+    SavingOverlay.show(context, label: 'Creating…');
     try {
       final year = DateTime.now().year;
       final nextNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'PO', 'p_year': year});
@@ -467,6 +469,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await _loadList();
       _loadDetail(poId);
     } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   Future<bool> _addItem() async {
@@ -595,6 +598,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Future<void> _approve() async {
     if (!_canApprove) { _showSnack('You do not have permission to approve.'); return; }
     final u = ref.read(currentUserProvider);
+    SavingOverlay.show(context, label: 'Approving…');
     try {
       await Supabase.instance.client.from('purchase_orders').update({
         'approved_by': u?.id, 'approved_by_name': u?.name,
@@ -607,6 +611,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       _loadDetail(_detail['id'] as String);
       _loadList();
     } catch (e) { _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   // Clears approval after any line-item change, forcing re-approval.
