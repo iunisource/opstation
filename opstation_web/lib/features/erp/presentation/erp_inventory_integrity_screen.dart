@@ -46,6 +46,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
 
   // Documents tab
   bool _docLoading = true;
+  bool _baselining = false;
   List<Map<String, dynamic>> _docRows = [];
   DateTime _from = DateTime(DateTime.now().year, 1, 1);
   DateTime _to = DateTime.now();
@@ -92,6 +93,75 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
       setState(() => _docLoading = false);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Reconciliation error: $e')));
+    }
+  }
+
+  // Mark every currently-flagged document as reviewed (a dated baseline). The
+  // report reads through the _active RPC, which then hides them — so only NEW
+  // divergences appear afterward.
+  Future<void> _baselineReviewed() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    final userId = ref.read(currentUserProvider)?.id;
+    if (orgId == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Mark all as reviewed?'),
+        content: Text('This marks the ${_docRows.length} document(s) currently shown as '
+            'reviewed, so they leave this list. Use it once you have accepted the '
+            'current backlog as explained. New divergences after today will still '
+            'appear. You can undo this.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(c, true), child: const Text('Mark reviewed')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _baselining = true);
+    try {
+      final n = await Supabase.instance.client.rpc('rpc_baseline_recon', params: {
+        'p_org': orgId, 'p_from': _d(_from), 'p_to': _d(_to),
+        'p_user': userId, 'p_note': 'Baseline via Inventory Integrity',
+      });
+      if (!mounted) return;
+      await _loadDocs();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$n document(s) marked reviewed')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    } finally {
+      if (mounted) setState(() => _baselining = false);
+    }
+  }
+
+  Future<void> _clearBaseline() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Undo baseline?'),
+        content: const Text('This brings every previously-reviewed document back into '
+            'the list. Use it if you want to re-examine the backlog.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(c, true), child: const Text('Undo')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _baselining = true);
+    try {
+      final n = await Supabase.instance.client.rpc('rpc_clear_recon_baseline', params: {'p_org': orgId});
+      if (!mounted) return;
+      await _loadDocs();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$n document(s) restored')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    } finally {
+      if (mounted) setState(() => _baselining = false);
     }
   }
 
@@ -618,6 +688,20 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
             onPressed: _pickRange,
           ),
           const Spacer(),
+          TextButton.icon(
+            icon: const Icon(Icons.undo, size: 15),
+            label: const Text('Undo baseline', style: TextStyle(fontSize: 12)),
+            onPressed: _baselining ? null : _clearBaseline,
+          ),
+          const SizedBox(width: 8),
+          if (_docRows.isNotEmpty)
+            ElevatedButton.icon(
+              icon: _baselining
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.done_all, size: 16),
+              label: Text(_baselining ? 'Marking\u2026' : 'Mark all ${_docRows.length} as reviewed'),
+              onPressed: _baselining ? null : _baselineReviewed,
+            ),
         ]),
         const SizedBox(height: 14),
         if (_docRows.isEmpty)
