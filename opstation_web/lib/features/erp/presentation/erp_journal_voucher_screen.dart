@@ -468,7 +468,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
               TextField(decoration: const InputDecoration(hintText: 'Search JVs...', prefixIcon: Icon(Icons.search, size: 15), isDense: true),
                 onChanged: (v) => setState(() => _listSearch = v)),
             ])),
-          Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+          Expanded(child: _loadingList ? const Center(child: BrandSpinner())
             : filtered.isEmpty ? const Center(child: Text('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
             : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
                 final v = filtered[i]; final sel = _current?['id'] == v['id']; final posted = v['status'] == 'posted';

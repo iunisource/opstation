@@ -76,7 +76,7 @@ class _SavingBarrier extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const _FastSpinner(size: 40),
+                    const BrandSpinner(size: 40),
                     const SizedBox(height: 14),
                     Text(
                       label,
@@ -108,16 +108,18 @@ class _SavingBarrier extends StatelessWidget {
 }
 
 /// A fast-spinning gradient ring — reads as "actively processing" more clearly
-/// than the default (slower) CircularProgressIndicator.
-class _FastSpinner extends StatefulWidget {
-  const _FastSpinner({this.size = 40});
+/// than the default (slower) CircularProgressIndicator. Public so screens can
+/// use it for their own inline / panel loading states too, for one consistent
+/// look everywhere.
+class BrandSpinner extends StatefulWidget {
+  const BrandSpinner({super.key, this.size = 40});
   final double size;
 
   @override
-  State<_FastSpinner> createState() => _FastSpinnerState();
+  State<BrandSpinner> createState() => _BrandSpinnerState();
 }
 
-class _FastSpinnerState extends State<_FastSpinner>
+class _BrandSpinnerState extends State<BrandSpinner>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,

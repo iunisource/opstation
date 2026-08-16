@@ -702,6 +702,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       _showSnack('Select a customer before confirming');
       return;
     }
+    SavingOverlay.show(context, label: 'Confirming…');
     try {
       await Supabase.instance.client.from('sales_orders').update({
         'status': 'confirmed', 'is_locked': true,
@@ -711,8 +712,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       await _logAudit(_detail['id'] as String, 'SO', 'confirmed', '${_items.length} items confirmed');
       _showSnack('Order confirmed');
       await _loadList();
-      _loadDetail(_detail['id'] as String);
+      await _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   Future<void> _toggleLock() async {
@@ -820,7 +822,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             const Divider(height: 1),
             Expanded(
               child: _listLoading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Center(child: BrandSpinner())
                   : _filteredOrders.isEmpty
                       ? const Center(child: Text('No orders', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : ListView.separated(
@@ -868,7 +870,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 ElevatedButton.icon(onPressed: _createNew, icon: const Icon(Icons.add, size: 16), label: const Text('New Sales Order')),
               ]))
             : _detailLoading
-                ? const Center(child: CircularProgressIndicator())
+                ? const Center(child: BrandSpinner())
                 : _buildDetail(),
     );
   }
@@ -1993,7 +1995,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             const Divider(height: 1),
             Expanded(
               child: _listLoading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Center(child: BrandSpinner())
                   : _filteredOrders.isEmpty
                       ? const Center(child: Text('No DOs', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : ListView.separated(
@@ -2043,7 +2045,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                 ElevatedButton.icon(onPressed: _createNew, icon: const Icon(Icons.add, size: 16), label: const Text('New Delivery Order')),
               ]))
             : _detailLoading
-                ? const Center(child: CircularProgressIndicator())
+                ? const Center(child: BrandSpinner())
                 : _buildDetail(),
     );
   }
@@ -2865,7 +2867,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             const Divider(height: 1),
             Expanded(
               child: _listLoading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Center(child: BrandSpinner())
                   : _filteredInvoices.isEmpty
                       ? const Center(child: Text('No invoices', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : ListView.separated(
@@ -2900,7 +2902,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         detailChild: _selectedId == null
             ? const Center(child: Text('Select a Sales Invoice', style: TextStyle(color: AppTheme.textSecondary)))
             : _detailLoading
-                ? const Center(child: CircularProgressIndicator())
+                ? const Center(child: BrandSpinner())
                 : _buildDetail(),
     );
   }

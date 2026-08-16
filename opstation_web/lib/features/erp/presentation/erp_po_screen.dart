@@ -828,7 +828,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             _PoFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
           ])),
         const SizedBox(height: 12),
-        Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
+        Expanded(child: _listLoading ? const Center(child: BrandSpinner())
             : filtered.isEmpty ? const Center(child: Text('No POs yet.', style: TextStyle(color: AppTheme.textSecondary)))
             : ListView.separated(
                 itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
@@ -849,7 +849,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   Widget _buildDetail() {
-    if (_detailLoading) return const Center(child: CircularProgressIndicator());
+    if (_detailLoading) return const Center(child: BrandSpinner());
     final sup = _detail['suppliers'] as Map?;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Header

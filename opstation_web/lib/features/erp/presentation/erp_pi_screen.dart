@@ -462,6 +462,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     await _saveAllItemCosts();
     final piId = _detail['id'] as String;
     final now = DateTime.now().toUtc().toIso8601String();
+    SavingOverlay.show(context, label: 'Saving…');
     try {
       await Supabase.instance.client.from('purchase_invoices').update({
         'review_status': 'pending',
@@ -475,6 +476,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       _loadList();
       ref.invalidate(piReviewPendingProvider);
     } catch (e) { _showSnack('Failed: $e'); }
+    finally { SavingOverlay.hide(); }
   }
 
   // Review flow: admin approves a pending invoice, which posts it.
@@ -672,7 +674,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         _PiFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
       ])),
       const SizedBox(height: 12),
-      Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
+      Expanded(child: _listLoading ? const Center(child: BrandSpinner())
           : filtered.isEmpty ? const Center(child: Text('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
@@ -697,7 +699,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   }
 
   Widget _buildDetail() {
-    if (_detailLoading) return const Center(child: CircularProgressIndicator());
+    if (_detailLoading) return const Center(child: BrandSpinner());
     final sup = _detail['suppliers'] as Map?;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Builder(builder: (context) {
