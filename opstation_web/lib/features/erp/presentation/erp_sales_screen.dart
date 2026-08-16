@@ -3285,16 +3285,22 @@ class _VoucherInfoStrip extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(icon, size: 16, color: AppTheme.textSecondary),
         const SizedBox(width: 6),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, letterSpacing: 0.5)),
-          Text(value,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w500,
-                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
-                color: muted ? AppTheme.textSecondary : null,
-              )),
-        ]),
+        // Flexible so a long value (e.g. a full customer address) wraps within
+        // the tile's 320px cap instead of overflowing into the next column.
+        Flexible(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, letterSpacing: 0.5)),
+            Text(value,
+                softWrap: true,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                  height: 1.3,
+                  fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+                  color: muted ? AppTheme.textSecondary : null,
+                )),
+          ]),
+        ),
       ]),
     );
   }
