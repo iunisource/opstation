@@ -345,16 +345,22 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       if (isNew) {
         final y = DateTime.now().year;
         try {
-          final res = await _client.rpc('next_voucher_number', params: {
-            'p_org_id': orgId, 'p_branch_id': _doc!['branch_id'], 'p_type': 'QT', 'p_year': y,
-          });
-          // The RPC returns a bare sequence for 'QT' (unlike SO/SI which come
-          // back pre-formatted). Format it to match every other voucher —
-          // QT-YEAR-#### — instead of storing a naked "1".
-          final seq = res?.toString().trim();
-          vnum = (seq != null && seq.isNotEmpty)
-              ? 'QT-$y-${seq.padLeft(4, '0')}'
-              : null;
+          // next_voucher_number does NOT track the 'QT' sequence — it returned a
+          // bare "1" for every quotation, so serials collided. Derive the next
+          // number from this org's existing quotations for the year (same
+          // approach as CPV/CRV/JV) and format it QT-YEAR-#### like every other
+          // voucher.
+          final existing = await _client
+              .from('quotations')
+              .select('voucher_number')
+              .eq('org_id', orgId ?? '')
+              .like('voucher_number', 'QT-$y-%');
+          int mx = 0;
+          for (final r in (existing as List)) {
+            final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0;
+            if (n > mx) mx = n;
+          }
+          vnum = 'QT-$y-${(mx + 1).toString().padLeft(4, '0')}';
         } catch (_) { vnum = null; }
       }
 
