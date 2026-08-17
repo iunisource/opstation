@@ -348,7 +348,13 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           final res = await _client.rpc('next_voucher_number', params: {
             'p_org_id': orgId, 'p_branch_id': _doc!['branch_id'], 'p_type': 'QT', 'p_year': y,
           });
-          vnum = res?.toString(); // RPC returns an integer sequence; store raw like SO
+          // The RPC returns a bare sequence for 'QT' (unlike SO/SI which come
+          // back pre-formatted). Format it to match every other voucher —
+          // QT-YEAR-#### — instead of storing a naked "1".
+          final seq = res?.toString().trim();
+          vnum = (seq != null && seq.isNotEmpty)
+              ? 'QT-$y-${seq.padLeft(4, '0')}'
+              : null;
         } catch (_) { vnum = null; }
       }
 
