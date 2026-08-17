@@ -235,18 +235,27 @@ final piReviewPendingProvider  = _reviewPendingProvider('purchase_invoices', 'or
 final priReviewPendingProvider = _reviewPendingProvider('purchase_return_invoices', 'org.doc_review_flow_pri');
 final siReviewPendingProvider  = _reviewPendingProvider('sales_invoices', 'org.doc_review_flow_si');
 
-// Count of GRNs that are RECEIVED but not yet invoiced — i.e. awaiting a
-// Purchase Invoice. Drives a pendency badge on Purchase Invoices (and the
+// Count of confirmed GRNs that are RECEIVED but not yet invoiced — i.e. awaiting
+// a Purchase Invoice. Drives a pendency badge on Purchase Invoices (and the
 // Purchase top-nav) so nobody forgets to invoice a received GRN.
+//
+// This deliberately mirrors the PI "New" picker query exactly (locked +
+// received/partial/saved + branch scope) so the menu badge and the picker modal
+// always agree. When a branch is selected we scope to it; with no branch we
+// fall back to an org-wide count so the badge still means something.
 final grnPendingInvoiceCountProvider = FutureProvider<int>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
+  final branchId = ref.watch(selectedBranchProvider)?['id'] as String?;
   try {
-    final res = await Supabase.instance.client
+    var q = Supabase.instance.client
         .from('purchase_grns')
         .select('id')
         .eq('org_id', user.orgId!)
-        .inFilter('status', ['received', 'saved']);
+        .eq('is_locked', true)
+        .inFilter('status', ['received', 'partially_received', 'saved']);
+    if (branchId != null) q = q.eq('branch_id', branchId);
+    final res = await q;
     return (res as List).length;
   } catch (_) {
     return 0;

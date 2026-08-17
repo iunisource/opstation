@@ -175,6 +175,28 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     } catch (_) {}
   }
 
+  // "New PI" button with a small red badge showing how many confirmed GRNs are
+  // still waiting to be invoiced. Same count the Purchase menu shows — both read
+  // grnPendingInvoiceCountProvider — and it matches the picker modal's list.
+  Widget _newPiButton() {
+    final pending = ref.watch(grnPendingInvoiceCountProvider).maybeWhen(data: (v) => v, orElse: () => 0);
+    final btn = IconButton(
+      icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 32),
+      onPressed: _createNew,
+      tooltip: pending > 0 ? '$pending GRN(s) awaiting invoice' : 'New PI',
+    );
+    if (pending <= 0) return btn;
+    return Stack(clipBehavior: Clip.none, children: [
+      btn,
+      Positioned(right: 2, top: 2, child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+        decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(9), border: Border.all(color: Colors.white, width: 1.5)),
+        child: Text('$pending', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700, height: 1.2)),
+      )),
+    ]);
+  }
+
   Future<void> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
@@ -439,6 +461,9 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       _showSnack(approved ? 'Approved & posted' : 'Invoice saved and locked');
       _loadDetail(piId); _loadList();
       ref.invalidate(piReviewPendingProvider);
+      // The source GRN just flipped to 'invoiced' — refresh the "awaiting
+      // invoice" count so the "+" badge and Purchase menu drop by one.
+      ref.invalidate(grnPendingInvoiceCountProvider);
     } catch (e) { _showSnack('Failed: $e'); }
     finally { SavingOverlay.hide(); _postingCore = false; }
   }
@@ -654,7 +679,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
       Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 12), child: Row(children: [
         const Expanded(child: Text('Purchase Invoices', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
-        IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 32), onPressed: _createNew, tooltip: 'New PI'),
+        _newPiButton(),
       ])),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: TextField(
         decoration: const InputDecoration(hintText: 'Search PI / GRN / supplier…', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
@@ -663,7 +688,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
         _PiFilterTab(label: 'All',   value: 'all',   current: _filter, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
-        _PiFilterTab(label: 'Draft', value: 'draft', current: _filter, onTap: (v) => setState(() => _filter = v)),
+        _PiFilterTab(label: 'Draft', value: 'draft', current: _filter, count: _invoices.where((r) => !(r['is_locked'] as bool? ?? false) && r['review_status'] == null).length, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
         if (_reviewFlow) ...[
           _PiFilterTab(label: 'Review', value: 'review', current: _filter, onTap: (v) => setState(() => _filter = v)),
@@ -961,7 +986,7 @@ class _GrnPickerForPiDialogState extends State<_GrnPickerForPiDialog> {
 }
 
 class _PiChip extends StatelessWidget { final String label, value; const _PiChip({required this.label, required this.value}); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)), child: Row(mainAxisSize: MainAxisSize.min, children: [Text('$label: ', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)), Text(value, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))])); }
-class _PiFilterTab extends StatelessWidget { final String label, value, current; final ValueChanged<String> onTap; const _PiFilterTab({required this.label, required this.value, required this.current, required this.onTap}); @override Widget build(BuildContext context) { final active = value == current; return GestureDetector(onTap: () => onTap(value), child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)), child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)))); } }
+class _PiFilterTab extends StatelessWidget { final String label, value, current; final int count; final ValueChanged<String> onTap; const _PiFilterTab({required this.label, required this.value, required this.current, required this.onTap, this.count = 0}); @override Widget build(BuildContext context) { final active = value == current; return GestureDetector(onTap: () => onTap(value), child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)), child: Row(mainAxisSize: MainAxisSize.min, children: [Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)), if (count > 0) ...[const SizedBox(width: 5), Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), constraints: const BoxConstraints(minWidth: 15), decoration: BoxDecoration(color: active ? Colors.white.withOpacity(0.25) : AppTheme.primary, borderRadius: BorderRadius.circular(8)), child: Text('$count', textAlign: TextAlign.center, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.white, height: 1.3)))]]))); } }
 
 class _PiInfoStrip extends StatelessWidget {
   final String? address, contact, phone, ntn, preparedBy;
