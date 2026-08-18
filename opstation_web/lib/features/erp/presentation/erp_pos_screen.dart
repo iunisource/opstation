@@ -2658,7 +2658,10 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                         final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
                         final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
                         return GestureDetector(
-                          onTap: isReturn ? null : () async {
+                          // Returns are openable too — their receipt loads the
+                          // same way as a sale's; leaving onTap null made a return
+                          // in the drawer un-clickable (only bills opened).
+                          onTap: () async {
                             try {
                               final ti = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String);
                               String? fn; try { final fr = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId!).eq('key', 'org.voucher_footer_note').maybeSingle(); fn = fr?['value'] as String?; } catch (_) {}
@@ -2678,7 +2681,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                               Text(time, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                             ])),
                             Text('${isReturn ? '-' : ''}${money(total.abs())}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: isReturn ? Colors.red : AppTheme.primary)),
-                            if (!isReturn) const Icon(Icons.chevron_right, size: 14, color: AppTheme.textSecondary),
+                            const Icon(Icons.chevron_right, size: 14, color: AppTheme.textSecondary),
                           ])));
                       }))),
             ],
@@ -3234,6 +3237,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   List<Map<String, dynamic>> _txnItems = [];
   bool _loadingTxns = true;
   bool _loadingItems = false;
+  bool _allReturned = false; // opened bill had items, but all already returned
   String _q = '';
   DateTime? _dateFrom;
   DateTime? _dateTo;
@@ -3266,7 +3270,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   }
 
   Future<void> _loadItems(Map<String, dynamic> txn) async {
-    setState(() { _selectedTxn = txn; _loadingItems = true; _txnItems = []; _selected.clear(); _qtyCtrls.forEach((_, c) => c.dispose()); _qtyCtrls.clear(); });
+    setState(() { _selectedTxn = txn; _loadingItems = true; _txnItems = []; _allReturned = false; _selected.clear(); _qtyCtrls.forEach((_, c) => c.dispose()); _qtyCtrls.clear(); });
     try {
       final items = await Supabase.instance.client
           .from('pos_transaction_items')
@@ -3305,6 +3309,9 @@ class _ReturnDialogState extends State<_ReturnDialog> {
       }
       setState(() {
         _txnItems = annotated;
+        // Distinguish "no items at all" from "every line already fully returned"
+        // so the empty state can say so instead of a bare "No items found".
+        _allReturned = (items as List).isNotEmpty && annotated.isEmpty;
         for (final it in _txnItems) {
           final id = it['id'] as String;
           _selected[id] = false;
@@ -3387,7 +3394,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
             : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Select items to return', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
                 const SizedBox(height: 8),
-                Expanded(child: _txnItems.isEmpty ? const Center(child: Text('No items found', style: TextStyle(color: AppTheme.textSecondary)))
+                Expanded(child: _txnItems.isEmpty ? Center(child: Text(_allReturned ? 'This bill has already been fully returned' : 'No items found', textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.textSecondary)))
                   : ListView(children: _txnItems.map((it) {
                       final id = it['id'] as String;
                       final name = it['products']?['name'] as String? ?? it['name'] as String? ?? '-';
