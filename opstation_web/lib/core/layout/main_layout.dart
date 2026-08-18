@@ -13,6 +13,7 @@ import '../notifications/notifications_menu_tile.dart';
 import '../notifications/notification_bell.dart';
 import '../notifications/global_job_alert.dart';
 import '../notifications/global_transfer_alert.dart';
+import '../notifications/global_badge_sync.dart';
 import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
@@ -524,7 +525,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [widget.child, const GlobalJobAlert(), const GlobalTransferAlert()]),
+        body: Stack(children: [widget.child, const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalBadgeSync()]),
       );
     }
 
@@ -538,6 +539,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ]),
           const GlobalJobAlert(),
           const GlobalTransferAlert(),
+          const GlobalBadgeSync(),
         ]),
       );
     }
@@ -549,6 +551,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         ]),
         const GlobalJobAlert(),
         const GlobalTransferAlert(),
+        const GlobalBadgeSync(),
       ]),
     );
   }
