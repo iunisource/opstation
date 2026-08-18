@@ -94,7 +94,10 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
       final sup  = List<Map<String,dynamic>>.from((data['suppliers'] as List?) ?? []);
       final cus  = List<Map<String,dynamic>>.from((data['customers'] as List?) ?? []);
       final all = <Map<String,dynamic>>[
-        ...coa.where((a) => !coa.any((b) => b['parent_id'] == a['id'])).map((a) => {
+        // Postable leaves only: Level-4 detail accounts, or a Level-3 with no
+        // Level-4 beneath it. Never a parent/group (matches the DB post guard and
+        // the CPV/CRV pickers).
+        ...coa.where((a) => !coa.any((b) => b['parent_id'] == a['id']) && ((a['level'] is num ? (a['level'] as num).toInt() : int.tryParse('${a['level']}') ?? 0) >= 3)).map((a) => {
           'id': a['id'],
           'label': "${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}",
           'sub': _typeLabel(a['account_type']),
