@@ -344,16 +344,60 @@ class ReportPdfBuilder {
     );
   }
 
+  // ── Per-customer collection, de-duplicated by receipt ─────────────────────
+  // The field app can submit the SAME collection more than once (GPS re-fire or
+  // repeated taps), producing several visit rows with an identical receipt and
+  // amount. Money, verified stops and receipts must therefore be counted per
+  // DISTINCT RECEIPT / per customer — never as the raw sum of visit rows —
+  // otherwise one 30,000 receipt entered 3× reads as 90,000. This collapses a
+  // trip's visits to one entry per customer: `collected` = sum of
+  // distinct-receipt amounts, `receipts` = those distinct numbers, and `latest`
+  // (the last visit) drives status / time / notes. Order preserves first
+  // appearance, matching how the list read before.
+  static List<Map<String, dynamic>> _custLines(
+      List<Map<String, dynamic>> visits) {
+    final byCustomer = <String, List<Map<String, dynamic>>>{};
+    for (final v in visits) {
+      final cid = v['customer_id'] as String?;
+      if (cid == null) continue;
+      byCustomer.putIfAbsent(cid, () => <Map<String, dynamic>>[]).add(v);
+    }
+    final out = <Map<String, dynamic>>[];
+    byCustomer.forEach((cid, vs) {
+      vs.sort((a, b) => DateTime.parse(a['timestamp'] as String)
+          .compareTo(DateTime.parse(b['timestamp'] as String)));
+      final latest = vs.last;
+      final byReceipt = <String, int>{};
+      var noReceiptSeq = 0;
+      for (final v in vs) {
+        final amt = (v['amount'] as int?) ?? 0;
+        if (amt <= 0) continue;
+        final raw = (v['receipt_number'] as String?)?.trim() ?? '';
+        // a real collection without a receipt keeps its own slot; identical
+        // receipts collapse to one (max guards a 0-vs-real mismatch).
+        final key = (raw.isEmpty || raw == '0') ? '__nr${noReceiptSeq++}' : raw;
+        final prev = byReceipt[key] ?? 0;
+        byReceipt[key] = amt > prev ? amt : prev;
+      }
+      out.add({
+        'cid': cid,
+        'latest': latest,
+        'collected': byReceipt.values.fold<int>(0, (s, a) => s + a),
+        'receipts':
+            byReceipt.keys.where((k) => !k.startsWith('__nr')).toList(),
+      });
+    });
+    return out;
+  }
+
   static pw.Widget _summaryRow(Map<String, dynamic> trip, TripReportContext ctx) {
-    final visitedIds = ctx.visits
-        .map((v) => v['customer_id'] as String?)
-        .whereType<String>()
-        .toSet();
-    final verifiedCount =
-        ctx.visits.where((v) => v['status'] == 'verified').length;
-    final totalStops = visitedIds.length;
-    final totalCollected = (trip['total_collected'] as int?) ??
-        ctx.visits.fold<int>(0, (s, v) => s + ((v['amount'] as int?) ?? 0));
+    final lines = _custLines(ctx.visits);
+    final totalStops = lines.length;
+    final verifiedCount = lines
+        .where((l) => (l['latest'] as Map)['status'] == 'verified')
+        .length;
+    final totalCollected =
+        lines.fold<int>(0, (s, l) => s + (l['collected'] as int));
     final completion =
         totalStops == 0 ? 0.0 : (verifiedCount / totalStops) * 100;
 
@@ -403,37 +447,26 @@ class ReportPdfBuilder {
   }
 
   static pw.Widget _visitDetailsTable(TripReportContext ctx) {
-    final Map<String, Map<String, dynamic>> latestByCustomer = {};
-    for (final v in ctx.visits) {
-      final cid = v['customer_id'] as String?;
-      if (cid == null) continue;
-      final ts = DateTime.parse(v['timestamp'] as String);
-      final prev = latestByCustomer[cid];
-      if (prev == null ||
-          ts.isAfter(DateTime.parse(prev['timestamp'] as String))) {
-        latestByCustomer[cid] = v;
-      }
-    }
-    final entries = latestByCustomer.entries.toList();
+    final lines = _custLines(ctx.visits);
 
     final headers = [
       '#', 'CODE', 'CUSTOMER', 'STATUS', 'COLLECTED', 'CR#', 'TIME', 'NOTES'
     ];
     final rows = <List<String>>[];
-    for (var i = 0; i < entries.length; i++) {
-      final cid = entries[i].key;
-      final v = entries[i].value;
+    for (var i = 0; i < lines.length; i++) {
+      final cid = lines[i]['cid'] as String;
+      final v = lines[i]['latest'] as Map<String, dynamic>;
       final cust = ctx.customersById[cid];
       final status = v['status'] as String? ?? 'pending';
-      final amount = (v['amount'] as int?) ?? 0;
-      final receipt = v['receipt_number'] as String? ?? '';
+      final collected = lines[i]['collected'] as int;
+      final receipts = (lines[i]['receipts'] as List).cast<String>();
       rows.add([
         '${i + 1}',
         (cust?['code'] as String?) ?? '-',
         (cust?['shop_name'] as String?) ?? '-',
         _statusTagWithDistance(status, v),
-        status == 'pending' ? '-' : '$amount',
-        receipt.isEmpty ? '-' : receipt,
+        status == 'pending' ? '-' : '$collected',
+        receipts.isEmpty ? '-' : receipts.join(', '),
         DateFormat('hh:mm a')
             .format(DateTime.parse(v['timestamp'] as String).toLocal()),
         _notesFor(status, v),
@@ -471,14 +504,12 @@ class ReportPdfBuilder {
   }
 
   static pw.Widget _receiptsFooter(TripReportContext ctx) {
-    int receipts = 0;
-    int total = 0;
-    for (final v in ctx.visits) {
-      final receipt = v['receipt_number'] as String? ?? '';
-      final amount = (v['amount'] as int?) ?? 0;
-      if (receipt.isNotEmpty && amount > 0) receipts++;
-      total += amount;
-    }
+    // De-duplicated: distinct receipts and their summed amount (see _custLines),
+    // so a re-submitted collection is not double-counted here either.
+    final lines = _custLines(ctx.visits);
+    final receipts =
+        lines.fold<int>(0, (s, l) => s + (l['receipts'] as List).length);
+    final total = lines.fold<int>(0, (s, l) => s + (l['collected'] as int));
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: pw.BoxDecoration(
