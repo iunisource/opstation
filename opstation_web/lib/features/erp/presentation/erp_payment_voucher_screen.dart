@@ -218,26 +218,41 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     try {
       final client = Supabase.instance.client;
       final total = validLines.fold<double>(0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0));
-      final newStatus = post ? 'posted' : 'draft';
       final dateStr = DateFormat('yyyy-MM-dd').format(_voucherDate);
+      // Persist as DRAFT first — ALWAYS. The voucher is flipped to 'posted' only
+      // after the GL posts cleanly (below). The old order (mark posted → post GL
+      // → swallow GL error) left vouchers flagged posted with no cash entry when
+      // a line hit a parent/group account; posting GL first and gating the flag
+      // on its success means a bad line leaves a draft, never a posted ghost.
+      String vid; String? vNum;
       if (_currentVoucher == null) {
         final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
-        final vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
-        final vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
-        await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null});
+        vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+        vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
+        await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': 'draft', 'total_amount': total, 'created_by': userId});
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         final created = await client.from('cpv_vouchers').select().eq('id', vid).single();
-        setState(() { _currentVoucher = created; _status = newStatus; }); _logAudit('created', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines  •  \$_cashAccountName');
-        _snack(post ? 'Voucher $vNum posted ✓' : 'Voucher $vNum saved');
+        setState(() { _currentVoucher = created; _status = 'draft'; }); _logAudit('created', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines  •  \$_cashAccountName');
       } else {
-        final vid = _currentVoucher!['id'] as String;
-        await client.from('cpv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null}).eq('id', vid);
+        vid = _currentVoucher!['id'] as String;
+        vNum = _currentVoucher!['voucher_number'] as String?;
+        await client.from('cpv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': 'draft', 'total_amount': total}).eq('id', vid);
         await client.from('cpv_voucher_lines').delete().eq('voucher_id', vid);
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
-        setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
-        _snack(post ? 'Voucher posted ✓' : 'Saved');
+        setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; });
       }
-      if (post && orgId != null) await _postCpvToGL(orgId!, bid, dateStr, validLines, total);
+      if (post && orgId != null) {
+        // GL FIRST. _postCpvToGL now throws on any failure, so a bad line aborts
+        // here and the voucher is left as a saved draft (handled by catch below).
+        await _postCpvToGL(orgId!, bid, dateStr, validLines, total);
+        // GL is in — now, and only now, mark the voucher posted.
+        await client.from('cpv_vouchers').update({'status': 'posted', 'posted_by': userId, 'posted_at': DateTime.now().toIso8601String(), 'posted_by_name': userName}).eq('id', vid);
+        setState(() { _status = 'posted'; _currentVoucher = {..._currentVoucher!, 'status': 'posted'}; });
+        _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
+        _snack('Voucher ${vNum ?? ''} posted ✓');
+      } else {
+        _snack('Voucher ${vNum ?? ''} saved');
+      }
       await _loadVouchers();
     } catch (e) { _snack('Failed: $e'); }
     SavingOverlay.hide();
@@ -302,7 +317,13 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
           'party_id': (l.accountType == 'customer' || l.accountType == 'supplier' || l.accountType == 'promoter') ? l.accountId : null,
         });
       }
-    } catch (e) { _snack('GL error: ' + e.toString()); }
+    } catch (e) {
+      // Surface AND propagate: the caller (_save) must NOT mark the voucher
+      // posted if the GL didn't post cleanly. Swallowing here is what produced
+      // posted-but-no-cash vouchers.
+      _snack('GL error: ' + e.toString());
+      rethrow;
+    }
   }
 
   Future<void> _delete() async {

@@ -450,16 +450,32 @@ class ReportPdfBuilder {
   }
 
   static pw.Widget _summaryRow(Trip trip) {
+    // Verified and collected must exclude the field app's duplicate submissions
+    // (the same collection re-sent on a GPS re-fire). VERIFIED counts distinct
+    // customers by their latest visit; COLLECTED sums each DISTINCT receipt once
+    // (see _receiptAmounts). CUSTOMERS stays the planned-stop count.
+    final latestByCust = <String, Visit>{};
+    for (final v in trip.visits) {
+      final prev = latestByCust[v.customerId];
+      if (prev == null || v.timestamp.isAfter(prev.timestamp)) {
+        latestByCust[v.customerId] = v;
+      }
+    }
+    final verifiedCount = latestByCust.values
+        .where((v) => v.status == VisitStatus.verified)
+        .length;
+    final totalCollected =
+        _receiptAmounts(trip.visits).values.fold<int>(0, (s, a) => s + a);
     final completion = trip.totalStops == 0
         ? 0.0
-        : (trip.verifiedCount / trip.totalStops) * 100;
+        : (verifiedCount / trip.totalStops) * 100;
 
     return pw.Row(
       children: [
         _summaryCell('${trip.totalStops}', 'CUSTOMERS'),
-        _summaryCell('${trip.verifiedCount}', 'VERIFIED'),
+        _summaryCell('$verifiedCount', 'VERIFIED'),
         _summaryCell('${completion.toStringAsFixed(1)}%', 'COMPLETION'),
-        _summaryCell('Rs. ${_fmtNum(trip.totalCollected)}', 'COLLECTED'),
+        _summaryCell('Rs. ${_fmtNum(totalCollected)}', 'COLLECTED'),
       ],
     );
   }
@@ -532,22 +548,30 @@ class ReportPdfBuilder {
           if (v.customerId == c.id) v,
       ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
-      if (stopVisits.isEmpty) {
-        final status = byCustomer[c.id] ?? VisitStatus.pending;
+      // Collapse re-submissions: the field app can re-send the SAME collection
+      // (identical receipt) on a GPS re-fire, so one 30,000 receipt sent 3×
+      // must show as ONE line, not three. Genuinely different receipts stay as
+      // separate collection lines.
+      final collections = _dedupCollections(stopVisits);
+
+      if (collections.isEmpty) {
+        // No money collected — one representative status line for the stop.
+        final rep = stopVisits.isEmpty ? null : stopVisits.last;
+        final status = rep?.status ?? byCustomer[c.id] ?? VisitStatus.pending;
         rows.add([
           '${i + 1}',
           c.code,
           c.shopName,
-          _statusTagWithDistance(status, null),
+          _statusTagWithDistance(status, rep),
           status == VisitStatus.pending ? '-' : '0',
           '-',
-          '-',
-          _notesFor(status, null),
+          rep == null ? '-' : DateFormat('hh:mm a').format(rep.timestamp),
+          _notesFor(status, rep),
         ]);
         continue;
       }
 
-      for (final v in stopVisits) {
+      for (final v in collections) {
         rows.add([
           '${i + 1}',
           c.code,
@@ -593,12 +617,11 @@ class ReportPdfBuilder {
   }
 
   static pw.Widget _receiptsFooter(Trip trip) {
-    int receipts = 0;
-    int total = 0;
-    for (final v in trip.visits) {
-      if ((v.receiptNumber ?? '').isNotEmpty && v.amount > 0) receipts++;
-      total += v.amount;
-    }
+    // Distinct receipts only — a re-submitted collection must not be counted
+    // twice here either (see _receiptAmounts).
+    final amounts = _receiptAmounts(trip.visits);
+    final receipts = amounts.length;
+    final total = amounts.values.fold<int>(0, (s, a) => s + a);
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: pw.BoxDecoration(
@@ -801,6 +824,43 @@ class ReportPdfBuilder {
   }
 
   // ---- Helpers ---------------------------------------------------------
+
+  // De-duplicate the field app's repeat submissions. A collection is identified
+  // by its receipt number; the same receipt sent again (GPS re-fire) is the
+  // same money. Genuinely different receipts — e.g. a morning and an evening
+  // payment from one shop — are kept separate.
+
+  // receipt-number -> amount, one entry per DISTINCT receipt (amount > 0 only).
+  // A collection with no receipt keeps its own slot (it cannot be de-duplicated).
+  static Map<String, int> _receiptAmounts(List<Visit> visits) {
+    final m = <String, int>{};
+    var noReceiptSeq = 0;
+    for (final v in visits) {
+      if (v.amount <= 0) continue;
+      final r = (v.receiptNumber ?? '').trim();
+      final key = (r.isEmpty || r == '0') ? '__nr${noReceiptSeq++}' : r;
+      final prev = m[key] ?? 0;
+      m[key] = v.amount > prev ? v.amount : prev;
+    }
+    return m;
+  }
+
+  // One representative visit per distinct collection (distinct receipt), kept in
+  // time order — used to render one table line per real collection.
+  static List<Visit> _dedupCollections(List<Visit> visits) {
+    final seen = <String>{};
+    final out = <Visit>[];
+    for (final v in visits) {
+      if (v.amount <= 0) continue;
+      final r = (v.receiptNumber ?? '').trim();
+      if (r.isEmpty || r == '0') {
+        out.add(v); // no receipt to de-dup on — keep as a distinct collection
+      } else if (seen.add(r)) {
+        out.add(v);
+      }
+    }
+    return out;
+  }
 
   static String _statusLabel(Trip trip) {
     if (trip.endedAt == null) return 'IN PROGRESS';
