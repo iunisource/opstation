@@ -72,7 +72,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
       }
     });
     // Browsers block audio until a user gesture — unlock on the first one.
-    _gestureSub = html.document.onPointerDown.listen((_) => _ensureAudio());
+    _gestureSub = html.document.onMouseDown.listen((_) => _ensureAudio());
     html.document.onKeyDown.listen((_) => _ensureAudio());
   }
 

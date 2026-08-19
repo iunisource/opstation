@@ -199,6 +199,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
   }
 
   Future<void> _save({bool post = false}) async {
+    if (_saving) return; // guard: block double-submit (was duplicating lines/GL)
     if (_cashAccountId == null) { _snack('Select a cash account first'); return; }
     final validLines = _lines.where((l) => l.accountId != null).toList();
     if (validLines.isEmpty) { _snack('Add at least one line item'); return; }
@@ -418,10 +419,10 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     final rawPostedAt = _currentVoucher!['posted_at'] as String?;
     final postedAtStr = rawPostedAt != null ? '  (' + rawPostedAt.replaceAll('T', ' ').substring(0, rawPostedAt.length > 16 ? 16 : rawPostedAt.length) + ')' : '';
     final html_str = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt Voucher</title><style>
-      body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db}
-      table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;text-align:left}
-      th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:1.1em}.footer{margin-top:40px;display:flex;justify-content:space-between}
-      @media print{.no-print{display:none}@page{margin:0}body{padding:15mm 20mm}}
+      body{font-family:Arial,sans-serif;padding:14px;color:#333;font-size:11px}h2{text-align:center;color:#1a56db;font-size:16px;margin:0 0 6px}
+      table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #ddd;padding:3px 6px;text-align:left;font-size:10px}
+      th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:11px}.footer{margin-top:26px;display:flex;justify-content:space-between}
+      @media print{.no-print{display:none}@page{margin:0}body{padding:10mm 14mm}}
     </style></head><body>
     <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">&#x1F5A8; Print</button></div>
     <h2>Cash Receipt Voucher</h2>
