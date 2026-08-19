@@ -68,6 +68,13 @@ class _ErpSkippedReceiptsReportScreenState
   List<_PersonGaps> _rows = []; // salespeople WITH gaps, worst first
   int _cleanCount = 0; // salespeople with receipts but no gaps
 
+  // Cleared serials: userId -> serial -> {comment, cleared_by, cleared_at}.
+  final Map<String, Map<int, Map<String, dynamic>>> _cleared = {};
+
+  Map<String, dynamic>? _clearanceOf(String uid, int n) => _cleared[uid]?[n];
+  bool _isCleared(String uid, int n) => _cleared[uid]?.containsKey(n) ?? false;
+  int get _clearedCount => _rows.fold(0, (s, r) => s + r.skipped.where((n) => _isCleared(r.userId, n)).length);
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String get _orgName => ref.read(currentUserProvider)?.orgName ?? '';
 
@@ -208,6 +215,24 @@ class _ErpSkippedReceiptsReportScreenState
       });
       rows.sort((a, b) => b.skipped.length.compareTo(a.skipped.length));
 
+      // Existing clearances for this org (which flagged serials were reviewed).
+      _cleared.clear();
+      try {
+        final clr = await client.from('skipped_receipt_clearances')
+            .select('user_id, serial_number, comment, cleared_by, cleared_at')
+            .eq('org_id', orgId);
+        for (final c in clr as List) {
+          final uid = c['user_id'] as String?;
+          final n = (c['serial_number'] as num?)?.toInt();
+          if (uid == null || n == null) continue;
+          (_cleared[uid] ??= {})[n] = {
+            'comment': c['comment'] as String? ?? '',
+            'cleared_by': c['cleared_by'] as String?,
+            'cleared_at': c['cleared_at'] as String?,
+          };
+        }
+      } catch (_) {/* table may not exist yet — clearing is a no-op then */}
+
       setState(() {
         _rows = rows;
         _cleanCount = clean;
@@ -224,6 +249,68 @@ class _ErpSkippedReceiptsReportScreenState
 
   int get _totalSkipped => _rows.fold(0, (s, r) => s + r.skipped.length);
 
+  // Tap a serial pill → clear it (with a comment) or re-open a cleared one.
+  Future<void> _openClearDialog(_PersonGaps r, int n) async {
+    final existing = _clearanceOf(r.userId, n);
+    final wasCleared = existing != null;
+    final ctrl = TextEditingController(text: existing?['comment'] as String? ?? '');
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Serial $n — ${r.name}'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(wasCleared ? 'This serial is marked cleared. Update the note, or re-open it.' : 'Mark this skipped serial as cleared (reviewed) and add a note.',
+              style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Comment (e.g. slip torn, entered late as 34862)',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('Cancel')),
+          if (wasCleared)
+            TextButton(onPressed: () => Navigator.pop(ctx, 'unclear'),
+                child: const Text('Re-open', style: TextStyle(color: AppTheme.danger))),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, 'clear'),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+              child: Text(wasCleared ? 'Update' : 'Mark cleared')),
+        ],
+      ),
+    );
+    if (action == null || action == 'cancel') return;
+    final client = Supabase.instance.client;
+    final orgId = _orgId; if (orgId == null) return;
+    final user = ref.read(currentUserProvider);
+    try {
+      if (action == 'unclear') {
+        await client.from('skipped_receipt_clearances').delete()
+            .eq('org_id', orgId).eq('user_id', r.userId).eq('serial_number', n);
+        setState(() => _cleared[r.userId]?.remove(n));
+      } else {
+        final nowIso = DateTime.now().toUtc().toIso8601String();
+        await client.from('skipped_receipt_clearances').upsert({
+          'id': 'skipclr_${orgId}_${r.userId}_$n',
+          'org_id': orgId, 'user_id': r.userId, 'serial_number': n,
+          'comment': ctrl.text.trim(),
+          'cleared_by': user?.id, 'cleared_at': nowIso,
+        }, onConflict: 'org_id,user_id,serial_number');
+        setState(() => (_cleared[r.userId] ??= {})[n] = {
+          'comment': ctrl.text.trim(), 'cleared_by': user?.id, 'cleared_at': nowIso,
+        });
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed: ${e.toString().split('\n').first}'), behavior: SnackBarBehavior.floating));
+    }
+  }
+
   // ── Print (Safari-safe: same-origin iframe self-print, never a blob tab) ──
   String _esc(String s) =>
       s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -232,11 +319,19 @@ class _ErpSkippedReceiptsReportScreenState
     final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
     final b = StringBuffer();
     for (final r in _rows) {
+      final clearedHere = r.skipped.where((n) => _isCleared(r.userId, n)).length;
       b.write('<h3>${_esc(r.name)} '
-          '<span class="cnt">${r.skipped.length} skipped</span></h3>');
+          '<span class="cnt">${r.skipped.length} skipped</span>'
+          '${clearedHere > 0 ? '<span class="cok">$clearedHere cleared</span>' : ''}</h3>');
       b.write('<div class="serials">');
       for (final n in r.skipped) {
-        b.write('<span class="s">$n</span>');
+        if (_isCleared(r.userId, n)) {
+          final cm = (_clearanceOf(r.userId, n)?['comment'] as String? ?? '').trim();
+          b.write('<span class="s cleared">&#10003; $n'
+              '${cm.isEmpty ? '' : ' <span class="note">— ${_esc(cm)}</span>'}</span>');
+        } else {
+          b.write('<span class="s">$n</span>');
+        }
       }
       b.write('</div>');
     }
@@ -253,6 +348,9 @@ class _ErpSkippedReceiptsReportScreenState
         '.serials{display:flex;flex-wrap:wrap;gap:5px}'
         '.s{border:1px solid #f0d58a;background:#fffbeb;border-radius:4px;'
         'padding:2px 7px;font-size:11px;font-variant-numeric:tabular-nums}'
+        '.s.cleared{border-color:#9ae6b4;background:#ecfdf3;color:#166534}'
+        '.cok{font-size:11px;color:#166534;font-weight:700;margin-left:8px}'
+        '.note{color:#166534;font-weight:400;font-variant-numeric:normal}'
         '.ok{color:#15803d;font-size:13px;margin-top:16px}'
         '.foot{margin-top:22px;font-size:10px;color:#888;border-top:1px solid #ccc;padding-top:8px}'
         '@media print{.no-print{display:none}}@page{margin:0.7cm}'
@@ -264,7 +362,8 @@ class _ErpSkippedReceiptsReportScreenState
         '<div class="info"><b>Period:</b> ${_esc(_periodLabel)}</div>'
         '<div class="info"><b>Generated:</b> $gen</div>'
         '<div class="info"><b>Totals:</b> ${_rows.length} salespeople with gaps, '
-        '$_totalSkipped skipped serial${_totalSkipped == 1 ? '' : 's'}.</div>'
+        '$_totalSkipped skipped serial${_totalSkipped == 1 ? '' : 's'}'
+        '${_clearedCount > 0 ? ', $_clearedCount cleared' : ''}.</div>'
         '${b.toString()}'
         '<div class="foot">A gap is a receipt number that falls between two the '
         'salesperson logged but was never entered (jumps over 20 are treated as a '
@@ -413,6 +512,10 @@ class _ErpSkippedReceiptsReportScreenState
                   'A gap can mean a collection was made but not entered (or a voided/torn slip).',
                   style: const TextStyle(fontSize: 12.5)),
             ),
+            if (_clearedCount > 0)
+              Padding(padding: const EdgeInsets.only(right: 10),
+                child: Text('$_clearedCount cleared',
+                    style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Colors.green.shade700))),
             if (_cleanCount > 0)
               Text('$_cleanCount clean',
                   style: TextStyle(
@@ -461,18 +564,47 @@ class _ErpSkippedReceiptsReportScreenState
               style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ),
         Wrap(spacing: 6, runSpacing: 6, children: [
-          for (final n in r.skipped)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFFBEB),
-                borderRadius: BorderRadius.circular(5),
-                border: Border.all(color: const Color(0xFFF0D58A)),
-              ),
-              child: Text('$n', style: const TextStyle(fontSize: 12)),
-            ),
+          for (final n in r.skipped) _serialPill(r, n),
         ]),
       ]),
+    );
+  }
+
+  Widget _serialPill(_PersonGaps r, int n) {
+    final cleared = _isCleared(r.userId, n);
+    final comment = (_clearanceOf(r.userId, n)?['comment'] as String? ?? '').trim();
+    final pill = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: cleared ? const Color(0xFFECFDF3) : const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: cleared ? const Color(0xFF9AE6B4) : const Color(0xFFF0D58A)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (cleared) ...[
+          Icon(Icons.check_circle, size: 12, color: Colors.green.shade600),
+          const SizedBox(width: 4),
+        ],
+        Text('$n', style: TextStyle(
+          fontSize: 12,
+          decoration: cleared ? TextDecoration.lineThrough : null,
+          color: cleared ? Colors.green.shade800 : AppTheme.textPrimary,
+        )),
+        if (cleared && comment.isNotEmpty) ...[
+          const SizedBox(width: 4),
+          Icon(Icons.sticky_note_2_outlined, size: 12, color: Colors.green.shade700),
+        ],
+      ]),
+    );
+    return Tooltip(
+      message: cleared
+          ? (comment.isEmpty ? 'Cleared — tap to edit or re-open' : 'Cleared: $comment')
+          : 'Tap to clear this serial and add a note',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(5),
+        onTap: () => _openClearDialog(r, n),
+        child: pill,
+      ),
     );
   }
 }
