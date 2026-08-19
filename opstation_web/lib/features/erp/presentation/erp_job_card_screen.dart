@@ -49,6 +49,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   List<Map<String, dynamic>> _products = [];
   Map<String, String> _prodLabel = {};
   Map<String, double> _prodCost = {};
+  Map<String, String> _prodUom = {};  // product_id -> base UOM abbreviation/name
   Map<String, double> _prodStock = {}; // product_id -> qty in hand at branch
   bool _loadingProducts = true;
 
@@ -219,7 +220,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       int from = 0; const page = 1000;
       while (true) {
         final rows = await Supabase.instance.client.from('products')
-            .select('id, name, sku, cost_price').eq('org_id', orgId).eq('is_active', true)
+            .select('id, name, sku, cost_price, uoms(abbreviation, name)').eq('org_id', orgId).eq('is_active', true)
             .order('name').range(from, from + page - 1);
         final list = List<Map<String, dynamic>>.from(rows);
         all.addAll(list);
@@ -231,6 +232,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _products = items;
         _prodLabel = {for (final p in items) p['id'] as String: p['label'] as String};
         _prodCost = {for (final p in all) p['id'] as String: (p['cost_price'] as num? ?? 0).toDouble()};
+        _prodUom = {for (final p in all) p['id'] as String: ((p['uoms']?['abbreviation'] as String?)?.trim().isNotEmpty == true ? p['uoms']['abbreviation'] as String : (p['uoms']?['name'] as String? ?? ''))};
         _loadingProducts = false;
       });
       _loadStock();
@@ -1420,6 +1422,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final m = _materials[i];
       final lineCost = m.qty * (_prodCost[m.productId] ?? 0);
       mat.write('<tr><td class="n">${i + 1}</td><td>${_esc(m.productLabel)}</td><td class="r">${_trim(m.qty)}</td>'
+          '<td>${_esc(_prodUom[m.productId] ?? '')}</td>'
           '${withPrices ? '<td class="r">${_money(lineCost)}</td>' : ''}</tr>');
     }
     final ohb = StringBuffer();
@@ -1456,9 +1459,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   <div class="card"><div class="k">Unit cost</div><div class="v">${NumberFormat('#,##0.0000').format(unit)}</div></div>
 </div>''';
     final recipeTable = '<div class="sec">Recipe (per planned qty)</div>'
-      '<table><thead><tr><th class="n">#</th><th>Component</th><th class="r">Qty</th>${withPrices ? '<th class="r">Cost</th>' : ''}</tr></thead>'
+      '<table><thead><tr><th class="n">#</th><th>Component</th><th class="r">Qty</th><th>UOM</th>${withPrices ? '<th class="r">Cost</th>' : ''}</tr></thead>'
       '<tbody>$matBody</tbody>'
-      '${withPrices ? '<tfoot><tr><td colspan="3">Components total</td><td class="r">${_money(comp)}</td></tr></tfoot>' : ''}</table>';
+      '${withPrices ? '<tfoot><tr><td colspan="4">Components total</td><td class="r">${_money(comp)}</td></tr></tfoot>' : ''}</table>';
 
     return '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job Card $jobNo${withPrices ? '' : ' (Internal)'}</title>
 <style>
@@ -2099,6 +2102,8 @@ $runSection
             const Expanded(child: Text('Component', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             const SizedBox(width: 12),
             const SizedBox(width: 80, child: Text('Qty required', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 8),
+            const SizedBox(width: 56, child: Text('UOM', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             const SizedBox(width: 12),
             const SizedBox(width: 90, child: Text('In hand', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             if (_canViewCost) const SizedBox(width: 110, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
@@ -2110,6 +2115,8 @@ $runSection
               Expanded(child: Text(_materials[i].productLabel, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
               const SizedBox(width: 12),
               SizedBox(width: 80, child: Text(_trim(_materials[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
+              const SizedBox(width: 8),
+              SizedBox(width: 56, child: Text(_prodUom[_materials[i].productId] ?? '', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
               const SizedBox(width: 12),
               Builder(builder: (_) {
                 final pid = _materials[i].productId;
