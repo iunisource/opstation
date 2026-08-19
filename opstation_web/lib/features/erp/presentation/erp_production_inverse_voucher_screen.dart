@@ -52,6 +52,13 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   bool _saving = false;
   bool _posting = false;
 
+  // Source mode: reverse a posted production voucher (recommended, actual
+  // costs) or free-pick any BOM (for stock with no voucher on record).
+  String _sourceMode = 'voucher'; // 'voucher' | 'free'
+  List<Map<String, dynamic>> _prodVouchers = [];
+  String? _srcVoucherId; String _srcVoucherLabel = '';
+  double _srcOutputQty = 0; // max qty that can be broken (the produced qty)
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isDraft => _status != 'posted';
@@ -61,7 +68,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadProducts(); _loadBoms(); _loadVouchers();
+      _loadProducts(); _loadBoms(); _loadVouchers(); _loadProdVouchers();
     });
   }
 
@@ -133,6 +140,77 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     }).toList();
   }
 
+  // Posted production vouchers available to reverse.
+  Future<void> _loadProdVouchers() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('production_vouchers')
+          .select('id, voucher_number, voucher_date, bom_id, product_id, output_qty, total_cost, fg_unit_cost')
+          .eq('org_id', orgId).eq('status', 'posted')
+          .order('voucher_date', ascending: false).limit(500);
+      if (mounted) setState(() => _prodVouchers = List<Map<String, dynamic>>.from(rows));
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> _filterProdVouchers(String q) {
+    final ql = q.toLowerCase();
+    final list = _prodVouchers.where((v) {
+      if (ql.isEmpty) return true;
+      final num = (v['voucher_number'] as String? ?? '').toLowerCase();
+      final pn = (_prodLabel[v['product_id']] ?? '').toLowerCase();
+      return num.contains(ql) || pn.contains(ql);
+    }).take(200).toList();
+    return list.map((v) => {
+      'id': v['id'],
+      'label': "${v['voucher_number'] ?? ''} — ${_prodLabel[v['product_id']] ?? ''}  (made ${_trim((v['output_qty'] as num? ?? 0).toDouble())} · ${v['voucher_date'] ?? ''})",
+    }).toList();
+  }
+
+  // Pre-fill from a posted production voucher: exact product, BOM, components,
+  // their ACTUAL consumed unit costs, and cap the quantity at what was made.
+  Future<void> _pickProdVoucher(String vId) async {
+    final v = _prodVouchers.firstWhere((x) => x['id'] == vId, orElse: () => {});
+    if (v.isEmpty) return;
+    try {
+      final comps = await Supabase.instance.client.from('production_voucher_components')
+          .select().eq('voucher_id', vId).order('line_order');
+      final list = List<Map<String, dynamic>>.from(comps as List);
+      for (final l in _components) l.dispose();
+      final outQty = (v['output_qty'] as num? ?? 1).toDouble();
+      final base = list.map((b) => {
+        'product_id': b['product_id'],
+        'quantity': (b['quantity'] as num? ?? 0).toDouble(),
+        'unit_cost': (b['unit_cost'] as num? ?? 0).toDouble(),
+      }).toList();
+      setState(() {
+        _srcVoucherId = vId;
+        _srcVoucherLabel = v['voucher_number'] as String? ?? '';
+        _srcOutputQty = outQty > 0 ? outQty : 1;
+        _bomId = v['bom_id'] as String?;
+        _fgId = v['product_id'] as String?;
+        _fgLabel = _prodLabel[_fgId] ?? (_fgId ?? '');
+        _bomLabel = _bomId != null ? (_boms.firstWhere((b) => b['id'] == _bomId, orElse: () => {})['code'] as String? ?? '') : '';
+        _bomBaseQty = _srcOutputQty;
+        _inputQtyCtrl.text = _trim(_srcOutputQty);
+        _baseComps = base;
+      });
+      _rescale();
+      _loadFgLayers();
+    } catch (e) { _snack(friendlyError('Could not load the production voucher', e)); }
+  }
+
+  void _setSourceMode(String m) {
+    if (m == _sourceMode) return;
+    for (final l in _components) l.dispose();
+    setState(() {
+      _sourceMode = m;
+      _srcVoucherId = null; _srcVoucherLabel = ''; _srcOutputQty = 0;
+      _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
+      _inputQtyCtrl.text = '1';
+      _components = []; _baseComps = []; _fgLayers = [];
+    });
+  }
+
   Future<void> _loadVouchers() async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _loadingList = true);
@@ -150,6 +228,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       _current = null; _status = 'draft';
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
+      _srcVoucherId = null; _srcVoucherLabel = ''; _srcOutputQty = 0;
       _inputQtyCtrl.text = '1'; _notesCtrl.clear();
       _components = []; _fgLayers = []; _baseComps = [];
     });
@@ -173,6 +252,11 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       if (mounted) setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
+        _srcVoucherId = v['source_voucher_id'] as String?;
+        _sourceMode = _srcVoucherId != null ? 'voucher' : 'free';
+        _srcVoucherLabel = _srcVoucherId != null
+            ? (_prodVouchers.firstWhere((x) => x['id'] == _srcVoucherId, orElse: () => {})['voucher_number'] as String? ?? '')
+            : '';
         final ds = v['voucher_date'] as String?;
         _date = ds != null ? DateTime.tryParse(ds) ?? DateTime.now() : DateTime.now();
         _bomId = v['bom_id'] as String?;
@@ -221,10 +305,17 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       l.productLabel = _prodLabel[l.productId] ?? (l.productId ?? '');
       final q = (b['quantity'] as num? ?? 0).toDouble() * scale;
       if (q != 0) l.qtyCtrl.text = _trim(double.parse(q.toStringAsFixed(4)));
+      // Actual per-unit cost from the source production run (voucher mode).
+      l.unitCostSnap = (b['unit_cost'] as num?)?.toDouble() ?? 0;
       return l;
     }).toList();
     if (mounted) setState(() => _components = nc);
   }
+
+  // Value basis per component line: actual run cost in voucher mode (when we
+  // captured one), otherwise today's product cost.
+  double _unitCostFor(_RComp l) =>
+      (_sourceMode == 'voucher' && l.unitCostSnap > 0) ? l.unitCostSnap : (_prodCost[l.productId] ?? 0);
 
   // ---------- finished-good FIFO cost (for an accurate estimate) ----------
   Future<void> _loadFgLayers() async {
@@ -256,7 +347,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   }
 
   // ---------- cost preview ----------
-  double get _estCompVal => _components.fold(0.0, (s, l) => s + l.qty * (_prodCost[l.productId] ?? 0));
+  double get _estCompVal => _components.fold(0.0, (s, l) => s + l.qty * _unitCostFor(l));
   double get _estFgCost => _fifoFgCost(_inQty);
   double get _estVariance => _estFgCost - _estCompVal;
 
@@ -265,8 +356,12 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     final orgId = _orgId; if (orgId == null) { _snack('Not authenticated'); return null; }
     if (!_isDraft) { _snack('Posted vouchers cannot be edited'); return _current?['id'] as String?; }
     if (_branchId == null) { _snack('No branch selected — pick one in the sidebar'); return null; }
-    if (_fgId == null) { _snack('Pick a BOM (sets the finished product)'); return null; }
+    if (_sourceMode == 'voucher' && _srcVoucherId == null) { _snack('Pick a production voucher to reverse'); return null; }
+    if (_fgId == null) { _snack(_sourceMode == 'voucher' ? 'Pick a production voucher (sets the finished product)' : 'Pick a BOM (sets the finished product)'); return null; }
     if (_inQty <= 0) { _snack('Quantity to disassemble must be greater than 0'); return null; }
+    if (_sourceMode == 'voucher' && _srcOutputQty > 0 && _inQty > _srcOutputQty) {
+      _snack('Quantity to break cannot exceed the produced quantity (${_trim(_srcOutputQty)})'); return null;
+    }
     final comps = _components.where((l) => l.productId != null && l.qty > 0).toList();
     if (comps.isEmpty) { _snack('Add at least one recovered component'); return null; }
     final userId = ref.read(currentUserProvider)?.id ?? '';
@@ -283,6 +378,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
         await client.from('production_inverse_vouchers').insert({
           'id': vId, 'org_id': orgId, 'branch_id': _branchId, 'voucher_number': num,
           'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId, 'input_qty': _inQty,
+          'source_voucher_id': _sourceMode == 'voucher' ? _srcVoucherId : null,
           'status': 'draft', 'is_locked': false, 'notes': _notesCtrl.text.trim(),
           'created_by': userId, 'created_at': DateTime.now().toIso8601String(),
           'updated_at': DateTime.now().toIso8601String(),
@@ -291,15 +387,20 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
         vId = _current!['id'] as String; num = _current!['voucher_number'] as String? ?? '';
         await client.from('production_inverse_vouchers').update({
           'branch_id': _branchId, 'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId,
+          'source_voucher_id': _sourceMode == 'voucher' ? _srcVoucherId : null,
           'input_qty': _inQty, 'notes': _notesCtrl.text.trim(), 'updated_at': DateTime.now().toIso8601String(),
         }).eq('id', vId);
       }
       await client.from('production_inverse_components').delete().eq('voucher_id', vId);
       for (var i = 0; i < comps.length; i++) {
-        await client.from('production_inverse_components').insert({
+        final row = <String, dynamic>{
           'id': vId + '_c' + i.toString(), 'voucher_id': vId,
           'product_id': comps[i].productId, 'quantity': comps[i].qty, 'line_order': i,
-        });
+        };
+        // Store actual run cost only in voucher mode; free mode leaves it null
+        // so posting falls back to current inventory cost (unchanged behaviour).
+        if (_sourceMode == 'voucher' && comps[i].unitCostSnap > 0) row['unit_cost'] = comps[i].unitCostSnap;
+        await client.from('production_inverse_components').insert(row);
       }
       resultId = vId;
       final updated = await client.from('production_inverse_vouchers').select().eq('id', vId).single();
@@ -439,15 +540,24 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
               const SizedBox(width: 16),
               SizedBox(width: 150, child: _labeled('Date', _dateField())),
               const SizedBox(width: 16),
-              Expanded(child: _labeled('Bill of Materials *', _isDraft
-                ? _ProductField(key: ValueKey('bom_${_current?['id'] ?? 'new'}_$_bomId'), initialLabel: _bomLabel.isEmpty ? '' : (_bomLabel + (_fgLabel.isNotEmpty ? ' — $_fgLabel' : '')), filterFn: _filterBoms, onPick: (b) => _pickBom(b['id'] as String))
-                : _readonlyBox(_bomLabel.isEmpty ? '—' : _bomLabel))),
+              Expanded(child: _labeled('Source', _sourceToggle())),
+            ]),
+            const SizedBox(height: 10),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (_sourceMode == 'voucher')
+                Expanded(child: _labeled('Production Voucher to reverse *', _isDraft
+                  ? _ProductField(key: ValueKey('pv_${_current?['id'] ?? 'new'}_$_srcVoucherId'), initialLabel: _srcVoucherLabel.isEmpty ? '' : (_srcVoucherLabel + (_fgLabel.isNotEmpty ? ' — $_fgLabel' : '')), filterFn: _filterProdVouchers, onPick: (v) => _pickProdVoucher(v['id'] as String))
+                  : _readonlyBox(_srcVoucherLabel.isEmpty ? '—' : (_srcVoucherLabel + (_fgLabel.isNotEmpty ? ' — $_fgLabel' : '')))))
+              else
+                Expanded(child: _labeled('Bill of Materials *', _isDraft
+                  ? _ProductField(key: ValueKey('bom_${_current?['id'] ?? 'new'}_$_bomId'), initialLabel: _bomLabel.isEmpty ? '' : (_bomLabel + (_fgLabel.isNotEmpty ? ' — $_fgLabel' : '')), filterFn: _filterBoms, onPick: (b) => _pickBom(b['id'] as String))
+                  : _readonlyBox(_bomLabel.isEmpty ? '—' : _bomLabel))),
               const SizedBox(width: 16),
-              SizedBox(width: 130, child: _labeled('Qty to break *', _inputQtyField())),
+              SizedBox(width: 150, child: _labeled(_sourceMode == 'voucher' && _srcOutputQty > 0 ? 'Qty to break * (max ${_trim(_srcOutputQty)})' : 'Qty to break *', _inputQtyField())),
             ]),
             const SizedBox(height: 10),
             Row(children: [
-              Expanded(child: _labeled('Finished Product (disassembled)', _readonlyBox(_fgLabel.isEmpty ? 'Select a BOM' : _fgLabel))),
+              Expanded(child: _labeled('Finished Product (disassembled)', _readonlyBox(_fgLabel.isEmpty ? (_sourceMode == 'voucher' ? 'Select a production voucher' : 'Select a BOM') : _fgLabel))),
               const SizedBox(width: 16),
               Expanded(flex: 2, child: _labeled('Notes', TextField(controller: _notesCtrl, enabled: _isDraft,
                 decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))))),
@@ -460,6 +570,35 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
           ]))),
       ])),
     ]));
+  }
+
+  Widget _sourceToggle() {
+    final enabled = _isDraft && _current == null; // lock the mode once a draft exists
+    Widget seg(String mode, String label, String sub) {
+      final on = _sourceMode == mode;
+      return Expanded(child: InkWell(
+        onTap: enabled && !on ? () => _setSourceMode(mode) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? AppTheme.primary.withOpacity(0.10) : Colors.white,
+            border: Border.all(color: on ? AppTheme.primary : const Color(0xFFE0E0E0)),
+            borderRadius: BorderRadius.circular(4)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Icon(on ? Icons.radio_button_checked : Icons.radio_button_off, size: 14, color: on ? AppTheme.primary : AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: on ? AppTheme.primary : AppTheme.textPrimary)),
+            ]),
+            const SizedBox(height: 2),
+            Text(sub, style: const TextStyle(fontSize: 9.5, color: AppTheme.textSecondary)),
+          ]))));
+    }
+    return Row(children: [
+      seg('voucher', 'From production voucher', 'Actual costs · qty capped to what was made'),
+      const SizedBox(width: 8),
+      seg('free', 'Free (any BOM)', 'For stock with no voucher on record'),
+    ]);
   }
 
   Widget _labeled(String label, Widget child) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -530,7 +669,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
             const SizedBox(width: 8),
             const Text('Recovered Components (returned to stock)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            const Expanded(child: Text('Derived from the BOM, scaled to quantity. Locked to the recipe.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            Expanded(child: Text(_sourceMode == 'voucher' ? 'From the production run, scaled to quantity, at actual consumed costs.' : 'Derived from the BOM, scaled to quantity. Locked to the recipe.', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           ])),
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
@@ -553,7 +692,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
               SizedBox(width: 110, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(_trim(_components[i].qty), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)))),
               const SizedBox(width: 12),
               SizedBox(width: 120, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text(
-                _isDraft ? _money(_components[i].qty * (_prodCost[_components[i].productId] ?? 0)) : _money(_components[i].lineCostSnap),
+                _isDraft ? _money(_components[i].qty * _unitCostFor(_components[i])) : _money(_components[i].lineCostSnap),
                 textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))),
               const SizedBox(width: 30),
             ])),
