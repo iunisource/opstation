@@ -56,6 +56,8 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   // hardware scanner / keyboard-wedge capture
   final _wedgeCtrl = TextEditingController();
   final _wedgeFocus = FocusNode();
+  Timer? _focusGuard;      // keeps the wedge armed even if focus is stolen
+  bool _manualOpen = false; // don't fight the manual-entry dialog for focus
 
   // audio
   Object? _audio;            // Web Audio context via JS interop
@@ -76,15 +78,27 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   void initState() {
     super.initState();
     _registerCameraView();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refocusWedge());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _armFocus());
+    // Camera/view registration and async layout can steal focus during the
+    // first second, so keep a lightweight guard re-arming the wedge.
+    _focusGuard = Timer.periodic(const Duration(seconds: 2), (_) => _refocusWedge());
     _loadConfig();
     _initCamera();
+  }
+
+  // Request focus repeatedly across the first ~2s so the scanner is live the
+  // moment the screen settles — no click or first manual punch needed.
+  void _armFocus() {
+    for (final ms in [0, 120, 350, 700, 1200, 2000]) {
+      Future.delayed(Duration(milliseconds: ms), _refocusWedge);
+    }
   }
 
   @override
   void dispose() {
     _clearTimer?.cancel();
     _scanLoop?.cancel();
+    _focusGuard?.cancel();
     _stopCamera();
     _wedgeCtrl.dispose();
     _wedgeFocus.dispose();
@@ -173,7 +187,8 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
 
   // ── keyboard-wedge ───────────────────────────────────────────────────────────
   void _refocusWedge() {
-    if (mounted && !_wedgeFocus.hasFocus) _wedgeFocus.requestFocus();
+    if (!mounted || _manualOpen) return; // don't steal focus from the dialog
+    if (!_wedgeFocus.hasFocus) _wedgeFocus.requestFocus();
   }
 
   void _onWedgeSubmitted(String value) {
@@ -407,6 +422,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
 
   Future<void> _manualEntry() async {
     _ensureAudio();
+    _manualOpen = true;
     final ctrl = TextEditingController();
     final code = await showDialog<String>(
       context: context,
@@ -423,6 +439,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
         ],
       ),
     );
+    _manualOpen = false;
     _refocusWedge();
     if (code != null && code.trim().isNotEmpty) _process(code.trim());
   }
@@ -432,13 +449,23 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0B1220),
-      body: Stack(children: [
-        // Offstage keyboard-wedge capture: scanners type the code + Enter here.
-        Offstage(
-          offstage: true,
-          child: TextField(
-            controller: _wedgeCtrl, focusNode: _wedgeFocus, autofocus: true,
-            onSubmitted: _onWedgeSubmitted,
+      // Any tap re-arms the scanner (also covers returning from a dialog).
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => _refocusWedge(),
+        child: Stack(children: [
+        // Keyboard-wedge capture: scanners type the code + Enter here. Kept
+        // laid-out (1x1, transparent) rather than Offstage — an unpainted
+        // input cannot grab focus at load, which is why the scanner used to
+        // need a click first.
+        Positioned(
+          left: 0, top: 0, width: 1, height: 1,
+          child: Opacity(
+            opacity: 0,
+            child: TextField(
+              controller: _wedgeCtrl, focusNode: _wedgeFocus, autofocus: true,
+              onSubmitted: _onWedgeSubmitted,
+            ),
           ),
         ),
         Center(
@@ -474,6 +501,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
           ),
         ),
       ]),
+      ),
     );
   }
 
