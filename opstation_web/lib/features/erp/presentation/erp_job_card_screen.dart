@@ -838,6 +838,51 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     }));
   }
 
+  // Close a job as completed with produced < planned (e.g. material ran out).
+  // Status-only: no stock/GL movement — batches already posted what was made.
+  Future<void> _finishShort() async {
+    if (_current == null) return;
+    final reasonCtrl = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+      final valid = reasonCtrl.text.trim().isNotEmpty;
+      return AlertDialog(
+        title: const Text('Finish job short?'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Produced ${_trim(_producedQty)} of ${_trim(_plannedQty)} planned. The remaining ${_trim(_leftQty)} will not be produced. This only closes the job — no stock or ledger change.',
+              style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          TextField(controller: reasonCtrl, autofocus: true, maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Reason (required)', border: OutlineInputBorder(), isDense: true),
+            onChanged: (_) => setS(() {})),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: valid ? () => Navigator.pop(ctx, true) : null,
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            child: const Text('Finish short')),
+        ],
+      );
+    }));
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      final userId = ref.read(currentUserProvider)?.id;
+      await Supabase.instance.client.from('job_cards').update({
+        'status': 'completed', 'closed_short': true, 'short_reason': reasonCtrl.text.trim(),
+        'short_closed_by': userId, 'short_closed_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _current!['id']);
+      await _logJobAudit('closed_short', notes: 'Produced ${_trim(_producedQty)}/${_trim(_plannedQty)} — ${reasonCtrl.text.trim()}');
+      _snack('Job closed short');
+      final updated = await Supabase.instance.client.from('job_cards').select().eq('id', _current!['id']).single();
+      await _loadJobs();
+      await _loadJob(updated);
+    } catch (e) {
+      _snack('Could not close: ${e.toString().split('\n').first}');
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
   Future<void> _voidRun(Map<String, dynamic> run) async {
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Void this batch?'),
@@ -1685,7 +1730,9 @@ $runSection
           Text(
               jOpen
                   ? '${_trim(produced)} made · open-ended'
-                  : '${_trim(produced)} / ${_trim(planned)} done  ·  ${_leftLabel(planned, produced)}',
+                  : (j['closed_short'] == true)
+                      ? '${_trim(produced)} / ${_trim(planned)} done  ·  closed short'
+                      : '${_trim(produced)} / ${_trim(planned)} done  ·  ${_leftLabel(planned, produced)}',
               style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
           if (j['customer_id'] != null &&
               (_custLabel[j['customer_id']] ?? '').isNotEmpty)
@@ -1847,7 +1894,7 @@ $runSection
                 Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
               ],
               if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
-              if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text(_openEnded ? '${_trim(_producedQty)} made · open-ended' : '${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_leftLabel(_plannedQty, _producedQty)}',
+              if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text(_openEnded ? '${_trim(_producedQty)} made · open-ended' : (_current?['closed_short'] == true) ? '${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  closed short' : '${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_leftLabel(_plannedQty, _producedQty)}',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
               if (context.isMobile) const Spacer(),
               if (_current != null) IconButton(icon: const Icon(Icons.fact_check_outlined, size: 20), onPressed: _showQcHistory, tooltip: 'QC History', visualDensity: VisualDensity.compact),
@@ -1870,10 +1917,17 @@ $runSection
                   icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
                   label: const Text('Save'), onPressed: _saving || _busy ? null : () => _save()),
                 const SizedBox(width: 8),
-                if (_current != null && _remainingQty > 0 && _status != 'cancelled') ElevatedButton.icon(
-                  icon: const Icon(Icons.add_task, size: 16), label: const Text('Produce Batch'),
-                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
-                  onPressed: _busy ? null : _produceBatch),
+                if (_current != null && _remainingQty > 0 && _status != 'cancelled' && _status != 'completed') ...[
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.flag_outlined, size: 16), label: const Text('Finish short'),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                    onPressed: _busy ? null : _finishShort),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.add_task, size: 16), label: const Text('Produce Batch'),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+                    onPressed: _busy ? null : _produceBatch),
+                ],
               ],
             ]),
             // Mobile: the real buttons get their own full-width row.
@@ -1889,7 +1943,14 @@ $runSection
                   )),
                 if (_editable && _current != null && _remainingQty > 0 && _status != 'cancelled')
                   const SizedBox(width: 8),
-                if (_current != null && _remainingQty > 0 && _status != 'cancelled')
+                if (_current != null && _remainingQty > 0 && _status != 'cancelled' && _status != 'completed') ...[
+                  Expanded(child: OutlinedButton.icon(
+                    icon: const Icon(Icons.flag_outlined, size: 16),
+                    label: const Text('Finish short'),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
+                    onPressed: _busy ? null : _finishShort,
+                  )),
+                  const SizedBox(width: 8),
                   Expanded(flex: 2, child: ElevatedButton.icon(
                     icon: const Icon(Icons.add_task, size: 16),
                     label: const Text('Produce Batch'),
@@ -1898,6 +1959,7 @@ $runSection
                       padding: const EdgeInsets.symmetric(vertical: 12)),
                     onPressed: _busy ? null : _produceBatch,
                   )),
+                ],
               ]),
             ],
           ])),
