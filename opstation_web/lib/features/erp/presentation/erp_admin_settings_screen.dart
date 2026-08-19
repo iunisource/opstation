@@ -375,6 +375,17 @@ const List<_AdminToggle> _toggles = [
         'created from now on appear. Supervision is non-blocking — the customer '
         'can still be used for orders while pending. When OFF, no counter shows.',
   ),
+
+  _AdminToggle(
+    'org.product_supervise_flow',
+    'Supervision for new products',
+    'When ON, every newly-created product must be "Supervised" by an admin or '
+        'master admin. A pendency counter on the Inventory → Products menu shows '
+        'how many products are still awaiting supervision, and clears as each is '
+        'supervised. Existing products were auto-supervised, so only products '
+        'created from now on appear. Supervision is non-blocking — the product '
+        'can still be used while pending. When OFF, no counter shows.',
+  ),
 ];
 
 /// A module-wise grouping of the flat [_toggles] list, so Admin Settings reads
@@ -422,6 +433,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.transfer_alert_skip_admin',
     'org.consignment_enabled',
     'org.hide_main_groups_by_branch',
+    'org.product_supervise_flow',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
     'org.show_org_name_sales',

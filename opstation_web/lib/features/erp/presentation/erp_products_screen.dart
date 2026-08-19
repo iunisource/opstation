@@ -80,67 +80,64 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     if (orgId == null) return;
     try {
       final client = Supabase.instance.client;
-      final products = await client
-          .from('products')
-          .select('*, uoms(name, abbreviation)')
-          .eq('org_id', orgId)
-          .order('name');
-      final taxonomies = await client
-          .from('product_taxonomies')
-          .select()
-          .eq('org_id', orgId)
-          .order('name');
-      final uoms = await client
-          .from('uoms')
-          .select()
-          .eq('org_id', orgId)
-          .order('name');
-      final branches = await client.from('branches').select('id, name').eq('org_id', orgId!).eq('is_active', true).order('name');
       // Which products already sit in each branch's POS catalog. Paginated past
       // the 5000 max-rows cap. posIds = any-branch (drives icon/filter);
       // posByBranch = per-branch (drives the duplicate check on push).
-      final posIds = <String>{};
-      final posByBranch = <String, Set<String>>{};
-      for (var from = 0; ; from += 1000) {
-        final rows = await client.from('pos_catalog').select('product_id, branch_id')
-            .eq('org_id', orgId).order('id').range(from, from + 999);
-        final batch = List<Map<String, dynamic>>.from(rows as List);
-        for (final r in batch) {
-          final pid = r['product_id'] as String?;
-          final bid = r['branch_id'] as String?;
-          if (pid == null) continue;
-          posIds.add(pid);
-          if (bid != null) (posByBranch[bid] ??= <String>{}).add(pid);
-        }
-        if (batch.length < 1000) break;
-      }
-      bool consignmentOn = false;
-      try {
-        final cfg = await client.from('app_config').select('value')
-            .eq('org_id', orgId).eq('key', 'org.consignment_enabled').maybeSingle();
-        consignmentOn = (cfg?['value'] as String?) == 'true';
-      } catch (_) {}
-      bool superviseOn = false;
-      try {
-        final sc = await client.from('app_config').select('value')
-            .eq('org_id', orgId).eq('key', 'org.product_supervise_flow').maybeSingle();
-        superviseOn = (sc?['value'] as String?) == 'true';
-      } catch (_) {}
-      bool hideGroupsOn = false;
-      final Map<String, Set<String>> hiddenByBranch = {};
-      try {
-        final hg = await client.from('app_config').select('value')
-            .eq('org_id', orgId).eq('key', 'org.hide_main_groups_by_branch').maybeSingle();
-        hideGroupsOn = (hg?['value'] as String?) == 'true';
-        if (hideGroupsOn) {
-          final hrows = await client.from('branch_hidden_main_groups')
-              .select('branch_id, main_group').eq('org_id', orgId);
-          for (final r in hrows as List) {
-            (hiddenByBranch[r['branch_id'] as String] ??= <String>{})
-                .add(r['main_group'] as String);
+      Future<Map<String, dynamic>> posFut() async {
+        final posIds = <String>{};
+        final posByBranch = <String, Set<String>>{};
+        for (var from = 0; ; from += 1000) {
+          final rows = await client.from('pos_catalog').select('product_id, branch_id')
+              .eq('org_id', orgId).order('id').range(from, from + 999);
+          final batch = List<Map<String, dynamic>>.from(rows as List);
+          for (final r in batch) {
+            final pid = r['product_id'] as String?;
+            final bid = r['branch_id'] as String?;
+            if (pid == null) continue;
+            posIds.add(pid);
+            if (bid != null) (posByBranch[bid] ??= <String>{}).add(pid);
           }
+          if (batch.length < 1000) break;
         }
-      } catch (_) {}
+        return {'ids': posIds, 'byBranch': posByBranch};
+      }
+
+      // Fire every independent query at once instead of one-after-another —
+      // this is the load-time win. The three config flags are collapsed into a
+      // single app_config read.
+      final res = await Future.wait<dynamic>([
+        client.from('products').select('*, uoms(name, abbreviation)').eq('org_id', orgId).order('name'),
+        client.from('product_taxonomies').select().eq('org_id', orgId).order('name'),
+        client.from('uoms').select().eq('org_id', orgId).order('name'),
+        client.from('branches').select('id, name').eq('org_id', orgId!).eq('is_active', true).order('name'),
+        client.from('app_config').select('key, value').eq('org_id', orgId)
+            .inFilter('key', ['org.consignment_enabled', 'org.product_supervise_flow', 'org.hide_main_groups_by_branch']),
+        client.from('branch_hidden_main_groups').select('branch_id, main_group').eq('org_id', orgId),
+        posFut(),
+      ]);
+      final products = res[0] as List;
+      final taxonomies = res[1] as List;
+      final uoms = res[2] as List;
+      final branches = res[3] as List;
+      final cfgRows = res[4] as List;
+      final hiddenRows = res[5] as List;
+      final pos = res[6] as Map;
+      final posIds = pos['ids'] as Set<String>;
+      final posByBranch = pos['byBranch'] as Map<String, Set<String>>;
+
+      final cfg = <String, String>{
+        for (final r in cfgRows) (r['key'] as String): ((r['value'] as String?) ?? '')
+      };
+      final consignmentOn = cfg['org.consignment_enabled'] == 'true';
+      final superviseOn = cfg['org.product_supervise_flow'] == 'true';
+      final hideGroupsOn = cfg['org.hide_main_groups_by_branch'] == 'true';
+      final Map<String, Set<String>> hiddenByBranch = {};
+      if (hideGroupsOn) {
+        for (final r in hiddenRows) {
+          (hiddenByBranch[r['branch_id'] as String] ??= <String>{})
+              .add(r['main_group'] as String);
+        }
+      }
       final Map<String, List<Map<String, dynamic>>> grouped = {};
       for (final t in taxonomies as List) {
         final type = t['taxonomy_type'] as String;
