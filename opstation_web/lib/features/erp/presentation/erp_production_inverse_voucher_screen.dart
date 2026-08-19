@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/utils/friendly_error.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
@@ -305,7 +306,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       if (mounted) setState(() => _current = updated);
       if (!silent) _snack('Disassembly $num saved (draft)');
       await _loadVouchers();
-    } catch (e) { _snack('Save failed: ' + e.toString()); }
+    } catch (e) { _snack(friendlyError('Could not save the disassembly voucher', e)); }
     if (mounted) setState(() => _saving = false);
     return resultId;
   }
@@ -333,7 +334,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       if (mounted) setState(() { _current = updated; _status = updated['status'] as String? ?? 'posted'; });
       await _loadVouchers();
       await _loadVoucher(updated);
-    } catch (e) { _snack('Post failed: ' + e.toString()); }
+    } catch (e) { _snack(friendlyError('Could not post the disassembly voucher', e)); }
     if (mounted) setState(() => _posting = false);
   }
 
@@ -354,7 +355,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       _snack('Draft deleted');
       _newVoucher();
       await _loadVouchers();
-    } catch (e) { _snack('Delete failed: $e'); }
+    } catch (e) { _snack(friendlyError('Could not delete the draft', e)); }
   }
 
 
