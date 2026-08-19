@@ -42,6 +42,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   final Map<String, Set<String>> _groupToSubs = {};
   bool _hideGroupsEnabled = false;                 // org.hide_main_groups_by_branch
   Map<String, Set<String>> _hiddenByBranch = {};   // branchId -> hidden main_groups
+  bool _productSuperviseEnabled = false;           // org.product_supervise_flow
+  bool _superviseFilter = false;                   // show only supervision-pending
 
   bool get _canDelete {
     final r = ref.read(currentUserProvider)?.role.name;
@@ -118,6 +120,12 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             .eq('org_id', orgId).eq('key', 'org.consignment_enabled').maybeSingle();
         consignmentOn = (cfg?['value'] as String?) == 'true';
       } catch (_) {}
+      bool superviseOn = false;
+      try {
+        final sc = await client.from('app_config').select('value')
+            .eq('org_id', orgId).eq('key', 'org.product_supervise_flow').maybeSingle();
+        superviseOn = (sc?['value'] as String?) == 'true';
+      } catch (_) {}
       bool hideGroupsOn = false;
       final Map<String, Set<String>> hiddenByBranch = {};
       try {
@@ -151,6 +159,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         _taxonomies = grouped;
         _uoms = List<Map<String, dynamic>>.from(uoms);
         _consignmentEnabled = consignmentOn;
+        _productSuperviseEnabled = superviseOn;
         _loading = false;
       });
     } catch (_) {
@@ -170,6 +179,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }
       if (posFilter == 'in' && !posIds.contains(p['id'])) return false;
       if (posFilter == 'out' && posIds.contains(p['id'])) return false;
+      if (_superviseFilter && p['supervised_at'] != null) return false;
       if (_fMain != null && p['product_main_group'] != _fMain) return false;
       if (_fGroup != null && p['product_group'] != _fGroup) return false;
       if (_fSub != null && p['product_sub_group'] != _fSub) return false;
@@ -355,6 +365,49 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       _load();
     } catch (e) {
       _showSnack('Failed: $e');
+    }
+  }
+
+  // Mark a newly-created product as supervised (admin / master admin only).
+  // Clears it from the Inventory → Products pendency counter.
+  Future<void> _superviseProduct(Map<String, dynamic> p) async {
+    final user = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('products').update({
+        'supervised_by': user?.id,
+        'supervised_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', p['id']);
+      ref.invalidate(productSupervisePendingProvider);
+      _showSnack('Product supervised');
+      _load();
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _superviseAllPending() async {
+    final user = ref.read(currentUserProvider);
+    final pending = _products.where((p) => p['supervised_at'] == null).toList();
+    if (pending.isEmpty) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Supervise all pending?'),
+      content: Text('Mark all ${pending.length} unsupervised product(s) as supervised?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Supervise all')),
+      ],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('products').update({
+        'supervised_by': user?.id,
+        'supervised_at': DateTime.now().toUtc().toIso8601String(),
+      }).filter('supervised_at', 'is', null).eq('org_id', user?.orgId ?? '');
+      ref.invalidate(productSupervisePendingProvider);
+      _showSnack('Supervised ${pending.length} product(s)');
+      _load();
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
     }
   }
 
@@ -1139,8 +1192,21 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             ),
           ]),
           const SizedBox(height: 8),
-          Text('${_filtered.length} products',
-              style: const TextStyle(color: AppTheme.textSecondary)),
+          Row(children: [
+            Text('${_filtered.length} products',
+                style: const TextStyle(color: AppTheme.textSecondary)),
+            if (_productSuperviseEnabled && _canDelete) ...[
+              () {
+                final pending = _products.where((p) => p['supervised_at'] == null).length;
+                if (pending == 0) return const SizedBox.shrink();
+                return Padding(padding: const EdgeInsets.only(left: 12), child: TextButton.icon(
+                  onPressed: _superviseAllPending,
+                  icon: Icon(Icons.verified_user_outlined, size: 16, color: Colors.amber.shade800),
+                  label: Text('Supervise all pending ($pending)', style: TextStyle(fontSize: 12, color: Colors.amber.shade800)),
+                ));
+              }(),
+            ],
+          ]),
           const SizedBox(height: 16),
           TextField(
             controller: _searchCtrl,
@@ -1202,6 +1268,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             }),
             if (_fMain != null || _fGroup != null || _fSub != null)
               TextButton(onPressed: () { _fMain = null; _fGroup = null; _fSub = null; _runFilter(); }, child: const Text('Clear groups')),
+            if (_productSuperviseEnabled)
+              ChoiceChip(
+                label: const Text('Supervision pending'),
+                selected: _superviseFilter,
+                onSelected: (v) { setState(() => _superviseFilter = v); _runFilter(); },
+                selectedColor: Colors.amber.withOpacity(0.20),
+                labelStyle: TextStyle(fontSize: 12, color: _superviseFilter ? Colors.amber.shade900 : AppTheme.textSecondary, fontWeight: _superviseFilter ? FontWeight.w700 : FontWeight.w500),
+              ),
             Text(_selected.isNotEmpty ? 'Export ${_selected.length} selected:' : 'Export ${_filtered.length} shown:',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             OutlinedButton.icon(
@@ -1295,7 +1369,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                         Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Sell Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Purchase/Cost Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        const SizedBox(width: 160),
+                        SizedBox(width: _productSuperviseEnabled ? 200 : 160),
                       ]),
                     ),
                     const Divider(height: 1),
@@ -1332,9 +1406,18 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                 )),
                                 Expanded(
                                     flex: 3,
-                                    child: Text(p['name'] as String? ?? '',
-                                        style: const TextStyle(
-                                            fontWeight: FontWeight.w600))),
+                                    child: Row(children: [
+                                      Flexible(child: Text(p['name'] as String? ?? '',
+                                          style: const TextStyle(fontWeight: FontWeight.w600),
+                                          overflow: TextOverflow.ellipsis)),
+                                      if (_productSuperviseEnabled && p['supervised_at'] == null)
+                                        Container(
+                                          margin: const EdgeInsets.only(left: 6),
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                          decoration: BoxDecoration(color: Colors.amber.shade700.withOpacity(0.14), borderRadius: BorderRadius.circular(4)),
+                                          child: Text('Supervision pending', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.amber.shade800)),
+                                        ),
+                                    ])),
                                 Expanded(
                                     flex: 2,
                                     child: Text(p['sku'] as String? ?? '-',
@@ -1368,8 +1451,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                         p['cost_price']?.toString() ?? '0',
                                         style: const TextStyle(fontSize: 13))),
                                 SizedBox(
-                                  width: 160,
+                                  width: _productSuperviseEnabled ? 200 : 160,
                                   child: Row(children: [
+                                    if (_productSuperviseEnabled && p['supervised_at'] == null && _canDelete)
+                                      IconButton(
+                                        icon: const Icon(Icons.verified_user_outlined, size: 18, color: AppTheme.primary),
+                                        tooltip: 'Supervise (admin)',
+                                        onPressed: () => _superviseProduct(p),
+                                      ),
                                     Builder(builder: (_) {
                                       final inPos =
                                           _posProductIds.contains(p['id']);

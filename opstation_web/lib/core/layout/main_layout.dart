@@ -298,6 +298,23 @@ final customerSupervisePendingProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
+// Count of newly-created products still awaiting admin supervision, gated by
+// org.product_supervise_flow. Drives the Inventory → Products pendency badge.
+final productSupervisePendingProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.product_supervise_flow').maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from('products').select('id')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null);
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+
 // Count of job cards awaiting acknowledgement (queued & not yet noted) for the
 // current org, gated by org.job_ack_flow. Drives the Manufacturing → Job Card
 // pendency badge. Invalidated by the Job Card screen on acknowledge + realtime.
@@ -633,6 +650,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
   final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
+  final productSupervisePending = ref.watch(productSupervisePendingProvider).valueOrNull ?? 0;
   final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
   final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
   final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
@@ -646,7 +664,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
 
     // ── ERP Inventory submenu ─────────────────────────────────────────────
     final invManage = <Widget>[
-      if (show('/erp/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/erp/products', location),
+      if (show('/erp/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/erp/products', location, badge: productSupervisePending),
       if (show('/erp/product-classifications')) _menuItem(context, 'Product Classifications', Icons.label_outline, '/erp/product-classifications', location),
       if (show('/erp/stock')) _menuItem(context, 'Stock Levels', Icons.stacked_bar_chart_outlined, '/erp/stock', location),
       if (show('/erp/inventory-ledger')) _menuItem(context, 'Inventory Ledger', Icons.inventory_2_outlined, '/erp/inventory-ledger', location),
@@ -868,7 +886,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/purchase-variance',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan'],
-          _trimDividers(inventoryItems), badge: transferPending + integrityCount),
+          _trimDividers(inventoryItems), badge: transferPending + integrityCount + productSupervisePending),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',

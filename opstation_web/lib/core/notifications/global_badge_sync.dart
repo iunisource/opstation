@@ -42,6 +42,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     'suppliers', // supplierPendingCountProvider
     'field_orders', // fieldOrderPendingCountProvider
     'retailer_orders', // retailerOrderPendingCountProvider
+    'products', // productSupervisePendingProvider
   ];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -131,6 +132,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(supplierPendingCountProvider);
     ref.invalidate(fieldOrderPendingCountProvider);
     ref.invalidate(retailerOrderPendingCountProvider);
+    ref.invalidate(productSupervisePendingProvider);
   }
 
   @override
