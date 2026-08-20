@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -23,11 +25,15 @@ class DashboardScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Dashboard', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            Text('Dashboard', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
             const SizedBox(height: 4),
             Text('Welcome back, ${user?.name ?? ""}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 15)),
-            const SizedBox(height: 32),
-            if (orgId != null) _DashboardStats(orgId: orgId),
+            const SizedBox(height: 28),
+            if (orgId != null)
+              _DashboardStats(
+                orgId: orgId,
+                isMaster: user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.superAdmin,
+              ),
           ],
         ),
       ),
@@ -37,7 +43,8 @@ class DashboardScreen extends ConsumerWidget {
 
 class _DashboardStats extends StatefulWidget {
   final String orgId;
-  const _DashboardStats({required this.orgId});
+  final bool isMaster;
+  const _DashboardStats({required this.orgId, required this.isMaster});
 
   @override
   State<_DashboardStats> createState() => _DashboardStatsState();
@@ -46,6 +53,79 @@ class _DashboardStats extends StatefulWidget {
 class _DashboardStatsState extends State<_DashboardStats> {
   Map<String, dynamic> _stats = {};
   bool _loading = true;
+
+  // ── dashboard privacy lock ────────────────────────────────────────────────
+  // org.dashboard_password (sha256 hex) hides the numbers from non-master
+  // admins until entered. Unlock lasts for this browser session per org.
+  static final Set<String> _sessionUnlocked = {};
+  String? _lockHash;
+
+  bool get _locked =>
+      _lockHash != null &&
+      _lockHash!.isNotEmpty &&
+      !widget.isMaster &&
+      !_sessionUnlocked.contains(widget.orgId);
+
+  String _mask(String v) => _locked ? '• • •' : v;
+
+  Future<void> _loadLock() async {
+    try {
+      final row = await Supabase.instance.client
+          .from('app_config')
+          .select('value')
+          .eq('org_id', widget.orgId)
+          .eq('key', 'org.dashboard_password')
+          .maybeSingle();
+      if (mounted) setState(() => _lockHash = row?['value'] as String?);
+    } catch (_) {}
+  }
+
+  Future<void> _promptUnlock() async {
+    final ctrl = TextEditingController();
+    String? error;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        title: const Row(children: [
+          Icon(Icons.lock_outline, size: 18, color: AppTheme.textSecondary),
+          SizedBox(width: 8),
+          Text('Dashboard is protected', style: TextStyle(fontSize: 16)),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Enter the dashboard password set by your master admin.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl, autofocus: true, obscureText: true,
+            decoration: InputDecoration(
+              labelText: 'Password', isDense: true,
+              border: const OutlineInputBorder(), errorText: error,
+            ),
+            onSubmitted: (_) {
+              if (sha256.convert(utf8.encode(ctrl.text)).toString() == _lockHash) {
+                Navigator.pop(ctx, true);
+              } else { setS(() => error = 'Incorrect password'); }
+            },
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              if (sha256.convert(utf8.encode(ctrl.text)).toString() == _lockHash) {
+                Navigator.pop(ctx, true);
+              } else { setS(() => error = 'Incorrect password'); }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            child: const Text('Unlock'),
+          ),
+        ],
+      )),
+    );
+    if (ok == true && mounted) {
+      setState(() => _sessionUnlocked.add(widget.orgId));
+    }
+  }
   RealtimeChannel? _channel;
   Timer? _debounce;
 
@@ -53,6 +133,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
   void initState() {
     super.initState();
     _load();
+    _loadLock();
     _subscribeToChanges();
   }
 
@@ -288,43 +369,44 @@ class _DashboardStatsState extends State<_DashboardStats> {
 
     final cards = [
       _StatCard(
-        icon: Icons.directions_walk,
-        label: 'Active Routes',
-        value: '${_stats['activeRoutes'] ?? 0}',
-        color: AppTheme.success,
-        onTap: _showActiveRoutes,
-      ),
-      _StatCard(icon: Icons.check_circle_outline, label: 'Completed Today', value: '${_stats['completedToday'] ?? 0}', color: AppTheme.primary),
-      _StatCard(
         icon: Icons.payments_outlined,
         label: "Today's Collection",
-        value: 'Rs ${_stats['collection'] ?? 0}',
-        color: const Color(0xFF8B5CF6),
-        onTap: _showCollectionBreakdown,
+        value: _mask('Rs ${_stats['collection'] ?? 0}'),
+        color: AppTheme.primary,
+        featured: true,
+        onTap: _locked ? null : _showCollectionBreakdown,
       ),
-      _StatCard(icon: Icons.storefront_outlined, label: 'Shops Visited', value: '${_stats['shopsVisited'] ?? 0}', color: const Color(0xFF0EA5E9)),
-      _StatCard(icon: Icons.people_outline, label: 'Team Members', value: '${_stats['team'] ?? 0}', color: AppTheme.warning),
-      _StatCard(icon: Icons.store_outlined, label: 'Customers', value: '${_stats['customers'] ?? 0}', color: AppTheme.danger),
-      _StatCard(icon: Icons.route_outlined, label: 'Total Routes', value: '${_stats['routes'] ?? 0}', color: const Color(0xFF06B6D4)),
+      _StatCard(
+        icon: Icons.directions_walk,
+        label: 'Active Routes',
+        value: _mask('${_stats['activeRoutes'] ?? 0}'),
+        color: AppTheme.success,
+        onTap: _locked ? null : _showActiveRoutes,
+      ),
+      _StatCard(icon: Icons.check_circle_outline, label: 'Completed Today', value: _mask('${_stats['completedToday'] ?? 0}'), color: AppTheme.primary),
+      _StatCard(icon: Icons.storefront_outlined, label: 'Shops Visited', value: _mask('${_stats['shopsVisited'] ?? 0}'), color: const Color(0xFF0EA5E9)),
+      _StatCard(icon: Icons.people_outline, label: 'Team Members', value: _mask('${_stats['team'] ?? 0}'), color: AppTheme.warning),
+      _StatCard(icon: Icons.store_outlined, label: 'Customers', value: _mask('${_stats['customers'] ?? 0}'), color: AppTheme.danger),
+      _StatCard(icon: Icons.route_outlined, label: 'Total Routes', value: _mask('${_stats['routes'] ?? 0}'), color: const Color(0xFF06B6D4)),
     ];
 
     final intelligenceCards = [
       _StatCard(
         icon: Icons.checklist_outlined,
         label: 'Audited Shops',
-        value: '${_stats['auditedShops'] ?? 0}',
+        value: _mask('${_stats['auditedShops'] ?? 0}'),
         color: const Color(0xFF14B8A6),
       ),
       _StatCard(
         icon: Icons.flag_outlined,
         label: 'Competitor Brands',
-        value: '${_stats['brandsTracked'] ?? 0}',
+        value: _mask('${_stats['brandsTracked'] ?? 0}'),
         color: const Color(0xFFF59E0B),
       ),
       _StatCard(
         icon: Icons.history,
         label: 'Intel Activity (7d)',
-        value: '${_stats['intelActivity7d'] ?? 0}',
+        value: _mask('${_stats['intelActivity7d'] ?? 0}'),
         color: const Color(0xFFEC4899),
       ),
     ];
@@ -333,14 +415,45 @@ class _DashboardStatsState extends State<_DashboardStats> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          const Text("Today's Overview", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          Container(width: 5, height: 18,
+              decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(3))),
+          const SizedBox(width: 9),
+          const Text("Today's Overview", style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: -0.2)),
+          // Subtle lock affordance — a quiet icon, only when the numbers are hidden.
+          if (_locked)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Tooltip(
+                message: 'Numbers hidden — tap to unlock',
+                child: InkWell(
+                  onTap: _promptUnlock,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(Icons.lock_outline, size: 15, color: AppTheme.textSecondary.withOpacity(0.7)),
+                  ),
+                ),
+              ),
+            ),
           const Spacer(),
-          // The full date string overflows a phone header; short form there.
-          Flexible(child: Text(
-            DateFormat(context.isMobile ? 'd MMM' : 'EEEE, d MMM yyyy').format(DateTime.now()),
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-            overflow: TextOverflow.ellipsis)),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: () { setState(() => _loading = true); _load(); }),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.calendar_today_outlined, size: 12, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              Text(
+                DateFormat(context.isMobile ? 'd MMM' : 'EEEE, d MMM yyyy').format(DateTime.now()),
+                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12.5, fontWeight: FontWeight.w500),
+                overflow: TextOverflow.ellipsis),
+            ]),
+          ),
+          const SizedBox(width: 6),
+          IconButton(icon: const Icon(Icons.refresh, size: 20), onPressed: () { setState(() => _loading = true); _load(); }),
         ]),
         const SizedBox(height: 16),
         Wrap(
@@ -349,11 +462,19 @@ class _DashboardStatsState extends State<_DashboardStats> {
           children: cards,
         ),
         const SizedBox(height: 32),
-        const Text('Intelligence', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        Row(children: [
+          Container(width: 5, height: 18,
+              decoration: BoxDecoration(color: const Color(0xFF14B8A6), borderRadius: BorderRadius.circular(3))),
+          const SizedBox(width: 9),
+          const Text('Intelligence', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: -0.2)),
+        ]),
         const SizedBox(height: 4),
-        const Text(
-          'Surveyor-collected market data - shop coverage, competitor presence.',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        const Padding(
+          padding: EdgeInsets.only(left: 14),
+          child: Text(
+            'Surveyor-collected market data - shop coverage, competitor presence.',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
         ),
         const SizedBox(height: 16),
         Wrap(
@@ -373,6 +494,7 @@ class _StatCard extends StatelessWidget {
   final String value;
   final Color color;
   final VoidCallback? onTap;
+  final bool featured;
 
   const _StatCard({
     required this.icon,
@@ -380,37 +502,55 @@ class _StatCard extends StatelessWidget {
     required this.value,
     required this.color,
     this.onTap,
+    this.featured = false,
   });
 
   @override
   Widget build(BuildContext context) {
     // 200px fixed fits exactly one card per row on a phone, wasting half the
     // screen. Half-width (minus the Wrap spacing) gives two per row.
-    final w = context.isMobile
+    final base = context.isMobile
         ? (MediaQuery.sizeOf(context).width - 24 - 16) / 2
         : 200.0;
+    final w = featured && !context.isMobile ? base * 2 + 16 : base;
     final body = Container(
       width: w,
       padding: EdgeInsets.all(context.isMobile ? 14 : 20),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.border),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8)],
+        color: featured ? null : Colors.white,
+        gradient: featured
+            ? const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1B45A0), Color(0xFF2F6FED)])
+            : null,
+        borderRadius: BorderRadius.circular(14),
+        border: featured ? null : Border.all(color: AppTheme.border),
+        boxShadow: featured
+            ? [BoxShadow(color: AppTheme.primary.withOpacity(0.30), blurRadius: 18, offset: const Offset(0, 6))]
+            : [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8)],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             width: 40, height: 40,
-            decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+            decoration: BoxDecoration(
+                color: featured ? Colors.white.withOpacity(0.16) : color.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(11)),
             alignment: Alignment.center,
-            child: Icon(icon, color: color, size: 20),
+            child: Icon(icon, color: featured ? Colors.white : color, size: 20),
           ),
           const SizedBox(height: 16),
-          Text(value, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 29, fontWeight: FontWeight.w800, letterSpacing: -0.5,
+                  color: featured ? Colors.white : const Color(0xFF0F172A))),
           const SizedBox(height: 4),
-          Text(label, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          Text(label,
+              style: TextStyle(
+                  color: featured ? Colors.white.withOpacity(0.75) : AppTheme.textSecondary,
+                  fontSize: 12.5, fontWeight: FontWeight.w500)),
         ],
       ),
     );

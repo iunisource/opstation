@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -1216,6 +1218,9 @@ class _ErpAdminSettingsScreenState
                     const SizedBox(height: 16),
                     _FiscalYearPanel(
                         orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                    const SizedBox(height: 16),
+                    _DashboardPasswordPanel(
+                        orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   ],
                   const SizedBox(height: 16),
                   SignatureStampSettings(
@@ -2007,6 +2012,137 @@ class _FooterNotesPanelState extends State<_FooterNotesPanel> {
               ),
         ],
       ),
+    );
+  }
+}
+
+
+/// Dashboard privacy: master admin sets a password that non-master users must
+/// enter before dashboard numbers are shown. Deliberately SUBTLE — one quiet
+/// row, no big buttons.
+class _DashboardPasswordPanel extends StatefulWidget {
+  final String orgId;
+  const _DashboardPasswordPanel({required this.orgId});
+  @override
+  State<_DashboardPasswordPanel> createState() => _DashboardPasswordPanelState();
+}
+
+class _DashboardPasswordPanelState extends State<_DashboardPasswordPanel> {
+  bool _isSet = false;
+  bool _loaded = false;
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    try {
+      final row = await Supabase.instance.client.from('app_config')
+          .select('value').eq('org_id', widget.orgId)
+          .eq('key', 'org.dashboard_password').maybeSingle();
+      if (mounted) setState(() { _isSet = ((row?['value'] as String?) ?? '').isNotEmpty; _loaded = true; });
+    } catch (_) { if (mounted) setState(() => _loaded = true); }
+  }
+
+  Future<void> _edit() async {
+    final p1 = TextEditingController();
+    final p2 = TextEditingController();
+    String? error;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        title: Text(_isSet ? 'Change dashboard password' : 'Set dashboard password',
+            style: const TextStyle(fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Admins and other users will need this password to view the dashboard numbers. You (master admin) always see them.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          TextField(controller: p1, obscureText: true, autofocus: true,
+              decoration: const InputDecoration(labelText: 'New password', isDense: true, border: OutlineInputBorder())),
+          const SizedBox(height: 10),
+          TextField(controller: p2, obscureText: true,
+              decoration: InputDecoration(labelText: 'Confirm password', isDense: true,
+                  border: const OutlineInputBorder(), errorText: error)),
+        ]),
+        actions: [
+          if (_isSet)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, ''),
+              child: const Text('Remove protection', style: TextStyle(color: AppTheme.danger, fontSize: 12.5)),
+            ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              if (p1.text.length < 4) { setS(() => error = 'At least 4 characters'); return; }
+              if (p1.text != p2.text) { setS(() => error = 'Passwords do not match'); return; }
+              Navigator.pop(ctx, p1.text);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            child: const Text('Save'),
+          ),
+        ],
+      )),
+    );
+    if (result == null) return;
+    try {
+      if (result.isEmpty) {
+        await Supabase.instance.client.from('app_config').delete()
+            .eq('org_id', widget.orgId).eq('key', 'org.dashboard_password');
+      } else {
+        final hash = sha256.convert(utf8.encode(result)).toString();
+        await Supabase.instance.client.from('app_config').upsert({
+          'org_id': widget.orgId, 'key': 'org.dashboard_password', 'value': hash,
+        }, onConflict: 'key,org_id,branch_id');
+      }
+      if (mounted) {
+        setState(() => _isSet = result.isNotEmpty);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(result.isEmpty ? 'Dashboard protection removed' : 'Dashboard password saved'),
+            behavior: SnackBarBehavior.floating));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Could not save: ' + e.toString().split('\n').first),
+          behavior: SnackBarBehavior.floating));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const SizedBox.shrink();
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 760),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(children: [
+        Icon(Icons.lock_outline, size: 16, color: AppTheme.textSecondary.withOpacity(0.8)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Dashboard privacy', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(
+              _isSet
+                  ? 'Protected — non-master users must enter the password to see dashboard numbers.'
+                  : 'Optionally require a password before non-master users can see dashboard numbers.',
+              style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+            ),
+          ]),
+        ),
+        const SizedBox(width: 12),
+        TextButton(
+          onPressed: _edit,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Text(_isSet ? 'Change' : 'Set password',
+              style: const TextStyle(fontSize: 12.5, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+        ),
+      ]),
     );
   }
 }
