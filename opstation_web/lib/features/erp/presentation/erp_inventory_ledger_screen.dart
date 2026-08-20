@@ -10,7 +10,9 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpInventoryLedgerScreen extends ConsumerStatefulWidget {
-  const ErpInventoryLedgerScreen({super.key});
+  /// Optional product id to preselect (deep link, e.g. from global search).
+  final String? focusProductId;
+  const ErpInventoryLedgerScreen({super.key, this.focusProductId});
   @override
   ConsumerState<ErpInventoryLedgerScreen> createState() => _ErpInventoryLedgerScreenState();
 }
@@ -80,6 +82,18 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         _products = List<Map<String, dynamic>>.from(products);
         _loadingProducts = false;
       });
+      // Deep link: preselect a product and load its ledger straight away.
+      final fid = widget.focusProductId;
+      if (fid != null && _selectedProduct == null) {
+        Map<String, dynamic>? match;
+        for (final p in _products) {
+          if (p['id'] == fid) { match = p; break; }
+        }
+        if (match != null) {
+          setState(() => _selectedProduct = match);
+          _loadMovements(fid);
+        }
+      }
     } catch (_) { setState(() => _loadingProducts = false); }
   }
 

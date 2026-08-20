@@ -55,7 +55,10 @@ class _GlobalSearchDialogState extends State<_GlobalSearchDialog> {
   SupabaseClient get _c => Supabase.instance.client;
 
   late final List<_Cat> _cats = [
-    _Cat('Products', Icons.inventory_2_outlined, const ['/erp/products'], (q, nav) async {
+    // Tapping a product opens its LEDGER (movement history), preselected — the
+    // most useful "what happened to this item" view. Falls back to the Products
+    // screen if the user can't reach the ledger.
+    _Cat('Products', Icons.inventory_2_outlined, const ['/erp/inventory-ledger', '/erp/products'], (q, nav) async {
       final r = await _c.from('products').select('id,name,sku').eq('org_id', widget.orgId)
           .or('name.ilike.%$q%,sku.ilike.%$q%').limit(6);
       return (r as List).map((e) => _Hit(

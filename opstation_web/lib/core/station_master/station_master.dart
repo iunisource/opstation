@@ -883,6 +883,20 @@ Future<_Msg> _route(String raw, _Ctx c) async {
     return _activeRoutes(c);
   }
 
+  // Voucher activity by a user — "how many vouchers did Ammar create today".
+  if ((q.contains('how many') || q.contains('number of') || q.contains('count')) &&
+      (q.contains('voucher') ||
+          q.contains('invoice') ||
+          q.contains('document') ||
+          q.contains('entries') ||
+          q.contains('created') ||
+          q.contains('booked') ||
+          q.contains('posted') ||
+          q.contains('made') ||
+          q.contains('entered'))) {
+    return _voucherActivity(q, c);
+  }
+
   // Top-selling products / best sellers.
   if (q.contains('best sell') ||
       q.contains('best-sell') ||
@@ -948,15 +962,23 @@ Future<_Msg> _route(String raw, _Ctx c) async {
     return _voucherLookup(raw, c);
   }
 
-  // Stock / product lookup (default for "stock of…", "how much X").
-  if (q.contains('stock') ||
-      q.contains('inventory') ||
-      q.contains('quantity') ||
-      q.contains('qty') ||
-      q.contains('available') ||
-      q.contains('on hand') ||
-      q.contains('how much') ||
-      q.contains('how many')) {
+  // Stock / product lookup (default for "stock of…", "how much X"). Skip when
+  // the question is really about documents/people (handled above).
+  final bool docWord = q.contains('voucher') ||
+      q.contains('invoice') ||
+      q.contains('document') ||
+      q.contains('created') ||
+      q.contains('booked') ||
+      q.contains('posted');
+  if (!docWord &&
+      (q.contains('stock') ||
+          q.contains('inventory') ||
+          q.contains('quantity') ||
+          q.contains('qty') ||
+          q.contains('available') ||
+          q.contains('on hand') ||
+          q.contains('how much') ||
+          q.contains('how many'))) {
     return _stock(q, c);
   }
 
@@ -1004,6 +1026,83 @@ _Msg _fallback() {
     '• "what\'s pending approval"\n'
     '• "where is <voucher number>"\n\n'
     'Type "help" for the full list.',
+  );
+}
+
+// ─── Intent: voucher activity by a user ─────────────────────────────────────
+// "How many vouchers did Ammar create today?" — counts documents booked by a
+// named user in a period. Admin-only (it reveals another person's activity).
+
+const List<List<String>> _activityTables = [
+  ['sales_invoices', 'sales invoice', 'voucher_date'],
+  ['purchase_invoices', 'purchase invoice', 'voucher_date'],
+  ['purchase_grns', 'GRN', 'voucher_date'],
+  ['sales_orders', 'sales order', 'voucher_date'],
+  ['purchase_orders', 'purchase order', 'voucher_date'],
+  ['stock_transfers', 'stock transfer', 'transfer_date'],
+];
+
+Future<_Msg> _voucherActivity(String q, _Ctx c) async {
+  if (!c.isAdmin) {
+    return const _Msg(false,
+        'Counting another person\'s activity is restricted. Please ask an admin.');
+  }
+  final term = _term(q, [
+    'how many', 'number of', 'count', 'vouchers', 'voucher', 'invoices',
+    'invoice', 'documents', 'document', 'entries', 'entry', 'did', 'has',
+    'have', 'create', 'created', 'creates', 'make', 'made', 'makes', 'book',
+    'booked', 'post', 'posted', 'enter', 'entered', 'by', 'user', 'total',
+    'so far',
+  ]);
+  var name = term;
+  for (final m in _monthNames) {
+    name = name.replaceAll(m, ' ');
+  }
+  name = name
+      .replaceAll(RegExp(r'\b(this|last|month|week|year|today|yesterday|day|days|period|the)\b'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (name.length < 2) {
+    return const _Msg(false,
+        'Whose activity? e.g. "how many vouchers did Ammar create today".');
+  }
+  final users = await _smartSearch(c,
+      table: 'users', select: 'id, name', cols: ['name'], term: name);
+  if (users.isEmpty) {
+    return _Msg(false, 'I couldn\'t find a user named "$name".');
+  }
+  final user = users.first;
+  final uid = user['id'] as String;
+  final uname = (user['name'] ?? name) as String;
+  final p = _period(q);
+
+  int total = 0;
+  final parts = <String>[];
+  for (final t in _activityTables) {
+    try {
+      final rows = await c.client
+          .from(t[0])
+          .select('id')
+          .eq('org_id', c.orgId)
+          .eq('created_by', uid)
+          .gte(t[2], p.d2)
+          .lte(t[2], p.d1);
+      final n = (rows as List).length;
+      if (n > 0) {
+        total += n;
+        parts.add('$n ${t[1]}${n == 1 ? '' : 's'}');
+      }
+    } catch (_) {
+      // table has no created_by / different date column — skip quietly
+    }
+  }
+  if (total == 0) {
+    return _Msg(false, '$uname booked no documents ${p.label}.');
+  }
+  return _Msg(
+    false,
+    '$uname booked $total document${total == 1 ? '' : 's'} ${p.label}:\n\n'
+    '${parts.map((e) => '• $e').join('\n')}',
   );
 }
 
@@ -1186,11 +1285,115 @@ Future<_Msg> _supplierBalance(String q, _Ctx c) async {
 
 // ─── Intent: sales summary ──────────────────────────────────────────────────
 
+/// Strip every generic "sales summary" word (and the period words / month
+/// names) so that whatever remains is the entity the user named — a customer
+/// or a product — if any.
+String _entityTerm(String q) {
+  var s = _term(q, [
+    'total', 'totals', 'sale', 'sales', 'revenue', 'sold', 'sell', 'selling',
+    'purchase', 'purchases', 'bought', 'buying', 'summary', 'so far', 'made',
+    'did', 'do', 'does', 'we', 'our', 'my', 'value', 'worth', 'amount',
+    'figure', 'figures', 'number', 'numbers', 'report', 'builder', 'show',
+    'tell', 'give', 'all', 'net', 'gross', 'to', 'from', 'much', 'many',
+  ]);
+  for (final m in _monthNames) {
+    s = s.replaceAll(m, ' ');
+  }
+  s = s
+      .replaceAll(RegExp(r'\b(this|last|month|week|year|today|yesterday|day|days|period|the)\b'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return s;
+}
+
 Future<_Msg> _salesSummary(String q, _Ctx c) async {
   if (!c.can('/erp/sales-report') && !c.can('/erp/sales-invoices')) {
     return const _Msg(false, _noPerm);
   }
   final p = _period(q);
+  final scope = c.branchId != null ? ' (current branch)' : '';
+  final entity = _entityTerm(q);
+
+  // ── Named entity: a specific customer, or a specific product ──
+  if (entity.length >= 2) {
+    // 1) Customer?
+    final custs = await _smartSearch(c,
+        table: 'customers',
+        select: 'id, shop_name',
+        cols: ['shop_name', 'code'],
+        term: entity);
+    if (custs.isNotEmpty) {
+      final ids = custs.map((e) => e['id'] as String).toList();
+      var cq = c.client
+          .from('sales_invoices')
+          .select('grand_total, branch_id')
+          .eq('org_id', c.orgId)
+          .eq('is_voided', false)
+          .inFilter('customer_id', ids)
+          .gte('voucher_date', p.d2)
+          .lte('voucher_date', p.d1);
+      if (c.branchId != null) cq = cq.eq('branch_id', c.branchId!);
+      final rows = (await cq as List).cast<Map<String, dynamic>>();
+      double total = 0;
+      for (final r in rows) {
+        total += (r['grand_total'] as num?)?.toDouble() ?? 0;
+      }
+      final who = custs.length == 1
+          ? (custs.first['shop_name'] ?? 'that customer') as String
+          : '${custs.length} matching customers';
+      return _Msg(
+        false,
+        'Sales to $who ${p.label}$scope: ${_money(total)} across ${rows.length} '
+        'invoice${rows.length == 1 ? '' : 's'}.',
+        links: [_Link('Sales report', '/erp/sales-report')],
+      );
+    }
+    // 2) Product? (sum invoice-line value for that item)
+    final prods = await _smartSearch(c,
+        table: 'products',
+        select: 'id, name',
+        cols: ['name', 'sku'],
+        term: entity);
+    if (prods.isNotEmpty) {
+      final ids = prods.map((e) => e['id'] as String).toList();
+      var pq = c.client
+          .from('sales_invoice_items')
+          .select(
+              'qty_delivered, line_total, sales_invoices!inner(org_id, is_voided, voucher_date, branch_id)')
+          .eq('sales_invoices.org_id', c.orgId)
+          .eq('sales_invoices.is_voided', false)
+          .inFilter('product_id', ids)
+          .gte('sales_invoices.voucher_date', p.d2)
+          .lte('sales_invoices.voucher_date', p.d1);
+      if (c.branchId != null) {
+        pq = pq.eq('sales_invoices.branch_id', c.branchId!);
+      }
+      final rows = (await pq as List).cast<Map<String, dynamic>>();
+      double total = 0, units = 0;
+      for (final r in rows) {
+        total += (r['line_total'] as num?)?.toDouble() ?? 0;
+        units += (r['qty_delivered'] as num?)?.toDouble() ?? 0;
+      }
+      final who = prods.length == 1
+          ? (prods.first['name'] ?? 'that product') as String
+          : '${prods.length} matching products';
+      return _Msg(
+        false,
+        'Sales of $who ${p.label}$scope: ${_money(total)} '
+        '(${_qty(units)} sold).',
+        links: [_Link('Sales report', '/erp/sales-report')],
+      );
+    }
+    // Named something we couldn't match — say so rather than silently returning
+    // the org-wide figure.
+    return _Msg(
+      false,
+      'I couldn\'t find a customer or product called "$entity". For the '
+      'whole-company figure, ask e.g. "total sales ${p.label}".',
+    );
+  }
+
+  // ── No entity: org-wide total ──
   var query = c.client
       .from('sales_invoices')
       .select('grand_total, branch_id')
@@ -1204,10 +1407,9 @@ Future<_Msg> _salesSummary(String q, _Ctx c) async {
   for (final r in rows) {
     total += (r['grand_total'] as num?)?.toDouble() ?? 0;
   }
-  final scope = c.branchId != null ? ' (current branch)' : '';
   return _Msg(
     false,
-    'Sales ${p.label}$scope: ${_money(total)} across ${rows.length} '
+    'Total sales ${p.label}$scope: ${_money(total)} across ${rows.length} '
     'invoice${rows.length == 1 ? '' : 's'}.',
     links: [_Link('Sales report', '/erp/sales-report')],
   );
