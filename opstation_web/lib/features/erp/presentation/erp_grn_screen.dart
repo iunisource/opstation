@@ -3,6 +3,7 @@ import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -27,6 +28,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   List<Map<String, dynamic>> _grns = [];
   String? _selectedId;
   Map<String, dynamic> _detail = {};
+  List<Map<String, dynamic>> _linkedPis = []; // invoices raised on this GRN
   List<Map<String, dynamic>> _items = [];
   Map<String, TextEditingController> _receivedCtrl = {};
   VoucherMeta _meta = VoucherMeta();
@@ -128,11 +130,18 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       try { final c = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (c?['value'] as String?) == 'true'; } catch (_) {}
       bool superviseEn = false;
       try { final c = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.grn_supervise_flow').maybeSingle(); superviseEn = (c?['value'] as String?) == 'true'; } catch (_) {}
+      // Linked purchase invoice(s) — shown as a clickable chip when invoiced.
+      List<Map<String, dynamic>> pis = [];
+      try {
+        final r = await client.from('purchase_invoices').select('id,voucher_number').eq('grn_id', id);
+        pis = List<Map<String, dynamic>>.from(r as List);
+      } catch (_) {}
       setState(() {
         _detail = Map<String, dynamic>.from(grn);
         _items = List<Map<String, dynamic>>.from(items);
         _meta = meta; _detailLoading = false; _datesEditable = datesEd;
         _superviseEnabled = superviseEn;
+        _linkedPis = pis;
         _initReceivedCtrls();
       });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
@@ -592,6 +601,27 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           _GrnChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           if (poVoucher != null) _GrnChip(label: 'PO #', value: poVoucher),
           _GrnChip(label: 'Status', value: _prettyStatus(_detail['status'] as String?)),
+          // Clickable invoice chip(s): jump straight to the PI raised on this GRN.
+          for (final pi in _linkedPis)
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => context.go('/erp/purchase-invoices?focus=${pi['id']}'),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.purple.withOpacity(0.35))),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.receipt_long, size: 13, color: Colors.purple),
+                  const SizedBox(width: 5),
+                  Text('Invoice: ${pi['voucher_number'] ?? pi['id']}',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.purple)),
+                  const SizedBox(width: 3),
+                  const Icon(Icons.open_in_new, size: 11, color: Colors.purple),
+                ]),
+              ),
+            ),
           if (_isLocked) const _GrnLockedChip(),
           if (_superviseEnabled && _detail['supervised_at'] != null)
             _GrnSupervisedChip(date: DateFormat('d MMM yyyy').format(DateTime.parse(_detail['supervised_at'] as String).toLocal())),
