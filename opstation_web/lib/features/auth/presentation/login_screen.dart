@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,10 +29,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   static const _kRememberKey = 'opstation_web_remember_me';
   static const _ink = Color(0xFF111827);
 
+  // Rotating headline word on the brand panel.
+  static const _rotWords = ['trading.', 'distribution.', 'manufacturing.', 'retail.', 'your empire.'];
+  int _rotIndex = 0;
+  Timer? _rotTimer;
+
   @override
   void initState() {
     super.initState();
     _loadRemember();
+    _rotTimer = Timer.periodic(const Duration(milliseconds: 2600), (_) {
+      if (mounted) setState(() => _rotIndex = (_rotIndex + 1) % _rotWords.length);
+    });
   }
 
   Future<void> _loadRemember() async {
@@ -85,6 +94,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   void dispose() {
+    _rotTimer?.cancel();
     _emailCtrl.dispose();
     _passCtrl.dispose();
     _emailFocus.dispose();
@@ -177,20 +187,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   // ───────────────────────────── brand panel (left) ─────────────────────────
+  // Dark, premium, quietly animated. The one job: make signing in feel like
+  // stepping onto the bridge of the operation.
   Widget _brandPanel() {
     return Container(
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Colors.white, Color(0xFFEEF3FF)],
+          colors: [Color(0xFF0B1220), Color(0xFF111B33), Color(0xFF16234A)],
         ),
-        border: Border(right: BorderSide(color: AppTheme.primary.withOpacity(0.08))),
       ),
       child: Stack(
         children: [
-          Positioned(top: -100, left: -80, child: _orb(360, 0.06)),
-          Positioned(bottom: -150, right: -110, child: _orb(470, 0.05)),
+          Positioned(top: -120, right: -60, child: _orb(420, 0.16)),
+          Positioned(bottom: -180, left: -120, child: _orb(520, 0.10)),
+          Positioned(top: 180, left: -140, child: _orb(300, 0.08)),
           Padding(
             padding: const EdgeInsets.all(56),
             child: Column(
@@ -201,42 +213,119 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: AppTheme.primary.withOpacity(0.10),
+                      gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [AppTheme.primary, Color(0xFF4B84F5)]),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppTheme.primary.withOpacity(0.20)),
+                      boxShadow: [
+                        BoxShadow(
+                            color: AppTheme.primary.withOpacity(0.45),
+                            blurRadius: 22,
+                            offset: const Offset(0, 6)),
+                      ],
                     ),
                     alignment: Alignment.center,
                     child: const Text('O',
-                        style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w800, fontSize: 22)),
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
                   ),
                   const SizedBox(width: 12),
                   const Text('Opstation',
-                      style: TextStyle(color: _ink, fontSize: 20, fontWeight: FontWeight.w800)),
+                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white.withOpacity(0.18)),
+                    ),
+                    child: const Text('ERP',
+                        style: TextStyle(
+                            color: Color(0xFF9DBBFA),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.2)),
+                  ),
                 ]),
                 const Spacer(),
+                Text('PLANET\'S BEST ERP FOR TRADING & DISTRIBUTION',
+                    style: TextStyle(
+                        color: const Color(0xFF9DBBFA).withOpacity(0.9),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 2.2)),
+                const SizedBox(height: 16),
                 const Text(
-                  'Everything you run,\nin one place.',
+                  'Built to run',
                   style: TextStyle(
-                      color: _ink,
-                      fontSize: 42,
+                      color: Colors.white,
+                      fontSize: 46,
                       fontWeight: FontWeight.w800,
-                      height: 1.1,
-                      letterSpacing: -1.0),
+                      height: 1.08,
+                      letterSpacing: -1.2),
                 ),
-                const SizedBox(height: 20),
+                SizedBox(
+                  height: 58,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 450),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, anim) => FadeTransition(
+                      opacity: anim,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                                begin: const Offset(0, 0.5), end: Offset.zero)
+                            .animate(anim),
+                        child: child,
+                      ),
+                    ),
+                    child: Text(
+                      _rotWords[_rotIndex],
+                      key: ValueKey(_rotIndex),
+                      style: const TextStyle(
+                          color: Color(0xFF4B84F5),
+                          fontSize: 46,
+                          fontWeight: FontWeight.w800,
+                          height: 1.08,
+                          letterSpacing: -1.2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
                 Text(
-                  'Sign in to pick up right where your team left off — every branch and every book, up to date.',
+                  'Purchase to profit, warehouse to doorstep — every branch, every book,\nlive in one place. Sign in and take the wheel.',
                   style: TextStyle(
-                      color: _ink.withOpacity(0.58),
-                      fontSize: 16,
-                      height: 1.55,
+                      color: Colors.white.withOpacity(0.62),
+                      fontSize: 15.5,
+                      height: 1.6,
                       fontWeight: FontWeight.w400),
                 ),
+                const SizedBox(height: 28),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final m in const [
+                    'Inventory', 'Sales', 'POS', 'Manufacturing',
+                    'Financials', 'Field Sales', 'HR'
+                  ])
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.white.withOpacity(0.14)),
+                      ),
+                      child: Text(m,
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.85),
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                ]),
                 const Spacer(),
                 _reassurance(),
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
                 Text('© 2026 Opstation · All rights reserved',
-                    style: TextStyle(color: _ink.withOpacity(0.45), fontSize: 12)),
+                    style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 12)),
               ],
             ),
           ),
@@ -249,20 +338,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   // business, not a feature pitch.
   Widget _reassurance() => Row(
         children: [
-          Icon(Icons.lock_outline_rounded, size: 16, color: _ink.withOpacity(0.45)),
+          Icon(Icons.lock_outline_rounded, size: 16, color: Colors.white.withOpacity(0.45)),
           const SizedBox(width: 8),
           Text('Secured & encrypted',
-              style: TextStyle(color: _ink.withOpacity(0.55), fontSize: 13, fontWeight: FontWeight.w500)),
+              style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13, fontWeight: FontWeight.w500)),
           Container(
             width: 3,
             height: 3,
             margin: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(color: _ink.withOpacity(0.25), shape: BoxShape.circle),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.3), shape: BoxShape.circle),
           ),
-          Icon(Icons.cloud_done_outlined, size: 16, color: _ink.withOpacity(0.45)),
+          Icon(Icons.cloud_done_outlined, size: 16, color: Colors.white.withOpacity(0.45)),
           const SizedBox(width: 8),
           Text('Backed up nightly',
-              style: TextStyle(color: _ink.withOpacity(0.55), fontSize: 13, fontWeight: FontWeight.w500)),
+              style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13, fontWeight: FontWeight.w500)),
         ],
       );
 

@@ -37,6 +37,7 @@ import 'package:go_router/go_router.dart';
 import 'package:animations/animations.dart';
 import '../../features/auth/auth_controller.dart';
 import '../../features/auth/presentation/login_screen.dart';
+import '../../features/auth/presentation/signup_wizard_screen.dart';
 import '../../features/dashboard/presentation/dashboard_screen.dart';
 import '../../features/team/presentation/team_screen.dart';
 import '../../features/customers/presentation/customers_screen.dart';
@@ -170,7 +171,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
 
       final user = auth.valueOrNull;
       final loggedIn = user != null;
-      final onLogin = loc == '/login';
+      final onLogin = loc == '/login' || loc == '/signup';
       if (!loggedIn && !onLogin) return '/login';
       if (loggedIn) {
         final role = user.role;
@@ -243,6 +244,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         builder: (_, __) => const LoginScreen(),
+      ),
+      GoRoute(
+        path: '/signup',
+        builder: (_, __) => const SignupWizardScreen(),
       ),
       GoRoute(
         path: '/r/login',
