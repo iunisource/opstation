@@ -1,8 +1,13 @@
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../../core/permissions/access_control.dart';
 
 // Onboarding / reference guide for the ERP. Static content (generated from a
 // single source shared with the PDF). Visible to all orgs; no permission gate.
+// Each item also carries a "where it lives" location (menu path) and, when the
+// user is allowed to reach it, a one-click deep link to open the screen.
 
 const String kOnboardingPdfUrl =
     'https://opstation-landing.web.app/opstation-onboarding-guide.pdf';
@@ -243,15 +248,257 @@ const List<_GuideSection> _kGuide = [
   ),
 ];
 
-class ErpOnboardingScreen extends StatefulWidget {
+// ─── "Where it lives" metadata ──────────────────────────────────────────────
+// A per-item location: the menu trail to reach it, and (when there's one screen
+// to open) a deep link. Derived from the live navigation map, so the guide
+// always tells you exactly where to click.
+class _Loc {
+  final String menu; // e.g. "Inventory" or "ERP ▸ Admin Settings"
+  final String? route; // deep link, or null if there's no single screen to open
+  const _Loc(this.menu, [this.route]);
+}
+
+const Map<String, IconData> _sectionIcon = {
+  'Getting started': Icons.rocket_launch_outlined,
+  'Inventory': Icons.inventory_2_outlined,
+  'Purchasing': Icons.shopping_cart_outlined,
+  'Sales': Icons.receipt_long_outlined,
+  'Point of Sale (POS)': Icons.storefront_outlined,
+  'Manufacturing': Icons.precision_manufacturing_outlined,
+  'Financials & Accounting': Icons.account_balance_outlined,
+  'CRM': Icons.contacts_outlined,
+  'Distribution & Field Sales (Opstation mobile app)': Icons.local_shipping_outlined,
+  'Market Intelligence': Icons.insights_outlined,
+  'Compliance': Icons.rule_outlined,
+  'HR': Icons.badge_outlined,
+  'Assets & Facility': Icons.chair_outlined,
+  'Team & Operations': Icons.groups_outlined,
+  'Reports (quick index)': Icons.summarize_outlined,
+  'Controls & Administration': Icons.admin_panel_settings_outlined,
+};
+
+// The default top-level menu that a section's items live under.
+const Map<String, String> _sectionMenu = {
+  'Getting started': '',
+  'Inventory': 'Inventory',
+  'Purchasing': 'Purchase',
+  'Sales': 'Sales',
+  'Point of Sale (POS)': 'POS',
+  'Manufacturing': 'Manufacturing',
+  'Financials & Accounting': 'Financials',
+  'CRM': 'CRM',
+  'Distribution & Field Sales (Opstation mobile app)': '',
+  'Market Intelligence': 'Intelligence',
+  'Compliance': 'Operations ▸ Compliance',
+  'HR': 'HR',
+  'Assets & Facility': 'Management',
+  'Team & Operations': 'Operations',
+  'Reports (quick index)': 'Reports',
+  'Controls & Administration': 'ERP',
+};
+
+// Item name → route. Names are unique across the guide except "Products"
+// (handled by the section-keyed override below).
+const Map<String, String> _routeByName = {
+  'Products': '/erp/products',
+  'Branches': '/erp/branches',
+  'Units of Measure': '/erp/uoms',
+  'Product Classifications': '/erp/product-classifications',
+  'Opening Stock': '/erp/opening-stock',
+  'Stock Transfers': '/erp/stock-transfers',
+  'Stock Adjustment': '/erp/stock-adjustment',
+  'Stock Levels': '/erp/stock',
+  'Low Stock Report': '/erp/low-stock-report',
+  'Stock Value Report': '/erp/stock-value-report',
+  'Stock Balance Report': '/erp/stock-balance-report',
+  'Stock Aging Report': '/erp/stock-aging-report',
+  'Inventory Ledger': '/erp/inventory-ledger',
+  'Inventory Integrity': '/erp/inventory-integrity',
+  'Purchase Dashboard': '/erp/purchase-dashboard',
+  'Suppliers': '/erp/suppliers',
+  'Purchase Orders (PO)': '/erp/purchase',
+  'GRN (Goods Receipt Note)': '/erp/grn',
+  'Purchase Invoices (PI)': '/erp/purchase-invoices',
+  'Purchase Return Notes': '/erp/purchase-returns',
+  'Purchase Return Invoices': '/erp/purchase-return-vouchers',
+  'Purchase Price Variance': '/erp/purchase-variance',
+  'Supplier Ledger': '/erp/supplier-ledger',
+  'Supplier Aging': '/erp/supplier-aging',
+  'Sales Dashboard': '/erp/sales-dashboard',
+  'Quotation': '/erp/quotation',
+  'Sales Orders (SO)': '/erp/sales',
+  'Delivery Orders (DO)': '/erp/delivery-orders',
+  'Sales Invoices (SI)': '/erp/sales-invoices',
+  'Sales Return Notes': '/erp/sales-returns',
+  'Sales Return Invoices': '/erp/sales-return-invoices',
+  'Sales Report': '/erp/sales-report',
+  'Customer Ledger': '/erp/customer-ledger',
+  'Customer Aging': '/erp/customer-aging',
+  'Configuration': '/erp/pos-config',
+  'POS Catalog': '/erp/pos-catalog',
+  'POS Terminal': '/erp/pos',
+  'Customer History': '/erp/pos-customer-history',
+  'Bills on Hold': '/erp/pos-held-bills',
+  'Expense Management': '/erp/pos-expense-management',
+  'Promoters & Commission': '/erp/promoters',
+  'Production Floor': '/manufacturing/production-floor',
+  'Product Assembly (BOM)': '/manufacturing/product-assembly',
+  'Production Voucher': '/manufacturing/production-voucher',
+  'Production Material Planner': '/manufacturing/production-plan',
+  'Job Card': '/manufacturing/job-card',
+  'QC Checkpoints': '/manufacturing/qc-checkpoints',
+  'QC Station': '/manufacturing/qc-station',
+  'Production Inverse Voucher (Disassembly)': '/manufacturing/production-inverse-voucher',
+  'Damage Stock Voucher': '/manufacturing/damage-stock-voucher',
+  'Claim Processing Voucher': '/manufacturing/claim-processing-voucher',
+  'Finished Goods without BOM': '/erp/fg-without-bom',
+  'Production Waste Report': '/manufacturing/production-waste-report',
+  'Chart of Accounts': '/erp/chart-of-accounts',
+  'Journal Vouchers': '/financials/journal-vouchers',
+  'Opening Journal': '/financials/opening-journal',
+  'Payment Vouchers (CPV)': '/erp/payment-vouchers',
+  'Receipt Vouchers (CRV)': '/erp/receipt-vouchers',
+  'PDC Voucher': '/erp/pdc-voucher',
+  'Cash Book Report': '/financials/cash-book',
+  'Trial Balance': '/financials/trial-balance',
+  'Account Activity': '/financials/account-activity',
+  'Profit & Loss': '/financials/profit-loss',
+  'Balance Sheet': '/financials/balance-sheet',
+  'Customers': '/crm/customers',
+  'Pipeline': '/crm/pipeline',
+  'Follow-ups': '/crm/follow-ups',
+  'Field Orders': '/erp/field-orders',
+  'Retailer Orders': '/erp/retailer-orders',
+  'Dispatch Orders': '/dispatch-orders',
+  'Deliveries': '/deliveries',
+  'Routes': '/routes',
+  'Live Map': '/live-map',
+  'Intelligence Dashboard': '/intelligence/dashboard',
+  'Placement Audit': '/intelligence/placement',
+  'Competitor Spotting': '/intelligence/competitors',
+  'Performance': '/intelligence/performance',
+  'Competitor Categories & Brand Aliases': '/competitor-categories',
+  'No Collection in Last 3 Visits': '/compliance',
+  'No Visit in Last 3 Routes': '/compliance',
+  'Skipped in Last 3 Routes': '/compliance',
+  'Zero-amount verified visits': '/compliance',
+  'Employee Directory': '/hr/employees',
+  'Attendance': '/hr/attendance',
+  'Attendance Board': '/hr/attendance-board',
+  'Attendance Kiosk': '/hr/attendance-kiosk',
+  'Leave': '/hr/leave',
+  'Assets': '/assets',
+  'Facility': '/facility',
+  'Team (360)': '/team',
+  'Retailers': '/operations/retailers',
+  'Notifications': '/operations/notifications',
+  'Files': '/operations/files',
+  'Reports Center': '/reports/center',
+  'Margin Report': '/reports/margin',
+  'Customer Balance Report': '/reports/customer-balance',
+  'Supplier Balance Report': '/reports/supplier-balance',
+  'Skipped Receipts Report': '/reports/skipped-receipts',
+  'ERP Users & Permissions': '/erp/users',
+  'Branch scoping': '/erp/branches',
+  'Audit Trail': '/erp/audit-log',
+  'Data safeguards': '/erp/admin-settings',
+  'Inventory Integrity & reconciliation': '/erp/inventory-integrity',
+  'Station Master (assistant)': '/erp/admin-settings',
+  'Dashboard privacy lock': '/erp/admin-settings',
+  'Supervision flows': '/erp/admin-settings',
+  'Automated daily backup': '/erp/admin-settings',
+  'Admin Settings': '/erp/admin-settings',
+  '1. Branches': '/erp/branches',
+  '2. ERP Users & Permissions': '/erp/users',
+  '3. Chart of Accounts': '/erp/chart-of-accounts',
+  '4. Units of Measure & Classifications': '/erp/uoms',
+  '5. Products': '/erp/products',
+  '6. Opening balances': '/financials/opening-journal',
+  '7. Safeguards (recommended)': '/erp/admin-settings',
+  '9. Ask Station Master': '/erp/admin-settings',
+};
+
+// Item name → menu override (when it differs from the section's default menu).
+const Map<String, String> _menuByName = {
+  'Branches': 'ERP',
+  'Field Orders': 'Sales',
+  'Retailer Orders': 'Sales',
+  'Dispatch Orders': 'Dispatch',
+  'Deliveries': 'Operations',
+  'Routes': 'Operations',
+  'Live Map': 'Operations',
+  'Collections': 'Opstation mobile app',
+  'Reimbursements': 'Opstation mobile app',
+  'Reports Center': 'Reports',
+  'Competitor Categories & Brand Aliases': 'Intelligence ▸ Setup',
+  'ERP Users & Permissions': 'ERP ▸ Administration',
+  'Audit Trail': 'ERP ▸ Administration',
+  'Data safeguards': 'ERP ▸ Admin Settings',
+  'Inventory Integrity & reconciliation': 'Inventory',
+  'Global search': 'Top bar',
+  'Station Master (assistant)': 'ERP ▸ Admin Settings',
+  'Dashboard privacy lock': 'ERP ▸ Admin Settings',
+  'Supervision flows': 'ERP ▸ Admin Settings',
+  'Guided welcome tour': 'Profile menu',
+  'Approvals & locking': 'Across documents',
+  'Automated daily backup': 'ERP ▸ Admin Settings',
+  'Menu layout': 'Top bar',
+  'Admin Settings': 'ERP ▸ Administration',
+  'Branch scoping': 'ERP',
+  '1. Branches': 'ERP',
+  '2. ERP Users & Permissions': 'ERP ▸ Administration',
+  '3. Chart of Accounts': 'Financials',
+  '4. Units of Measure & Classifications': 'Inventory',
+  '5. Products': 'Inventory',
+  '6. Opening balances': 'Financials',
+  '7. Safeguards (recommended)': 'ERP ▸ Admin Settings',
+  '8. Take the welcome tour': 'Profile menu',
+  '9. Ask Station Master': 'ERP ▸ Admin Settings',
+};
+
+// Section|Name overrides for the few duplicate item names.
+const Map<String, String> _routeBySectionName = {
+  'Market Intelligence|Products': '/products',
+};
+const Map<String, String> _menuBySectionName = {
+  'Market Intelligence|Products': 'Intelligence ▸ Setup',
+};
+
+_Loc _locFor(String sectionTitle, String itemName) {
+  final key = '$sectionTitle|$itemName';
+  final route = _routeBySectionName[key] ?? _routeByName[itemName];
+  final menu = _menuBySectionName[key] ??
+      _menuByName[itemName] ??
+      (_sectionMenu[sectionTitle] ?? '');
+  return _Loc(menu, route);
+}
+
+// A soft accent colour per section, so the long guide reads as distinct blocks
+// rather than one grey wall.
+const List<Color> _accents = [
+  Color(0xFF2F6FED), // blue
+  Color(0xFF0EA5A4), // teal
+  Color(0xFF7C3AED), // violet
+  Color(0xFFEA580C), // orange
+  Color(0xFF0891B2), // cyan
+  Color(0xFFDB2777), // pink
+  Color(0xFF059669), // green
+  Color(0xFF4F46E5), // indigo
+];
+
+class ErpOnboardingScreen extends ConsumerStatefulWidget {
   const ErpOnboardingScreen({super.key});
 
   @override
-  State<ErpOnboardingScreen> createState() => _ErpOnboardingScreenState();
+  ConsumerState<ErpOnboardingScreen> createState() =>
+      _ErpOnboardingScreenState();
 }
 
-class _ErpOnboardingScreenState extends State<ErpOnboardingScreen> {
+class _ErpOnboardingScreenState extends ConsumerState<ErpOnboardingScreen> {
   String _q = '';
+  final Map<String, GlobalKey> _sectionKeys = {
+    for (final s in _kGuide) s.title: GlobalKey(),
+  };
 
   List<_GuideSection> get _filtered {
     final q = _q.trim().toLowerCase();
@@ -262,180 +509,464 @@ class _ErpOnboardingScreenState extends State<ErpOnboardingScreen> {
         out.add(s);
         continue;
       }
-      final items = s.items
-          .where((i) =>
-              i.name.toLowerCase().contains(q) || i.desc.toLowerCase().contains(q))
-          .toList();
+      final items = s.items.where((i) {
+        final loc = _locFor(s.title, i.name);
+        return i.name.toLowerCase().contains(q) ||
+            i.desc.toLowerCase().contains(q) ||
+            loc.menu.toLowerCase().contains(q);
+      }).toList();
       if (items.isNotEmpty) out.add(_GuideSection(s.title, s.intro, items));
     }
     return out;
   }
 
+  bool _canOpen(String? route) {
+    if (route == null) return false;
+    final access = ref.read(accessSyncProvider);
+    if (access == null) return true; // still loading — let the router decide
+    return access.canAccessRoute(route);
+  }
+
+  void _jumpTo(String title) {
+    if (_q.trim().isNotEmpty) setState(() => _q = '');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _sectionKeys[title]?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeInOut,
+            alignment: 0.02);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    final searching = _q.trim().isNotEmpty;
     final sections = _filtered;
-
     return ColoredBox(
       color: const Color(0xFFF6F8FC),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // ── Header ──
-          Container(
-            color: Colors.white,
-            padding: const EdgeInsets.fromLTRB(28, 24, 28, 16),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 940),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: _hero(context)),
+          SliverToBoxAdapter(child: _quickJump()),
+          if (sections.isEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(48),
+                child: Center(
+                    child: Text('No matches.',
+                        style: TextStyle(color: Color(0xFF5B6473)))),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 48),
+              sliver: SliverToBoxAdapter(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1040),
+                    child: Column(
                       children: [
-                        Icon(Icons.menu_book_outlined, color: primary, size: 26),
-                        const SizedBox(width: 10),
-                        const Expanded(
-                          child: Text('Onboarding Guide',
-                              style: TextStyle(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF0F1729))),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: () => html.window.open(kOnboardingPdfUrl, '_blank'),
-                          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-                          label: const Text('Download PDF'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: primary,
-                            side: BorderSide(color: primary.withOpacity(0.5)),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                        ),
+                        for (var i = 0; i < sections.length; i++)
+                          _sectionCard(sections[i], i),
                       ],
                     ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Opstation — the planet\'s best ERP for the trading & distribution '
-                      'industry. A reference to every module, voucher, report and helper '
-                      'in the system.',
-                      style: TextStyle(fontSize: 13.5, color: Color(0xFF5B6473)),
-                    ),
-                    const SizedBox(height: 14),
-                    TextField(
-                      onChanged: (v) => setState(() => _q = v),
-                      decoration: InputDecoration(
-                        hintText: 'Search features, vouchers, reports...',
-                        prefixIcon: const Icon(Icons.search, size: 20),
-                        isDense: true,
-                        filled: true,
-                        fillColor: const Color(0xFFF1F4FA),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: BorderSide.none,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
-          const Divider(height: 1, color: Color(0xFFE6EAF2)),
-          // ── Sections ──
-          Expanded(
-            child: sections.isEmpty
-                ? const Center(
-                    child: Text('No matches.',
-                        style: TextStyle(color: Color(0xFF5B6473))))
-                : ListView(
-                    padding: const EdgeInsets.fromLTRB(20, 18, 20, 36),
-                    children: [
-                      Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 940),
-                          child: Column(
-                            children: [
-                              for (var i = 0; i < sections.length; i++)
-                                _sectionCard(context, sections[i], primary,
-                                    expanded: searching || i == 0),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _sectionCard(BuildContext context, _GuideSection s, Color primary,
-      {required bool expanded}) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFFE6EAF2)),
+  // ── Hero header ──
+  Widget _hero(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF14285F), Color(0xFF1D46A0), Color(0xFF2F6FED)],
+        ),
       ),
-      color: Colors.white,
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          key: ValueKey('${s.title}_$expanded'),
-          initiallyExpanded: expanded,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
-          childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-          title: Text(s.title,
-              style: TextStyle(
-                  fontWeight: FontWeight.w700, fontSize: 15.5, color: primary)),
-          subtitle: Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(s.intro,
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF5B6473))),
+      padding: const EdgeInsets.fromLTRB(28, 30, 28, 26),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1040),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.16),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.35)),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Text('O',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800)),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Onboarding Guide',
+                            style: TextStyle(
+                                fontSize: 26,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: -0.4)),
+                        const SizedBox(height: 4),
+                        Text(
+                          'The planet\'s best ERP for the trading & distribution industry.',
+                          style: TextStyle(
+                              fontSize: 13.5,
+                              color: Colors.white.withOpacity(0.85)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        html.window.open(kOnboardingPdfUrl, '_blank'),
+                    icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    label: const Text('Download PDF'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(color: Colors.white.withOpacity(0.55)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(9)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              // Search
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: TextField(
+                  onChanged: (v) => setState(() => _q = v),
+                  style: const TextStyle(color: Color(0xFF0F1729)),
+                  decoration: InputDecoration(
+                    hintText: 'Search a screen, report or voucher…',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    isDense: true,
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Wrap(spacing: 18, runSpacing: 8, children: [
+                _heroStat('16', 'modules'),
+                _heroStat('124', 'features & reports'),
+                _heroStat('Tip', 'each item shows where to find it'),
+              ]),
+            ],
           ),
-          children: [
-            for (final it in s.items)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
+        ),
+      ),
+    );
+  }
+
+  Widget _heroStat(String big, String small) {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Text(big,
+          style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 14)),
+      const SizedBox(width: 6),
+      Text(small,
+          style: TextStyle(
+              color: Colors.white.withOpacity(0.8), fontSize: 12)),
+    ]);
+  }
+
+  // ── Quick-jump chips ──
+  Widget _quickJump() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1040),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var i = 0; i < _kGuide.length; i++)
+                _jumpChip(_kGuide[i].title, i),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _jumpChip(String title, int i) {
+    final accent = _accents[i % _accents.length];
+    final icon = _sectionIcon[title] ?? Icons.folder_outlined;
+    // Compact label for the long section names.
+    final label = title.contains('(') ? title.split('(').first.trim() : title;
+    return InkWell(
+      borderRadius: BorderRadius.circular(30),
+      onTap: () => _jumpTo(title),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: accent.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(color: accent.withOpacity(0.28)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: accent),
+          const SizedBox(width: 6),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: accent.withOpacity(0.95))),
+        ]),
+      ),
+    );
+  }
+
+  // ── Section card ──
+  Widget _sectionCard(_GuideSection s, int index) {
+    final accent = _accents[index % _accents.length];
+    final icon = _sectionIcon[s.title] ?? Icons.folder_outlined;
+    return Container(
+      key: _sectionKeys[s.title],
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE6EAF2)),
+        boxShadow: [
+          BoxShadow(
+              color: const Color(0xFF0F1729).withOpacity(0.03),
+              blurRadius: 12,
+              offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // header
+          Container(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+            decoration: BoxDecoration(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+              gradient: LinearGradient(
+                colors: [accent.withOpacity(0.10), accent.withOpacity(0.02)],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: accent.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: accent, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      margin: const EdgeInsets.only(top: 6, right: 12),
-                      decoration:
-                          BoxDecoration(color: primary, shape: BoxShape.circle),
-                    ),
-                    Expanded(
-                      child: RichText(
-                        text: TextSpan(
-                          style: const TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF39414F),
-                              height: 1.38),
-                          children: [
-                            TextSpan(
-                                text: '${it.name}  ',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF0F1729))),
-                            TextSpan(text: it.desc),
-                          ],
-                        ),
+                    Row(children: [
+                      Flexible(
+                        child: Text(s.title,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
+                                color: Color(0xFF0F1729))),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: accent.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text('${s.items.length}',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: accent)),
+                      ),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text(s.intro,
+                        style: const TextStyle(
+                            fontSize: 12.5,
+                            height: 1.4,
+                            color: Color(0xFF5B6473))),
                   ],
                 ),
               ),
-          ],
+            ]),
+          ),
+          // items grid
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+            child: LayoutBuilder(builder: (ctx, cons) {
+              final cols = cons.maxWidth > 720 ? 2 : 1;
+              final w = (cons.maxWidth - (cols - 1) * 12) / cols;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  for (final it in s.items)
+                    SizedBox(
+                      width: w,
+                      child: _FeatureCard(
+                        name: it.name,
+                        desc: it.desc,
+                        loc: _locFor(s.title, it.name),
+                        accent: accent,
+                        canOpen: _canOpen(_locFor(s.title, it.name).route),
+                        onOpen: () {
+                          final r = _locFor(s.title, it.name).route;
+                          if (r != null) context.go(r);
+                        },
+                      ),
+                    ),
+                ],
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// A single feature/voucher/report card: name, its location breadcrumb, and the
+// description. Clickable (with a hover lift) when the user can reach the screen.
+class _FeatureCard extends StatefulWidget {
+  final String name;
+  final String desc;
+  final _Loc loc;
+  final Color accent;
+  final bool canOpen;
+  final VoidCallback onOpen;
+  const _FeatureCard({
+    required this.name,
+    required this.desc,
+    required this.loc,
+    required this.accent,
+    required this.canOpen,
+    required this.onOpen,
+  });
+
+  @override
+  State<_FeatureCard> createState() => _FeatureCardState();
+}
+
+class _FeatureCardState extends State<_FeatureCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final clickable = widget.canOpen;
+    return MouseRegion(
+      cursor: clickable ? SystemMouseCursors.click : MouseCursor.defer,
+      onEnter: (_) { if (clickable) setState(() => _hover = true); },
+      onExit: (_) { if (clickable) setState(() => _hover = false); },
+      child: GestureDetector(
+        onTap: clickable ? widget.onOpen : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 13),
+          decoration: BoxDecoration(
+            color: _hover ? widget.accent.withOpacity(0.04) : const Color(0xFFFBFCFE),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+                color: _hover
+                    ? widget.accent.withOpacity(0.45)
+                    : const Color(0xFFE6EAF2)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: Text(widget.name,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13.5,
+                          color: Color(0xFF0F1729))),
+                ),
+                if (clickable)
+                  Icon(Icons.north_east,
+                      size: 14,
+                      color: _hover
+                          ? widget.accent
+                          : const Color(0xFFB0B8C6)),
+              ]),
+              const SizedBox(height: 7),
+              _locationPill(),
+              const SizedBox(height: 8),
+              Text(widget.desc,
+                  style: const TextStyle(
+                      fontSize: 12.3, height: 1.4, color: Color(0xFF4B5563))),
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _locationPill() {
+    final menu = widget.loc.menu;
+    final label = menu.isEmpty ? widget.name : '$menu  ▸  ${widget.name}';
+    final color = widget.canOpen ? widget.accent : const Color(0xFF7A8394);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.place_outlined, size: 12, color: color),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color)),
+        ),
+      ]),
     );
   }
 }
