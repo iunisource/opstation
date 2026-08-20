@@ -388,6 +388,17 @@ const List<_AdminToggle> _toggles = [
         'created from now on appear. Supervision is non-blocking — the product '
         'can still be used while pending. When OFF, no counter shows.',
   ),
+
+  _AdminToggle(
+    'org.station_master_enabled',
+    'Station Master assistant',
+    'When ON, a "Station Master" helper bubble appears for everyone in this '
+        'org. Users can ask plain-language questions about their own data — '
+        'stock of a product, a customer\'s balance, today\'s sales or '
+        'collection, what\'s pending approval, or where a voucher is. It only '
+        'answers from the areas each user is already allowed to see, and only '
+        'about system data — nothing general. When OFF, the bubble is hidden.',
+  ),
 ];
 
 /// A module-wise grouping of the flat [_toggles] list, so Admin Settings reads
@@ -445,6 +456,9 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Alerts, Data & Assets', Icons.notifications_active_outlined, [
     'org.asset_maintenance_reminder',
     'org.backup_enabled',
+  ]),
+  _ToggleGroup('Assistant', Icons.hub_outlined, [
+    'org.station_master_enabled',
   ]),
 ];
 
