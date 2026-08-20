@@ -4,6 +4,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
 import '../../features/auth/auth_controller.dart';
 
+/// Bump this to replay the tour on demand (user menu → "Replay welcome tour").
+final tourReplayProvider = StateProvider<int>((ref) => 0);
+
 /// First-login guided tour. Mounted once in the shell (like the global
 /// alerts). On boot it checks users.tour_seen_at — if NULL, it overlays a
 /// step-by-step welcome tour tailored to the user's ROLE, then stamps
@@ -164,8 +167,19 @@ class _FirstLoginTourState extends ConsumerState<FirstLoginTour> {
   }
 
   // ── UI ─────────────────────────────────────────────────────────────────────
+  void _replay() {
+    final user = ref.read(currentUserProvider);
+    if (user == null) return;
+    final steps = _stepsForRole(user.role, user.name);
+    if (steps.isEmpty) return;
+    setState(() { _steps = steps; _index = 0; _visible = true; });
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen(tourReplayProvider, (prev, next) {
+      if (next != (prev ?? 0)) _replay();
+    });
     if (!_visible || _steps.isEmpty) return const SizedBox.shrink();
     final step = _steps[_index];
     final last = _index == _steps.length - 1;

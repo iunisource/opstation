@@ -1130,6 +1130,7 @@ Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
           ),
           onSelected: (v) {
             if (v == 'logout') ref.read(authControllerProvider.notifier).signOut();
+            if (v == 'tour') ref.read(tourReplayProvider.notifier).state++;
           },
           itemBuilder: (_) => [
             PopupMenuItem(
@@ -1146,6 +1147,14 @@ Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
               child: const NotificationsMenuTile(),
             ),
             const PopupMenuDivider(),
+            const PopupMenuItem(
+              value: 'tour',
+              child: Row(children: [
+                Icon(Icons.tour_outlined, size: 15, color: AppTheme.sidebarText),
+                SizedBox(width: 8),
+                Text('Replay welcome tour', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ]),
+            ),
             const PopupMenuItem(
               value: 'logout',
               child: Row(children: [
