@@ -225,13 +225,17 @@ class _DashboardStatsState extends State<_DashboardStats> {
             .select('id')
             .eq('org_id', widget.orgId)
             .filter('ended_at', 'is', null),
-        // Completed = ended_at within today's local-day window.
+        // Completed = a trip that STARTED today and has finished. Keying off
+        // started_at (not ended_at) stops a route that actually ran on a prior
+        // day — but was only closed this morning (e.g. a missed auto-cutoff) —
+        // from leaking into today's numbers and showing a rep on "two routes".
         client
             .from('trips')
             .select('id')
             .eq('org_id', widget.orgId)
-            .gte('ended_at', todayStart)
-            .lt('ended_at', tomorrowStart),
+            .gte('started_at', todayStart)
+            .lt('started_at', tomorrowStart)
+            .not('ended_at', 'is', null),
         // Today's visits — RLS scopes to the user's org. Bounded window
         // (gte + lt) so trips that span midnight don't double-count.
         client
@@ -1010,8 +1014,9 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
     try {
       final client = Supabase.instance.client;
 
-      // Active trips = ended_at IS NULL. Completed = ended within today's
-      // local-day window (same formula as the dashboard counter).
+      // Active trips = ended_at IS NULL. Completed = STARTED today and finished
+      // (same formula as the dashboard counter) — see _load() for why we key off
+      // started_at, not ended_at.
       final now = DateTime.now();
       final todayStart =
           DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
@@ -1024,7 +1029,10 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
           .select('id, route_name, user_name, started_at, ended_at')
           .eq('org_id', widget.orgId);
       final tripRows = widget.completed
-          ? await base.gte('ended_at', todayStart).lt('ended_at', tomorrowStart)
+          ? await base
+              .gte('started_at', todayStart)
+              .lt('started_at', tomorrowStart)
+              .not('ended_at', 'is', null)
           : await base.filter('ended_at', 'is', null);
 
       final trips = (tripRows as List)
