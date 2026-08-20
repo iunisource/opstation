@@ -653,17 +653,207 @@ const _noPerm =
     'You don\'t have access to that area, so I can\'t answer it. Ask an admin '
     'if you think you should.';
 
+// ─── Navigation catalog: "where does X live?" ───────────────────────────────
+// A compact map of the screens people ask to find, each with its menu location
+// and (permission-checked) deep link. This is what lets Station Master answer
+// "where is the sales order screen" conversationally instead of hunting for a
+// voucher number.
+class _Feature {
+  final String name;
+  final String menu; // menu trail, e.g. "Sales" or "ERP ▸ Administration"
+  final String? route;
+  final List<String> aliases;
+  const _Feature(this.name, this.menu, this.route, this.aliases);
+}
+
+const List<_Feature> _features = [
+  // Sales
+  _Feature('Sales Orders', 'Sales', '/erp/sales', ['sale order', 'sales order', 'so', 'order']),
+  _Feature('Sales Invoices', 'Sales', '/erp/sales-invoices', ['sale invoice', 'sales invoice', 'si', 'invoice', 'bill']),
+  _Feature('Quotation', 'Sales', '/erp/quotation', ['quote', 'quotation']),
+  _Feature('Delivery Orders', 'Sales', '/erp/delivery-orders', ['delivery order', 'do', 'dispatch note']),
+  _Feature('Customers', 'Sales', '/customers', ['customer', 'shop', 'client']),
+  _Feature('Field Orders', 'Sales', '/erp/field-orders', ['field order', 'booking']),
+  _Feature('Retailer Orders', 'Sales', '/erp/retailer-orders', ['retailer order']),
+  _Feature('Customer Ledger', 'Sales', '/erp/customer-ledger', ['customer ledger']),
+  _Feature('Customer Aging', 'Sales', '/erp/customer-aging', ['customer aging', 'receivable aging']),
+  _Feature('Sales Report', 'Sales', '/erp/sales-report', ['sales report']),
+  _Feature('Sales Returns', 'Sales', '/erp/sales-returns', ['sales return', 'sale return']),
+  // Purchase
+  _Feature('Purchase Orders', 'Purchase', '/erp/purchase', ['purchase order', 'po']),
+  _Feature('GRN (Goods Receipt Note)', 'Purchase', '/erp/grn', ['grn', 'goods receipt', 'receipt note']),
+  _Feature('Purchase Invoices', 'Purchase', '/erp/purchase-invoices', ['purchase invoice', 'pi', 'supplier bill']),
+  _Feature('Suppliers', 'Purchase', '/erp/suppliers', ['supplier', 'vendor']),
+  _Feature('Supplier Ledger', 'Purchase', '/erp/supplier-ledger', ['supplier ledger']),
+  _Feature('Purchase Returns', 'Purchase', '/erp/purchase-returns', ['purchase return']),
+  _Feature('Purchase Report', 'Purchase', '/erp/purchase-report', ['purchase report']),
+  // Inventory
+  _Feature('Products', 'Inventory', '/erp/products', ['product', 'item', 'sku']),
+  _Feature('Stock Levels', 'Inventory', '/erp/stock', ['stock', 'stock level', 'on hand', 'inventory']),
+  _Feature('Stock Transfers', 'Inventory', '/erp/stock-transfers', ['stock transfer', 'transfer']),
+  _Feature('Stock Adjustment', 'Inventory', '/erp/stock-adjustment', ['stock adjustment', 'adjustment']),
+  _Feature('Opening Stock', 'Inventory', '/erp/opening-stock', ['opening stock']),
+  _Feature('Inventory Ledger', 'Inventory', '/erp/inventory-ledger', ['inventory ledger', 'stock ledger', 'movement']),
+  _Feature('Low Stock Report', 'Inventory', '/erp/low-stock-report', ['low stock', 'reorder']),
+  _Feature('Inventory Integrity', 'Inventory', '/erp/inventory-integrity', ['integrity', 'reconcile']),
+  _Feature('Units of Measure', 'Inventory', '/erp/uoms', ['uom', 'unit of measure', 'units']),
+  // POS
+  _Feature('POS Terminal', 'POS', '/erp/pos', ['pos', 'terminal', 'counter', 'till']),
+  _Feature('POS Catalog', 'POS', '/erp/pos-catalog', ['pos catalog']),
+  // Manufacturing
+  _Feature('Production Voucher', 'Manufacturing', '/manufacturing/production-voucher', ['production voucher', 'production']),
+  _Feature('Job Card', 'Manufacturing', '/manufacturing/job-card', ['job card', 'work order']),
+  _Feature('Product Assembly (BOM)', 'Manufacturing', '/manufacturing/product-assembly', ['bom', 'assembly', 'recipe']),
+  _Feature('Production Floor', 'Manufacturing', '/manufacturing/production-floor', ['production floor', 'shop floor', 'floor']),
+  _Feature('Production Inverse (Disassembly)', 'Manufacturing', '/manufacturing/production-inverse-voucher', ['disassembly', 'inverse', 'production inverse']),
+  _Feature('Damage Stock Voucher', 'Manufacturing', '/manufacturing/damage-stock-voucher', ['damage stock', 'damage', 'write off']),
+  // Financials
+  _Feature('Chart of Accounts', 'Financials', '/erp/chart-of-accounts', ['chart of accounts', 'coa', 'accounts']),
+  _Feature('Journal Vouchers', 'Financials', '/financials/journal-vouchers', ['journal', 'journal voucher', 'jv']),
+  _Feature('Payment Vouchers (CPV)', 'Financials', '/erp/payment-vouchers', ['payment voucher', 'cpv', 'payment']),
+  _Feature('Receipt Vouchers (CRV)', 'Financials', '/erp/receipt-vouchers', ['receipt voucher', 'crv', 'receipt']),
+  _Feature('Trial Balance', 'Financials', '/financials/trial-balance', ['trial balance']),
+  _Feature('Profit & Loss', 'Financials', '/financials/profit-loss', ['profit', 'loss', 'p&l', 'profit and loss', 'income statement']),
+  _Feature('Balance Sheet', 'Financials', '/financials/balance-sheet', ['balance sheet']),
+  _Feature('Cash Book', 'Financials', '/financials/cash-book', ['cash book', 'cashbook']),
+  _Feature('Opening Journal', 'Financials', '/financials/opening-journal', ['opening journal', 'opening balance']),
+  _Feature('PDC Voucher', 'Financials', '/erp/pdc-voucher', ['pdc', 'post dated cheque', 'cheque']),
+  // Reports
+  _Feature('Customer Balance Report', 'Reports', '/reports/customer-balance', ['customer balance']),
+  _Feature('Supplier Balance Report', 'Reports', '/reports/supplier-balance', ['supplier balance']),
+  _Feature('Margin Report', 'Reports', '/reports/margin', ['margin']),
+  _Feature('Reports Center', 'Reports', '/reports/center', ['reports center', 'report builder', 'reports']),
+  _Feature('Skipped Receipts Report', 'Reports', '/reports/skipped-receipts', ['skipped receipt', 'skipped receipts']),
+  // HR
+  _Feature('Employee Directory', 'HR', '/hr/employees', ['employee', 'staff', 'directory']),
+  _Feature('Attendance', 'HR', '/hr/attendance', ['attendance']),
+  _Feature('Attendance Kiosk', 'HR', '/hr/attendance-kiosk', ['kiosk', 'check in']),
+  _Feature('Leave', 'HR', '/hr/leave', ['leave', 'time off']),
+  // Operations
+  _Feature('Dashboard', 'Operations', '/dashboard', ['dashboard']),
+  _Feature('Routes', 'Operations', '/routes', ['route']),
+  _Feature('Live Map', 'Operations', '/live-map', ['live map', 'map']),
+  _Feature('Deliveries', 'Operations', '/deliveries', ['delivery', 'deliveries']),
+  _Feature('Team', 'Operations', '/team', ['team']),
+  // Admin
+  _Feature('Admin Settings', 'ERP', '/erp/admin-settings', ['admin settings', 'settings', 'configuration']),
+  _Feature('Branches', 'ERP', '/erp/branches', ['branch', 'warehouse', 'location']),
+  _Feature('ERP Users & Permissions', 'ERP ▸ Administration', '/erp/users', ['user', 'permission', 'erp users', 'access']),
+  _Feature('Audit Trail', 'ERP ▸ Administration', '/erp/audit-log', ['audit', 'audit trail', 'log', 'history']),
+  _Feature('Onboarding Guide', 'ERP', '/erp/onboarding', ['onboarding', 'guide', 'manual', 'help']),
+];
+
+/// True when the query is asking where something IS / how to reach it, rather
+/// than asking for a data value.
+bool _isNavQuery(String q) {
+  return q.startsWith('where') ||
+      q.contains('where is') ||
+      q.contains('where do i') ||
+      q.contains('where can i') ||
+      q.contains('how do i find') ||
+      q.contains('how to find') ||
+      q.contains('how do i open') ||
+      q.contains('how to open') ||
+      q.contains('how do i get to') ||
+      q.contains('take me to') ||
+      q.contains('go to ') ||
+      q.contains('open the ') ||
+      q.contains('navigate') ||
+      q.contains('which menu') ||
+      q.contains('find the ');
+}
+
+_Feature? _findFeature(String term) {
+  final toks = _tokens(term);
+  if (toks.isEmpty) return null;
+  final t = term.toLowerCase().trim();
+  _Feature? best;
+  int bestScore = 0;
+  for (final f in _features) {
+    final hay = ('${f.name} ${f.aliases.join(' ')}').toLowerCase();
+    final nameWords = f.name
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((w) => w.isNotEmpty)
+        .toSet();
+    int s = 0;
+    for (final tok in toks) {
+      if (hay.contains(tok)) s += 1;
+      if (nameWords.contains(tok)) s += 2;
+    }
+    if (f.aliases.contains(t)) s += 4;
+    if (f.name.toLowerCase() == t) s += 6;
+    if (s > bestScore) {
+      bestScore = s;
+      best = f;
+    }
+  }
+  return bestScore >= 2 ? best : null;
+}
+
+Future<_Msg?> _navigate(String raw, _Ctx c) async {
+  final term = _term(raw, [
+    'where is', 'where do i find', 'where do i', 'where can i find', 'where can i',
+    'how do i find', 'how to find', 'how do i open', 'how to open',
+    'how do i get to', 'take me to', 'go to', 'open the', 'navigate to',
+    'navigate', 'which menu', 'find the', 'located in', 'located',
+    'lives', 'live',
+  ]);
+  final f = _findFeature(term.isEmpty ? raw : term);
+  if (f == null) return null;
+  final canOpen = f.route != null && c.can(f.route!);
+  final trail = '${f.menu}  ▸  ${f.name}';
+  if (canOpen) {
+    return _Msg(
+      false,
+      'You\'ll find ${f.name} under $trail. Want me to open it? Tap below.',
+      links: [_Link('Open ${f.name}', f.route!)],
+    );
+  }
+  // Known screen, but this user can't reach it.
+  return _Msg(
+    false,
+    '${f.name} lives under $trail — but your access doesn\'t include it, so I '
+    'can\'t open it for you. An admin can grant it.',
+  );
+}
+
 // ─── Intent router ──────────────────────────────────────────────────────────
 
 Future<_Msg> _route(String raw, _Ctx c) async {
   final q = raw.toLowerCase().trim();
 
   // Greetings / help / capabilities.
-  if (RegExp(r'^(hi|hello|hey|salam|help|what can you do|what can i ask|menu)\b')
+  if (RegExp(r'^(hi|hello|hey|salam|assalam|help|what can you do|what can i ask|menu)\b')
           .hasMatch(q) ||
       q == 'help' ||
       q.contains('what can you')) {
     return _help();
+  }
+
+  // Small talk — keep it human without wandering off-system.
+  if (RegExp(r'^(thanks|thank you|thankyou|thx|shukriya|ok|okay|great|cool|nice|good job|got it)\b')
+      .hasMatch(q)) {
+    return const _Msg(false,
+        'Anytime! Ask me whenever you need a number or want to find a screen. 🙂');
+  }
+  if (q.contains('who are you') ||
+      q.contains('what are you') ||
+      q.contains('your name')) {
+    return const _Msg(false,
+        'I\'m Station Master — a built-in helper for Opstation. I answer from '
+        'your own data (stock, balances, sales, approvals) and help you find any '
+        'screen, and I only show what you\'re allowed to see. Try "sales today" '
+        'or "where is the sales order screen".');
+  }
+
+  // Navigation — "where is the sales order screen", "take me to GRN".
+  if (_isNavQuery(q) && !q.contains('stock of') && !q.contains('balance of')) {
+    final nav = await _navigate(raw, c);
+    if (nav != null) return nav;
+    // Not a known screen — it might be a voucher number instead.
+    if (_voucherToken(raw) != null) return _voucherLookup(raw, c);
+    // Otherwise fall through to the normal intents below.
   }
 
   // Pending approvals / what needs my attention.
@@ -750,8 +940,7 @@ Future<_Msg> _route(String raw, _Ctx c) async {
       q.contains('inventory') ||
       q.contains('how much') ||
       q.contains('how many');
-  if (q.contains('where is') ||
-      q.contains('status of') ||
+  if (q.contains('status of') ||
       q.contains('look up') ||
       q.contains('lookup') ||
       (q.contains('find ') && !stockish) ||
@@ -798,7 +987,8 @@ _Msg _help() {
     '• Collection — "collection today" (admins)\n'
     '• Active routes — "which routes are running now" (admins)\n'
     '• Pending approvals — "what\'s pending approval"\n'
-    '• Find a voucher — "where is INV-2026-0041"\n\n'
+    '• Find a voucher — "where is INV-2026-0041"\n'
+    '• Find a screen — "where is the sales order screen", "take me to GRN"\n\n'
     'I only answer from your own system data — nothing general.',
   );
 }
@@ -1348,7 +1538,9 @@ Future<_Msg> _voucherLookup(String raw, _Ctx c) async {
   }
   if (found == 0) {
     return _Msg(false,
-        'I couldn\'t find a voucher matching "$t" in the areas you can access.');
+        'Hmm, I couldn\'t find a voucher matching "$t" in the areas you can '
+        'access. If you meant a screen (like "Sales Orders"), try "where is the '
+        'sales order screen".');
   }
   return _Msg(
     false,

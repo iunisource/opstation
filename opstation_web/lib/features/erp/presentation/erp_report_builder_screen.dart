@@ -656,19 +656,87 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     _run();
   }
 
+  num _sumMeasure(Iterable<Map<String, dynamic>> rows, String m) {
+    num s = 0;
+    for (final r in rows) {
+      final v = r[m];
+      if (v is num) s += v;
+    }
+    return s;
+  }
+
   Widget _table() {
     final dims = [..._rows, ..._cols];
     final cols = [...dims, ..._values];
+
+    // Sort a display copy by the dimensions so each group is contiguous — that
+    // lets us drop a subtotal row after every group, plus a grand total.
+    final data = [..._result];
+    if (dims.isNotEmpty) {
+      data.sort((a, b) {
+        for (final d in dims) {
+          final c = (a[d]?.toString() ?? '').compareTo(b[d]?.toString() ?? '');
+          if (c != 0) return c;
+        }
+        return 0;
+      });
+    }
+
+    DataRow dataRow(Map<String, dynamic> r) => DataRow(cells: cols.map((c) {
+          final isMeasure = _values.contains(c);
+          final v = r[c];
+          return DataCell(Text(isMeasure ? _fmt(v as num?) : (v?.toString() ?? '(none)'), style: const TextStyle(fontSize: 12)));
+        }).toList());
+
+    DataRow totalRow(String label, Iterable<Map<String, dynamic>> group, {required bool grand}) {
+      final weight = grand ? FontWeight.w800 : FontWeight.w700;
+      final cells = <DataCell>[];
+      for (var i = 0; i < dims.length; i++) {
+        cells.add(DataCell(Text(i == 0 ? label : '', style: TextStyle(fontSize: 12, fontWeight: weight))));
+      }
+      if (dims.isEmpty) {
+        cells.add(DataCell(Text(label, style: TextStyle(fontSize: 12, fontWeight: weight))));
+      }
+      for (var j = 0; j < _values.length; j++) {
+        final m = _values[j];
+        // When there are no dimension columns, the label already used the first
+        // measure cell — keep alignment by leaving that first measure blank.
+        if (dims.isEmpty && j == 0) { cells.add(const DataCell(Text(''))); continue; }
+        cells.add(DataCell(Text(_fmt(_sumMeasure(group, m)), style: TextStyle(fontSize: 12, fontWeight: weight))));
+      }
+      return DataRow(
+        color: MaterialStateProperty.all(grand ? AppTheme.background : AppTheme.background.withOpacity(0.45)),
+        cells: cells,
+      );
+    }
+
+    final rows = <DataRow>[];
+    final groupDim = _rows.isNotEmpty ? _rows.first : (dims.isNotEmpty ? dims.first : null);
+    if (groupDim != null && _values.isNotEmpty) {
+      final groups = <String, List<Map<String, dynamic>>>{};
+      final order = <String>[];
+      for (final r in data) {
+        final k = r[groupDim]?.toString() ?? '(none)';
+        (groups[k] ??= []).add(r);
+        if (!order.contains(k)) order.add(k);
+      }
+      final showSub = order.length > 1; // one group == subtotal duplicates grand
+      for (final k in order) {
+        final g = groups[k]!;
+        for (final r in g) rows.add(dataRow(r));
+        if (showSub) rows.add(totalRow('$k  ·  subtotal', g, grand: false));
+      }
+    } else {
+      for (final r in data) rows.add(dataRow(r));
+    }
+    if (_values.isNotEmpty) rows.add(totalRow('Grand total', data, grand: true));
+
     return SingleChildScrollView(child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: DataTable(
         headingRowHeight: 42, dataRowMinHeight: 38, dataRowMaxHeight: 48,
         columns: cols.map((c) => DataColumn(label: Text(_label(c), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)), numeric: _values.contains(c))).toList(),
-        rows: _result.map((r) => DataRow(cells: cols.map((c) {
-          final isMeasure = _values.contains(c);
-          final v = r[c];
-          return DataCell(Text(isMeasure ? _fmt(v as num?) : (v?.toString() ?? '(none)'), style: const TextStyle(fontSize: 12)));
-        }).toList())).toList(),
+        rows: rows,
       ),
     )));
   }
@@ -844,10 +912,36 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       buf.write(_crosstabHtml());
     } else {
       final cols = [...dims, ..._values];
+      // Sort by dimensions so groups are contiguous for subtotals (mirrors the
+      // on-screen Table view).
+      final data = [..._result];
+      if (dims.isNotEmpty) {
+        data.sort((a, b) {
+          for (final d in dims) {
+            final c = (a[d]?.toString() ?? '').compareTo(b[d]?.toString() ?? '');
+            if (c != 0) return c;
+          }
+          return 0;
+        });
+      }
+      void totalTr(String label, Iterable<Map<String, dynamic>> group) {
+        buf.write('<tr class="total">');
+        for (var i = 0; i < dims.length; i++) {
+          buf.write('<td>${i == 0 ? _esc(label) : ''}</td>');
+        }
+        if (dims.isEmpty) buf.write('<td>${_esc(label)}</td>');
+        for (var j = 0; j < _values.length; j++) {
+          if (dims.isEmpty && j == 0) { buf.write('<td class="num"></td>'); continue; }
+          buf.write('<td class="num">${_esc(_fmt(_sumMeasure(group, _values[j])))}</td>');
+        }
+        buf.write('</tr>');
+      }
+
       buf.write('<table><thead><tr>');
       for (final c in cols) buf.write('<th class="${_values.contains(c) ? 'num' : ''}">${_esc(_label(c))}</th>');
       buf.write('</tr></thead><tbody>');
-      for (final r in _result) {
+      final groupDim = _rows.isNotEmpty ? _rows.first : (dims.isNotEmpty ? dims.first : null);
+      void writeRow(Map<String, dynamic> r) {
         buf.write('<tr>');
         for (final c in cols) {
           final isM = _values.contains(c);
@@ -855,6 +949,23 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         }
         buf.write('</tr>');
       }
+      if (groupDim != null && _values.isNotEmpty) {
+        final groups = <String, List<Map<String, dynamic>>>{};
+        final order = <String>[];
+        for (final r in data) {
+          final k = r[groupDim]?.toString() ?? '(none)';
+          (groups[k] ??= []).add(r);
+          if (!order.contains(k)) order.add(k);
+        }
+        final showSub = order.length > 1;
+        for (final k in order) {
+          for (final r in groups[k]!) writeRow(r);
+          if (showSub) totalTr('$k  ·  subtotal', groups[k]!);
+        }
+      } else {
+        for (final r in data) writeRow(r);
+      }
+      if (_values.isNotEmpty) totalTr('Grand total', data);
       buf.write('</tbody></table>');
     }
 
