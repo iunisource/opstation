@@ -495,10 +495,37 @@ class _Period {
 String _ymd(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+const _monthNames = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december'
+];
+
 _Period _period(String q) {
   final now = DateTime.now();
   DateTime startDay, endDay; // local-day, endDay inclusive
   String label;
+
+  // Named month, e.g. "in july" / "july 2025". Defaults to the most recent
+  // occurrence of that month (this year, or last year if it hasn't happened yet).
+  int? mIdx;
+  for (var i = 0; i < _monthNames.length; i++) {
+    if (RegExp('\\b${_monthNames[i]}\\b').hasMatch(q)) {
+      mIdx = i + 1;
+      break;
+    }
+  }
+  if (mIdx != null) {
+    final yr = RegExp(r'\b(20\d{2})\b').firstMatch(q);
+    int year = yr != null ? int.parse(yr.group(1)!) : now.year;
+    if (yr == null && mIdx > now.month) year -= 1; // month not reached yet this year
+    startDay = DateTime(year, mIdx, 1);
+    endDay = DateTime(year, mIdx + 1, 1).subtract(const Duration(days: 1));
+    label = '${_monthNames[mIdx - 1][0].toUpperCase()}${_monthNames[mIdx - 1].substring(1)} $year';
+    final startIso2 = startDay.toUtc().toIso8601String();
+    final endIso2 = endDay.add(const Duration(days: 1)).toUtc().toIso8601String();
+    return _Period(label, startIso2, endIso2, _ymd(endDay), _ymd(startDay));
+  }
+
   if (q.contains('yesterday')) {
     final y = now.subtract(const Duration(days: 1));
     startDay = DateTime(y.year, y.month, y.day);
@@ -571,6 +598,57 @@ String _term(String q, List<String> triggers) {
   return s.replaceAll(RegExp(r'[%,()]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
+/// Break a search phrase into meaningful tokens: drop punctuation, single
+/// letters, and common noise words ("sb", "c/o", "and"…). This is what makes
+/// "Imran sb C/O Zexel" match a customer stored as "Imran Traders — Zexel".
+const _noiseWords = {
+  'sb', 'co', 'and', 'the', 'of', 'for', 'in', 'ltd', 'pvt', 'llc',
+  'company', 'traders', 'trader', 'store', 'stores', 'shop',
+};
+List<String> _tokens(String term) {
+  return term
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((t) => t.length >= 2 && !_noiseWords.contains(t))
+      .toList();
+}
+
+/// Smart, order-independent lookup. Every token must appear in at least one of
+/// [cols] (AND across tokens, OR within a token). If nothing matches all
+/// tokens, falls back to matching ANY token so we still surface candidates.
+Future<List<Map<String, dynamic>>> _smartSearch(
+  _Ctx c, {
+  required String table,
+  required String select,
+  required List<String> cols,
+  required String term,
+  int limit = 6,
+}) async {
+  final tokens = _tokens(term);
+  if (tokens.isEmpty) return const [];
+  // Pass 1: AND across tokens.
+  var q = c.client.from(table).select(select).eq('org_id', c.orgId);
+  for (final t in tokens) {
+    q = q.or(cols.map((col) => '$col.ilike.%$t%').join(','));
+  }
+  var rows = (await q.limit(limit) as List).cast<Map<String, dynamic>>();
+  if (rows.isNotEmpty || tokens.length == 1) return rows;
+  // Pass 2: OR across every token (broader net).
+  final ors = <String>[];
+  for (final t in tokens) {
+    for (final col in cols) {
+      ors.add('$col.ilike.%$t%');
+    }
+  }
+  final q2 = c.client
+      .from(table)
+      .select(select)
+      .eq('org_id', c.orgId)
+      .or(ors.join(','));
+  rows = (await q2.limit(limit) as List).cast<Map<String, dynamic>>();
+  return rows;
+}
+
 const _noPerm =
     'You don\'t have access to that area, so I can\'t answer it. Ask an admin '
     'if you think you should.';
@@ -613,6 +691,23 @@ Future<_Msg> _route(String raw, _Ctx c) async {
           q.contains('on road') ||
           q.contains('out'))) {
     return _activeRoutes(c);
+  }
+
+  // Top-selling products / best sellers.
+  if (q.contains('best sell') ||
+      q.contains('best-sell') ||
+      q.contains('top sell') ||
+      q.contains('top-sell') ||
+      q.contains('highest sell') ||
+      q.contains('most sold') ||
+      q.contains('most selling') ||
+      q.contains('best seller') ||
+      q.contains('top product') ||
+      q.contains('top sku') ||
+      ((q.contains('top ') || q.contains('highest')) &&
+          (q.contains('sell') || q.contains('sold') || q.contains('sku') ||
+              q.contains('product') || q.contains('item')))) {
+    return _topProducts(q, c);
   }
 
   // Sales summary.
@@ -698,6 +793,7 @@ _Msg _help() {
     '• Customer balance — "balance of Ali Traders", "who owes us"\n'
     '• Supplier balance — "how much do we owe Umar Steel"\n'
     '• Sales — "sales today", "sales this month"\n'
+    '• Top sellers — "best selling product in July", "top SKUs this month"\n'
     '• Purchases — "purchases this month"\n'
     '• Collection — "collection today" (admins)\n'
     '• Active routes — "which routes are running now" (admins)\n'
@@ -733,13 +829,11 @@ Future<_Msg> _stock(String q, _Ctx c) async {
     return const _Msg(false,
         'Which product? e.g. "stock of GM Cable" or "how much 2-Stroke oil".');
   }
-  final prods = await c.client
-      .from('products')
-      .select('id, name, sku')
-      .eq('org_id', c.orgId)
-      .or('name.ilike.%$term%,sku.ilike.%$term%')
-      .limit(6);
-  final list = (prods as List).cast<Map<String, dynamic>>();
+  final list = await _smartSearch(c,
+      table: 'products',
+      select: 'id, name, sku',
+      cols: ['name', 'sku'],
+      term: term);
   if (list.isEmpty) {
     return _Msg(false, 'I couldn\'t find a product matching "$term".');
   }
@@ -795,13 +889,11 @@ Future<_Msg> _customerBalance(String q, _Ctx c) async {
     return const _Msg(false,
         'Which customer? e.g. "balance of Ali Traders".');
   }
-  final custs = await c.client
-      .from('customers')
-      .select('id, shop_name, code')
-      .eq('org_id', c.orgId)
-      .or('shop_name.ilike.%$term%,code.ilike.%$term%')
-      .limit(6);
-  final list = (custs as List).cast<Map<String, dynamic>>();
+  final list = await _smartSearch(c,
+      table: 'customers',
+      select: 'id, shop_name, code',
+      cols: ['shop_name', 'code'],
+      term: term);
   if (list.isEmpty) {
     return _Msg(false, 'I couldn\'t find a customer matching "$term".');
   }
@@ -854,13 +946,11 @@ Future<_Msg> _supplierBalance(String q, _Ctx c) async {
     return const _Msg(false,
         'Which supplier? e.g. "how much do we owe Umar Steel".');
   }
-  final sups = await c.client
-      .from('suppliers')
-      .select('id, name')
-      .eq('org_id', c.orgId)
-      .ilike('name', '%$term%')
-      .limit(6);
-  final list = (sups as List).cast<Map<String, dynamic>>();
+  final list = await _smartSearch(c,
+      table: 'suppliers',
+      select: 'id, name',
+      cols: ['name'],
+      term: term);
   if (list.isEmpty) {
     return _Msg(false, 'I couldn\'t find a supplier matching "$term".');
   }
@@ -929,6 +1019,76 @@ Future<_Msg> _salesSummary(String q, _Ctx c) async {
     false,
     'Sales ${p.label}$scope: ${_money(total)} across ${rows.length} '
     'invoice${rows.length == 1 ? '' : 's'}.',
+    links: [_Link('Sales report', '/erp/sales-report')],
+  );
+}
+
+// ─── Intent: top-selling products ───────────────────────────────────────────
+
+Future<_Msg> _topProducts(String q, _Ctx c) async {
+  if (!c.can('/erp/sales-report') && !c.can('/erp/sales-invoices')) {
+    return const _Msg(false, _noPerm);
+  }
+  final p = _period(q);
+  final byUnits = q.contains('unit') ||
+      q.contains('quantity') ||
+      q.contains('qty') ||
+      q.contains('volume') ||
+      q.contains('most sold');
+
+  // Inner-join the parent invoice so we can filter by org/date/branch without a
+  // giant id list. Only posted (non-voided) invoices count.
+  var query = c.client
+      .from('sales_invoice_items')
+      .select(
+          'product_id, qty_delivered, line_total, sales_invoices!inner(org_id, is_voided, voucher_date, branch_id)')
+      .eq('sales_invoices.org_id', c.orgId)
+      .eq('sales_invoices.is_voided', false)
+      .gte('sales_invoices.voucher_date', p.d2)
+      .lte('sales_invoices.voucher_date', p.d1);
+  if (c.branchId != null) {
+    query = query.eq('sales_invoices.branch_id', c.branchId!);
+  }
+  final rows = (await query as List).cast<Map<String, dynamic>>();
+  if (rows.isEmpty) {
+    return _Msg(false, 'No sales found for ${p.label}.');
+  }
+  final val = <String, double>{};
+  final units = <String, double>{};
+  for (final r in rows) {
+    final pid = r['product_id'] as String?;
+    if (pid == null) continue;
+    val[pid] = (val[pid] ?? 0) + ((r['line_total'] as num?)?.toDouble() ?? 0);
+    units[pid] =
+        (units[pid] ?? 0) + ((r['qty_delivered'] as num?)?.toDouble() ?? 0);
+  }
+  final ids = val.keys.toList()
+    ..sort((a, b) => byUnits
+        ? (units[b] ?? 0).compareTo(units[a] ?? 0)
+        : (val[b] ?? 0).compareTo(val[a] ?? 0));
+  final topIds = ids.take(5).toList();
+  final prods = (await c.client
+          .from('products')
+          .select('id, name, sku')
+          .eq('org_id', c.orgId)
+          .inFilter('id', topIds) as List)
+      .cast<Map<String, dynamic>>();
+  final info = {for (final pr in prods) pr['id'] as String: pr};
+
+  final buf = StringBuffer();
+  for (var i = 0; i < topIds.length; i++) {
+    final id = topIds[i];
+    final pr = info[id];
+    final name = (pr?['name'] ?? 'Product') as String;
+    final sku = (pr?['sku'] ?? '').toString();
+    buf.writeln('${i + 1}. $name${sku.isNotEmpty ? ' ($sku)' : ''} — '
+        '${_qty(units[id] ?? 0)} sold, ${_money(val[id] ?? 0)}');
+  }
+  final basis = byUnits ? 'by units sold' : 'by sales value';
+  final scope = c.branchId != null ? ', current branch' : '';
+  return _Msg(
+    false,
+    'Top sellers — ${p.label} ($basis$scope):\n\n${buf.toString().trimRight()}',
     links: [_Link('Sales report', '/erp/sales-report')],
   );
 }
