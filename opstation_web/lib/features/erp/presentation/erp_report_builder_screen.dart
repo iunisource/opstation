@@ -729,7 +729,12 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     } else {
       for (final r in data) rows.add(dataRow(r));
     }
-    if (_values.isNotEmpty) rows.add(totalRow('Grand total', data, grand: true));
+    // Only add a grand-total row when there are dimension columns to align the
+    // label under. With no dimensions the query returns a single aggregated row
+    // that already IS the total, so a separate row would just duplicate it.
+    if (_values.isNotEmpty && dims.isNotEmpty) {
+      rows.add(totalRow('Grand total', data, grand: true));
+    }
 
     return SingleChildScrollView(child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
@@ -965,7 +970,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       } else {
         for (final r in data) writeRow(r);
       }
-      if (_values.isNotEmpty) totalTr('Grand total', data);
+      // As on screen: only add a grand-total row when there are dimension
+      // columns; with none, the single aggregated row already is the total.
+      if (_values.isNotEmpty && dims.isNotEmpty) totalTr('Grand total', data);
       buf.write('</tbody></table>');
     }
 
