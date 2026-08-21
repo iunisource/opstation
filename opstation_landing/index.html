@@ -27,7 +27,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&family=Playfair+Display:ital,wght@1,400;1,500;1,600&display=swap" rel="stylesheet" />
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -397,6 +397,132 @@
       <div class="card p-6 bg-white"><div class="eyebrow text-brand-600">Office</div><h3 class="display font-bold text-lg mt-3">Owners</h3><p class="text-muted text-sm mt-2 leading-relaxed">Watch the whole operation — stock, cash and production — in real time.</p></div>
     </div>
   </section>
+
+  <!-- SPOTLIGHT REVEAL -->
+  <style>
+    .font-playfair { font-family: 'Playfair Display', serif; }
+    @keyframes rvReveal { 0% { opacity:0; transform:translateY(28px); filter:blur(12px);} 100% { opacity:1; transform:translateY(0); filter:blur(0);} }
+    @keyframes rvFadeUp { 0% { opacity:0; transform:translateY(20px);} 100% { opacity:1; transform:translateY(0);} }
+    @keyframes rvZoom   { 0% { transform:scale(1.12);} 100% { transform:scale(1);} }
+    .rv-anim { opacity:0; animation-fill-mode:forwards; animation-timing-function:cubic-bezier(0.16,1,0.3,1); }
+    .rv-reveal { animation-name:rvReveal; animation-duration:1.1s; }
+    .rv-fade   { animation-name:rvFadeUp; animation-duration:1s; }
+    .rv-zoom   { animation:rvZoom 1.8s cubic-bezier(0.16,1,0.3,1) forwards; }
+    #reveal-hero.rv-in .rv-anim { animation-play-state:running; }
+    @media (prefers-reduced-motion: reduce) { .rv-anim, .rv-zoom { animation:none; opacity:1; } }
+  </style>
+  <section id="reveal-hero" class="relative w-full overflow-hidden bg-black" style="height:100dvh">
+    <!-- base scene (always visible) -->
+    <div class="absolute inset-0 bg-center bg-cover bg-no-repeat rv-zoom" style="z-index:10; background-image:url('https://images.higgs.ai/?default=1&output=webp&url=https%3A%2F%2Fd8j0ntlcm91z4.cloudfront.net%2Fuser_38xzZboKViGWJOttwIXH07lWA1P%2Fhf_20260721_142052_eb24fa6b-a69e-4ff2-8e74-8ff14fd0f864.png&w=1280&q=85');"></div>
+    <!-- reveal scene (only inside the moving spotlight) -->
+    <div id="rv-reveal-layer" class="absolute inset-0 bg-center bg-cover bg-no-repeat pointer-events-none" style="z-index:30; background-image:url('https://images.higgs.ai/?default=1&output=webp&url=https%3A%2F%2Fd8j0ntlcm91z4.cloudfront.net%2Fuser_38xzZboKViGWJOttwIXH07lWA1P%2Fhf_20260721_142424_81e51558-a475-4497-86c1-510dc01e003a.png&w=1280&q=85');"></div>
+    <!-- subtle darken so white text stays legible over both scenes -->
+    <div class="absolute inset-0 pointer-events-none" style="z-index:40; background:linear-gradient(180deg,rgba(0,0,0,0.35) 0%,rgba(0,0,0,0.15) 35%,rgba(0,0,0,0.15) 60%,rgba(0,0,0,0.45) 100%);"></div>
+    <canvas id="rv-canvas" style="display:none"></canvas>
+
+    <!-- top row: heading + paragraph -->
+    <div class="absolute top-[12%] left-0 right-0 flex items-start justify-between px-5 sm:px-10 md:px-14 pointer-events-none" style="z-index:50">
+      <div class="text-white leading-[0.95] text-left">
+        <span class="block font-playfair italic font-normal text-5xl sm:text-7xl md:text-8xl rv-anim rv-reveal" style="letter-spacing:-0.05em; animation-delay:0.25s">Every unit,</span>
+        <span class="block font-display font-extrabold text-5xl sm:text-7xl md:text-8xl -mt-1 rv-anim rv-reveal" style="letter-spacing:-0.06em; animation-delay:0.42s">every rupee, in view.</span>
+      </div>
+      <p class="hidden sm:block max-w-[250px] pt-3 text-base text-white leading-relaxed text-left rv-anim rv-fade" style="animation-delay:0.7s">
+        From the field to the warehouse to the ledger — one system keeps every movement on the record.
+      </p>
+    </div>
+
+    <!-- bottom-right: paragraph + CTA -->
+    <div class="absolute bottom-10 sm:bottom-24 left-5 right-5 sm:left-auto sm:right-10 md:right-14 max-w-full sm:max-w-[280px] flex flex-col items-start gap-4 sm:gap-5" style="z-index:50">
+      <p class="text-sm sm:text-base text-white leading-relaxed">Opstation turns scattered stock, cash and orders into one clear, real-time picture — nothing hidden.</p>
+      <a href="https://opstation-f06c7.web.app/#/signup" class="inline-block bg-brand-500 hover:bg-brand-600 text-white text-base font-semibold px-8 py-3.5 rounded-full transition-all hover:scale-[1.03] active:scale-95" style="box-shadow:0 10px 30px -8px rgba(47,111,237,0.55)">Start free</a>
+    </div>
+
+    <!-- bottom-left: scroll hint -->
+    <div class="absolute bottom-6 left-5 sm:left-10 md:left-14 flex items-center gap-3" style="z-index:50">
+      <span class="w-7 h-7 rounded-full bg-white flex items-center justify-center">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </span>
+      <span class="text-xs text-white/60">Scroll down for more</span>
+    </div>
+
+    <!-- bottom-right: year -->
+    <div class="absolute bottom-6 right-5 sm:right-10 md:right-14" style="z-index:50">
+      <span class="text-xs text-white/60">20-26</span>
+    </div>
+  </section>
+  <script>
+    (function () {
+      var section = document.getElementById('reveal-hero');
+      var layer = document.getElementById('rv-reveal-layer');
+      var canvas = document.getElementById('rv-canvas');
+      if (!section || !layer || !canvas) return;
+      var ctx = canvas.getContext('2d');
+      var SPOTLIGHT_R = 260;
+      var rect = section.getBoundingClientRect();
+      // start the spotlight centred so it looks intentional before first move
+      var mouse = { x: rect.width / 2, y: rect.height * 0.42 };
+      var smooth = { x: mouse.x, y: mouse.y };
+      var running = false, rafId = null;
+
+      function sizeCanvas() {
+        rect = section.getBoundingClientRect();
+        canvas.width = Math.max(1, Math.round(rect.width));
+        canvas.height = Math.max(1, Math.round(rect.height));
+      }
+      sizeCanvas();
+
+      function draw() {
+        var x = smooth.x, y = smooth.y;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        var g = ctx.createRadialGradient(x, y, 0, x, y, SPOTLIGHT_R);
+        g.addColorStop(0.00, 'rgba(255,255,255,1)');
+        g.addColorStop(0.40, 'rgba(255,255,255,1)');
+        g.addColorStop(0.60, 'rgba(255,255,255,0.75)');
+        g.addColorStop(0.75, 'rgba(255,255,255,0.4)');
+        g.addColorStop(0.88, 'rgba(255,255,255,0.12)');
+        g.addColorStop(1.00, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, SPOTLIGHT_R, 0, Math.PI * 2);
+        ctx.fill();
+        var url = canvas.toDataURL();
+        layer.style.webkitMaskImage = 'url(' + url + ')';
+        layer.style.maskImage = 'url(' + url + ')';
+        layer.style.webkitMaskSize = '100% 100%';
+        layer.style.maskSize = '100% 100%';
+        layer.style.webkitMaskRepeat = 'no-repeat';
+        layer.style.maskRepeat = 'no-repeat';
+      }
+
+      function loop() {
+        smooth.x += (mouse.x - smooth.x) * 0.1;
+        smooth.y += (mouse.y - smooth.y) * 0.1;
+        draw();
+        rafId = window.requestAnimationFrame(loop);
+      }
+      function start() { if (!running) { running = true; loop(); } }
+      function stop() { if (running) { running = false; if (rafId) cancelAnimationFrame(rafId); } }
+
+      section.addEventListener('mousemove', function (e) {
+        rect = section.getBoundingClientRect();
+        mouse.x = e.clientX - rect.left;
+        mouse.y = e.clientY - rect.top;
+      });
+      window.addEventListener('resize', sizeCanvas);
+
+      // Only animate while the section is on screen (saves the per-frame toDataURL cost).
+      if ('IntersectionObserver' in window) {
+        new IntersectionObserver(function (entries) {
+          entries.forEach(function (en) {
+            if (en.isIntersecting) { section.classList.add('rv-in'); start(); }
+            else stop();
+          });
+        }, { threshold: 0.05 }).observe(section);
+      } else { section.classList.add('rv-in'); start(); }
+
+      draw();
+    })();
+  </script>
 
   <!-- INDUSTRIES -->
   <section id="industries" class="max-w-6xl mx-auto px-6 py-24 md:py-32 reveal">
