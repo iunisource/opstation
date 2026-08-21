@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
+import '../../../core/utils/friendly_error.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -29,6 +30,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _linkedPis = []; // invoices raised on this GRN
+  bool _adjustMode = false;  // editing a posted (received) GRN after unlock
+  bool _adjustBusy = false;
   List<Map<String, dynamic>> _items = [];
   Map<String, TextEditingController> _receivedCtrl = {};
   VoucherMeta _meta = VoucherMeta();
@@ -73,6 +76,10 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked;
+  // A posted (received) GRN can be re-adjusted once an admin has UNLOCKED it —
+  // as long as it hasn't been invoiced (an invoice already cleared GRNI, so a
+  // change here would unbalance the books). This is the real purpose of unlock.
+  bool get _canAdjust => _isConfirmed && !_isLocked && _isAdmin && _linkedPis.isEmpty;
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -306,6 +313,51 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       _showSnack('Failed to save: $e');
     } finally {
       SavingOverlay.hide();
+    }
+  }
+
+  void _enterAdjust() {
+    _initReceivedCtrls(); // reset editors to current received quantities
+    setState(() => _adjustMode = true);
+  }
+
+  void _cancelAdjust() {
+    _initReceivedCtrls();
+    setState(() => _adjustMode = false);
+  }
+
+  /// Save edits to a posted (received) GRN. Each changed line is sent to
+  /// adjust_grn_received_qty, which posts the DELTA correction (stock, cost
+  /// layer, GL and PO progress) so nothing drifts.
+  Future<void> _saveAdjustments() async {
+    if (_adjustBusy) return;
+    final lines = <Map<String, dynamic>>[];
+    for (final row in _items) {
+      final id = row['id'] as String;
+      final newQty = double.tryParse(_receivedCtrl[id]?.text ?? '');
+      if (newQty == null) continue;
+      final old = (row['qty_received'] as num?)?.toDouble() ?? 0;
+      if (newQty == old) continue;
+      lines.add({'item_id': id, 'qty': newQty});
+    }
+    if (lines.isEmpty) { setState(() => _adjustMode = false); return; }
+    setState(() => _adjustBusy = true);
+    SavingOverlay.show(context, label: 'Adjusting…');
+    try {
+      await Supabase.instance.client.rpc('adjust_grn_received_qty', params: {
+        'p_grn_id': _detail['id'],
+        'p_lines': lines,
+        'p_user_id': ref.read(currentUserProvider)?.id,
+      });
+      _showSnack('Quantities adjusted — stock, cost and GL updated');
+      setState(() => _adjustMode = false);
+      _loadDetail(_detail['id'] as String);
+      _loadList();
+    } catch (e) {
+      _showSnack(friendlyError('adjust the GRN', e));
+    } finally {
+      SavingOverlay.hide();
+      if (mounted) setState(() => _adjustBusy = false);
     }
   }
 
@@ -570,6 +622,20 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                 onPressed: _confirmBusy ? null : _confirmReceipt),
             const SizedBox(width: 8),
           ],
+          if (_adjustMode) ...[
+            ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 16),
+                label: Text(_adjustBusy ? 'Saving…' : 'Save changes'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+                onPressed: _adjustBusy ? null : _saveAdjustments),
+            const SizedBox(width: 6),
+            TextButton(onPressed: _adjustBusy ? null : _cancelAdjust, child: const Text('Cancel')),
+            const SizedBox(width: 8),
+          ] else if (_canAdjust) ...[
+            OutlinedButton.icon(icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('Edit quantities'),
+                onPressed: _enterAdjust),
+            const SizedBox(width: 8),
+          ],
           if (_superviseEnabled && _isAdmin) ...[
             if (_detail['supervised_at'] == null)
               OutlinedButton.icon(
@@ -630,6 +696,14 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           decoration: BoxDecoration(color: Colors.green.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.25))),
           child: const Row(children: [Icon(Icons.edit_note, size: 15, color: Colors.green), SizedBox(width: 8),
             Expanded(child: Text('Adjust received quantities below, then click "Confirm Receipt" to move stock.', style: TextStyle(fontSize: 12, color: Colors.green)))])),
+        if (_adjustMode) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.primary.withOpacity(0.25))),
+          child: const Row(children: [Icon(Icons.tune, size: 15, color: AppTheme.primary), SizedBox(width: 8),
+            Expanded(child: Text('Editing a posted GRN. Changing a received quantity re-posts a correction — stock, cost layer and GL all move by the difference. Then click "Save changes".', style: TextStyle(fontSize: 12, color: AppTheme.primary)))])),
+        if (_isConfirmed && !_isLocked && _linkedPis.isNotEmpty && _isAdmin) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(color: Colors.purple.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.purple.withOpacity(0.25))),
+          child: const Row(children: [Icon(Icons.info_outline, size: 15, color: Colors.purple), SizedBox(width: 8),
+            Expanded(child: Text('This GRN is invoiced, so quantities are locked to keep GRNI and payables balanced. Adjust or delete the linked invoice first to edit the received quantities.', style: TextStyle(fontSize: 12, color: Colors.purple)))])),
         const SizedBox(height: 16),
         // Items table
         Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
@@ -655,11 +729,11 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                   ])),
                   Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   Expanded(flex: 2, child: Text(ordered.toStringAsFixed(ordered % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(color: AppTheme.textSecondary))),
-                  Expanded(flex: 2, child: _isDraft
+                  Expanded(flex: 2, child: (_isDraft || _adjustMode)
                       ? TextField(controller: _receivedCtrl[id],
                           decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)),
                           textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          onSubmitted: (_) => _saveReceivedQty(id))
+                          onSubmitted: _isDraft ? (_) => _saveReceivedQty(id) : null)
                       : Text(received.toStringAsFixed(received % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
                 ]));
             }),

@@ -234,6 +234,14 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     final qtyStr = qtyAbs == qtyAbs.roundToDouble() ? qtyAbs.toStringAsFixed(0) : qtyAbs.toStringAsFixed(2);
     final cost = (m['unit_cost'] as num?)?.toDouble() ?? 0;
     final at = cost > 0 ? ' @ ${cost.toStringAsFixed(2)}' : '';
+    // A GRN quantity edit posts a system correction (never a manual tweak) —
+    // label it as such and tie it back to the GRN so the ledger isn't ambiguous.
+    if (ref == 'grn_qty_correction') {
+      final refId = m['reference_id'] as String?;
+      final vno = refId != null ? _voucherNumbers[refId] : null;
+      final dir = qty < 0 ? 'reduced' : 'increased';
+      return '${vno ?? 'GRN'} quantity $dir by $qtyStr pcs';
+    }
     final t = type.isNotEmpty ? type : ref;
     if (t.contains('sale') && t.contains('return')) return 'Sale return $qtyStr pcs$at';
     if (t.contains('pos')) return 'Sold $qtyStr pcs$at';
@@ -381,6 +389,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     final ref = ((m['reference_type'] as String?) ?? '').toLowerCase();
     final notes = ((m['notes'] as String?) ?? '').toLowerCase();
     final combined = ref + ' ' + notes;
+    if (ref == 'grn_qty_correction') return 'GRN correction';
     if (type == 'adjustment') {
       if (combined.contains('sales_return') || combined.contains('sale_return')) return 'sale return';
       if (combined.contains('pos_return')) return 'pos return';
@@ -400,6 +409,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       case 'purchase return': return Colors.teal;
       case 'transfer': return Colors.blue;
       case 'adjustment': return Colors.purple;
+      case 'GRN correction': return Colors.indigo;
       default: return AppTheme.textSecondary;
     }
   }
@@ -769,7 +779,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             : '';
         final descRaw = _movementDescription(m);
         final desc = descRaw.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-        final manualTag = ((m['created_by'] as String?) ?? '').isEmpty
+        final manualTag = (((m['created_by'] as String?) ?? '').isEmpty && (m['reference_type'] as String?) != 'grn_qty_correction')
             ? ' <span class="badge" style="background:#fef3c7;color:#b45309;">manual</span>'
             : '';
         rowsBuf.write('<tr><td>' + date + '</td>' + brCell + '<td><span class="badge">' + type + '</span>' + manualTag + '</td><td>' + vno + '</td><td>' + desc + '</td><td class="num green">' + inStr + '</td><td class="num red">' + outStr + '</td><td class="num bold">' + balStr + '</td></tr>');
@@ -1137,7 +1147,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                                     // every screen stamps the user. It came from a script / manual
                                     // SQL repair. Flag it so data fixes announce themselves instead
                                     // of masquerading as ordinary vouchers.
-                                    if (((m['created_by'] as String?) ?? '').isEmpty)
+                                    if (((m['created_by'] as String?) ?? '').isEmpty && refType != 'grn_qty_correction')
                                       Tooltip(
                                         message: 'No user recorded — this entry was made by a script or manual database repair, not from a screen in the app.',
                                         child: Container(
