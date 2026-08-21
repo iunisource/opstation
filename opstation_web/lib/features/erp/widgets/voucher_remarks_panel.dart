@@ -13,6 +13,11 @@ class VoucherRemarksPanel extends StatefulWidget {
   final String? userId;
   final String? userName;
   final bool canWrite;
+  // When true, the panel tracks read-state: unread remarks from other users are
+  // highlighted, a "Mark as read" button appears, and [onRead] fires after they
+  // are cleared (so a parent can refresh a pendency badge). Off elsewhere.
+  final bool trackReads;
+  final VoidCallback? onRead;
 
   const VoucherRemarksPanel({
     super.key,
@@ -22,6 +27,8 @@ class VoucherRemarksPanel extends StatefulWidget {
     required this.userId,
     required this.userName,
     this.canWrite = true,
+    this.trackReads = false,
+    this.onRead,
   });
 
   @override
@@ -67,6 +74,12 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
     }
   }
 
+  // Unread remarks written by SOMEONE ELSE — what the pendency badge counts and
+  // what "Mark as read" clears. A user's own remark never nags them.
+  int get _unreadFromOthers => _rows
+      .where((r) => r['is_read'] != true && r['user_id'] != widget.userId)
+      .length;
+
   Future<void> _add() async {
     final text = _ctrl.text.trim();
     if (text.isEmpty) return;
@@ -81,9 +94,32 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
         'user_id': widget.userId,
         'user_name': widget.userName,
         'remark': text,
+        // A freshly-added remark is unread for everyone else until someone reads
+        // it. (Backfilled history is already is_read = true.)
+        'is_read': false,
       });
       _ctrl.clear();
       await _load();
+      widget.onRead?.call(); // refresh badge — a new remark raises the counter
+    } catch (e) { _snack('Failed: $e'); }
+    if (mounted) setState(() => _saving = false);
+  }
+
+  Future<void> _markRead() async {
+    final ids = _rows
+        .where((r) => r['is_read'] != true)
+        .map((r) => r['id'] as String)
+        .toList();
+    if (ids.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await Supabase.instance.client.from('voucher_remarks').update({
+        'is_read': true,
+        'read_by': widget.userId,
+        'read_at': DateTime.now().toIso8601String(),
+      }).inFilter('id', ids);
+      await _load();
+      widget.onRead?.call(); // clear the badge
     } catch (e) { _snack('Failed: $e'); }
     if (mounted) setState(() => _saving = false);
   }
@@ -105,6 +141,13 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
               const SizedBox(width: 6),
               const Text('(not printed)', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
               const Spacer(),
+              if (widget.trackReads && _unreadFromOthers > 0)
+                Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFFDC2626), borderRadius: BorderRadius.circular(10)),
+                  child: Text('$_unreadFromOthers new', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
               if (_rows.isNotEmpty)
                 Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
@@ -115,6 +158,30 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
           ),
         ),
         if (_expanded) ...[
+          if (widget.trackReads && _unreadFromOthers > 0)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF2F2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFECACA)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.mark_chat_unread_outlined, size: 16, color: Color(0xFFDC2626)),
+                const SizedBox(width: 8),
+                Expanded(child: Text(
+                  '$_unreadFromOthers new remark${_unreadFromOthers == 1 ? '' : 's'} to review',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF991B1B)))),
+                TextButton.icon(
+                  onPressed: _saving ? null : _markRead,
+                  icon: const Icon(Icons.done_all, size: 16),
+                  label: const Text('Read'),
+                  style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626), padding: const EdgeInsets.symmetric(horizontal: 10)),
+                ),
+              ]),
+            ),
           if (widget.canWrite)
             Padding(padding: const EdgeInsets.fromLTRB(12, 12, 12, 6), child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Expanded(child: TextField(
@@ -137,9 +204,17 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
               for (final r in _rows)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(border: Border(top: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
+                  decoration: BoxDecoration(
+                    color: (widget.trackReads && r['is_read'] != true && r['user_id'] != widget.userId)
+                        ? const Color(0xFFFEF2F2)
+                        : null,
+                    border: Border(top: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
+                      if (widget.trackReads && r['is_read'] != true && r['user_id'] != widget.userId) ...[
+                        Container(width: 7, height: 7, margin: const EdgeInsets.only(right: 6),
+                          decoration: const BoxDecoration(color: Color(0xFFDC2626), shape: BoxShape.circle)),
+                      ],
                       Text(r['user_name'] as String? ?? '—', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700)),
                       const Spacer(),
                       Text(r['created_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(r['created_at'] as String).toLocal()) : '',

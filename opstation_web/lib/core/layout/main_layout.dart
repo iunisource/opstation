@@ -415,6 +415,33 @@ final fieldOrderPendingCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+/// Delivery-Order remark pendency: how many DOs have an unread internal remark
+/// written by SOMEONE ELSE. It lights up the Delivery Orders menu + the Sales
+/// nav badge so a colleague comes, reads the comment, and clicks "Read" (which
+/// marks the DO's remarks read and clears this count). A user's own remark
+/// never counts against them.
+final doRemarkPendingProvider = FutureProvider<int>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('voucher_remarks')
+        .select('voucher_id, user_id')
+        .eq('org_id', user.orgId!)
+        .eq('voucher_type', 'DO')
+        .eq('is_read', false);
+    final dos = <String>{};
+    for (final r in res as List) {
+      if (r['user_id'] == user.id) continue; // don't nag the author
+      final v = r['voucher_id'];
+      if (v != null) dos.add(v as String);
+    }
+    return dos.length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 /// Count of retailer orders awaiting review. A retailer order is a REQUEST in
 /// its own table — nothing exists in sales_orders until staff approve it, which
 /// is what stops a pending request being confirmed by accident from the Sales
@@ -654,6 +681,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final siReviewPending = ref.watch(siReviewPendingProvider).valueOrNull ?? 0;
   final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
   final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
+  final doRemarkPending = ref.watch(doRemarkPendingProvider).valueOrNull ?? 0;
   final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
   final productSupervisePending = ref.watch(productSupervisePendingProvider).valueOrNull ?? 0;
@@ -732,7 +760,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
       if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
       if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
-      if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location),
+      if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location, badge: doRemarkPending),
       if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending),
     ];
     final salesReturns = <Widget>[
@@ -904,7 +932,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
-          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending + doRemarkPending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
