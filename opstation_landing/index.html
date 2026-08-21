@@ -122,6 +122,7 @@
         <a href="#apps"     class="nav-link link-u text-sm text-white/85">Apps</a>
         <a href="#how"      class="nav-link link-u text-sm text-white/85">How it works</a>
         <a href="#industries" class="nav-link link-u text-sm text-white/85">Industries</a>
+        <a href="#pricing"  class="nav-link link-u text-sm text-white/85">Pricing</a>
         <a href="#faq"      class="nav-link link-u text-sm text-white/85">FAQ</a>
       </nav>
       <div class="flex items-center gap-3">
@@ -409,6 +410,19 @@
     .rv-fade   { animation-name:rvFadeUp; animation-duration:1s; }
     .rv-zoom   { animation:rvZoom 1.8s cubic-bezier(0.16,1,0.3,1) forwards; }
     #reveal-hero.rv-in .rv-anim { animation-play-state:running; }
+    /* Cursor spotlight = a CSS radial-gradient mask that follows --mx/--my.
+       No per-frame canvas encoding, so it tracks the cursor with zero lag. */
+    #rv-reveal-layer {
+      --mx: 50%; --my: 42%;
+      -webkit-mask-image: radial-gradient(circle 260px at var(--mx) var(--my),
+        rgba(0,0,0,1) 0%, rgba(0,0,0,1) 40%, rgba(0,0,0,.75) 60%,
+        rgba(0,0,0,.4) 75%, rgba(0,0,0,.12) 88%, rgba(0,0,0,0) 100%);
+      mask-image: radial-gradient(circle 260px at var(--mx) var(--my),
+        rgba(0,0,0,1) 0%, rgba(0,0,0,1) 40%, rgba(0,0,0,.75) 60%,
+        rgba(0,0,0,.4) 75%, rgba(0,0,0,.12) 88%, rgba(0,0,0,0) 100%);
+      -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+      will-change: -webkit-mask-position, mask-image;
+    }
     @media (prefers-reduced-motion: reduce) { .rv-anim, .rv-zoom { animation:none; opacity:1; } }
   </style>
   <section id="reveal-hero" class="relative w-full overflow-hidden bg-black" style="height:100dvh">
@@ -418,7 +432,6 @@
     <div id="rv-reveal-layer" class="absolute inset-0 bg-center bg-cover bg-no-repeat pointer-events-none" style="z-index:30; background-image:url('https://images.higgs.ai/?default=1&output=webp&url=https%3A%2F%2Fd8j0ntlcm91z4.cloudfront.net%2Fuser_38xzZboKViGWJOttwIXH07lWA1P%2Fhf_20260721_142424_81e51558-a475-4497-86c1-510dc01e003a.png&w=1280&q=85');"></div>
     <!-- subtle darken so white text stays legible over both scenes -->
     <div class="absolute inset-0 pointer-events-none" style="z-index:40; background:linear-gradient(180deg,rgba(0,0,0,0.35) 0%,rgba(0,0,0,0.15) 35%,rgba(0,0,0,0.15) 60%,rgba(0,0,0,0.45) 100%);"></div>
-    <canvas id="rv-canvas" style="display:none"></canvas>
 
     <!-- top row: heading + paragraph -->
     <div class="absolute top-[12%] left-0 right-0 flex items-start justify-between px-5 sm:px-10 md:px-14 pointer-events-none" style="z-index:50">
@@ -454,50 +467,24 @@
     (function () {
       var section = document.getElementById('reveal-hero');
       var layer = document.getElementById('rv-reveal-layer');
-      var canvas = document.getElementById('rv-canvas');
-      if (!section || !layer || !canvas) return;
-      var ctx = canvas.getContext('2d');
-      var SPOTLIGHT_R = 260;
+      if (!section || !layer) return;
       var rect = section.getBoundingClientRect();
-      // start the spotlight centred so it looks intentional before first move
+      // Start centred so the spotlight looks intentional before the first move.
       var mouse = { x: rect.width / 2, y: rect.height * 0.42 };
       var smooth = { x: mouse.x, y: mouse.y };
-      var running = false, rafId = null;
+      var running = false, rafId = null, moved = false;
 
-      function sizeCanvas() {
-        rect = section.getBoundingClientRect();
-        canvas.width = Math.max(1, Math.round(rect.width));
-        canvas.height = Math.max(1, Math.round(rect.height));
-      }
-      sizeCanvas();
-
-      function draw() {
-        var x = smooth.x, y = smooth.y;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        var g = ctx.createRadialGradient(x, y, 0, x, y, SPOTLIGHT_R);
-        g.addColorStop(0.00, 'rgba(255,255,255,1)');
-        g.addColorStop(0.40, 'rgba(255,255,255,1)');
-        g.addColorStop(0.60, 'rgba(255,255,255,0.75)');
-        g.addColorStop(0.75, 'rgba(255,255,255,0.4)');
-        g.addColorStop(0.88, 'rgba(255,255,255,0.12)');
-        g.addColorStop(1.00, 'rgba(255,255,255,0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(x, y, SPOTLIGHT_R, 0, Math.PI * 2);
-        ctx.fill();
-        var url = canvas.toDataURL();
-        layer.style.webkitMaskImage = 'url(' + url + ')';
-        layer.style.maskImage = 'url(' + url + ')';
-        layer.style.webkitMaskSize = '100% 100%';
-        layer.style.maskSize = '100% 100%';
-        layer.style.webkitMaskRepeat = 'no-repeat';
-        layer.style.maskRepeat = 'no-repeat';
+      function apply() {
+        // Only the gradient centre changes each frame — cheap, GPU-composited.
+        layer.style.setProperty('--mx', smooth.x + 'px');
+        layer.style.setProperty('--my', smooth.y + 'px');
       }
 
       function loop() {
-        smooth.x += (mouse.x - smooth.x) * 0.1;
-        smooth.y += (mouse.y - smooth.y) * 0.1;
-        draw();
+        // 0.16 = smooth but snappy; the spotlight stays right under the cursor.
+        smooth.x += (mouse.x - smooth.x) * 0.16;
+        smooth.y += (mouse.y - smooth.y) * 0.16;
+        apply();
         rafId = window.requestAnimationFrame(loop);
       }
       function start() { if (!running) { running = true; loop(); } }
@@ -507,10 +494,17 @@
         rect = section.getBoundingClientRect();
         mouse.x = e.clientX - rect.left;
         mouse.y = e.clientY - rect.top;
-      });
-      window.addEventListener('resize', sizeCanvas);
+        if (!moved) { moved = true; smooth.x = mouse.x; smooth.y = mouse.y; } // no jump-in from centre
+      }, { passive: true });
+      section.addEventListener('touchmove', function (e) {
+        var t = e.touches && e.touches[0]; if (!t) return;
+        rect = section.getBoundingClientRect();
+        mouse.x = t.clientX - rect.left;
+        mouse.y = t.clientY - rect.top;
+      }, { passive: true });
+      window.addEventListener('resize', function () { rect = section.getBoundingClientRect(); });
 
-      // Only animate while the section is on screen (saves the per-frame toDataURL cost).
+      // Run the rAF loop only while the section is on screen.
       if ('IntersectionObserver' in window) {
         new IntersectionObserver(function (entries) {
           entries.forEach(function (en) {
@@ -520,7 +514,7 @@
         }, { threshold: 0.05 }).observe(section);
       } else { section.classList.add('rv-in'); start(); }
 
-      draw();
+      apply();
     })();
   </script>
 
@@ -545,6 +539,38 @@
       <span class="industry-pill"><span class="dot"></span>Energy &amp; Utilities</span>
       <span class="industry-pill"><span class="dot"></span>Services</span>
       <span class="industry-pill industry-more">…and more</span>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing" class="bg-navy text-white relative overflow-hidden border-t border-white/10">
+    <div class="relative max-w-5xl mx-auto px-6 py-24 md:py-32 reveal">
+      <p class="eyebrow text-sky text-center">— Simple pricing</p>
+      <h2 class="display font-extrabold tracking-tighter2 text-[2rem] md:text-[2.8rem] leading-[1.05] mt-4 text-center max-w-3xl mx-auto">One price. Everything included.</h2>
+      <p class="mt-5 text-white/70 text-center text-lg max-w-2xl mx-auto">Empower an organisation of any size — you just pay what's evident, and it covers everything.</p>
+
+      <div class="mt-14 max-w-md mx-auto">
+        <div class="rounded-3xl bg-white text-ink p-8 sm:p-10 shadow-2xl shadow-black/30 border border-white/10">
+          <div class="flex items-baseline justify-center gap-2">
+            <span class="display font-extrabold tracking-tighter2 text-5xl sm:text-6xl">PKR&nbsp;39,900</span>
+          </div>
+          <p class="text-center text-muted text-sm mt-2">per month · any size of organisation</p>
+
+          <a href="https://opstation-f06c7.web.app/#/signup" class="mt-8 flex w-full items-center justify-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold rounded-xl px-6 py-4 transition shadow-lg shadow-brand-500/30">
+            Start your 2-week free trial
+          </a>
+          <p class="text-center text-faint text-xs mt-3">No credit card required for the trial.</p>
+
+          <div class="mt-8 pt-8 border-t border-line grid sm:grid-cols-2 gap-x-6 gap-y-3.5">
+            <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">No hosting fee</span></div>
+            <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">No setup fee</span></div>
+            <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">No hidden costs</span></div>
+            <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">No annual lock-in</span></div>
+            <div class="flex items-start gap-2.5 text-sm sm:col-span-2"><svg class="mt-0.5 text-brand-600 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Every module, every user, every branch — all included</span></div>
+          </div>
+        </div>
+        <p class="text-center text-white/60 text-sm mt-6">Sign up for a 2-week free trial today — no credit card required.</p>
+      </div>
     </div>
   </section>
 
@@ -587,6 +613,7 @@
         <a href="#field" class="link-u hover:text-white">Field ops</a>
         <a href="#how" class="link-u hover:text-white">How it works</a>
         <a href="#industries" class="link-u hover:text-white">Industries</a>
+        <a href="#pricing" class="link-u hover:text-white">Pricing</a>
         <a href="#faq" class="link-u hover:text-white">FAQ</a>
         <a href="https://opstation-f06c7.web.app" class="link-u hover:text-white">Sign in</a>
       </nav>
