@@ -183,11 +183,52 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     if (orgId == null) return;
     setState(() => _loading = true);
     try {
-      final res = await Supabase.instance.client
+      final client = Supabase.instance.client;
+      final res = await client
           .rpc('rpc_inventory_integrity', params: {'p_org': orgId});
+      var rows = List<Map<String, dynamic>>.from(res as List);
+
+      // In-transit awareness: a dispatched-but-not-received transfer lowers
+      // physical stock while its cost layer stays put, so the check reports a
+      // STOCK <> LAYERS gap that isn't real. Add back in-transit quantities and
+      // drop any product whose ONLY gap is fully explained by stock on a truck.
+      try {
+        final intransit = <String, double>{};
+        final trs = await client
+            .from('stock_transfers')
+            .select('id')
+            .eq('org_id', orgId)
+            .eq('status', 'in_transit');
+        final ids = (trs as List).map((e) => e['id'] as String).toList();
+        if (ids.isNotEmpty) {
+          final items = await client
+              .from('stock_transfer_items')
+              .select('product_id, quantity')
+              .inFilter('transfer_id', ids);
+          for (final r in (items as List)) {
+            final pid = r['product_id'] as String?;
+            if (pid == null) continue;
+            intransit[pid] = (intransit[pid] ?? 0) + ((r['quantity'] as num?)?.toDouble() ?? 0);
+          }
+        }
+        if (intransit.isNotEmpty) {
+          rows = rows.where((r) {
+            if (r['issue'] != 'STOCK <> LAYERS') return true;      // other issues stay
+            if (((r['neg_layers'] as num?)?.toInt() ?? 0) != 0) return true; // real neg-layer issue
+            final pid = r['product_id'] as String?;
+            final it = pid != null ? (intransit[pid] ?? 0) : 0;
+            if (it == 0) return true;
+            final stock = (r['stock_qty'] as num?)?.toDouble() ?? 0;
+            final layer = (r['layer_qty'] as num?)?.toDouble() ?? 0;
+            // keep only if the gap is NOT fully explained by in-transit stock
+            return (stock + it - layer).abs() > 0.001;
+          }).toList();
+        }
+      } catch (_) {/* if the in-transit lookup fails, show the raw list */}
+
       if (!mounted) return;
       setState(() {
-        _rows = List<Map<String, dynamic>>.from(res as List);
+        _rows = rows;
         _loading = false;
       });
     } catch (e) {

@@ -388,9 +388,47 @@ final inventoryIntegrityCountProvider = FutureProvider<int>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   try {
-    final res = await Supabase.instance.client
+    final client = Supabase.instance.client;
+    final res = await client
         .rpc('rpc_inventory_integrity', params: {'p_org': user.orgId});
-    return (res as List).length;
+    var rows = List<Map<String, dynamic>>.from(res as List);
+
+    // Match the Integrity screen: a STOCK <> LAYERS gap that is fully explained
+    // by in-transit transfers is not a real issue, so don't count it in the badge.
+    try {
+      final intransit = <String, double>{};
+      final trs = await client
+          .from('stock_transfers')
+          .select('id')
+          .eq('org_id', user.orgId!)
+          .eq('status', 'in_transit');
+      final ids = (trs as List).map((e) => e['id'] as String).toList();
+      if (ids.isNotEmpty) {
+        final items = await client
+            .from('stock_transfer_items')
+            .select('product_id, quantity')
+            .inFilter('transfer_id', ids);
+        for (final r in (items as List)) {
+          final pid = r['product_id'] as String?;
+          if (pid == null) continue;
+          intransit[pid] = (intransit[pid] ?? 0) + ((r['quantity'] as num?)?.toDouble() ?? 0);
+        }
+      }
+      if (intransit.isNotEmpty) {
+        rows = rows.where((r) {
+          if (r['issue'] != 'STOCK <> LAYERS') return true;
+          if (((r['neg_layers'] as num?)?.toInt() ?? 0) != 0) return true;
+          final pid = r['product_id'] as String?;
+          final it = pid != null ? (intransit[pid] ?? 0) : 0;
+          if (it == 0) return true;
+          final stock = (r['stock_qty'] as num?)?.toDouble() ?? 0;
+          final layer = (r['layer_qty'] as num?)?.toDouble() ?? 0;
+          return (stock + it - layer).abs() > 0.001;
+        }).toList();
+      }
+    } catch (_) {/* fall back to the raw count */}
+
+    return rows.length;
   } catch (_) {
     return 0;
   }
