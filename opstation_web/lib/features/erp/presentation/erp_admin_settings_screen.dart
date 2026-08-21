@@ -168,6 +168,16 @@ const List<_AdminToggle> _toggles = [
         'users. Only applies when the new-job alert above is ON.',
   ),
   _AdminToggle(
+    'org.job_card_price_restrict',
+    'Restrict who can see Job Card prices',
+    'When ON, Job Card prices — component costs, labour/overhead, totals, and the '
+        'priced "Print / PDF" — are shown only to admins and the specific users you '
+        'select below. Everyone else still sees the full Job Card and can print the '
+        'internal shop-floor copy, just without any costing. When OFF (default), the '
+        'existing production-cost report permission governs who sees prices.',
+    users: _UsersField('org.job_card_price_users', 'Users allowed to see Job Card prices'),
+  ),
+  _AdminToggle(
     'org.transfer_alert_skip_admin',
     'Skip admins for the stock-transfer buzzer',
     'When ON, admin and master-admin users are NOT interrupted by the '
@@ -438,6 +448,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.grn_supervise_flow',
   ]),
   _ToggleGroup('Manufacturing', Icons.precision_manufacturing_outlined, [
+    'org.job_card_price_restrict',
     'org.job_ack_flow',
     'org.job_ack_skip_admin',
     'feature.qc_station',

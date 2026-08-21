@@ -99,6 +99,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   StreamSubscription<html.Event>? _visSub; // catch up on tab re-focus
   bool _resubscribing = false;
 
+  // ── Job-card price visibility ────────────────────────────────────────────
+  // When org.job_card_price_restrict is ON, prices (screen + priced print) are
+  // limited to admins and the explicitly-selected users; everyone else still
+  // gets the internal, no-price copy. When OFF, the old production_cost report
+  // grant governs visibility.
+  bool _priceRestrict = false;       // org.job_card_price_restrict toggle
+  Set<String> _priceUserIds = {};    // org.job_card_price_users (allowed viewers)
+
   // ── New-job alert / acknowledgement flow ─────────────────────────────────
   bool _ackFlowEnabled = false;      // org.job_ack_flow toggle
   Timer? _buzzTimer;                 // fires every 5 min while unacked jobs exist
@@ -160,6 +168,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _pendingJobId = _jobIdFromUrl();
       _loadUsers(); _loadWorkCenters(); _loadWorkers(); _loadCustomers(); _loadCheckpoints();
       await _loadAckSetting();
+      _loadPriceSetting();
       await Future.wait([_loadProducts(), _loadBoms()]);
       await _loadJobs();
       if (_pendingJobId != null && mounted) {
@@ -912,10 +921,25 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
   }
 
-  // Costing visibility: admins always; other users need the 'production_cost'
-  // grant. Editing/adding cost (the per-batch labor & overhead) is restricted
-  // to master admins only.
-  bool get _canViewCost => ref.read(accessSyncProvider)?.canViewReport('production_cost') ?? false;
+  // Costing visibility. Admins/master admins always see prices. When the org
+  // has turned ON price restriction (Admin Settings → Manufacturing), only the
+  // explicitly-selected users see prices — everyone else gets the internal,
+  // no-price copy. When restriction is OFF, the old 'production_cost' report
+  // grant governs visibility (backward compatible).
+  // Editing cost (per-batch labor & overhead) stays master-admin only.
+  bool get _canViewCost {
+    final role = ref.read(currentUserProvider)?.role;
+    if (role == WebUserRole.admin ||
+        role == WebUserRole.masterAdmin ||
+        role == WebUserRole.superAdmin) {
+      return true;
+    }
+    if (_priceRestrict) {
+      final uid = ref.read(currentUserProvider)?.id;
+      return uid != null && _priceUserIds.contains(uid);
+    }
+    return ref.read(accessSyncProvider)?.canViewReport('production_cost') ?? false;
+  }
   bool get _canEditCost => ref.read(currentUserProvider)?.role == WebUserRole.masterAdmin;
 
   // ── New-job alert / acknowledgement ──────────────────────────────────────
@@ -932,6 +956,29 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final on = (row?['value'] as String?)?.trim() == 'true';
       if (mounted) setState(() => _ackFlowEnabled = on);
     } catch (_) {/* default off */}
+  }
+
+  Future<void> _loadPriceSetting() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', orgId)
+          .inFilter('key', ['org.job_card_price_restrict', 'org.job_card_price_users']);
+      bool restrict = false;
+      Set<String> users = {};
+      for (final r in (rows as List)) {
+        final k = r['key'] as String?;
+        final v = (r['value'] as String?)?.trim() ?? '';
+        if (k == 'org.job_card_price_restrict') restrict = v == 'true';
+        if (k == 'org.job_card_price_users') {
+          users = v.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+        }
+      }
+      if (mounted) setState(() { _priceRestrict = restrict; _priceUserIds = users; });
+    } catch (_) {/* default: unrestricted */}
   }
 
   /// Decide whether the buzzer should be running, and buzz immediately when a
@@ -1519,8 +1566,10 @@ $runSection
 
   void _printJobCard({bool withPrices = true}) {
     if (_current == null) { _snack('Open a saved job card to print'); return; }
+    // Never emit a priced copy for a user who isn't allowed to see prices.
+    final priced = withPrices && _canViewCost;
     try {
-      final out = _buildJobCardHtml(withPrices: withPrices);
+      final out = _buildJobCardHtml(withPrices: priced);
       final blob = html.Blob([out], 'text/html');
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.window.open(url, '_blank');
@@ -1902,7 +1951,7 @@ $runSection
               if (context.isMobile) const Spacer(),
               if (_current != null) IconButton(icon: const Icon(Icons.fact_check_outlined, size: 20), onPressed: _showQcHistory, tooltip: 'QC History', visualDensity: VisualDensity.compact),
               if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail', visualDensity: VisualDensity.compact),
-              if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)', visualDensity: VisualDensity.compact),
+              if (_current != null && _canViewCost) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)', visualDensity: VisualDensity.compact),
               if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
               if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
               if (_current != null && _status != 'completed' && _status != 'cancelled')
