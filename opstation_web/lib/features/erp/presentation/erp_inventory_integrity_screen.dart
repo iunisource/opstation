@@ -447,6 +447,61 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     final branchId = branchRow['branch_id'] as String?;
     final branchName = branchRow['branch_name'] as String? ?? '—';
     if (orgId == null || branchId == null) return;
+
+    // ── In-transit guard ──────────────────────────────────────────────────
+    // A dispatched-but-not-received transfer takes stock out of PHYSICAL at the
+    // source, but its cost layer legitimately stays until the goods are received.
+    // So during transit the layers are higher than on-hand by exactly the
+    // in-transit qty — that is NOT drift. Reconciling here (trust physical) would
+    // delete the cost backing the in-transit stock. Block it and point the user
+    // to receive/cancel the transfer instead.
+    try {
+      final client = Supabase.instance.client;
+      final trs = await client
+          .from('stock_transfers')
+          .select('id, voucher_number')
+          .eq('org_id', orgId)
+          .eq('from_branch_id', branchId)
+          .eq('status', 'in_transit');
+      final trList = (trs as List).cast<Map<String, dynamic>>();
+      if (trList.isNotEmpty) {
+        final ids = trList.map((e) => e['id'] as String).toList();
+        final items = await client
+            .from('stock_transfer_items')
+            .select('quantity, transfer_id')
+            .inFilter('transfer_id', ids)
+            .eq('product_id', productId);
+        double q = 0;
+        final hitIds = <String>{};
+        for (final r in (items as List)) {
+          final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
+          if (qty != 0) { q += qty; hitIds.add(r['transfer_id'] as String); }
+        }
+        if (q > 0) {
+          final vnos = trList
+              .where((t) => hitIds.contains(t['id']))
+              .map((t) => (t['voucher_number'] ?? t['id']).toString())
+              .join(', ');
+          if (!mounted) return;
+          await showDialog<void>(
+            context: dialogCtx,
+            builder: (c) => AlertDialog(
+              title: const Text('Stock is in transit'),
+              content: Text(
+                  '$productName has ${q % 1 == 0 ? q.toStringAsFixed(0) : q.toStringAsFixed(2)} unit(s) '
+                  'dispatched from $branchName and not yet received ($vnos).\n\n'
+                  'That is why on-hand is below the cost layers — it is normal for an '
+                  'in-transit transfer, not a real discrepancy. Receive (or cancel) the '
+                  'transfer first; reconciling now would delete the cost backing the '
+                  'in-transit stock.'),
+              actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK'))],
+            ),
+          );
+          return;
+        }
+      }
+    } catch (_) {/* if the check fails, fall through — the DB guard also protects */}
+
     final ok = await showDialog<bool>(
       context: dialogCtx,
       builder: (c) => AlertDialog(
