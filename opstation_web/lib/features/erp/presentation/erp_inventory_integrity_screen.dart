@@ -188,12 +188,16 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
           .rpc('rpc_inventory_integrity', params: {'p_org': orgId});
       var rows = List<Map<String, dynamic>>.from(res as List);
 
-      // In-transit awareness: a dispatched-but-not-received transfer lowers
-      // physical stock while its cost layer stays put, so the check reports a
-      // STOCK <> LAYERS gap that isn't real. Add back in-transit quantities and
-      // drop any product whose ONLY gap is fully explained by stock on a truck.
+      // In-transit + pending purchase-return awareness. Both lower physical
+      // stock while the cost layer stays put: an in-transit transfer keeps its
+      // layer until the goods are received, and a saved-but-not-invoiced
+      // purchase return keeps its layer until the return invoice (PRI) is
+      // posted. In both cases the STOCK <> LAYERS gap is a normal timing window,
+      // not corruption. Build the expected gap per product and drop any product
+      // whose ONLY gap is fully explained by it.
       try {
-        final intransit = <String, double>{};
+        final expected = <String, double>{};
+        // (a) in-transit stock transfers (dispatched, not yet received)
         final trs = await client
             .from('stock_transfers')
             .select('id')
@@ -208,23 +212,34 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
           for (final r in (items as List)) {
             final pid = r['product_id'] as String?;
             if (pid == null) continue;
-            intransit[pid] = (intransit[pid] ?? 0) + ((r['quantity'] as num?)?.toDouble() ?? 0);
+            expected[pid] = (expected[pid] ?? 0) + ((r['quantity'] as num?)?.toDouble() ?? 0);
           }
         }
-        if (intransit.isNotEmpty) {
+        // (b) purchase returns saved but not yet invoiced (layer consumed at PRI)
+        try {
+          final pr = await client
+              .rpc('rpc_pending_purchase_return_qty', params: {'p_org': orgId});
+          for (final r in (pr as List)) {
+            final pid = r['product_id'] as String?;
+            if (pid == null) continue;
+            expected[pid] = (expected[pid] ?? 0) + ((r['qty'] as num?)?.toDouble() ?? 0);
+          }
+        } catch (_) {/* ignore if the helper RPC is unavailable */}
+
+        if (expected.isNotEmpty) {
           rows = rows.where((r) {
             if (r['issue'] != 'STOCK <> LAYERS') return true;      // other issues stay
             if (((r['neg_layers'] as num?)?.toInt() ?? 0) != 0) return true; // real neg-layer issue
             final pid = r['product_id'] as String?;
-            final it = pid != null ? (intransit[pid] ?? 0) : 0;
+            final it = pid != null ? (expected[pid] ?? 0) : 0;
             if (it == 0) return true;
             final stock = (r['stock_qty'] as num?)?.toDouble() ?? 0;
             final layer = (r['layer_qty'] as num?)?.toDouble() ?? 0;
-            // keep only if the gap is NOT fully explained by in-transit stock
+            // keep only if the gap is NOT fully explained by in-transit + pending returns
             return (stock + it - layer).abs() > 0.001;
           }).toList();
         }
-      } catch (_) {/* if the in-transit lookup fails, show the raw list */}
+      } catch (_) {/* if the lookup fails, show the raw list */}
 
       if (!mounted) return;
       setState(() {

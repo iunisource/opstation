@@ -393,10 +393,12 @@ final inventoryIntegrityCountProvider = FutureProvider<int>((ref) async {
         .rpc('rpc_inventory_integrity', params: {'p_org': user.orgId});
     var rows = List<Map<String, dynamic>>.from(res as List);
 
-    // Match the Integrity screen: a STOCK <> LAYERS gap that is fully explained
-    // by in-transit transfers is not a real issue, so don't count it in the badge.
+    // Match the Integrity screen: a STOCK <> LAYERS gap fully explained by
+    // in-transit transfers OR saved-but-not-invoiced purchase returns is a
+    // normal timing window, not a real issue, so don't count it in the badge.
     try {
-      final intransit = <String, double>{};
+      final expected = <String, double>{};
+      // (a) in-transit stock transfers (dispatched, not yet received)
       final trs = await client
           .from('stock_transfers')
           .select('id')
@@ -411,15 +413,26 @@ final inventoryIntegrityCountProvider = FutureProvider<int>((ref) async {
         for (final r in (items as List)) {
           final pid = r['product_id'] as String?;
           if (pid == null) continue;
-          intransit[pid] = (intransit[pid] ?? 0) + ((r['quantity'] as num?)?.toDouble() ?? 0);
+          expected[pid] = (expected[pid] ?? 0) + ((r['quantity'] as num?)?.toDouble() ?? 0);
         }
       }
-      if (intransit.isNotEmpty) {
+      // (b) purchase returns saved but not yet invoiced (layer consumed at PRI)
+      try {
+        final pr = await client
+            .rpc('rpc_pending_purchase_return_qty', params: {'p_org': user.orgId});
+        for (final r in (pr as List)) {
+          final pid = r['product_id'] as String?;
+          if (pid == null) continue;
+          expected[pid] = (expected[pid] ?? 0) + ((r['qty'] as num?)?.toDouble() ?? 0);
+        }
+      } catch (_) {/* ignore if the helper RPC is unavailable */}
+
+      if (expected.isNotEmpty) {
         rows = rows.where((r) {
           if (r['issue'] != 'STOCK <> LAYERS') return true;
           if (((r['neg_layers'] as num?)?.toInt() ?? 0) != 0) return true;
           final pid = r['product_id'] as String?;
-          final it = pid != null ? (intransit[pid] ?? 0) : 0;
+          final it = pid != null ? (expected[pid] ?? 0) : 0;
           if (it == 0) return true;
           final stock = (r['stock_qty'] as num?)?.toDouble() ?? 0;
           final layer = (r['layer_qty'] as num?)?.toDouble() ?? 0;
