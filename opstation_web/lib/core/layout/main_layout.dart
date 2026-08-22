@@ -1029,8 +1029,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     ];
 
   return <Widget>[
-        if (user?.role == WebUserRole.superAdmin)
+        if (user?.role == WebUserRole.superAdmin) ...[
           _navButton(context, 'Organizations', Icons.business, '/orgs', location),
+          _navButton(context, 'Subscriptions', Icons.workspace_premium_outlined, '/subscriptions', location),
+        ],
+
+        if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+          _navButton(context, 'Billing', Icons.credit_card_outlined, '/billing', location),
 
         if (isDispatch) ...[
           _navButton(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),

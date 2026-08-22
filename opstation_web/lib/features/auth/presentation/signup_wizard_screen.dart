@@ -24,6 +24,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
   final _org = TextEditingController();
   final _note = TextEditingController();
   String? _industry;
+  String _costing = 'fifo';
 
   int _step = 0; // 0 = about you, 1 = about business
   bool _submitting = false;
@@ -83,25 +84,41 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       return;
     }
     setState(() { _submitting = true; _error = null; });
+    const errMap = {
+      'email_exists': 'An account with this email already exists — try signing in instead.',
+      'bad_email': 'Please enter a valid email address.',
+      'missing_fields': 'Please enter your business name and email.',
+    };
     try {
-      final res = await Supabase.instance.client.functions.invoke('signup-request', body: {
+      final res = await Supabase.instance.client.functions.invoke('signup-trial', body: {
         'name': _name.text.trim(),
         'orgName': _org.text.trim(),
         'contact': _contact.text.trim(),
         'email': _email.text.trim(),
-        'industry': _industry ?? '',
-        'note': _note.text.trim(),
+        'costingMethod': _costing,
       });
-      if (res.status != 200) {
-        setState(() { _submitting = false; _error = 'Could not submit (status ${res.status}). Please try again.'; });
+      final data = res.data is Map ? res.data as Map : const {};
+      if (res.status == 200 && data['ok'] == true) {
+        if (!mounted) return;
+        setState(() { _submitting = false; _done = true; });
         return;
       }
-      if (!mounted) return;
-      setState(() { _submitting = false; _done = true; });
+      final code = data['error'] as String?;
+      setState(() {
+        _submitting = false;
+        _error = errMap[code] ?? 'Could not create your workspace. Please try again or contact support.';
+      });
+    } on FunctionException catch (e) {
+      final det = e.details;
+      final code = det is Map ? det['error'] as String? : null;
+      setState(() {
+        _submitting = false;
+        _error = errMap[code] ?? 'Could not create your workspace. Please try again or contact support.';
+      });
     } catch (e) {
       setState(() {
         _submitting = false;
-        _error = 'Could not submit: ${e.toString().split("\n").first}';
+        _error = 'Could not create your workspace: ${e.toString().split("\n").first}';
       });
     }
   }
@@ -172,12 +189,12 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
             const Text('Create your\nOpstation workspace.',
                 style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w800, height: 1.15, letterSpacing: -0.5)),
             const SizedBox(height: 14),
-            Text('Tell us about your business and our team sets up your organization, branches and users — then reaches out to hand over the keys.',
+            Text('Tell us about your business and your workspace is created instantly — we email your login details right away. Free for 14 days.',
                 style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 15, height: 1.5)),
             const SizedBox(height: 32),
-            _railPoint('Guided setup — no configuration on your side'),
+            _railPoint('Instant setup — your workspace is ready in seconds'),
             _railPoint('A dedicated workspace for your whole operation'),
-            _railPoint('We reach out within one business day'),
+            _railPoint('14-day free trial · no credit card required'),
             const Spacer(),
             Text('© 2026 Opstation · All rights reserved',
                 style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 12)),
@@ -310,6 +327,28 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       onChanged: (v) => setState(() => _industry = v),
     ),
     const SizedBox(height: 16),
+    Row(children: const [
+      Text('Inventory costing method', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
+      Text(' *', style: TextStyle(fontSize: 13, color: AppTheme.danger, fontWeight: FontWeight.w700)),
+    ]),
+    const SizedBox(height: 6),
+    DropdownButtonFormField<String>(
+      value: _costing,
+      isExpanded: true,
+      decoration: _dec('Select costing method', Icons.calculate_outlined),
+      items: const [
+        DropdownMenuItem(value: 'fifo', child: Text('FIFO (First In, First Out)')),
+        DropdownMenuItem(value: 'lifo', child: Text('LIFO (Last In, First Out)')),
+        DropdownMenuItem(value: 'avco', child: Text('Weighted Average')),
+      ],
+      onChanged: (v) => setState(() => _costing = v ?? 'fifo'),
+    ),
+    const Padding(
+      padding: EdgeInsets.only(top: 5, left: 2),
+      child: Text('This sets how stock cost is calculated. It is fixed once you start transacting, so choose carefully.',
+          style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+    ),
+    const SizedBox(height: 16),
     _field(controller: _note, label: 'Anything we should know?', hint: 'Optional — branches, users, what you need first',
         icon: Icons.notes_outlined, maxLines: 3),
   ];
@@ -385,7 +424,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
           child: _submitting
               ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Text(_step == 0 ? 'Continue' : 'Submit request',
+                  Text(_step == 0 ? 'Continue' : 'Create workspace',
                       style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                   const SizedBox(width: 8),
                   Icon(_step == 0 ? Icons.arrow_forward : Icons.check, size: 18),
@@ -406,12 +445,12 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
         child: const Icon(Icons.check_circle, color: Colors.green, size: 40),
       ),
       const SizedBox(height: 22),
-      const Text('Request received', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: _ink)),
+      const Text('Check your email', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: _ink)),
       const SizedBox(height: 10),
       Text(
-        'Thanks! We\'re setting up ${org.isEmpty ? 'your organization' : org} now. '
-        'Our team will email you${email.isEmpty ? '' : ' at $email'} within one business day '
-        'to hand over your workspace.',
+        '${org.isEmpty ? 'Your workspace' : org} is ready! We\'ve emailed your login '
+        'details${email.isEmpty ? '' : ' to $email'} with a temporary password. '
+        'You\'ll set your own password the first time you sign in. Your free trial runs for 14 days.',
         style: const TextStyle(fontSize: 15, color: AppTheme.textSecondary, height: 1.5),
       ),
       const SizedBox(height: 28),

@@ -14,6 +14,7 @@ class WebUser {
   final WebUserRole role;
   final String? orgId;
   final String? orgName;
+  final bool mustChangePassword;
   const WebUser({
     required this.id,
     required this.name,
@@ -21,15 +22,23 @@ class WebUser {
     required this.role,
     this.orgId,
     this.orgName,
+    this.mustChangePassword = false,
   });
+  WebUser copyWith({bool? mustChangePassword}) => WebUser(
+    id: id, name: name, email: email, role: role,
+    orgId: orgId, orgName: orgName,
+    mustChangePassword: mustChangePassword ?? this.mustChangePassword,
+  );
   Map<String, dynamic> toJson() => {
     'id': id, 'name': name, 'email': email,
     'role': role.name, 'orgId': orgId, 'orgName': orgName,
+    'mustChangePassword': mustChangePassword,
   };
   factory WebUser.fromJson(Map<String, dynamic> m) => WebUser(
     id: m['id'], name: m['name'], email: m['email'],
     role: WebUserRole.values.firstWhere((r) => r.name == m['role']),
     orgId: m['orgId'], orgName: m['orgName'],
+    mustChangePassword: m['mustChangePassword'] as bool? ?? false,
   );
 }
 
@@ -142,7 +151,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
       // read their own row by matching email to auth.users.email.
       final rows = await client
           .from('users')
-          .select('id, name, email, role, org_id, is_active')
+          .select('id, name, email, role, org_id, is_active, password_temporary')
           .eq('email', normalized)
           .limit(1);
       if (rows.isEmpty) {
@@ -205,6 +214,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
         role: WebUserRole.values.firstWhere((r) => r.name == role),
         orgId: orgId,
         orgName: orgName,
+        mustChangePassword: row['password_temporary'] as bool? ?? false,
       );
 
       final prefs = await SharedPreferences.getInstance();
@@ -214,6 +224,19 @@ class AuthController extends AsyncNotifier<WebUser?> {
       }
       return user;
     });
+  }
+
+  /// Clears the force-password-change flag in memory + cached session after the
+  /// user has set a new password. The router then lets them through to the app.
+  Future<void> markPasswordChanged() async {
+    final u = state.valueOrNull;
+    if (u == null) return;
+    final nu = u.copyWith(mustChangePassword: false);
+    state = AsyncData(nu);
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('opstation_web_remember_me') ?? true) {
+      await prefs.setString(_kSessionKey, jsonEncode(nu.toJson()));
+    }
   }
 
   Future<void> signOut() async {

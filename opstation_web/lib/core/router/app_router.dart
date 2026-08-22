@@ -38,6 +38,7 @@ import 'package:animations/animations.dart';
 import '../../features/auth/auth_controller.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/signup_wizard_screen.dart';
+import '../../features/auth/presentation/change_password_screen.dart';
 import '../../features/dashboard/presentation/dashboard_screen.dart';
 import '../../features/team/presentation/team_screen.dart';
 import '../../features/customers/presentation/customers_screen.dart';
@@ -62,6 +63,8 @@ import '../../features/dispatch_orders/presentation/dispatch_orders_screen.dart'
 import '../../features/orders/presentation/orders_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/superadmin/presentation/orgs_screen.dart';
+import '../../features/superadmin/presentation/subscriptions_screen.dart';
+import '../../features/billing/presentation/billing_screen.dart';
 import '../../features/live_map/presentation/live_map_screen.dart';
 import '../../features/compliance/presentation/compliance_screen.dart';
 import '../../features/operations/presentation/retailer_files_screen.dart';
@@ -183,9 +186,14 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           if (role == WebUserRole.erpUser) return '/erp/home';
           return '/dashboard';
         }
+        // Forced password change (temporary password) blocks everything else.
+        if (user.mustChangePassword) {
+          return loc == '/change-password' ? null : '/change-password';
+        }
+        if (loc == '/change-password') return home();
         bool allowed() {
           if (role == WebUserRole.superAdmin) {
-            return loc == '/orgs';
+            return loc == '/orgs' || loc == '/subscriptions';
           }
           if (role == WebUserRole.dispatchManager) {
             return loc == '/deliveries' ||
@@ -250,6 +258,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const SignupWizardScreen(),
       ),
       GoRoute(
+        path: '/change-password',
+        builder: (_, __) => const ChangePasswordScreen(),
+      ),
+      GoRoute(
         path: '/r/login',
         builder: (_, __) => const RetailerLoginScreen(),
       ),
@@ -307,6 +319,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/assets', builder: (_, __) => const ErpAssetsScreen()),
           GoRoute(path: '/facility', builder: (_, __) => const ErpFacilityScreen()),
           GoRoute(path: '/orgs', builder: (_, __) => const OrgsScreen()),
+          GoRoute(path: '/subscriptions', builder: (_, __) => const SubscriptionsScreen()),
+          GoRoute(path: '/billing', builder: (_, __) => const BillingScreen()),
           GoRoute(path: '/erp/products',  builder: (_, state) => ErpProductsScreen(focusId: state.uri.queryParameters['focus'])),
           GoRoute(path: '/erp/low-stock-report', builder: (_, __) => const ErpLowStockReportScreen()),
           GoRoute(path: '/erp/stock-value-report', builder: (_, __) => const ErpStockValueReportScreen()),
