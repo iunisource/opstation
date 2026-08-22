@@ -1018,11 +1018,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           badge: assetsDue + facilityDue,
         ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-        ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
+        ['/erp/onboarding', '/erp/branches', '/erp/files', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
         [
           _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
           if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
           if (show('/erp/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/erp/files', location),
+          if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+            _menuItem(context, 'Billing & Subscription', Icons.credit_card_outlined, '/billing', location),
           if (_hasItems(erpAdminItems)) _menuLabel('Administration'),
           ..._trimDividers(erpAdminItems),
         ]),
@@ -1033,9 +1035,6 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _navButton(context, 'Organizations', Icons.business, '/orgs', location),
           _navButton(context, 'Subscriptions', Icons.workspace_premium_outlined, '/subscriptions', location),
         ],
-
-        if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
-          _navButton(context, 'Billing', Icons.credit_card_outlined, '/billing', location),
 
         if (isDispatch) ...[
           _navButton(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
