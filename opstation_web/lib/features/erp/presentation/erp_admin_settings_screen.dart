@@ -493,6 +493,10 @@ class _ErpAdminSettingsScreenState
   final Set<String> _saving = {};
   bool _loading = true;
   bool _backupRunning = false;
+  // UI: search + collapsible sections.
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _search = '';
+  final Set<String> _collapsedGroups = {}; // section titles currently collapsed
   bool _blockNegStock = false; // inventory_settings.block_negative_stock (Serious Zone)
   bool _blockZeroCostReceipt = false; // inventory_settings.block_zero_cost_receipt (Serious Zone)
   bool _savingSerious = false;
@@ -510,6 +514,10 @@ class _ErpAdminSettingsScreenState
         _textCtrls[t.text!.key] = TextEditingController();
       }
     }
+    // Start with every section collapsed — a clean overview the admin can
+    // expand into, instead of one long wall of switches.
+    _collapsedGroups.addAll([for (final g in _toggleGroupsOrder) g.title]);
+    _collapsedGroups.add('Other');
     _load();
   }
 
@@ -521,6 +529,7 @@ class _ErpAdminSettingsScreenState
     for (final c in _textCtrls.values) {
       c.dispose();
     }
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -938,14 +947,25 @@ class _ErpAdminSettingsScreenState
   Widget _branchRow(_BranchField b) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-      child: Row(children: [
-        Text(b.label,
-            style:
-                const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 260,
-          child: DropdownButtonFormField<String>(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Flexible(
+              child: Text(b.label,
+                  style: const TextStyle(
+                      fontSize: 12.5, color: AppTheme.textSecondary)),
+            ),
+            if (_saving.contains(b.key)) ...[
+              const SizedBox(width: 10),
+              const SizedBox(
+                  width: 13,
+                  height: 13,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          ]),
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
             value: _branchValues[b.key] ?? 'all',
             isExpanded: true,
             style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
@@ -966,15 +986,8 @@ class _ErpAdminSettingsScreenState
               if (v != null) _saveBranch(b, v);
             },
           ),
-        ),
-        if (_saving.contains(b.key)) ...[
-          const SizedBox(width: 10),
-          const SizedBox(
-              width: 13,
-              height: 13,
-              child: CircularProgressIndicator(strokeWidth: 2)),
         ],
-      ]),
+      ),
     );
   }
 
@@ -1087,11 +1100,23 @@ class _ErpAdminSettingsScreenState
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Text(u.label,
-            style:
-                const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
-        const SizedBox(width: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Flexible(
+            child: Text(u.label,
+                style: const TextStyle(
+                    fontSize: 12.5, color: AppTheme.textSecondary)),
+          ),
+          if (_saving.contains(u.key)) ...[
+            const SizedBox(width: 10),
+            const SizedBox(
+                width: 13,
+                height: 13,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+          ],
+        ]),
+        const SizedBox(height: 6),
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(
           child: Text(
             names.isEmpty ? 'No users selected — nobody can edit' : names.join(', '),
@@ -1109,90 +1134,108 @@ class _ErpAdminSettingsScreenState
           label: Text(sel.isEmpty ? 'Select users' : 'Edit (${sel.length})'),
           onPressed: () => _pickUsers(u),
         ),
-        if (_saving.contains(u.key)) ...[
-          const SizedBox(width: 10),
-          const SizedBox(
-              width: 13,
-              height: 13,
-              child: CircularProgressIndicator(strokeWidth: 2)),
+        ]),
+      ],
+    ));
+  }
+
+  // A single toggle rendered as a self-contained card (for the grid layout).
+  // Header: title + description on the left, switch on the right. When ON, any
+  // companion field (number / text / branch / users) drops in below a divider.
+  Widget _toggleCard(_AdminToggle t) {
+    final on = _values[t.key] ?? false;
+    final hasCompanion =
+        on && (t.number != null || t.text != null || t.branch != null || t.users != null);
+    return Container(
+      decoration: BoxDecoration(
+        color: on ? AppTheme.primary.withOpacity(0.045) : Colors.white,
+        border: Border.all(
+            color: on ? AppTheme.primary.withOpacity(0.35) : AppTheme.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(t.title,
+                          style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                              height: 1.25)),
+                      const SizedBox(height: 5),
+                      Text(t.subtitle,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              color: AppTheme.textSecondary,
+                              height: 1.35)),
+                    ]),
+              ),
+              const SizedBox(width: 4),
+              if (_saving.contains(t.key))
+                const Padding(
+                  padding: EdgeInsets.only(top: 4, right: 8, left: 4),
+                  child: SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                )
+              else
+                Transform.scale(
+                  scale: 0.9,
+                  child: Switch(
+                    value: on,
+                    activeColor: AppTheme.primary,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    onChanged: (v) => _setToggle(t.key, v),
+                  ),
+                ),
+            ]),
+          ),
+          if (hasCompanion) ...[
+            const Divider(height: 1, color: AppTheme.border),
+            const SizedBox(height: 12),
+            if (t.number != null) _numberRow(t.number!),
+            if (t.text != null) _textRow(t.text!),
+            if (t.branch != null) _branchRow(t.branch!),
+            if (t.users != null) _usersRow(t.users!),
+          ],
         ],
-      ]),
+      ),
     );
   }
 
-  // One switch row (+ its optional number/text companion when ON).
-  Widget _toggleTile(_AdminToggle t) {
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      SwitchListTile(
-        activeColor: AppTheme.primary,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        title: Row(children: [
-          Flexible(
-            child: Text(t.title,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-          ),
-          if (_saving.contains(t.key)) ...[
-            const SizedBox(width: 10),
-            const SizedBox(
-                width: 13,
-                height: 13,
-                child: CircularProgressIndicator(strokeWidth: 2)),
-          ],
-        ]),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(t.subtitle,
-              style: const TextStyle(
-                  fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
-        ),
-        value: _values[t.key] ?? false,
-        onChanged: (v) => _setToggle(t.key, v),
-      ),
-      if (t.number != null && (_values[t.key] ?? false)) _numberRow(t.number!),
-      if (t.text != null && (_values[t.key] ?? false)) _textRow(t.text!),
-      if (t.branch != null && (_values[t.key] ?? false)) _branchRow(t.branch!),
-      if (t.users != null && (_values[t.key] ?? false)) _usersRow(t.users!),
-    ]);
-  }
-
-  // The full set of toggles, rendered as module-wise sections (a titled header
-  // + a card of switches per group). Order follows [_toggleGroupsOrder]; any
-  // toggle not assigned to a group is collected into a trailing "Other" card.
+  // The full set of toggles, rendered as module-wise sections. Each section is
+  // a collapsible card with an icon, a count of enabled settings, and a chevron.
+  // A search box filters toggles by title/description across all sections and
+  // auto-expands the matches. Order follows [_toggleGroupsOrder]; any toggle not
+  // assigned to a group is collected into a trailing "Other" card.
   List<Widget> _buildGroupedToggles() {
     final byKey = {for (final t in _toggles) t.key: t};
     final assigned = <String>{};
+    final q = _search.trim().toLowerCase();
+    final searching = q.isNotEmpty;
     final out = <Widget>[];
 
-    void section(String title, IconData icon, List<_AdminToggle> items) {
+    bool matches(_AdminToggle t) =>
+        q.isEmpty ||
+        t.title.toLowerCase().contains(q) ||
+        t.subtitle.toLowerCase().contains(q);
+
+    void section(String title, IconData icon, List<_AdminToggle> allItems) {
+      final items = allItems.where(matches).toList();
       if (items.isEmpty) return;
-      out.add(Padding(
-        padding: const EdgeInsets.only(top: 2, bottom: 8),
-        child: Row(children: [
-          Icon(icon, size: 16, color: AppTheme.primary),
-          const SizedBox(width: 8),
-          Text(title.toUpperCase(),
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: AppTheme.primary,
-                  letterSpacing: 0.6)),
-        ]),
-      ));
-      out.add(Container(
-        constraints: const BoxConstraints(maxWidth: 760),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.border),
-        ),
-        child: Column(children: [
-          for (int i = 0; i < items.length; i++) ...[
-            if (i > 0) const Divider(height: 1, color: AppTheme.border),
-            _toggleTile(items[i]),
-          ],
-        ]),
-      ));
-      out.add(const SizedBox(height: 18));
+      final enabled = items.where((t) => _values[t.key] ?? false).length;
+      // While searching, everything is force-expanded to reveal matches.
+      final collapsed = !searching && _collapsedGroups.contains(title);
+      out.add(_sectionCard(title, icon, items, enabled, collapsed));
+      out.add(const SizedBox(height: 14));
     }
 
     for (final g in _toggleGroupsOrder) {
@@ -1211,7 +1254,125 @@ class _ErpAdminSettingsScreenState
         if (!assigned.contains(t.key)) t
     ];
     section('Other', Icons.tune, leftover);
+
+    if (out.isEmpty && searching) {
+      out.add(Container(
+        constraints: const BoxConstraints(maxWidth: 1040),
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        alignment: Alignment.center,
+        child: Column(children: [
+          Icon(Icons.search_off,
+              size: 40, color: AppTheme.textSecondary.withOpacity(0.4)),
+          const SizedBox(height: 10),
+          Text('No settings match "$_search"',
+              style: const TextStyle(
+                  fontSize: 13.5, color: AppTheme.textSecondary)),
+        ]),
+      ));
+    }
     return out;
+  }
+
+  // A single collapsible section card.
+  Widget _sectionCard(String title, IconData icon, List<_AdminToggle> items,
+      int enabled, bool collapsed) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 1040),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => setState(() {
+            if (_collapsedGroups.contains(title)) {
+              _collapsedGroups.remove(title);
+            } else {
+              _collapsedGroups.add(title);
+            }
+          }),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 13, 12, 13),
+            child: Row(children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(icon, size: 20, color: AppTheme.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: const TextStyle(
+                              fontSize: 14.5, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      Text(
+                          '${items.length} setting${items.length == 1 ? '' : 's'}',
+                          style: const TextStyle(
+                              fontSize: 11.5, color: AppTheme.textSecondary)),
+                    ]),
+              ),
+              if (enabled > 0)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('$enabled on',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.primary)),
+                ),
+              AnimatedRotation(
+                turns: collapsed ? 0 : 0.5,
+                duration: const Duration(milliseconds: 180),
+                child: const Icon(Icons.expand_more,
+                    color: AppTheme.textSecondary),
+              ),
+            ]),
+          ),
+        ),
+        if (!collapsed) ...[
+          const Divider(height: 1, color: AppTheme.border),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: LayoutBuilder(builder: (ctx, c) {
+              const spacing = 12.0;
+              final cols = c.maxWidth >= 640 ? 2 : 1;
+              final itemW = cols == 1
+                  ? c.maxWidth
+                  : ((c.maxWidth - spacing * (cols - 1)) / cols) - 0.5;
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  for (final t in items)
+                    SizedBox(width: itemW, child: _toggleCard(t)),
+                ],
+              );
+            }),
+          ),
+        ],
+      ]),
+    );
   }
 
   @override
@@ -1225,17 +1386,123 @@ class _ErpAdminSettingsScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Admin Settings',
-                      style:
-                          TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Organization-wide toggles. Changes apply to all branches and save immediately.',
-                    style:
-                        TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                  // Header
+                  Row(children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            AppTheme.primary,
+                            AppTheme.primary.withOpacity(0.68)
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.tune, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Admin Settings',
+                                style: TextStyle(
+                                    fontSize: 24, fontWeight: FontWeight.w800)),
+                            SizedBox(height: 2),
+                            Text(
+                                'Organization-wide controls. Changes apply to all branches and save immediately.',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: AppTheme.textSecondary)),
+                          ]),
+                    ),
+                  ]),
+                  const SizedBox(height: 18),
+                  // Search
+                  Container(
+                    constraints: const BoxConstraints(maxWidth: 1040),
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: (v) => setState(() => _search = v),
+                      decoration: InputDecoration(
+                        hintText: 'Search settings…',
+                        prefixIcon: const Icon(Icons.search, size: 20),
+                        suffixIcon: _search.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: () {
+                                  _searchCtrl.clear();
+                                  setState(() => _search = '');
+                                },
+                              ),
+                        isDense: true,
+                        filled: true,
+                        fillColor: Colors.white,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 14),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                const BorderSide(color: AppTheme.border)),
+                        enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                const BorderSide(color: AppTheme.border)),
+                        focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(
+                                color: AppTheme.primary, width: 1.5)),
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 20),
+                  if (_search.isEmpty) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      constraints: const BoxConstraints(maxWidth: 1040),
+                      child: Row(children: [
+                        TextButton.icon(
+                          onPressed: () =>
+                              setState(() => _collapsedGroups.clear()),
+                          icon: const Icon(Icons.unfold_more, size: 16),
+                          label: const Text('Expand all',
+                              style: TextStyle(fontSize: 12.5)),
+                          style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap),
+                        ),
+                        const SizedBox(width: 6),
+                        TextButton.icon(
+                          onPressed: () => setState(() {
+                            _collapsedGroups.addAll(
+                                [for (final g in _toggleGroupsOrder) g.title]);
+                            _collapsedGroups.add('Other');
+                          }),
+                          icon: const Icon(Icons.unfold_less, size: 16),
+                          label: const Text('Collapse all',
+                              style: TextStyle(fontSize: 12.5)),
+                          style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap),
+                        ),
+                      ]),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
                   ..._buildGroupedToggles(),
+                  // The panels below are not part of the toggle list — hide them
+                  // while a search is active so results stay focused.
+                  if (_search.isEmpty) ...[
                   if (ref.read(currentUserProvider)?.role ==
                           WebUserRole.masterAdmin ||
                       ref.read(currentUserProvider)?.role ==
@@ -1310,6 +1577,7 @@ class _ErpAdminSettingsScreenState
                   ],
                   const SizedBox(height: 8),
                   _seriousZone(),
+                  ], // end: panels hidden while searching
                 ],
               ),
             ),
