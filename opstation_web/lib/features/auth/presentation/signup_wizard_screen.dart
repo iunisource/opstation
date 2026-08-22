@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../billing/presentation/plan_cards.dart';
 
 /// Full-screen, self-guiding organisation sign-up.
 ///
@@ -26,6 +27,8 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
   final _note = TextEditingController();
   String? _industry;
   String _costing = 'fifo';
+  List<Map<String, dynamic>> _plans = [];
+  String _planId = 'plan_standard';
 
   int _step = 0; // 0 = about you, 1 = about business
   bool _submitting = false;
@@ -79,6 +82,25 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
     for (final c in [_name, _email, _contact, _org]) {
       c.addListener(() => setState(() {}));
     }
+    _loadPlans();
+  }
+
+  Future<void> _loadPlans() async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('subscription_plans')
+          .select('id, name, amount, tagline, badge, highlight, features, module_keys')
+          .eq('is_active', true)
+          .order('sort_order');
+      if (!mounted) return;
+      final list = List<Map<String, dynamic>>.from(rows);
+      setState(() {
+        _plans = list;
+        // default to the highlighted (recommended) plan, else the first.
+        final hi = list.where((p) => (p['highlight'] as bool?) ?? false).toList();
+        _planId = (hi.isNotEmpty ? hi.first['id'] : (list.isNotEmpty ? list.first['id'] : 'plan_standard')) as String;
+      });
+    } catch (_) {/* plans are optional for signup; falls back to default plan */}
   }
 
   @override
@@ -121,6 +143,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
         'contact': _contact.text.trim(),
         'email': _email.text.trim(),
         'costingMethod': _costing,
+        'planId': _planId,
       });
       final data = res.data is Map ? res.data as Map : const {};
       if (res.status == 200 && data['ok'] == true) {
@@ -419,7 +442,23 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       child: Text('This sets how stock cost is calculated. It is fixed once you start transacting, so choose carefully.',
           style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
     ),
-    const SizedBox(height: 16),
+    const SizedBox(height: 22),
+    const Text('Choose your plan', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _ink)),
+    const SizedBox(height: 2),
+    const Text('Start free for 14 days — no card needed. Switch or upgrade anytime.',
+        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+    const SizedBox(height: 12),
+    if (_plans.isEmpty)
+      const Padding(padding: EdgeInsets.all(12), child: Center(child: Text('Loading plans…', style: TextStyle(color: AppTheme.textSecondary))))
+    else
+      PlanCards(
+        plans: _plans,
+        activeId: _planId,
+        onSelect: (p) => setState(() => _planId = p['id'] as String),
+        ctaLabel: (p) => (p['id'] as String) == _planId ? 'Selected' : 'Choose',
+        ctaDisabled: (p) => false,
+      ),
+    const SizedBox(height: 18),
     _field(controller: _note, label: 'Anything we should know?', hint: 'Optional — branches, users, what you need first',
         icon: Icons.notes_outlined, maxLines: 3),
   ];

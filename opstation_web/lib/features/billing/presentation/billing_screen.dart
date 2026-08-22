@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'plan_cards.dart';
 
 /// Org-facing Billing & Subscription screen (master admin / admin). Designed to
 /// feel confident and welcoming — this is where we ask for the card, so it
@@ -25,6 +26,13 @@ class _State extends ConsumerState<BillingScreen> {
   Map<String, dynamic>? _card;
   List<Map<String, dynamic>> _invoices = [];
   List<Map<String, dynamic>> _payments = [];
+  List<Map<String, dynamic>> _plans = [];
+
+  String? get _planId => _sub?['plan_id'] as String?;
+  String get _planName {
+    final p = _plans.where((e) => e['id'] == _planId).toList();
+    return p.isNotEmpty ? (p.first['name'] as String? ?? 'Your plan') : 'Your plan';
+  }
 
   @override
   void initState() {
@@ -49,6 +57,9 @@ class _State extends ConsumerState<BillingScreen> {
       _payments = List<Map<String, dynamic>>.from(await _c.from('subscription_payments')
           .select('amount, status, provider, created_at')
           .eq('org_id', orgId).order('created_at', ascending: false).limit(24));
+      _plans = List<Map<String, dynamic>>.from(await _c.from('subscription_plans')
+          .select('id, name, amount, tagline, badge, highlight, features, module_keys')
+          .eq('is_active', true).order('sort_order'));
       if (!mounted) return;
       setState(() => _loading = false);
     } catch (e) {
@@ -71,6 +82,35 @@ class _State extends ConsumerState<BillingScreen> {
     final d = iso == null ? null : DateTime.tryParse(iso);
     if (d == null) return -1;
     return d.difference(DateTime.now()).inDays;
+  }
+
+  Future<void> _changePlan(Map<String, dynamic> plan) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Switch to ${plan['name']}?'),
+        content: Text(
+          'Your plan will change to ${plan['name']} (${_money((plan['amount'] as num?) ?? 0)}/month) '
+          'and the modules included in that plan will be enabled. You can change again anytime.',
+          style: const TextStyle(fontSize: 13.5, height: 1.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirm')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await _c.rpc('sub_change_plan', params: {'p_org': ref.read(currentUserProvider)?.orgId, 'p_plan_id': plan['id']});
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Switched to ${plan['name']}. Reload to see updated menus.')));
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not change plan: $e')));
+    }
   }
 
   void _addCard() {
@@ -141,7 +181,7 @@ class _State extends ConsumerState<BillingScreen> {
                         color: Colors.white.withOpacity(0.18),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: Text(trialing ? 'FREE TRIAL' : 'STANDARD PLAN',
+                      child: Text(trialing ? 'FREE TRIAL' : _planName.toUpperCase(),
                           style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
                     ),
                   ]),
@@ -216,6 +256,28 @@ class _State extends ConsumerState<BillingScreen> {
                 ]),
               ),
               const SizedBox(height: 16),
+
+              // ── Plans / upgrade ──────────────────────────────────────────
+              if (_plans.isNotEmpty) ...[
+                const Text('Choose your plan', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                const Text('Upgrade or switch anytime — your modules update instantly.',
+                    style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                const SizedBox(height: 14),
+                PlanCards(
+                  plans: _plans,
+                  activeId: _planId,
+                  onSelect: _changePlan,
+                  ctaLabel: (p) {
+                    if (p['id'] == _planId) return 'Current plan';
+                    final cur = _plans.where((e) => e['id'] == _planId).toList();
+                    final curAmt = cur.isNotEmpty ? ((cur.first['amount'] as num?) ?? 0) : 0;
+                    return ((p['amount'] as num?) ?? 0) > curAmt ? 'Upgrade' : 'Switch';
+                  },
+                  ctaDisabled: (p) => p['id'] == _planId,
+                ),
+                const SizedBox(height: 20),
+              ],
 
               _historyCard('Invoices', _invoices.isEmpty
                   ? [const _Empty()]
