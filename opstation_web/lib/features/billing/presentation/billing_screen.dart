@@ -153,6 +153,7 @@ class _State extends ConsumerState<BillingScreen> {
     final trialing = status == 'trialing';
     final daysLeft = _daysLeft();
     final hasCard = _card != null;
+    final mobile = MediaQuery.of(context).size.width < 600;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -239,14 +240,28 @@ class _State extends ConsumerState<BillingScreen> {
                         ),
                       ]),
                     ),
-                    const SizedBox(width: 12),
-                    ElevatedButton.icon(
-                      onPressed: _addCard,
-                      icon: Icon(hasCard ? Icons.edit_outlined : Icons.add, size: 18),
-                      label: Text(hasCard ? 'Update' : 'Add payment method'),
-                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
-                    ),
+                    if (!mobile) ...[
+                      const SizedBox(width: 12),
+                      ElevatedButton.icon(
+                        onPressed: _addCard,
+                        icon: Icon(hasCard ? Icons.edit_outlined : Icons.add, size: 18),
+                        label: Text(hasCard ? 'Update' : 'Add payment method'),
+                        style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
+                      ),
+                    ],
                   ]),
+                  if (mobile) ...[
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _addCard,
+                        icon: Icon(hasCard ? Icons.edit_outlined : Icons.add, size: 18),
+                        label: Text(hasCard ? 'Update payment method' : 'Add payment method'),
+                        style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 18),
                   Wrap(spacing: 20, runSpacing: 10, children: const [
                     _Trust(icon: Icons.lock_outline, text: 'Secure & encrypted'),

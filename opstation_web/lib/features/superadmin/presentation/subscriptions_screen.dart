@@ -247,6 +247,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
 
     final mrr = _rows.where((r) => r.paying).fold<num>(0, (a, r) => a + r.amount);
     int cnt(String s) => _rows.where((r) => r.status == s).length;
+    final mobile = MediaQuery.of(context).size.width < 720;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -276,16 +277,15 @@ class _State extends ConsumerState<SubscriptionsScreen> {
                       _tile('MRR (active)', _money(mrr), AppTheme.textPrimary),
                     ]),
                     const SizedBox(height: 18),
-                    Row(children: [
+                    Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
                       SizedBox(
-                        width: 320,
+                        width: mobile ? double.infinity : 320,
                         child: TextField(
                           decoration: const InputDecoration(
                               prefixIcon: Icon(Icons.search), hintText: 'Search org', isDense: true),
                           onChanged: (v) => setState(() => _search = v),
                         ),
                       ),
-                      const SizedBox(width: 12),
                       DropdownButton<String>(
                         value: _filter,
                         items: const [
@@ -299,19 +299,26 @@ class _State extends ConsumerState<SubscriptionsScreen> {
                       ),
                     ]),
                     const SizedBox(height: 12),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: AppTheme.card,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppTheme.border),
-                      ),
-                      child: Column(children: [
-                        _headerRow(),
-                        for (final r in rows) _dataRow(r),
+                    if (mobile)
+                      Column(children: [
+                        for (final r in rows) _mobileCard(r),
                         if (rows.isEmpty)
                           const Padding(padding: EdgeInsets.all(24), child: Text('No matching orgs')),
-                      ]),
-                    ),
+                      ])
+                    else
+                      Container(
+                        decoration: BoxDecoration(
+                          color: AppTheme.card,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppTheme.border),
+                        ),
+                        child: Column(children: [
+                          _headerRow(),
+                          for (final r in rows) _dataRow(r),
+                          if (rows.isEmpty)
+                            const Padding(padding: EdgeInsets.all(24), child: Text('No matching orgs')),
+                        ]),
+                      ),
                   ]),
                 ),
         ),
@@ -357,66 +364,97 @@ class _State extends ConsumerState<SubscriptionsScreen> {
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
       child: Row(children: [
         Expanded(flex: 3, child: Text(r.name, style: const TextStyle(fontWeight: FontWeight.w600))),
-        Expanded(
-          flex: 2,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: _statusColor(r.status).withOpacity(0.12),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(r.status,
-                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: _statusColor(r.status))),
-            ),
-          ),
-        ),
+        Expanded(flex: 2, child: Align(alignment: Alignment.centerLeft, child: _statusChip(r))),
         Expanded(flex: 2, child: Text(r.paying ? _money(r.amount) : '—',
             style: TextStyle(fontSize: 13, color: r.paying ? AppTheme.textPrimary : AppTheme.textSecondary))),
         Expanded(flex: 2, child: Text(
             r.periodEnd == null ? (r.status == 'active' ? 'Never' : '—') : _fmtDate(r.periodEnd),
             style: const TextStyle(fontSize: 13))),
         Expanded(flex: 2, child: Text(card, style: const TextStyle(fontSize: 13))),
-        Expanded(
-          flex: 2,
-          child: Switch(
-            value: r.managed,
-            onChanged: (v) => _rpc('sub_admin_set_billing_managed',
-                {'p_org': r.orgId, 'p_managed': v, 'p_user': _uid()},
-                v ? 'Automated billing on' : 'Automated billing off'),
-          ),
-        ),
-        SizedBox(
-          width: 48,
-          child: PopupMenuButton<String>(
-            onSelected: (v) {
-              switch (v) {
-                case 'paid': _rpc('sub_admin_mark_paid', {'p_org': r.orgId, 'p_user': _uid()}, 'Marked paid'); break;
-                case 'never': _rpc('sub_admin_never_expire', {'p_org': r.orgId, 'p_user': _uid()}, 'Set to never expire'); break;
-                case 'extend': _extend(r); break;
-                case 'lock': _rpc('sub_admin_set_active', {'p_org': r.orgId, 'p_active': false, 'p_user': _uid()}, 'Locked'); break;
-                case 'unlock': _rpc('sub_admin_set_active', {'p_org': r.orgId, 'p_active': true, 'p_user': _uid()}, 'Unlocked'); break;
-                case 'card': _recordCard(r); break;
-                case 'history': _history(r); break;
-              }
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'paid', child: Text('Mark paid (extend period)')),
-              const PopupMenuItem(value: 'extend', child: Text('Extend days…')),
-              const PopupMenuItem(value: 'never', child: Text('Set to never expire')),
-              if (r.orgActive)
-                const PopupMenuItem(value: 'lock', child: Text('Lock org'))
-              else
-                const PopupMenuItem(value: 'unlock', child: Text('Unlock org')),
-              const PopupMenuItem(value: 'card', child: Text('Record card on file')),
-              const PopupMenuItem(value: 'history', child: Text('View history')),
-            ],
-          ),
+        Expanded(flex: 2, child: _autoBillSwitch(r)),
+        SizedBox(width: 48, child: _actionsMenu(r)),
+      ]),
+    );
+  }
+
+  Widget _statusChip(_Row r) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+            color: _statusColor(r.status).withOpacity(0.12), borderRadius: BorderRadius.circular(20)),
+        child: Text(r.status,
+            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: _statusColor(r.status))),
+      );
+
+  Widget _autoBillSwitch(_Row r) => Switch(
+        value: r.managed,
+        onChanged: (v) => _rpc('sub_admin_set_billing_managed',
+            {'p_org': r.orgId, 'p_managed': v, 'p_user': _uid()},
+            v ? 'Automated billing on' : 'Automated billing off'),
+      );
+
+  Widget _actionsMenu(_Row r) => PopupMenuButton<String>(
+        onSelected: (v) {
+          switch (v) {
+            case 'paid': _rpc('sub_admin_mark_paid', {'p_org': r.orgId, 'p_user': _uid()}, 'Marked paid'); break;
+            case 'never': _rpc('sub_admin_never_expire', {'p_org': r.orgId, 'p_user': _uid()}, 'Set to never expire'); break;
+            case 'extend': _extend(r); break;
+            case 'lock': _rpc('sub_admin_set_active', {'p_org': r.orgId, 'p_active': false, 'p_user': _uid()}, 'Locked'); break;
+            case 'unlock': _rpc('sub_admin_set_active', {'p_org': r.orgId, 'p_active': true, 'p_user': _uid()}, 'Unlocked'); break;
+            case 'card': _recordCard(r); break;
+            case 'history': _history(r); break;
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'paid', child: Text('Mark paid (extend period)')),
+          const PopupMenuItem(value: 'extend', child: Text('Extend days…')),
+          const PopupMenuItem(value: 'never', child: Text('Set to never expire')),
+          if (r.orgActive)
+            const PopupMenuItem(value: 'lock', child: Text('Lock org'))
+          else
+            const PopupMenuItem(value: 'unlock', child: Text('Unlock org')),
+          const PopupMenuItem(value: 'card', child: Text('Record card on file')),
+          const PopupMenuItem(value: 'history', child: Text('View history')),
+        ],
+      );
+
+  // Stacked card for narrow screens.
+  Widget _mobileCard(_Row r) {
+    final card = r.card == null ? '—' : '${r.card!['brand'] ?? 'Card'} ••${r.card!['last4'] ?? ''}';
+    final due = r.periodEnd == null ? (r.status == 'active' ? 'Never' : '—') : _fmtDate(r.periodEnd);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 12),
+      decoration: BoxDecoration(
+          color: AppTheme.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15))),
+          _statusChip(r),
+          _actionsMenu(r),
+        ]),
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Column(children: [
+            _kv('Amount', r.paying ? _money(r.amount) : '—'),
+            _kv('Due', due),
+            _kv('Card', card),
+            Row(children: [
+              const Expanded(child: Text('Auto-bill', style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary))),
+              _autoBillSwitch(r),
+            ]),
+          ]),
         ),
       ]),
     );
   }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 80, child: Text(k, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary))),
+          Expanded(child: Text(v, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+        ]),
+      );
 }
 
 const _th = TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary);
