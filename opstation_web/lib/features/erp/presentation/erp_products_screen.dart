@@ -822,24 +822,102 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       );
     }
 
+    // Visual-only helper: wraps a group of fields in a titled card with an
+    // icon, so the long form reads as clear, scannable sections.
+    Widget sectionCard(IconData icon, String title, List<Widget> children,
+        {String? subtitle}) {
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+        decoration: BoxDecoration(
+          color: AppTheme.card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              height: 30,
+              width: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, size: 17, color: AppTheme.primary),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(title,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: AppTheme.textPrimary)),
+            ),
+          ]),
+          if (subtitle != null) ...[
+            const SizedBox(height: 8),
+            Text(subtitle,
+                style: const TextStyle(
+                    fontSize: 11, color: AppTheme.textSecondary)),
+          ],
+          const SizedBox(height: 12),
+          ...children,
+        ]),
+      );
+    }
+
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
-          title: Text(product == null ? 'Add Product' : 'Edit Product'),
+          backgroundColor: AppTheme.background,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+          title: Row(children: [
+            Container(
+              height: 40,
+              width: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                  product == null
+                      ? Icons.add_box_outlined
+                      : Icons.edit_outlined,
+                  color: AppTheme.primary,
+                  size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(product == null ? 'Add Product' : 'Edit Product',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 18,
+                            color: AppTheme.textPrimary)),
+                    const SizedBox(height: 2),
+                    Text(
+                        product == null
+                            ? 'Create a new catalog item'
+                            : 'Update catalog details',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppTheme.textSecondary)),
+                  ]),
+            ),
+          ]),
           content: SizedBox(
             width: 600,
             child: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Basic Info',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                          color: AppTheme.textSecondary)),
-                ),
-                const SizedBox(height: 8),
+                sectionCard(Icons.inventory_2_outlined, 'Basic Info', [
                 Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   // Optional product photo. Shown to retailers only when the
                   // "Show product images" admin toggle is ON.
@@ -933,16 +1011,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   items: [for (final u in _uoms) <String, String>{'value': u['id'] as String, 'label': '${u['name']} (${u['abbreviation']})'}],
                   onChanged: (v) => setS(() => uomId = v),
                 ),
-                const SizedBox(height: 16),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Classification',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                          color: AppTheme.textSecondary)),
-                ),
-                const SizedBox(height: 8),
+                ]),
+                sectionCard(Icons.category_outlined, 'Classification', [
                 Row(children: [
                   Expanded(child: _taxonomyDropdown('product_type', 'Product Type', productType, (v) => setS(() => productType = v))),
                   const SizedBox(width: 12),
@@ -960,16 +1030,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   const SizedBox(width: 12),
                   Expanded(child: _taxonomyDropdown('movement_category', 'Movement Category', movementCategory, (v) => setS(() => movementCategory = v))),
                 ]),
-                const SizedBox(height: 16),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Pricing',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                          color: AppTheme.textSecondary)),
-                ),
-                const SizedBox(height: 8),
+                ], subtitle: 'Optional — used for grouping and reports.'),
+                sectionCard(Icons.payments_outlined, 'Pricing', [
                 Row(children: [
                   Expanded(
                       child: TextField(
@@ -993,6 +1055,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   const SizedBox(width: 12),
                   const Expanded(child: SizedBox()),
                 ]),
+                ]),
+                sectionCard(Icons.tune, 'Item Type', [
                 if (_consignmentEnabled) ...[
                   const SizedBox(height: 8),
                   CheckboxListTile(
@@ -1031,11 +1095,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   subtitle: const Text('When added to a Purchase Order, a free-text description field unlocks so the buyer can type exactly what is being ordered. Use for miscellaneous, one-off, or service purchases.',
                       style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                 ),
-                const SizedBox(height: 16),
-                const Align(alignment: Alignment.centerLeft, child: Text('Branch Allocation', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
-                const SizedBox(height: 4),
-                const Align(alignment: Alignment.centerLeft, child: Text('Tick the branches this product is stocked in. Newly ticked branches start at zero stock; existing stock is never changed here. Branches that already hold stock are locked.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-                const SizedBox(height: 8),
+                ]),
+                sectionCard(Icons.store_mall_directory_outlined, 'Branch Allocation', [
                 if (_branches.isEmpty)
                   const Align(alignment: Alignment.centerLeft, child: Text('No branches found.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
                 else
@@ -1051,6 +1112,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                       onSelected: locked ? null : (v) => setS(() { if (v) selectedBranches.add(bid); else selectedBranches.remove(bid); }),
                     );
                   }).toList())),
+                ], subtitle: 'Tick the branches this product is stocked in. Newly ticked branches start at zero stock; existing stock is never changed here. Branches that already hold stock are locked.'),
               ]),
             ),
           ),
