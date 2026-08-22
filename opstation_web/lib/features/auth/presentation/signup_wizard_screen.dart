@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
@@ -31,6 +32,28 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
   bool _done = false;
   String? _error;
 
+  // Branded provisioning loader (cycles while the workspace is created).
+  Timer? _loaderTimer;
+  int _loaderStep = 0;
+  static const _loaderLines = [
+    'Setting up your backend…',
+    'Building your office environment…',
+    'Wiring up your books & ledgers…',
+    'Unlocking your modules…',
+    'Almost ready!',
+  ];
+
+  void _startLoader() {
+    _loaderStep = 0;
+    _loaderTimer?.cancel();
+    _loaderTimer = Timer.periodic(const Duration(milliseconds: 1400), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _loaderStep = (_loaderStep + 1) % _loaderLines.length);
+    });
+  }
+
+  void _stopLoader() { _loaderTimer?.cancel(); _loaderTimer = null; }
+
   static const _industries = [
     'Manufacturing',
     'Retail',
@@ -60,6 +83,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
 
   @override
   void dispose() {
+    _stopLoader();
     for (final c in [_name, _email, _contact, _org, _note]) {
       c.dispose();
     }
@@ -84,6 +108,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       return;
     }
     setState(() { _submitting = true; _error = null; });
+    _startLoader();
     const errMap = {
       'email_exists': 'An account with this email already exists — try signing in instead.',
       'bad_email': 'Please enter a valid email address.',
@@ -99,16 +124,19 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       });
       final data = res.data is Map ? res.data as Map : const {};
       if (res.status == 200 && data['ok'] == true) {
+        _stopLoader();
         if (!mounted) return;
         setState(() { _submitting = false; _done = true; });
         return;
       }
+      _stopLoader();
       final code = data['error'] as String?;
       setState(() {
         _submitting = false;
         _error = errMap[code] ?? 'Could not create your workspace. Please try again or contact support.';
       });
     } on FunctionException catch (e) {
+      _stopLoader();
       final det = e.details;
       final code = det is Map ? det['error'] as String? : null;
       setState(() {
@@ -116,6 +144,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
         _error = errMap[code] ?? 'Could not create your workspace. Please try again or contact support.';
       });
     } catch (e) {
+      _stopLoader();
       setState(() {
         _submitting = false;
         _error = 'Could not create your workspace: ${e.toString().split("\n").first}';
@@ -127,7 +156,8 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: LayoutBuilder(builder: (context, c) {
+      body: Stack(children: [
+      LayoutBuilder(builder: (context, c) {
         final wide = c.maxWidth >= 900;
         final form = _done ? _successView() : _formView();
         if (!wide) {
@@ -156,6 +186,47 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
           ),
         ]);
       }),
+      if (_submitting) _loaderOverlay(),
+      ]),
+    );
+  }
+
+  // ── branded provisioning loader ────────────────────────────────────────────
+  Widget _loaderOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.white.withOpacity(0.94),
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(
+              width: 72, height: 72,
+              child: Stack(alignment: Alignment.center, children: [
+                const SizedBox(
+                  width: 72, height: 72,
+                  child: CircularProgressIndicator(strokeWidth: 3, color: AppTheme.primary),
+                ),
+                Container(
+                  width: 48, height: 48, alignment: Alignment.center,
+                  decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(13)),
+                  child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 26),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              child: Text(
+                _loaderLines[_loaderStep],
+                key: ValueKey(_loaderStep),
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _ink),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text('Creating your Opstation workspace — this only takes a few seconds.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary.withOpacity(0.9))),
+          ]),
+        ),
+      ),
     );
   }
 
@@ -314,7 +385,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
   ];
 
   List<Widget> _stepTwo() => [
-    _field(controller: _org, label: 'Organization name', required: true, hint: 'e.g. Unisource Trading Co.',
+    _field(controller: _org, label: 'Organization name', required: true, hint: 'e.g. Premium Enterprises',
         icon: Icons.business_outlined),
     const SizedBox(height: 16),
     const Text('Industry', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),

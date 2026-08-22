@@ -19,6 +19,12 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
   Map<String, int> _userCountsByOrgId = {};
   Map<String, Map<String, dynamic>> _settingsByOrgId = {};   // org_id -> {costing_method, method_locked}
   bool _loading = true;
+  bool _showArchived = false;
+
+  List<Map<String, dynamic>> get _visibleOrgs => _showArchived
+      ? _orgs
+      : _orgs.where((o) => (o['archived'] as bool? ?? false) == false).toList();
+  int get _archivedCount => _orgs.where((o) => (o['archived'] as bool? ?? false)).length;
 
   @override
   void initState() {
@@ -93,6 +99,20 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed: $e')),
         );
+      }
+    }
+  }
+
+  Future<void> _toggleArchive(Map<String, dynamic> o) async {
+    final newVal = !(o['archived'] as bool? ?? false);
+    try {
+      await Supabase.instance.client
+          .from('orgs')
+          .update({'archived': newVal}).eq('id', o['id']);
+      _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
       }
     }
   }
@@ -665,19 +685,28 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
           ),
         ]),
         const SizedBox(height: 8),
-        Text('${_orgs.length} organizations',
-            style: const TextStyle(color: AppTheme.textSecondary)),
+        Row(children: [
+          Text('${_visibleOrgs.length} organizations'
+              '${_archivedCount > 0 ? ' · $_archivedCount archived' : ''}',
+              style: const TextStyle(color: AppTheme.textSecondary)),
+          const Spacer(),
+          if (_archivedCount > 0) ...[
+            const Text('Show archived', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            Switch(value: _showArchived, onChanged: (v) => setState(() => _showArchived = v)),
+          ],
+        ]),
         const SizedBox(height: 24),
         if (_loading)
           const Center(child: CircularProgressIndicator())
         else
           Expanded(
             child: ListView.separated(
-              itemCount: _orgs.length,
+              itemCount: _visibleOrgs.length,
               separatorBuilder: (_, __) => const SizedBox(height: 12),
               itemBuilder: (_, i) {
-                final o = _orgs[i];
+                final o = _visibleOrgs[i];
                 final isActive = o['is_active'] as bool? ?? true;
+                final isArchived = o['archived'] as bool? ?? false;
                 final maxUsers = o['max_users'] as int?;
                 final userCount = _userCountsByOrgId[o['id']] ?? 0;
                 final master = _mastersByOrgId[o['id']];
@@ -784,6 +813,12 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                         color: isActive ? AppTheme.danger : AppTheme.success,
                       ),
                       onPressed: () => _toggleActive(o),
+                    ),
+                    IconButton(
+                      tooltip: isArchived ? 'Unarchive' : 'Archive (hide from list)',
+                      icon: Icon(isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+                          size: 18, color: AppTheme.textSecondary),
+                      onPressed: () => _toggleArchive(o),
                     ),
                   ]),
                 );

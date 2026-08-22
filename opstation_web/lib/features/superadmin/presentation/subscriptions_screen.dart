@@ -26,6 +26,9 @@ class _Row {
   bool get managed => (sub['billing_managed'] as bool?) ?? false;
   num get amount => (sub['amount'] as num?) ?? 0;
   String? get periodEnd => sub['current_period_end'] as String?;
+  // "Paying" = on automated billing OR marked paid (mark-paid flips managed on).
+  // Only these show an amount / count toward MRR — everything else is just an org.
+  bool get paying => managed && status == 'active';
 }
 
 class _State extends ConsumerState<SubscriptionsScreen> {
@@ -192,7 +195,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
     if (!mounted) return;
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: Text('${r.name} — history'),
         content: SizedBox(
           width: 560,
@@ -216,7 +219,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
             ]),
           ),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+        actions: [TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Close'))],
       ),
     );
   }
@@ -242,7 +245,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
     if (_filter != 'ALL') rows = rows.where((r) => r.status == _filter).toList();
     if (q.isNotEmpty) rows = rows.where((r) => r.name.toLowerCase().contains(q)).toList();
 
-    final mrr = _rows.where((r) => r.status == 'active').fold<num>(0, (a, r) => a + r.amount);
+    final mrr = _rows.where((r) => r.paying).fold<num>(0, (a, r) => a + r.amount);
     int cnt(String s) => _rows.where((r) => r.status == s).length;
 
     return Scaffold(
@@ -369,8 +372,11 @@ class _State extends ConsumerState<SubscriptionsScreen> {
             ),
           ),
         ),
-        Expanded(flex: 2, child: Text(_money(r.amount), style: const TextStyle(fontSize: 13))),
-        Expanded(flex: 2, child: Text(_fmtDate(r.periodEnd), style: const TextStyle(fontSize: 13))),
+        Expanded(flex: 2, child: Text(r.paying ? _money(r.amount) : '—',
+            style: TextStyle(fontSize: 13, color: r.paying ? AppTheme.textPrimary : AppTheme.textSecondary))),
+        Expanded(flex: 2, child: Text(
+            r.periodEnd == null ? (r.status == 'active' ? 'Never' : '—') : _fmtDate(r.periodEnd),
+            style: const TextStyle(fontSize: 13))),
         Expanded(flex: 2, child: Text(card, style: const TextStyle(fontSize: 13))),
         Expanded(
           flex: 2,
@@ -387,6 +393,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
             onSelected: (v) {
               switch (v) {
                 case 'paid': _rpc('sub_admin_mark_paid', {'p_org': r.orgId, 'p_user': _uid()}, 'Marked paid'); break;
+                case 'never': _rpc('sub_admin_never_expire', {'p_org': r.orgId, 'p_user': _uid()}, 'Set to never expire'); break;
                 case 'extend': _extend(r); break;
                 case 'lock': _rpc('sub_admin_set_active', {'p_org': r.orgId, 'p_active': false, 'p_user': _uid()}, 'Locked'); break;
                 case 'unlock': _rpc('sub_admin_set_active', {'p_org': r.orgId, 'p_active': true, 'p_user': _uid()}, 'Unlocked'); break;
@@ -397,6 +404,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'paid', child: Text('Mark paid (extend period)')),
               const PopupMenuItem(value: 'extend', child: Text('Extend days…')),
+              const PopupMenuItem(value: 'never', child: Text('Set to never expire')),
               if (r.orgActive)
                 const PopupMenuItem(value: 'lock', child: Text('Lock org'))
               else
