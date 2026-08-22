@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart' show orgModulesProvider;
 import '../../auth/auth_controller.dart';
 import 'plan_cards.dart';
 
@@ -32,6 +33,12 @@ class _State extends ConsumerState<BillingScreen> {
   String get _planName {
     final p = _plans.where((e) => e['id'] == _planId).toList();
     return p.isNotEmpty ? (p.first['name'] as String? ?? 'Your plan') : 'Your plan';
+  }
+
+  String? get _pendingPlanId => _sub?['pending_plan_id'] as String?;
+  String get _pendingPlanName {
+    final p = _plans.where((e) => e['id'] == _pendingPlanId).toList();
+    return p.isNotEmpty ? (p.first['name'] as String? ?? 'new plan') : 'new plan';
   }
 
   @override
@@ -84,33 +91,109 @@ class _State extends ConsumerState<BillingScreen> {
     return d.difference(DateTime.now()).inDays;
   }
 
+  // Paying auto-billed org → plan changes are cycle-locked (scheduled for the
+  // next billing date). Trials and manual orgs change immediately.
+  bool get _schedules =>
+      (_sub?['billing_managed'] == true) && (_sub?['status'] != 'trialing');
+
   Future<void> _changePlan(Map<String, dynamic> plan) async {
+    final scheduling = _schedules;
+    final dueDate = _fmt(_sub?['current_period_end'] as String?);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Switch to ${plan['name']}?'),
+        title: Text(scheduling ? 'Schedule ${plan['name']}?' : 'Switch to ${plan['name']}?'),
         content: Text(
-          'Your plan will change to ${plan['name']} (${_money((plan['amount'] as num?) ?? 0)}/month) '
-          'and the modules included in that plan will be enabled. You can change again anytime.',
+          scheduling
+              ? 'Your plan will switch to ${plan['name']} (${_money((plan['amount'] as num?) ?? 0)}/month) '
+                  'on your next billing date ($dueDate), and you\'ll be billed the new price for that cycle. '
+                  'Nothing changes until then — you can cancel the scheduled change anytime before it applies.'
+              : 'Your plan will change to ${plan['name']} (${_money((plan['amount'] as num?) ?? 0)}/month) '
+                  'and the modules included in that plan will be enabled. You can change again anytime.',
           style: const TextStyle(fontSize: 13.5, height: 1.5),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirm')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(scheduling ? 'Schedule change' : 'Confirm')),
         ],
       ),
     );
     if (ok != true) return;
     try {
-      await _c.rpc('sub_change_plan', params: {'p_org': ref.read(currentUserProvider)?.orgId, 'p_plan_id': plan['id']});
+      final res = await _c.rpc('sub_change_plan',
+          params: {'p_org': ref.read(currentUserProvider)?.orgId, 'p_plan_id': plan['id']});
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Switched to ${plan['name']}. Reload to see updated menus.')));
+      final out = res?.toString() ?? '';
+      String msg;
+      if (out.startsWith('scheduled:')) {
+        final parts = out.substring('scheduled:'.length).split('|');
+        final when = parts.length > 1 && parts[1].isNotEmpty ? parts[1] : 'your next billing date';
+        msg = 'Scheduled — switching to ${parts[0]} on $when.';
+      } else if (out.startsWith('reverted:')) {
+        msg = 'Scheduled change canceled — staying on your current plan.';
+      } else {
+        // applied immediately — modules were rebuilt, refresh the cached set so
+        // the menu reshapes without a manual reload.
+        ref.invalidate(orgModulesProvider);
+        msg = 'Switched to ${plan['name']}. Your menus have been updated.';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       await _load();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not change plan: $e')));
     }
+  }
+
+  Future<void> _cancelPending() async {
+    try {
+      await _c.rpc('sub_cancel_pending_plan',
+          params: {'p_org': ref.read(currentUserProvider)?.orgId});
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Scheduled plan change canceled.')));
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not cancel: $e')));
+    }
+  }
+
+  Widget _pendingBanner() {
+    final when = _fmt(_sub?['current_period_end'] as String?);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7E6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF0C36D)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.schedule, size: 20, color: Color(0xFFB4791A)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Scheduled: switching from $_planName to $_pendingPlanName on $when.',
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF7A5310)),
+          ),
+        ),
+        const SizedBox(width: 8),
+        TextButton(
+          onPressed: _cancelPending,
+          style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFB4791A),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w700)),
+        ),
+      ]),
+    );
   }
 
   void _addCard() {
@@ -276,8 +359,15 @@ class _State extends ConsumerState<BillingScreen> {
               if (_plans.isNotEmpty) ...[
                 const Text('Choose your plan', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 2),
-                const Text('Upgrade or switch anytime — your modules update instantly.',
-                    style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                Text(
+                    _schedules
+                        ? 'Changes take effect on your next billing date — your current plan stays until then.'
+                        : 'Upgrade or switch anytime — your modules update instantly.',
+                    style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                if (_pendingPlanId != null && _pendingPlanId != _planId) ...[
+                  const SizedBox(height: 12),
+                  _pendingBanner(),
+                ],
                 const SizedBox(height: 14),
                 PlanCards(
                   plans: _plans,
@@ -285,11 +375,14 @@ class _State extends ConsumerState<BillingScreen> {
                   onSelect: _changePlan,
                   ctaLabel: (p) {
                     if (p['id'] == _planId) return 'Current plan';
+                    if (p['id'] == _pendingPlanId) return 'Scheduled';
                     final cur = _plans.where((e) => e['id'] == _planId).toList();
                     final curAmt = cur.isNotEmpty ? ((cur.first['amount'] as num?) ?? 0) : 0;
-                    return ((p['amount'] as num?) ?? 0) > curAmt ? 'Upgrade' : 'Switch';
+                    final up = ((p['amount'] as num?) ?? 0) > curAmt;
+                    if (_schedules) return up ? 'Schedule upgrade' : 'Schedule switch';
+                    return up ? 'Upgrade' : 'Switch';
                   },
-                  ctaDisabled: (p) => p['id'] == _planId,
+                  ctaDisabled: (p) => p['id'] == _planId || p['id'] == _pendingPlanId,
                 ),
                 const SizedBox(height: 20),
               ],
