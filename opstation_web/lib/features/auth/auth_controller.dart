@@ -15,6 +15,7 @@ class WebUser {
   final String? orgId;
   final String? orgName;
   final bool mustChangePassword;
+  final bool subscriptionExpired;
   const WebUser({
     required this.id,
     required this.name,
@@ -23,22 +24,26 @@ class WebUser {
     this.orgId,
     this.orgName,
     this.mustChangePassword = false,
+    this.subscriptionExpired = false,
   });
-  WebUser copyWith({bool? mustChangePassword}) => WebUser(
+  WebUser copyWith({bool? mustChangePassword, bool? subscriptionExpired}) => WebUser(
     id: id, name: name, email: email, role: role,
     orgId: orgId, orgName: orgName,
     mustChangePassword: mustChangePassword ?? this.mustChangePassword,
+    subscriptionExpired: subscriptionExpired ?? this.subscriptionExpired,
   );
   Map<String, dynamic> toJson() => {
     'id': id, 'name': name, 'email': email,
     'role': role.name, 'orgId': orgId, 'orgName': orgName,
     'mustChangePassword': mustChangePassword,
+    'subscriptionExpired': subscriptionExpired,
   };
   factory WebUser.fromJson(Map<String, dynamic> m) => WebUser(
     id: m['id'], name: m['name'], email: m['email'],
     role: WebUserRole.values.firstWhere((r) => r.name == m['role']),
     orgId: m['orgId'], orgName: m['orgName'],
     mustChangePassword: m['mustChangePassword'] as bool? ?? false,
+    subscriptionExpired: m['subscriptionExpired'] as bool? ?? false,
   );
 }
 
@@ -171,6 +176,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
       // Step 3: org gate.
       final orgId = row['org_id'] as String?;
       String? orgName;
+      bool subExpired = false;
       if (orgId != null) {
         final orgRows = await client
             .from('orgs')
@@ -180,17 +186,23 @@ class AuthController extends AsyncNotifier<WebUser?> {
         if (orgRows.isNotEmpty) {
           final orgActive = orgRows.first['is_active'] as bool? ?? true;
           if (!orgActive) {
+            // Hard disable (super admin) — fully blocked.
             await client.auth.signOut();
             throw Exception(
                 'Your organization has been disabled. Contact support.');
           }
           final expRaw = orgRows.first['expires_at'] as String?;
-          if (expRaw != null) {
-            final expiry = DateTime.parse(expRaw);
-            if (expiry.isBefore(DateTime.now())) {
+          if (expRaw != null && DateTime.parse(expRaw).isBefore(DateTime.now())) {
+            // Trial / subscription lapsed. Admins get in (to a "renew" wall);
+            // other users are paused until an admin renews.
+            final roleStr = row['role'] as String;
+            final isAdmin = roleStr == 'masterAdmin' || roleStr == 'admin';
+            if (isAdmin) {
+              subExpired = true;
+            } else {
               await client.auth.signOut();
               throw Exception(
-                  'Your organization access has expired. Contact support.');
+                  'Your workspace is paused. Please ask your administrator to renew the subscription.');
             }
           }
           orgName = orgRows.first['name'] as String?;
@@ -215,6 +227,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
         orgId: orgId,
         orgName: orgName,
         mustChangePassword: row['password_temporary'] as bool? ?? false,
+        subscriptionExpired: subExpired,
       );
 
       final prefs = await SharedPreferences.getInstance();

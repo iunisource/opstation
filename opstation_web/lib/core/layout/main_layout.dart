@@ -18,6 +18,7 @@ import '../onboarding/first_login_tour.dart';
 import '../station_master/station_master.dart';
 import '../../features/support/presentation/request_callback_button.dart';
 import '../../features/support/presentation/download_app_button.dart';
+import '../../features/billing/presentation/trial_banner.dart';
 import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
@@ -624,7 +625,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [widget.child, const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const RequestCallbackButton(), const DownloadAppButton()]),
+        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const RequestCallbackButton(), const DownloadAppButton()]),
       );
     }
 
@@ -634,7 +635,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         body: Stack(children: [
           Row(children: [
             _SideNav(user: user),
-            Expanded(child: widget.child),
+            Expanded(child: Column(children: [const TrialBanner(), Expanded(child: widget.child)])),
           ]),
           const GlobalJobAlert(),
           const GlobalTransferAlert(),
@@ -650,6 +651,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
       body: Stack(children: [
         Column(children: [
           _TopNav(user: user),
+          const TrialBanner(),
           Expanded(child: widget.child),
         ]),
         const GlobalJobAlert(),

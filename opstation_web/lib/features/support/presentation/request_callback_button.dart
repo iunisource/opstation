@@ -29,7 +29,7 @@ class RequestCallbackButton extends ConsumerWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(30),
-          onTap: () => _openDialog(context, ref),
+          onTap: () => showRequestCallbackDialog(context, ref),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
@@ -54,8 +54,10 @@ class RequestCallbackButton extends ConsumerWidget {
       ),
     );
   }
+}
 
-  void _openDialog(BuildContext context, WidgetRef ref) {
+/// Shared callback dialog — used by the floating button and the trial-ended wall.
+void showRequestCallbackDialog(BuildContext context, WidgetRef ref) {
     final user = ref.read(currentUserProvider);
     final nameCtrl = TextEditingController(text: user?.name ?? '');
     final emailCtrl = TextEditingController(text: user?.email ?? '');
@@ -175,5 +177,4 @@ class RequestCallbackButton extends ConsumerWidget {
         },
       ),
     );
-  }
 }

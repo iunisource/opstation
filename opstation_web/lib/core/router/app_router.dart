@@ -65,6 +65,7 @@ import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/superadmin/presentation/orgs_screen.dart';
 import '../../features/superadmin/presentation/subscriptions_screen.dart';
 import '../../features/billing/presentation/billing_screen.dart';
+import '../../features/billing/presentation/subscription_expired_screen.dart';
 import '../../features/live_map/presentation/live_map_screen.dart';
 import '../../features/compliance/presentation/compliance_screen.dart';
 import '../../features/operations/presentation/retailer_files_screen.dart';
@@ -191,6 +192,11 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           return loc == '/change-password' ? null : '/change-password';
         }
         if (loc == '/change-password') return home();
+        // Lapsed trial / subscription — admins are walled here until they renew.
+        if (user.subscriptionExpired) {
+          return loc == '/subscription-expired' ? null : '/subscription-expired';
+        }
+        if (loc == '/subscription-expired') return home();
         bool allowed() {
           if (role == WebUserRole.superAdmin) {
             return loc == '/orgs' || loc == '/subscriptions';
@@ -260,6 +266,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/change-password',
         builder: (_, __) => const ChangePasswordScreen(),
+      ),
+      GoRoute(
+        path: '/subscription-expired',
+        builder: (_, __) => const SubscriptionExpiredScreen(),
       ),
       GoRoute(
         path: '/r/login',
