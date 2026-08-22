@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -18,10 +19,12 @@ class RequestCallbackButton extends ConsumerWidget {
     final role = user?.role;
     final show = role == WebUserRole.masterAdmin || role == WebUserRole.admin;
     if (!show) return const SizedBox.shrink();
+    // Only on the main dashboard, not every screen.
+    if (GoRouterState.of(context).matchedLocation != '/dashboard') return const SizedBox.shrink();
 
     return Positioned(
-      left: 20,
-      bottom: 20,
+      right: 88,
+      bottom: 74,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
