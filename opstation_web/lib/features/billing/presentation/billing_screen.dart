@@ -229,7 +229,9 @@ class _State extends ConsumerState<BillingScreen> {
                       '${e['provider'] ?? ''}', _fmt(e['created_at'] as String?),
                       _money((e['amount'] as num?) ?? 0), (e['status'] as String?) ?? '')).toList()),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
+              _trustBadges(),
+              const SizedBox(height: 16),
               Center(
                 child: Text('Questions about billing? Email billing@opstationerp.com',
                     style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary.withOpacity(0.9))),
@@ -240,6 +242,65 @@ class _State extends ConsumerState<BillingScreen> {
       ),
     );
   }
+
+  // ── Trust badges (card networks + security) ─────────────────────────────
+  Widget _trustBadges() => Center(
+        child: Column(children: [
+          Text('TRUSTED & SECURE PAYMENTS',
+              style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.2,
+                  color: AppTheme.textSecondary.withOpacity(0.8))),
+          const SizedBox(height: 12),
+          Wrap(spacing: 10, runSpacing: 10, alignment: WrapAlignment.center, children: [
+            _visaBadge(),
+            _mastercardBadge(),
+            _pill(Icons.lock, '256-bit SSL'),
+            _pill(Icons.verified_user_outlined, 'PCI-DSS Compliant'),
+            _pill(Icons.shield_outlined, 'Bank-grade security'),
+          ]),
+        ]),
+      );
+
+  Widget _badgeBox({required Widget child}) => Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppTheme.card,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: child,
+      );
+
+  Widget _pill(IconData icon, String text) => _badgeBox(
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 15, color: AppTheme.success),
+          const SizedBox(width: 6),
+          Text(text, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+        ]),
+      );
+
+  Widget _visaBadge() => _badgeBox(
+        child: Text('VISA',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 1.5,
+                fontStyle: FontStyle.italic, color: const Color(0xFF1A1F71))),
+      );
+
+  Widget _mastercardBadge() => _badgeBox(
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(
+            width: 30, height: 20,
+            child: Stack(children: [
+              Positioned(left: 0, child: Container(width: 20, height: 20,
+                  decoration: const BoxDecoration(color: Color(0xFFEB001B), shape: BoxShape.circle))),
+              Positioned(left: 10, child: Container(width: 20, height: 20,
+                  decoration: BoxDecoration(color: const Color(0xFFF79E1B).withOpacity(0.9), shape: BoxShape.circle))),
+            ]),
+          ),
+          const SizedBox(width: 6),
+          const Text('Mastercard', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF1F2937))),
+        ]),
+      );
 
   Widget _historyCard(String title, List<Widget> children) => Container(
         width: double.infinity,
