@@ -230,6 +230,9 @@ class AuthController extends AsyncNotifier<WebUser?> {
         subscriptionExpired: subExpired,
       );
 
+      // Fresh login → show the support buttons again.
+      ref.read(supportButtonsHiddenProvider.notifier).state = false;
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('opstation_web_remember_me', rememberMe);
       if (rememberMe) {
@@ -268,3 +271,8 @@ final authControllerProvider =
 final currentUserProvider = Provider<WebUser?>((ref) {
   return ref.watch(authControllerProvider).valueOrNull;
 });
+
+/// Whether the dashboard support buttons (Request a call back / Get the Android
+/// app) have been dismissed for this session. Reset to false on every sign-in,
+/// so they reappear at the next login.
+final supportButtonsHiddenProvider = StateProvider<bool>((ref) => false);

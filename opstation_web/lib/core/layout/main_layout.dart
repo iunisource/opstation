@@ -17,7 +17,7 @@ import '../notifications/global_badge_sync.dart';
 import '../onboarding/first_login_tour.dart';
 import '../station_master/station_master.dart';
 import '../../features/support/presentation/request_callback_button.dart';
-import '../../features/support/presentation/download_app_button.dart';
+import '../../features/support/presentation/support_buttons.dart';
 import '../../features/billing/presentation/trial_banner.dart';
 import 'erp_global_search.dart';
 
@@ -625,7 +625,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const RequestCallbackButton(), const DownloadAppButton()]),
+        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
       );
     }
 
@@ -642,8 +642,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           const GlobalBadgeSync(),
           const FirstLoginTour(),
           const StationMaster(),
-          const RequestCallbackButton(),
-          const DownloadAppButton(),
+          const SupportButtons(),
         ]),
       );
     }
@@ -659,8 +658,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         const GlobalBadgeSync(),
         const FirstLoginTour(),
         const StationMaster(),
-        const RequestCallbackButton(),
-        const DownloadAppButton(),
+        const SupportButtons(),
       ]),
     );
   }
@@ -1033,6 +1031,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           if (show('/erp/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/erp/files', location),
           if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
             _menuItem(context, 'Billing & Subscription', Icons.credit_card_outlined, '/billing', location),
+          if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+            _menuAction(context, 'Request a call back', Icons.support_agent, () => showRequestCallbackDialog(context, ref)),
+          if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+            _menuAction(context, 'Get the Android app', Icons.android, () => openAndroidApp(context)),
           if (_hasItems(erpAdminItems)) _menuLabel('Administration'),
           ..._trimDividers(erpAdminItems),
         ]),
@@ -1719,6 +1721,22 @@ void _openInNewTab(BuildContext context, String path, Offset pos) {
         ]),
       ),
     ],
+  );
+}
+
+// Menu entry that runs an action (opens a dialog / link) instead of navigating.
+Widget _menuAction(BuildContext context, String label, IconData icon, VoidCallback onPressed) {
+  return MenuItemButton(
+    style: ButtonStyle(
+      foregroundColor: const WidgetStatePropertyAll(Colors.white70),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+      minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
+      backgroundColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.hovered) ? Colors.white.withOpacity(0.08) : Colors.transparent),
+    ),
+    leadingIcon: Icon(icon, size: 15, color: Colors.white54),
+    onPressed: onPressed,
+    child: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w400)),
   );
 }
 
