@@ -72,15 +72,30 @@ class RequestCallbackButton extends ConsumerWidget {
               return;
             }
             setS(() { busy = true; error = null; });
+            const map = {
+              'contact_required': 'Please enter a phone number.',
+              'not_configured': 'Callbacks aren\'t set up yet — the support inbox is missing. Please contact your administrator.',
+              'send_failed': 'The request could not be emailed right now. Please try again shortly.',
+            };
             try {
-              await Supabase.instance.client.functions.invoke('request-callback', body: {
+              final res = await Supabase.instance.client.functions.invoke('request-callback', body: {
                 'name': nameCtrl.text.trim(),
                 'email': emailCtrl.text.trim(),
                 'contact': phoneCtrl.text.trim(),
                 'orgName': user?.orgName ?? '',
                 'message': msgCtrl.text.trim(),
               });
-              setS(() { busy = false; done = true; });
+              final data = res.data is Map ? res.data as Map : const {};
+              if (res.status == 200 && data['ok'] == true) {
+                setS(() { busy = false; done = true; });
+              } else {
+                final code = data['error'] as String?;
+                setS(() { busy = false; error = map[code] ?? 'Could not send your request. Please try again.'; });
+              }
+            } on FunctionException catch (e) {
+              final det = e.details;
+              final code = det is Map ? det['error'] as String? : null;
+              setS(() { busy = false; error = map[code] ?? 'Could not send your request. Please try again.'; });
             } catch (e) {
               setS(() { busy = false; error = 'Could not send your request. Please try again.'; });
             }
