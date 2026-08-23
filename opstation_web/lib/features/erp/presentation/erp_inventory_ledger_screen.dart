@@ -845,92 +845,107 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       }
     });
     ref.watch(selectedBranchProvider); // keep the "Branch:" label in sync
-    return Container(
-      color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Inventory Ledger', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 4),
-        Text('Branch: ' + _branchModeLabel(), style: const TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 20),
-        if (_loadingProducts)
-          const Center(child: CircularProgressIndicator())
-        else if (_selectedProduct == null)
-          _buildPicker()
-        else
-          _buildLedger(),
-      ]),
-    );
+    return LayoutBuilder(builder: (context, c) {
+      final mobile = c.maxWidth < 640;
+      final pad = mobile ? 16.0 : 32.0;
+      return Container(
+        color: AppTheme.background,
+        padding: EdgeInsets.all(pad),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Inventory Ledger',
+              style: TextStyle(fontSize: mobile ? 22 : 28, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text('Branch: ' + _branchModeLabel(),
+              maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppTheme.textSecondary)),
+          SizedBox(height: mobile ? 14 : 20),
+          if (_loadingProducts)
+            const Expanded(child: Center(child: CircularProgressIndicator()))
+          else if (_selectedProduct == null)
+            _buildPicker(mobile)
+          else
+            _buildLedger(mobile),
+        ]),
+      );
+    });
   }
 
-  Widget _buildPicker() {
+  Widget _buildPicker(bool mobile) {
     final visible = _visibleProducts;
+    final branchScope = DropdownButtonFormField<String>(
+      value: _branchMode,
+      isDense: true,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: 'Branch Scope', isDense: true),
+      items: const [
+        DropdownMenuItem(value: 'current', child: Text('Current Branch')),
+        DropdownMenuItem(value: 'all', child: Text('All Branches')),
+        DropdownMenuItem(value: 'multi', child: Text('Multi-select...')),
+      ],
+      onChanged: (v) {
+        if (v == null) return;
+        if (v == 'multi') {
+          _showBranchMultiSelect();
+        } else {
+          setState(() { _branchMode = v; });
+          if (_selectedProduct != null) _loadMovements(_selectedProduct!['id'] as String);
+        }
+      },
+    );
+    final mainGroup = DropdownButtonFormField<String?>(
+      value: _mainGroupFilter,
+      isDense: true,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: 'Main Group', isDense: true),
+      items: [
+        const DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(color: AppTheme.textSecondary))),
+        ..._mainGroupOptions.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g, overflow: TextOverflow.ellipsis))),
+      ],
+      onChanged: (v) => setState(() {
+        _mainGroupFilter = v;
+        if (_groupFilter != null && !_groupOptions.contains(_groupFilter)) _groupFilter = null;
+      }),
+    );
+    final group = DropdownButtonFormField<String?>(
+      value: _groupFilter,
+      isDense: true,
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: 'Group', isDense: true),
+      items: [
+        const DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(color: AppTheme.textSecondary))),
+        ..._groupOptions.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g, overflow: TextOverflow.ellipsis))),
+      ],
+      onChanged: (v) => setState(() => _groupFilter = v),
+    );
+    final search = TextField(
+      controller: _productSearchCtrl,
+      decoration: const InputDecoration(
+        labelText: 'Search Product',
+        prefixIcon: Icon(Icons.search, size: 18),
+        isDense: true,
+      ),
+    );
+    final filters = mobile
+        ? Column(children: [
+            branchScope,
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: mainGroup),
+              const SizedBox(width: 10),
+              Expanded(child: group),
+            ]),
+            const SizedBox(height: 10),
+            search,
+          ])
+        : Wrap(spacing: 12, runSpacing: 8, children: [
+            SizedBox(width: 220, child: branchScope),
+            SizedBox(width: 220, child: mainGroup),
+            SizedBox(width: 220, child: group),
+            SizedBox(width: 320, child: search),
+          ]);
     return Expanded(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Wrap(spacing: 12, runSpacing: 8, children: [
-          SizedBox(
-            width: 220,
-            child: DropdownButtonFormField<String>(
-              value: _branchMode,
-              isDense: true,
-              decoration: const InputDecoration(labelText: 'Branch Scope', isDense: true),
-              items: const [
-                DropdownMenuItem(value: 'current', child: Text('Current Branch')),
-                DropdownMenuItem(value: 'all', child: Text('All Branches')),
-                DropdownMenuItem(value: 'multi', child: Text('Multi-select...')),
-              ],
-              onChanged: (v) {
-                if (v == null) return;
-                if (v == 'multi') {
-                  _showBranchMultiSelect();
-                } else {
-                  setState(() { _branchMode = v; });
-                  if (_selectedProduct != null) _loadMovements(_selectedProduct!['id'] as String);
-                }
-              },
-            ),
-          ),
-          SizedBox(
-            width: 220,
-            child: DropdownButtonFormField<String?>(
-              value: _mainGroupFilter,
-              isDense: true,
-              decoration: const InputDecoration(labelText: 'Main Group', isDense: true),
-              items: [
-                const DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(color: AppTheme.textSecondary))),
-                ..._mainGroupOptions.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g))),
-              ],
-              onChanged: (v) => setState(() {
-                _mainGroupFilter = v;
-                if (_groupFilter != null && !_groupOptions.contains(_groupFilter)) _groupFilter = null;
-              }),
-            ),
-          ),
-          SizedBox(
-            width: 220,
-            child: DropdownButtonFormField<String?>(
-              value: _groupFilter,
-              isDense: true,
-              decoration: const InputDecoration(labelText: 'Group', isDense: true),
-              items: [
-                const DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(color: AppTheme.textSecondary))),
-                ..._groupOptions.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g))),
-              ],
-              onChanged: (v) => setState(() => _groupFilter = v),
-            ),
-          ),
-          SizedBox(
-            width: 320,
-            child: TextField(
-              controller: _productSearchCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Search Product',
-                prefixIcon: Icon(Icons.search, size: 18),
-                isDense: true,
-              ),
-            ),
-          ),
-        ]),
+        filters,
         const SizedBox(height: 12),
         Text(visible.length.toString() + ' of ' + _products.length.toString() + ' products',
             style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -969,7 +984,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     );
   }
 
-  Widget _buildLedger() {
+  Widget _buildLedger(bool mobile) {
     final p = _selectedProduct!;
     final uomAbbr = p['uoms']?['abbreviation'] as String? ?? '';
     final currentStock = _movements.isNotEmpty ? (_movements.last['running_qty'] as double) : 0.0;
@@ -984,111 +999,160 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       }
     }
     String fmtQ(double q) => q % 1 == 0 ? q.toInt().toString() : q.toString();
+
+    final stockCard = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Current Stock', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        Text((currentStock % 1 == 0 ? currentStock.toInt().toString() : currentStock.toString()) + ' ' + uomAbbr,
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: currentStock > 0 ? AppTheme.success : AppTheme.danger)),
+        if (multiBranch && branchTotals.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+                branchTotals.entries
+                    .map((e) => '${_branchNameById(e.key) ?? '—'}: ${fmtQ(e.value)}')
+                    .join('  ·  '),
+                style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+          ),
+      ]),
+    );
+    final movesCard = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Total Movements', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        Text(_movements.length.toString(), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+      ]),
+    );
+    final printBtn = OutlinedButton.icon(
+      onPressed: _printLedger,
+      icon: const Icon(Icons.print_outlined, size: 16),
+      label: const Text('Print / PDF'),
+      style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary),
+    );
+    final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(p['name'] as String? ?? '',
+          maxLines: 2, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+      Text([
+        p['sku'] as String?,
+        p['product_main_group'] as String?,
+        p['product_group'] as String?,
+      ].where((s) => s != null && s.isNotEmpty).join('  ·  '),
+          maxLines: 2, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+    ]);
+
+    final Widget header = mobile
+        ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              IconButton(onPressed: _clearSelection, icon: const Icon(Icons.arrow_back, size: 20), tooltip: 'Back to products'),
+              Expanded(child: titleBlock),
+            ]),
+            if (_movements.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Expanded(child: stockCard),
+                const SizedBox(width: 10),
+                Expanded(child: movesCard),
+              ]),
+              const SizedBox(height: 8),
+              SizedBox(width: double.infinity, child: printBtn),
+            ],
+          ])
+        : Row(children: [
+            IconButton(onPressed: _clearSelection, icon: const Icon(Icons.arrow_back, size: 20), tooltip: 'Back to products'),
+            Expanded(child: titleBlock),
+            if (_movements.isNotEmpty) ...[
+              printBtn,
+              const SizedBox(width: 12),
+              stockCard,
+              const SizedBox(width: 12),
+              movesCard,
+            ],
+          ]);
+
     return Expanded(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          IconButton(onPressed: _clearSelection, icon: const Icon(Icons.arrow_back, size: 20), tooltip: 'Back to products'),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(p['name'] as String? ?? '', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-              Text([
-                p['sku'] as String?,
-                p['product_main_group'] as String?,
-                p['product_group'] as String?,
-              ].where((s) => s != null && s.isNotEmpty).join('  ·  '),
-                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-            ]),
-          ),
-          if (_movements.isNotEmpty) ...[
-            OutlinedButton.icon(
-              onPressed: _printLedger,
-              icon: const Icon(Icons.print_outlined, size: 16),
-              label: const Text('Print / PDF'),
-              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Current Stock', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                Text((currentStock % 1 == 0 ? currentStock.toInt().toString() : currentStock.toString()) + ' ' + uomAbbr,
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: currentStock > 0 ? AppTheme.success : AppTheme.danger)),
-                if (multiBranch && branchTotals.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                        branchTotals.entries
-                            .map((e) => '${_branchNameById(e.key) ?? '—'}: ${fmtQ(e.value)}')
-                            .join('  ·  '),
-                        style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
-                  ),
-              ]),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Total Movements', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                Text(_movements.length.toString(), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-              ]),
-            ),
-          ],
-        ]),
+        header,
         const SizedBox(height: 16),
         if (_loading)
           const Expanded(child: Center(child: CircularProgressIndicator()))
         else if (_movements.isEmpty)
           const Expanded(child: Center(child: Text('No movements for this product.', style: TextStyle(color: AppTheme.textSecondary))))
         else ...[
-          Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            SizedBox(
-              width: 320,
-              child: TextField(
-                controller: _movementsSearchCtrl,
-                decoration: InputDecoration(
-                  labelText: 'Search entries',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  isDense: true,
-                  suffixIcon: _movementsSearchCtrl.text.isNotEmpty
-                      ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => _movementsSearchCtrl.clear())
-                      : null,
-                ),
-              ),
-            ),
-            SizedBox(
-              width: 180,
-              child: DropdownButtonFormField<String>(
-                value: _typeFilter,
+          Builder(builder: (context) {
+            final searchField = TextField(
+              controller: _movementsSearchCtrl,
+              decoration: InputDecoration(
+                labelText: 'Search entries',
+                prefixIcon: const Icon(Icons.search, size: 18),
                 isDense: true,
-                decoration: const InputDecoration(labelText: 'Type', isDense: true),
-                items: _availableTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() { _typeFilter = v; });
-                  _applyFilters();
-                },
+                suffixIcon: _movementsSearchCtrl.text.isNotEmpty
+                    ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => _movementsSearchCtrl.clear())
+                    : null,
               ),
-            ),
-            OutlinedButton.icon(
+            );
+            final typeField = DropdownButtonFormField<String>(
+              value: _typeFilter,
+              isDense: true,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Type', isDense: true),
+              items: _availableTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() { _typeFilter = v; });
+                _applyFilters();
+              },
+            );
+            final dateBtn = OutlinedButton.icon(
               onPressed: _pickDateRange,
               icon: const Icon(Icons.calendar_today, size: 14),
               label: Text((_dateFrom != null && _dateTo != null)
                   ? DateFormat('d MMM yy').format(_dateFrom!) + ' - ' + DateFormat('d MMM yy').format(_dateTo!)
-                  : 'Date Range'),
+                  : 'Date Range', overflow: TextOverflow.ellipsis),
               style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary),
-            ),
-            if (_dateFrom != null || _dateTo != null)
-              IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: _clearDateRange, tooltip: 'Clear date range'),
-          ]),
+            );
+            final clearDate = (_dateFrom != null || _dateTo != null)
+                ? IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: _clearDateRange, tooltip: 'Clear date range')
+                : null;
+            if (mobile) {
+              return Column(children: [
+                searchField,
+                const SizedBox(height: 10),
+                typeField,
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(child: dateBtn),
+                  if (clearDate != null) clearDate,
+                ]),
+              ]);
+            }
+            return Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              SizedBox(width: 320, child: searchField),
+              SizedBox(width: 180, child: typeField),
+              dateBtn,
+              if (clearDate != null) clearDate,
+            ]);
+          }),
           const SizedBox(height: 6),
           if (_filteredMovements.length != _movements.length)
             Text(_filteredMovements.length.toString() + ' of ' + _movements.length.toString() + ' entries match',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           const SizedBox(height: 8),
           Expanded(
-            child: Container(
+            child: mobile
+                ? (_filteredMovements.isEmpty
+                    ? const Center(child: Text('No entries match.', style: TextStyle(color: AppTheme.textSecondary)))
+                    : ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        itemCount: _filteredMovements.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (_, i) => _movementCard(_filteredMovements[i], multiBranch),
+                      ))
+                : Container(
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
               child: Column(children: [
                 Container(
@@ -1199,6 +1263,96 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             ),
           ),
         ],
+      ]),
+    );
+  }
+
+  // Mobile: one movement rendered as a compact card instead of a table row.
+  Widget _movementCard(Map<String, dynamic> m, bool multiBranch) {
+    final qty = (m['quantity'] as num?)?.toDouble() ?? 0;
+    final runQty = m['running_qty'] as double;
+    final entryUom = m['uoms']?['abbreviation'] as String? ?? '';
+    final date = m['moved_at'] != null
+        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
+    final type = _displayType(m);
+    final refId = m['reference_id'] as String?;
+    final refType = m['reference_type'] as String?;
+    final vno = refId != null ? (_voucherNumbers[refId] ?? '') : '';
+    final hasVoucher = vno.isNotEmpty && refType != null && refId != null;
+    final displayRef = vno.isNotEmpty ? vno : ((m['notes'] as String? ?? '').isNotEmpty ? m['notes'] as String : _friendlyRefLabel(refType));
+    final desc = _movementDescription(m);
+    final bal = multiBranch ? ((m['branch_running'] as double?) ?? 0) : runQty;
+    final isManual = ((m['created_by'] as String?) ?? '').isEmpty && refType != 'grn_qty_correction';
+
+    Widget kv(String label, String value, Color color) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 2),
+            Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+          ],
+        );
+
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      padding: const EdgeInsets.all(12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(color: _typeColor(type).withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+            child: Text(type, style: TextStyle(fontSize: 11.5, color: _typeColor(type), fontWeight: FontWeight.w700)),
+          ),
+          if (isManual) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppTheme.warning.withOpacity(0.45)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                Icon(Icons.terminal, size: 10, color: AppTheme.warning),
+                SizedBox(width: 3),
+                Text('manual', style: TextStyle(fontSize: 10, color: AppTheme.warning, fontWeight: FontWeight.w700)),
+              ]),
+            ),
+          ],
+          const Spacer(),
+          Text(date, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ]),
+        const SizedBox(height: 8),
+        hasVoucher
+            ? InkWell(
+                onTap: () => _openVoucherFromMovement(m),
+                child: Text(displayRef,
+                    style: const TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w700, decoration: TextDecoration.underline)),
+              )
+            : Text(displayRef, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        if (desc.isNotEmpty && desc != displayRef) ...[
+          const SizedBox(height: 3),
+          Text(desc, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        ],
+        if (multiBranch) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            const Icon(Icons.store_outlined, size: 13, color: AppTheme.textSecondary),
+            const SizedBox(width: 4),
+            Text(_branchNameById(m['branch_id'] as String?) ?? '—',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          ]),
+        ],
+        const SizedBox(height: 10),
+        const Divider(height: 1),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(child: kv('In', qty > 0 ? '+' + qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2) + ' ' + entryUom : '—', AppTheme.success)),
+          Expanded(child: kv('Out', qty < 0 ? qty.abs().toStringAsFixed(qty.abs() % 1 == 0 ? 0 : 2) + ' ' + entryUom : '—', AppTheme.danger)),
+          Expanded(child: kv(multiBranch ? 'Branch Bal.' : 'Balance',
+              bal.toStringAsFixed(bal % 1 == 0 ? 0 : 2) + ' ' + entryUom, bal > 0 ? AppTheme.success : AppTheme.danger)),
+        ]),
       ]),
     );
   }
