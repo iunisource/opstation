@@ -1422,6 +1422,7 @@ class _ErpAdminSettingsScreenState
                     ),
                   ]),
                   const SizedBox(height: 18),
+                  _GoLivePanel(orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   // Search
                   Container(
                     constraints: const BoxConstraints(maxWidth: 1040),
@@ -2434,6 +2435,109 @@ class _DashboardPasswordPanelState extends State<_DashboardPasswordPanel> {
           ),
           child: Text(_isSet ? 'Change' : 'Set password',
               style: const TextStyle(fontSize: 12.5, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+        ),
+      ]),
+    );
+  }
+}
+
+
+/// Setup / go-live gate. While the org's migration_complete is false, selling
+/// and production are blocked server-side; this panel explains why and lets a
+/// master admin flip the org live once opening stock is loaded. Self-hides when
+/// the org is already live or the user isn't an admin.
+class _GoLivePanel extends ConsumerStatefulWidget {
+  final String orgId;
+  const _GoLivePanel({required this.orgId});
+  @override
+  ConsumerState<_GoLivePanel> createState() => _GoLivePanelState();
+}
+
+class _GoLivePanelState extends ConsumerState<_GoLivePanel> {
+  bool _loaded = false;
+  bool _live = true;
+  bool _busy = false;
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    if (widget.orgId.isEmpty) { setState(() => _loaded = true); return; }
+    try {
+      final row = await Supabase.instance.client.from('inventory_settings')
+          .select('migration_complete').eq('org_id', widget.orgId).maybeSingle();
+      if (mounted) setState(() { _live = (row?['migration_complete'] as bool?) ?? true; _loaded = true; });
+    } catch (_) { if (mounted) setState(() => _loaded = true); }
+  }
+
+  Future<void> _goLive() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Go live?'),
+        content: const Text(
+          'Have you finished loading opening stock — with cost prices — for every product, and checked it against your physical count? Once you go live, staff can start selling and producing.',
+          style: TextStyle(fontSize: 13.5, height: 1.5)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not yet')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes, go live')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client.rpc('set_migration_complete',
+          params: {'p_org': widget.orgId, 'p_done': true});
+      if (!mounted) return;
+      setState(() { _live = true; _busy = false; });
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You\'re live — selling and production are now enabled.')));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not update: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final role = ref.watch(currentUserProvider)?.role;
+    final isAdmin = role == WebUserRole.masterAdmin ||
+        role == WebUserRole.admin || role == WebUserRole.superAdmin;
+    if (!_loaded || _live || !isAdmin) return const SizedBox.shrink();
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 1040),
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7E6),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF0C36D)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: const [
+          Icon(Icons.rocket_launch_outlined, color: Color(0xFFB4791A)),
+          SizedBox(width: 10),
+          Expanded(child: Text('Setup mode — selling & production are paused',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF7A5310)))),
+        ]),
+        const SizedBox(height: 8),
+        const Text(
+          'Load every product\'s opening stock — with cost prices — and reconcile it to your physical count first. While in setup mode, sales, POS, delivery and production are blocked so you can\'t sell stock you haven\'t entered yet. When your opening balances are complete, go live to start trading.',
+          style: TextStyle(fontSize: 13, height: 1.45, color: Color(0xFF7A5310))),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: ElevatedButton.icon(
+            onPressed: _busy ? null : _goLive,
+            icon: _busy
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.check_circle_outline, size: 18),
+            label: const Text('We\'re live — start transacting'),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB4791A), foregroundColor: Colors.white),
+          ),
         ),
       ]),
     );
