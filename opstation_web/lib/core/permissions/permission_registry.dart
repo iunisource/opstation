@@ -128,7 +128,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
     PermItem('production_waste', 'Production Waste Report', PermKind.report, '/manufacturing/production-waste-report'),
     PermItem('overheads_summary', 'Overheads Summary', PermKind.report, '/manufacturing/overheads-summary'),
-    PermItem('fg_without_bom', 'Finished Goods without BOM', PermKind.report, '/erp/fg-without-bom'),
+    PermItem('fg_without_bom', 'Goods without BOM', PermKind.report, '/erp/fg-without-bom'),
     // Capability (not a navigable screen): who may SEE costing on the Production
     // Voucher & Job Card. Admins always can; grant this to specific users.
     // Editing/adding cost is separately restricted to master admins in-screen.

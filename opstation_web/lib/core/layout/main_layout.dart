@@ -900,7 +900,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final mfgReportItems = <Widget>[
       if (show('/manufacturing/production-waste-report')) _menuItem(context, 'Production Waste Report', Icons.recycling_outlined, '/manufacturing/production-waste-report', location),
       if (show('/manufacturing/overheads-summary')) _menuItem(context, 'Overheads Summary', Icons.summarize_outlined, '/manufacturing/overheads-summary', location),
-      if (show('/erp/fg-without-bom')) _menuItem(context, 'Finished Goods without BOM', Icons.account_tree_outlined, '/erp/fg-without-bom', location),
+      if (show('/erp/fg-without-bom')) _menuItem(context, 'Goods without BOM', Icons.account_tree_outlined, '/erp/fg-without-bom', location),
     ];
     final manufacturingItems = <Widget>[
       ...mfgTopItems,

@@ -31,15 +31,16 @@ class _Row {
   final String sku;
   final String group;
   final double stock;
-  _Row(this.id, this.name, this.sku, this.group, this.stock);
+  final bool isRaw; // raw material / pre-production input
+  _Row(this.id, this.name, this.sku, this.group, this.stock, this.isRaw);
 }
 
 class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
   bool _loading = true;
   String? _error;
   List<_Row> _rows = [];
-  List<String> _groups = [];
   String _group = 'all';
+  String _type = 'finished'; // 'finished' | 'raw' | 'all'
   final _searchCtrl = TextEditingController();
   final _qty = NumberFormat('#,##0.##');
 
@@ -102,41 +103,28 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         stock[pid] = (stock[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
       }
 
-      final groups = <String>{};
       final rows = <_Row>[];
       for (final p in prods) {
         final id = p['id'] as String;
         if (withBom.contains(id)) continue; // has an assembly — fine
         final cls = (p['product_class'] as String?)?.trim() ?? '';
         final grp = (p['product_main_group'] as String?)?.trim() ?? '';
-        if (_isRaw(cls, grp)) continue; // raw / pre-production — not a finished good
-        if (grp.isNotEmpty) groups.add(grp);
         rows.add(_Row(
           id,
           (p['name'] as String?) ?? '(unnamed)',
           (p['sku'] as String?) ?? '',
           grp.isEmpty ? '—' : grp,
           stock[id] ?? 0,
+          _isRaw(cls, grp),
         ));
       }
-
-      final groupList = groups.toList()..sort();
-      // Default to the "finished goods" group so the report opens on exactly
-      // the items that should have a BOM. Clamp so a stale selection can't trip
-      // the dropdown assertion.
-      String def = _group;
-      if (def == 'all') {
-        final fin = groupList.firstWhere(
-            (g) => g.toLowerCase().contains('finish'), orElse: () => '');
-        if (fin.isNotEmpty) def = fin;
-      }
-      if (def != 'all' && !groupList.contains(def)) def = 'all';
 
       if (!mounted) return;
       setState(() {
         _rows = rows;
-        _groups = groupList;
-        _group = def;
+        // Clamp a stale group selection against the groups available for the
+        // current type filter.
+        if (_group != 'all' && !_groupOptions.contains(_group)) _group = 'all';
         _loading = false;
       });
     } catch (e) {
@@ -145,9 +133,30 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
     }
   }
 
+  String _typeLabel() =>
+      _type == 'finished' ? 'Finished Goods' : (_type == 'raw' ? 'Raw Materials' : 'All Goods');
+
+  // Whether a row passes the current Finished / Raw / All type filter.
+  bool _matchesType(_Row r) {
+    if (_type == 'finished') return !r.isRaw;
+    if (_type == 'raw') return r.isRaw;
+    return true; // all
+  }
+
+  // Groups present among rows matching the current type filter.
+  List<String> get _groupOptions {
+    final set = <String>{};
+    for (final r in _rows) {
+      if (!_matchesType(r)) continue;
+      if (r.group != '—') set.add(r.group);
+    }
+    return set.toList()..sort();
+  }
+
   List<_Row> get _visible {
     final q = _searchCtrl.text.trim().toLowerCase();
     return _rows.where((r) {
+      if (!_matchesType(r)) return false;
       if (_group != 'all' && r.group != _group) return false;
       if (q.isEmpty) return true;
       return r.name.toLowerCase().contains(q) || r.sku.toLowerCase().contains(q);
@@ -169,11 +178,11 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
       build: (ctx) => [
         if (org.isNotEmpty)
           pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
-        pw.Text('Finished Goods without BOM',
+        pw.Text('Goods without BOM',
             style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
         pw.Text(
-            'Group: ${_group == 'all' ? 'All (raw materials excluded)' : _group}     |     ${rows.length} item(s)     |     ${DateFormat('d MMM y').format(DateTime.now())}',
+            'Type: ${_typeLabel()}     |     Group: ${_group == 'all' ? 'All' : _group}     |     ${rows.length} item(s)     |     ${DateFormat('d MMM y').format(DateTime.now())}',
             style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
@@ -208,7 +217,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Expanded(
-            child: Text('Finished Goods without BOM',
+            child: Text('Goods without BOM',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           ),
           OutlinedButton.icon(
@@ -219,46 +228,68 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         ]),
         const SizedBox(height: 4),
         const Text(
-            'Products (by group) with no active Product Assembly (BOM). Raw materials are excluded — they don\'t need a BOM. Until an assembly is set up these items can\'t be produced or planned, and their stock can only come from manual adjustments.',
+            'Products with no active Product Assembly (BOM). Use the Type filter to view Finished Goods, Raw Materials, or all goods. Until an assembly is set up these items can\'t be produced or planned, and their stock can only come from manual adjustments.',
             style: TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
 
         // Filters
         Row(children: [
-          SizedBox(
-            width: 260,
-            child: DropdownButtonFormField<String>(
-              value: _group,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                  labelText: 'Group', isDense: true, border: OutlineInputBorder()),
-              items: [
-                const DropdownMenuItem(value: 'all', child: Text('All groups (no raw materials)')),
-                for (final g in _groups)
-                  DropdownMenuItem(value: g, child: Text(g, overflow: TextOverflow.ellipsis)),
-              ],
-              onChanged: (v) => setState(() => _group = v ?? 'all'),
-            ),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 320,
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                hintText: 'Search product / SKU…',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                isDense: true,
-                border: const OutlineInputBorder(),
-                suffixIcon: _searchCtrl.text.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        onPressed: () => _searchCtrl.clear()),
+          Expanded(
+            child: Wrap(spacing: 12, runSpacing: 8, children: [
+              SizedBox(
+                width: 220,
+                child: DropdownButtonFormField<String>(
+                  value: _type,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                      labelText: 'Type', isDense: true, border: OutlineInputBorder()),
+                  items: const [
+                    DropdownMenuItem(value: 'finished', child: Text('Finished Goods')),
+                    DropdownMenuItem(value: 'raw', child: Text('Raw Materials')),
+                    DropdownMenuItem(value: 'all', child: Text('All Goods')),
+                  ],
+                  onChanged: (v) => setState(() {
+                    _type = v ?? 'finished';
+                    // Reset a group selection that isn't available for this type.
+                    if (_group != 'all' && !_groupOptions.contains(_group)) _group = 'all';
+                  }),
+                ),
               ),
-            ),
+              SizedBox(
+                width: 240,
+                child: DropdownButtonFormField<String>(
+                  value: _group,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                      labelText: 'Group', isDense: true, border: OutlineInputBorder()),
+                  items: [
+                    const DropdownMenuItem(value: 'all', child: Text('All groups')),
+                    for (final g in _groupOptions)
+                      DropdownMenuItem(value: g, child: Text(g, overflow: TextOverflow.ellipsis)),
+                  ],
+                  onChanged: (v) => setState(() => _group = v ?? 'all'),
+                ),
+              ),
+              SizedBox(
+                width: 300,
+                child: TextField(
+                  controller: _searchCtrl,
+                  decoration: InputDecoration(
+                    hintText: 'Search product / SKU…',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                    suffixIcon: _searchCtrl.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () => _searchCtrl.clear()),
+                  ),
+                ),
+              ),
+            ]),
           ),
-          const Spacer(),
+          const SizedBox(width: 8),
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh, size: 20), tooltip: 'Refresh'),
         ]),
         const SizedBox(height: 12),
@@ -284,7 +315,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
                         style: const TextStyle(color: AppTheme.danger)))
                     : rows.isEmpty
                         ? const Center(
-                            child: Text('Nothing here — every finished good in this group has an active BOM.',
+                            child: Text('Nothing here — every item in this selection has an active BOM.',
                                 style: TextStyle(color: AppTheme.textSecondary)))
                         : Column(children: [
                             _header(),
