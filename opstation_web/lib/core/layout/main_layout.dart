@@ -773,6 +773,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/inventory-integrity')) _menuItem(context, 'Inventory Integrity', Icons.rule_outlined, '/erp/inventory-integrity', location, badge: integrityCount),
       if (show('/erp/purchase-variance')) _menuItem(context, 'Purchase Price Variance', Icons.trending_up_outlined, '/erp/purchase-variance', location),
       if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
+      if (show('/erp/price-list')) _menuItem(context, 'Price List Generator', Icons.sell_outlined, '/erp/price-list', location),
     ];
     final inventoryItems = <Widget>[
       if (modules.contains('inventory')) ...[
@@ -976,7 +977,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/purchase-variance',
-           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan'],
+           '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan', '/erp/price-list'],
           _trimDividers(inventoryItems), badge: transferPending + integrityCount + productSupervisePending),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
