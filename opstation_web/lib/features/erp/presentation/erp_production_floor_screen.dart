@@ -167,6 +167,9 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
     final done = jobs.where((j) => j['status'] == 'completed').toList();
     final voided = jobs.where((j) => j['status'] == 'cancelled').toList();
     final openUnits = [...queued, ...inProg].fold(0.0, (s, j) => s + _remaining(j));
+    bool openJob(Map<String, dynamic> j) { final s = j['status'] ?? 'queued'; return s != 'completed' && s != 'cancelled'; }
+    final onFloorJobs = jobs.where((j) => j['on_floor'] == true && openJob(j)).toList();
+    final finishedAwaiting = jobs.where((j) => j['on_floor'] != true && j['floor_finished_at'] != null && openJob(j)).toList();
 
     return Container(color: AppTheme.background, padding: context.pagePadding, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Title, count chips and controls all flow. In a Row they overflowed the
@@ -177,6 +180,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
         runSpacing: 8,
         children: [
         Text('Production Floor', style: TextStyle(fontSize: context.isMobile ? 20 : 24, fontWeight: FontWeight.w800)),
+        _statChip('On the floor', onFloorJobs.length, AppTheme.primary),
         _statChip('Queued', queued.length, Colors.orange),
         _statChip('In progress', inProg.length, Colors.blue),
         _statChip('Completed', done.length, Colors.green),
@@ -201,6 +205,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
         ),
         IconButton(icon: const Icon(Icons.refresh), onPressed: _load, tooltip: 'Refresh'),
       ]),
+      if (_viewMode != 2 && !_loading) _runningNowBand(onFloorJobs, finishedAwaiting),
       const SizedBox(height: 16),
       Expanded(child: _viewMode == 2
         ? _historyView()
@@ -218,6 +223,75 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       const SizedBox(width: 6),
       Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
     ]));
+
+  // ── "Running now" band: every job currently On the Floor (worker scanned the
+  // job-card QR, or the manager tapped "Put on floor"), regardless of the manual
+  // play/pause. Plus a note for jobs a worker flagged Finished, awaiting the
+  // manager to post the final batch.
+  Widget _runningNowBand(List<Map<String, dynamic>> onFloor, List<Map<String, dynamic>> finished) {
+    return Container(
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.primary.withOpacity(0.20)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const RunningDot(size: 9),
+          const SizedBox(width: 8),
+          Text('Running now  ·  ${onFloor.length}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+          const Spacer(),
+          if (finished.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: const Color(0xFF16A34A).withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+              child: Text('${finished.length} finished — awaiting close', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF166534))),
+            ),
+        ]),
+        const SizedBox(height: 10),
+        if (onFloor.isEmpty && finished.isEmpty)
+          const Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Text('No jobs on the floor right now. A job appears here when a worker scans its QR or the manager taps "Put on floor".', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+        else
+          Wrap(spacing: 10, runSpacing: 10, children: [
+            ...onFloor.map((j) => _runningCard(j, finished: false)),
+            ...finished.map((j) => _runningCard(j, finished: true)),
+          ]),
+      ]),
+    );
+  }
+
+  Widget _runningCard(Map<String, dynamic> j, {required bool finished}) {
+    final c = finished ? const Color(0xFF16A34A) : AppTheme.primary;
+    final planned = _planned(j); final produced = _produced(j);
+    final since = j['on_floor_at'] != null ? DateTime.tryParse(j['on_floor_at'] as String)?.toLocal() : null;
+    final sinceLbl = since != null ? DateFormat('d MMM, HH:mm').format(since) : null;
+    return InkWell(
+      onTap: () => context.go('/manufacturing/job-card?id=${j['id']}'),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 230,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: c.withOpacity(0.35))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            if (finished) Icon(Icons.flag_rounded, size: 13, color: c) else const RunningDot(size: 7),
+            const SizedBox(width: 6),
+            Expanded(child: Text(j['job_number'] as String? ?? '-', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: c), overflow: TextOverflow.ellipsis)),
+          ]),
+          const SizedBox(height: 4),
+          Text(_prodLabel[j['product_id']] ?? '', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 6),
+          Text('${_trim(produced)} / ${_trim(planned)} made', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+          if (finished)
+            const Padding(padding: EdgeInsets.only(top: 3), child: Text('Finished — post final batch', style: TextStyle(fontSize: 10.5, color: Color(0xFF166534), fontWeight: FontWeight.w600)))
+          else if (sinceLbl != null)
+            Padding(padding: const EdgeInsets.only(top: 3), child: Text('On floor since $sinceLbl', style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary))),
+        ]),
+      ),
+    );
+  }
 
   // ── Job History view: filters + results table (full history via DB) ──
   Future<void> _pickHistDate(bool isFrom) async {

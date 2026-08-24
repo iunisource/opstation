@@ -77,6 +77,7 @@ import '../layout/main_layout.dart';
 import '../../features/auth/retailer_auth_controller.dart';
 import '../../features/auth/presentation/retailer_login_screen.dart';
 import '../../features/retailer/presentation/retailer_portal_screen.dart';
+import '../../features/erp/presentation/floor_scan_screen.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart';
@@ -162,6 +163,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       if (auth.isLoading || rAuth.isLoading) return null;
 
       final loc = state.matchedLocation;
+
+      // Public job-card QR page (/f/<token>) — a factory worker scans the printed
+      // job order and lands here with NO login. Always allow it through, whatever
+      // the auth state, so it never bounces to /login.
+      if (loc.startsWith('/f/')) return null;
+
       final retailer = rAuth.valueOrNull;
       final inRetailerArea = loc == '/r' || loc.startsWith('/r/');
 
@@ -271,6 +278,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/subscription-expired',
         builder: (_, __) => const SubscriptionExpiredScreen(),
+      ),
+      GoRoute(
+        path: '/f/:token',
+        builder: (_, state) => FloorScanScreen(token: state.pathParameters['token'] ?? ''),
       ),
       GoRoute(
         path: '/r/login',

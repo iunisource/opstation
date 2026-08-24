@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:barcode/barcode.dart' as bc;
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
@@ -413,7 +414,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _jobs = fresh;
         if (_current != null) {
           final m = fresh.where((j) => j['id'] == _current!['id']);
-          if (m.isNotEmpty) _current!['is_running'] = m.first['is_running'];
+          if (m.isNotEmpty) {
+            _current!['is_running'] = m.first['is_running'];
+            _current!['on_floor'] = m.first['on_floor'];
+            _current!['on_floor_at'] = m.first['on_floor_at'];
+            _current!['floor_finished_at'] = m.first['floor_finished_at'];
+          }
         }
       });
       _evaluateBuzzer();
@@ -1438,6 +1444,35 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  /// "On the Floor" — the manager's one-way start (no pause). A job stays on the
+  /// floor through all its run days until it is completed or taken off. Mirrors
+  /// exactly what a worker's QR scan does. [on] = put on floor / take off floor.
+  Future<void> _toggleFloor(bool on) async {
+    if (_current == null) return;
+    final id = _current!['id'] as String;
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    setState(() => _busy = true);
+    try {
+      final Map<String, dynamic> upd = {'on_floor': on, 'updated_at': nowIso};
+      if (on) {
+        if (_current!['on_floor_at'] == null) upd['on_floor_at'] = nowIso;
+        upd['floor_finished_at'] = null; // (re)starting clears a prior finish flag
+        if (_status == 'queued') upd['status'] = 'in_progress';
+      }
+      await Supabase.instance.client.from('job_cards').update(upd).eq('id', id);
+      if (mounted) setState(() {
+        _current!['on_floor'] = on;
+        if (on && _current!['on_floor_at'] == null) _current!['on_floor_at'] = nowIso;
+        if (on) { _current!['floor_finished_at'] = null; if (_status == 'queued') { _status = 'in_progress'; _current!['status'] = 'in_progress'; } }
+        final idx = _jobs.indexWhere((j) => j['id'] == id);
+        if (idx >= 0) { _jobs[idx]['on_floor'] = on; if (on) _jobs[idx]['status'] = _current!['status']; }
+      });
+      await _logJobAudit(on ? 'floor_started' : 'floor_removed',
+          notes: on ? 'Put on the floor' : 'Taken off the floor');
+    } catch (e) { _snack('Could not update: $e'); }
+    if (mounted) setState(() => _busy = false);
+  }
+
   String _esc(String s) => s
       .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 
@@ -1455,6 +1490,19 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final uid = ref.read(currentUserProvider)?.id;
     final by = uid != null ? ((_users.firstWhere((u) => u['id'] == uid, orElse: () => <String, dynamic>{})['name'] as String?) ?? '') : '';
     final printedAt = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+
+    // Floor QR: a worker scans this to Start / Finish the job (no login). Only
+    // shown for a saved job that has a token.
+    String qrBlock = '';
+    final token = _current?['floor_token'] as String?;
+    if (token != null && token.isNotEmpty) {
+      try {
+        final origin = html.window.location.origin;
+        final url = '$origin/#/f/$token';
+        final svg = bc.Barcode.qrCode().toSvg(url, width: 108, height: 108, drawText: false);
+        qrBlock = '<div class="qr">$svg<div class="qrc">Scan to Start / Finish</div></div>';
+      } catch (_) { qrBlock = ''; }
+    }
 
     final mat = StringBuffer();
     for (var i = 0; i < _materials.length; i++) {
@@ -1528,12 +1576,18 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   tfoot td { font-weight: 800; border-top: 2px solid #222; border-bottom: 0; }
   .sec { font-size: 13px; font-weight: 700; margin: 4px 0 6px; }
   .foot { margin-top: 24px; padding-top: 8px; border-top: 1px solid #ddd; color: #888; font-size: 11px; display: flex; justify-content: space-between; }
+  .qr { text-align: center; }
+  .qr svg { width: 96px; height: 96px; display: block; }
+  .qrc { font-size: 8.5px; color: #666; margin-top: 2px; letter-spacing: .2px; }
   @media print { .no-print { display: none !important; } }
 </style></head><body>
 <div class="toolbar no-print"><button class="btn" onclick="window.print()">Print / Save as PDF</button></div>
 <div class="hdr">
   <div><h1>Job Card</h1><div class="sub">$branch</div></div>
-  <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div>${withPrices ? '' : '<div class="sub" style="color:#b45309;font-weight:700">Internal copy - no costing</div>'}</div>
+  <div style="display:flex;align-items:flex-start;gap:16px">
+    <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div>${withPrices ? '' : '<div class="sub" style="color:#b45309;font-weight:700">Internal copy - no costing</div>'}</div>
+    $qrBlock
+  </div>
 </div>
 <div class="meta">
   <div><div class="k">Date</div><div class="v">$dateStr</div></div>
@@ -1843,6 +1897,8 @@ $runSection
     final doneJobs = surfaced.where(isDone).toList();
 
     final running = (_current?['is_running'] as bool?) ?? false;
+    final onFloor = (_current?['on_floor'] as bool?) ?? false;
+    final floorFinished = _current?['floor_finished_at'] != null;
 
     final wcNames = _workCenters.where((w) => w['is_active'] != false).map((w) => w['name'] as String).toList();
     { final cur = _wcCtrl.text.trim(); if (cur.isNotEmpty && !wcNames.contains(cur)) wcNames.add(cur); }
@@ -1935,7 +1991,12 @@ $runSection
                 const SizedBox(width: 8),
                 Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
               ],
-              if (running) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
+              if (onFloor) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
+              if (!onFloor && floorFinished && _status != 'completed' && _status != 'cancelled')
+                Padding(padding: const EdgeInsets.only(right: 10), child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: Colors.green.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                  child: const Text('Finished — awaiting close', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF16A34A))))),
               if (_current != null) Padding(padding: const EdgeInsets.only(right: 8), child: Text(_openEnded ? '${_trim(_producedQty)} made · open-ended' : (_current?['closed_short'] == true) ? '${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  closed short' : '${_trim(_producedQty)} / ${_trim(_plannedQty)}  ·  ${_leftLabel(_plannedQty, _producedQty)}',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary))),
               if (context.isMobile) const Spacer(),
@@ -1945,12 +2006,19 @@ $runSection
               if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
               if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
               if (_current != null && _status != 'completed' && _status != 'cancelled')
-                IconButton(
-                  tooltip: running ? 'Pause' : 'Play',
-                  icon: Icon(running ? Icons.pause_circle : Icons.play_circle, size: 28,
-                    color: running ? Colors.orange.shade800 : Colors.green.shade700),
-                  onPressed: _busy ? null : _toggleRunning,
-                  visualDensity: VisualDensity.compact,
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: onFloor
+                      ? OutlinedButton.icon(
+                          icon: _busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.bolt, size: 16, color: AppTheme.primary),
+                          label: const Text('Take off floor', style: TextStyle(fontSize: 12)),
+                          style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary), padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), visualDensity: VisualDensity.compact),
+                          onPressed: _busy ? null : () => _toggleFloor(false))
+                      : ElevatedButton.icon(
+                          icon: _busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.precision_manufacturing_outlined, size: 16),
+                          label: const Text('Put on floor', style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), visualDensity: VisualDensity.compact),
+                          onPressed: _busy ? null : () => _toggleFloor(true)),
                 ),
               // Desktop keeps Save + Produce inline.
               if (!context.isMobile) ...[
