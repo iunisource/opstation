@@ -657,15 +657,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                 ]),
             ],
           ] else
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            LayoutBuilder(builder: (_, cc) {
+              final narrow = cc.maxWidth < 640;
+              final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Customer Ledger', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
                 Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
                     style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-              ]),
-              const Spacer(),
-              if (_selectedCustomer != null && _entries.isNotEmpty)
-                Wrap(spacing: 8, runSpacing: 8, children: [
+              ]);
+              final actions = (_selectedCustomer != null && _entries.isNotEmpty)
+                ? Wrap(spacing: 8, runSpacing: 8, children: [
                   OutlinedButton.icon(
                     icon: const Icon(Icons.calendar_today_outlined, size: 15),
                     label: Text(
@@ -697,8 +697,17 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     onPressed: _exportCsv,
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.green.shade300)),
                   ),
-                ]),
-            ]),
+                ])
+                : const SizedBox.shrink();
+              if (narrow) {
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  titleBlock, const SizedBox(height: 10), actions,
+                ]);
+              }
+              return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                titleBlock, const Spacer(), actions,
+              ]);
+            }),
           const SizedBox(height: 16),
           if (_errors.isNotEmpty) Container(
             margin: const EdgeInsets.only(bottom: 12),

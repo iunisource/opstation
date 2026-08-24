@@ -475,6 +475,15 @@ class _StockTransferVoucherScreen extends ConsumerStatefulWidget {
 
 class _StockTransferVoucherScreenState
     extends ConsumerState<_StockTransferVoucherScreen> {
+  // Session cache for the org-wide product & UOM catalogue — these rarely change
+  // during a session, so opening several transfers in a row skips the two
+  // heaviest fetches. Short TTL keeps a freshly-added product from staying hidden
+  // for long.
+  static List<Map<String, dynamic>>? _catProducts;
+  static List<Map<String, dynamic>>? _catUoms;
+  static String? _catOrg;
+  static DateTime? _catAt;
+
   Map<String, dynamic>? _transfer;
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _products = [];
@@ -529,6 +538,24 @@ class _StockTransferVoucherScreenState
     super.dispose();
   }
 
+  // Products + UOMs are org-wide and rarely change; serve from a 2-minute cache.
+  Future<void> _ensureCatalog(String orgId, SupabaseClient client) async {
+    final okc = _catOrg == orgId &&
+        _catProducts != null && _catUoms != null && _catAt != null &&
+        DateTime.now().difference(_catAt!).inSeconds < 120;
+    if (okc) return;
+    final res = await Future.wait([
+      client.from('products')
+          .select('id, name, sku, base_uom_id')
+          .eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
+      client.from('uoms').select().eq('org_id', orgId).order('name'),
+    ]);
+    _catProducts = List<Map<String, dynamic>>.from(res[0] as List);
+    _catUoms = List<Map<String, dynamic>>.from(res[1] as List);
+    _catOrg = orgId;
+    _catAt = DateTime.now();
+  }
+
   Future<void> _load() async {
     final orgId = _orgId;
     if (orgId == null) {
@@ -537,63 +564,67 @@ class _StockTransferVoucherScreenState
     }
     try {
       final client = Supabase.instance.client;
-      final products = await client
-          .from('products')
-          .select('id, name, sku, base_uom_id')
-          .eq('org_id', orgId)
-          .eq('is_active', true)
-          .order('name')
-          .limit(10000);
-      final uoms =
-          await client.from('uoms').select().eq('org_id', orgId).order('name');
-      List<Map<String, dynamic>> items = [];
-      Map<String, dynamic>? fresh = _transfer;
+
+      // Kick off all independent queries at once instead of one-after-another:
+      //  - the catalogue (cached), and (when editing) this voucher's items + row.
+      final catalogF = _ensureCatalog(orgId, client);
+      Future<List<Map<String, dynamic>>>? itemsF;
+      Future<Map<String, dynamic>>? freshF;
       if (_transfer != null) {
-        final rows = await client
+        final tid = _transfer!['id'];
+        itemsF = client
             .from('stock_transfer_items')
             .select('*, products(name, sku), uoms(name, abbreviation)')
-            .eq('transfer_id', _transfer!['id']);
-        items = List<Map<String, dynamic>>.from(rows);
-        fresh = await client
+            .eq('transfer_id', tid)
+            .then((r) => List<Map<String, dynamic>>.from(r as List));
+        freshF = client
             .from('stock_transfers')
-            .select(
-                '*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')
-            .eq('id', _transfer!['id'])
-            .single();
+            .select('*, from_branch:branches!from_branch_id(name), to_branch:branches!to_branch_id(name)')
+            .eq('id', tid)
+            .single()
+            .then((r) => Map<String, dynamic>.from(r as Map));
       }
-      // Resolve user names for the audit trail (generated / dispatched / approved).
-      final names = <String, String>{};
+
+      await catalogF;
+      final items = itemsF == null ? <Map<String, dynamic>>[] : await itemsF;
+      final Map<String, dynamic>? fresh = freshF == null ? _transfer : await freshF;
+
+      // These two depend on `fresh` (source branch + actor ids) — run them
+      // together once we have it.
+      final srcBranch = (fresh?['from_branch_id'] as String?) ?? _fromBranchId;
       final ids = <String>{
         for (final k in ['created_by', 'dispatched_by', 'approved_by'])
           if (fresh?[k] != null) fresh![k] as String,
       };
-      if (ids.isNotEmpty) {
-        try {
-          final us = await client.from('users').select('id, name').inFilter('id', ids.toList());
-          for (final u in us as List) { names[u['id'] as String] = (u['name'] as String?) ?? '—'; }
-        } catch (_) {}
-      }
-      // In-hand stock at the SOURCE branch (for the In Hand column + checks).
-      final srcBranch =
-          (fresh?['from_branch_id'] as String?) ?? _fromBranchId;
-      final inHand = <String, double>{};
-      if (srcBranch != null) {
-        try {
-          final stockRows = await client
-              .from('inventory_stock')
+      final namesF = ids.isEmpty
+          ? Future.value(<String, String>{})
+          : client.from('users').select('id, name').inFilter('id', ids.toList()).then((us) {
+              final m = <String, String>{};
+              for (final u in us as List) { m[u['id'] as String] = (u['name'] as String?) ?? '—'; }
+              return m;
+            }).catchError((_) => <String, String>{});
+      final inHandF = srcBranch == null
+          ? Future.value(<String, double>{})
+          : client.from('inventory_stock')
               .select('product_id, quantity')
-              .eq('org_id', orgId)
-              .eq('branch_id', srcBranch);
-          for (final s in stockRows as List) {
-            final pid = s['product_id'] as String;
-            inHand[pid] =
-                (inHand[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
-          }
-        } catch (_) {}
-      }
+              .eq('org_id', orgId).eq('branch_id', srcBranch)
+              .then((rows) {
+                final m = <String, double>{};
+                for (final s in rows as List) {
+                  final pid = s['product_id'] as String;
+                  m[pid] = (m[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
+                }
+                return m;
+              }).catchError((_) => <String, double>{});
+
+      final results = await Future.wait([namesF, inHandF]);
+      final names = results[0] as Map<String, String>;
+      final inHand = results[1] as Map<String, double>;
+
+      if (!mounted) return;
       setState(() {
-        _products = List<Map<String, dynamic>>.from(products);
-        _uoms = List<Map<String, dynamic>>.from(uoms);
+        _products = _catProducts ?? [];
+        _uoms = _catUoms ?? [];
         _items = items;
         if (fresh != null) _transfer = fresh;
         _userNames = names;
@@ -601,7 +632,7 @@ class _StockTransferVoucherScreenState
         _loading = false;
       });
     } catch (_) {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

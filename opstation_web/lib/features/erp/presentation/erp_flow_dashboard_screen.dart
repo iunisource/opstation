@@ -201,7 +201,16 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
           }
 
           final keep = st.step == 2
-              ? !invoicedLinks.contains('${r['id']}')
+              // A doc "awaits invoice" only if no active invoice links it and it
+              // isn't a draft. For GRNs additionally require it to be actually
+              // invoiceable — confirmed (is_locked) + in a received state, matching
+              // the PI GRN-picker — which also stops unconfirmed / old duplicate
+              // GRN rows from inflating the count.
+              ? (!invoicedLinks.contains('${r['id']}') &&
+                  !_draftStatuses.contains(status) &&
+                  (st.key != 'grn' ||
+                      (r['is_locked'] == true &&
+                          const ['received', 'partially_received', 'saved'].contains(status))))
               // Step 3: a "done" card counts posted/locked invoices (the
               // finished end of the pipeline); otherwise it's the unposted
               // to-do bucket.
@@ -495,7 +504,9 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
                 ? Colors.orange
                 : AppTheme.textSecondary;
     return InkWell(
-      onTap: () => context.go(st.route),
+      // Open the EXACT voucher (all target screens accept ?focus=<id>), not just
+      // the list.
+      onTap: () => context.go('${st.route}?focus=${d['id']}'),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(children: [

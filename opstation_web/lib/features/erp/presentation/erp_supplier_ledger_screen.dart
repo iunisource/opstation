@@ -373,15 +373,14 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                 ]),
             ],
           ] else
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Supplier Ledger', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-                const Text('All Branches',
-                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-              ]),
-              const Spacer(),
-              if (_selectedSupplier != null && _entries.isNotEmpty)
-                Wrap(spacing: 8, runSpacing: 8, children: [
+            LayoutBuilder(builder: (_, cc) {
+              final narrow = cc.maxWidth < 640;
+              final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, children: const [
+                Text('Supplier Ledger', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                Text('All Branches', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+              ]);
+              final actions = (_selectedSupplier != null && _entries.isNotEmpty)
+                ? Wrap(spacing: 8, runSpacing: 8, children: [
                   OutlinedButton.icon(
                     icon: const Icon(Icons.print_outlined, size: 16),
                     label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
@@ -396,8 +395,17 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       side: BorderSide(color: Colors.green.shade300)),
                   ),
-                ]),
-            ]),
+                ])
+                : const SizedBox.shrink();
+              if (narrow) {
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  titleBlock, const SizedBox(height: 10), actions,
+                ]);
+              }
+              return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                titleBlock, const Spacer(), actions,
+              ]);
+            }),
           const SizedBox(height: 16),
           if (_errors.isNotEmpty) Container(
             margin: const EdgeInsets.only(bottom: 12),

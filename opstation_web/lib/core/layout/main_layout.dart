@@ -799,11 +799,11 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final purLedgersReports = <Widget>[
       if (show('/erp/supplier-ledger')) _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
       if (show('/erp/supplier-aging')) _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
-      if (show('/erp/purchase-dashboard')) _menuItem(context, 'Purchase Dashboard',      Icons.dashboard_outlined,         '/erp/purchase-dashboard',       location),
       if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
     ];
     final purchaseItems = <Widget>[
       if (modules.contains('purchase')) ...[
+        if (show('/erp/purchase-dashboard')) _menuItem(context, 'Purchase Dashboard', Icons.dashboard_outlined, '/erp/purchase-dashboard', location, emphasize: true),
         ...purDocs,
         if (purReturns.isNotEmpty) _menuLabel('Returns'),
         ...purReturns,
@@ -828,12 +828,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final salesLedgersReports = <Widget>[
       if (show('/erp/customer-ledger')) _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
       if (show('/erp/customer-aging')) _menuItem(context, 'Customer Aging', Icons.hourglass_bottom_outlined, '/erp/customer-aging', location),
-      if (show('/erp/sales-dashboard')) _menuItem(context, 'Sales Dashboard',         Icons.dashboard_outlined,         '/erp/sales-dashboard',          location),
       if (show('/erp/sales-report')) _menuItem(context, 'Sales Report',         Icons.assessment_outlined,        '/erp/sales-report',          location),
       if (show('/erp/sales-return-report')) _menuItem(context, 'Sales Return Report',  Icons.summarize_outlined,         '/erp/sales-return-report',    location),
     ];
     final salesItems = <Widget>[
       if (modules.contains('sales')) ...[
+        if (show('/erp/sales-dashboard')) _menuItem(context, 'Sales Dashboard', Icons.dashboard_outlined, '/erp/sales-dashboard', location, emphasize: true),
         ...salesDocs,
         if (salesReturns.isNotEmpty) _menuLabel('Returns'),
         ...salesReturns,
@@ -1741,8 +1741,9 @@ Widget _menuAction(BuildContext context, String label, IconData icon, VoidCallba
   );
 }
 
-Widget _menuItem(BuildContext context, String label, IconData icon, String path, String location, {int badge = 0}) {
+Widget _menuItem(BuildContext context, String label, IconData icon, String path, String location, {int badge = 0, bool emphasize = false}) {
   final isActive = location == path;
+  final strong = isActive || emphasize;
   return GestureDetector(
     onSecondaryTapDown: (d) => _openInNewTab(context, path, d.globalPosition),
     child: MenuItemButton(
@@ -1750,13 +1751,14 @@ Widget _menuItem(BuildContext context, String label, IconData icon, String path,
         backgroundColor: WidgetStateProperty.resolveWith((states) {
           if (isActive) return AppTheme.primary.withOpacity(0.2);
           if (states.contains(WidgetState.hovered)) return Colors.white.withOpacity(0.08);
+          if (emphasize) return Colors.white.withOpacity(0.06); // persistent highlight
           return Colors.transparent;
         }),
-        foregroundColor: WidgetStatePropertyAll(isActive ? Colors.white : Colors.white70),
+        foregroundColor: WidgetStatePropertyAll(strong ? Colors.white : Colors.white70),
         padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
         minimumSize: const WidgetStatePropertyAll(Size(220, 38)),
       ),
-      leadingIcon: Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white54),
+      leadingIcon: Icon(icon, size: 15, color: strong ? Colors.white : Colors.white54),
       trailingIcon: badge > 0
           ? Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -1772,7 +1774,7 @@ Widget _menuItem(BuildContext context, String label, IconData icon, String path,
             )
           : null,
       onPressed: () => GoRouter.of(context).go(path),
-      child: Text(label, style: TextStyle(fontSize: 13, fontWeight: isActive ? FontWeight.w600 : FontWeight.w400)),
+      child: Text(label, style: TextStyle(fontSize: 13, fontWeight: strong ? FontWeight.w700 : FontWeight.w400)),
     ),
   );
 }
