@@ -266,19 +266,29 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
         child: Padding(
           padding: const EdgeInsets.all(48),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Container(
-                width: 42, height: 42, alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.14),
-                  borderRadius: BorderRadius.circular(11),
-                  border: Border.all(color: Colors.white.withOpacity(0.22)),
+            MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _goHome,
+                child: Tooltip(
+                  message: 'Back to sign in',
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(
+                      width: 42, height: 42, alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(11),
+                        border: Border.all(color: Colors.white.withOpacity(0.22)),
+                      ),
+                      child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 20)),
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('Opstation', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+                  ]),
                 ),
-                child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 20)),
               ),
-              const SizedBox(width: 12),
-              const Text('Opstation', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
-            ]),
+            ),
             const Spacer(),
             const Text('Create your\nOpstation workspace.',
                 style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w800, height: 1.15, letterSpacing: -0.5)),
@@ -307,18 +317,33 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
         ]),
       );
 
+  // Logo tap target: return to the sign-in screen (same as "Back to sign in").
+  void _goHome() => Navigator.of(context).maybePop();
+
   Widget _compactTopBar() {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
       child: Row(children: [
-        Container(
-          width: 34, height: 34, alignment: Alignment.center,
-          decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(9)),
-          child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+        MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _goHome,
+            child: Tooltip(
+              message: 'Back to sign in',
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 34, height: 34, alignment: Alignment.center,
+                  decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(9)),
+                  child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+                ),
+                const SizedBox(width: 10),
+                const Text('Opstation', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _ink)),
+              ]),
+            ),
+          ),
         ),
-        const SizedBox(width: 10),
-        const Text('Opstation', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _ink)),
         const Spacer(),
         TextButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Back to sign in')),
       ]),
@@ -397,7 +422,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
   }
 
   List<Widget> _stepOne() => [
-    _field(controller: _name, label: 'Your name', required: true, hint: 'e.g. Ahmed Khan', icon: Icons.person_outline),
+    _field(controller: _name, label: 'Your name', required: true, hint: 'e.g. James Carter', icon: Icons.person_outline),
     const SizedBox(height: 16),
     _field(controller: _email, label: 'Work email', required: true, hint: 'you@company.com',
         icon: Icons.mail_outline, keyboardType: TextInputType.emailAddress,
@@ -408,7 +433,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
   ];
 
   List<Widget> _stepTwo() => [
-    _field(controller: _org, label: 'Organization name', required: true, hint: 'e.g. Premium Enterprises',
+    _field(controller: _org, label: 'Organization name', required: true, hint: 'e.g. Summit Distributors',
         icon: Icons.business_outlined),
     const SizedBox(height: 16),
     const Text('Industry', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
