@@ -392,14 +392,28 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       // header
       Container(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
-          const Text('Margin Report', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(width: 10),
-          const Expanded(child: Text('Line-wise sale price vs. cost — flags negative-margin lines.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
-          OutlinedButton.icon(onPressed: _rows.isEmpty ? null : _exportCsv, icon: const Icon(Icons.grid_on, size: 16), label: const Text('Excel')),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(onPressed: _rows.isEmpty ? null : _exportPdf, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
-        ])),
+        child: LayoutBuilder(builder: (_, cc) {
+          final narrow = cc.maxWidth < 640;
+          final actions = Wrap(spacing: 8, runSpacing: 8, children: [
+            OutlinedButton.icon(onPressed: _rows.isEmpty ? null : _exportCsv, icon: const Icon(Icons.grid_on, size: 16), label: const Text('Excel')),
+            OutlinedButton.icon(onPressed: _rows.isEmpty ? null : _exportPdf, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
+          ]);
+          if (narrow) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Margin Report', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              const Text('Line-wise sale price vs. cost — flags negative-margin lines.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const SizedBox(height: 10),
+              actions,
+            ]);
+          }
+          return Row(children: [
+            const Text('Margin Report', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 10),
+            const Expanded(child: Text('Line-wise sale price vs. cost — flags negative-margin lines.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            actions,
+          ]);
+        })),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _filterCard(),
         const SizedBox(height: 16),

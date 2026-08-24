@@ -31,8 +31,10 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   bool _detailLoading = false;
   String _search = '';
   String _filter = 'all';
+  bool _superviseFlow = false; // org.sri_supervise_flow: non-blocking admin supervise mark
+  bool _superviseBusy = false;
 
-  @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); }
+  @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); _loadSuperviseFlow(); }
   @override void dispose() { for (final c in _priceCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -42,6 +44,17 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   bool get _isDraft  => !_isLocked;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+
+  Future<void> _loadSuperviseFlow() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final c = await Supabase.instance.client.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', 'org.sri_supervise_flow').maybeSingle();
+      final on = (c?['value'] as String?) == 'true';
+      if (mounted && on != _superviseFlow) setState(() => _superviseFlow = on);
+    } catch (_) {}
+  }
 
   // Admin toggle org.sri_price_edit: when ON, only the users listed in
   // org.sri_price_edit_users may edit prices/discounts on a draft SRI.
@@ -91,7 +104,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('sales_return_invoices')
-          .select('id,voucher_number,voucher_date,grand_total,is_locked,is_voided,status,customer_id,srn_id,customers(shop_name),sales_returns(voucher_number)')
+          .select('id,voucher_number,voucher_date,grand_total,is_locked,is_voided,status,customer_id,srn_id,supervised_at,customers(shop_name),sales_returns(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -120,6 +133,66 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         'action': action, 'details': details, 'performed_by': ref.read(currentUserProvider)?.id,
       });
     } catch (_) {}
+  }
+
+  // ── Supervision: a NON-BLOCKING admin review mark (org.sri_supervise_flow).
+  // Independent of issuing/posting — the invoice posts regardless of supervision.
+  Future<void> _supervise() async {
+    if (!_isAdmin) { _showSnack('Only admins can supervise'); return; }
+    if (_superviseBusy) return;
+    setState(() => _superviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      await Supabase.instance.client.from('sales_return_invoices').update({
+        'supervised_by': userId, 'supervised_at': now,
+        'supervised_by_name': userName,
+        'supervised_signature_url': sigUrl,
+        'supervised_stamp_url': stampUrl,
+        'updated_at': now,
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
+      if (mounted) setState(() {
+        _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
+        _detail['supervised_by_name'] = userName;
+        _detail['supervised_signature_url'] = sigUrl;
+        _detail['supervised_stamp_url'] = stampUrl;
+        final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _invoices[idx]['supervised_at'] = now;
+      });
+      _showSnack('Marked as supervised');
+    } catch (e) { _showSnack('Failed: $e'); }
+    finally { if (mounted) setState(() => _superviseBusy = false); }
+  }
+
+  Future<void> _clearSupervision() async {
+    if (!_isAdmin) return;
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Clear supervision?'),
+      content: const Text('Remove the supervised mark on this invoice? This does not affect the ledger or the return.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Clear'))],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('sales_return_invoices').update({
+        'supervised_by': null, 'supervised_at': null,
+        'supervised_by_name': null, 'supervised_signature_url': null, 'supervised_stamp_url': null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'unsupervised', null);
+      if (mounted) setState(() {
+        _detail['supervised_by'] = null; _detail['supervised_at'] = null;
+        _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
+        final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _invoices[idx]['supervised_at'] = null;
+      });
+      _showSnack('Supervision cleared');
+    } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void> _createNew() async {
@@ -353,6 +426,10 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                   title: Row(children: [
                     Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
+                    if (_superviseFlow && r['supervised_at'] == null && !voided) ...[
+                      const Tooltip(message: 'Awaiting supervision', child: Icon(Icons.verified_user_outlined, size: 14, color: Colors.orange)),
+                      const SizedBox(width: 4),
+                    ],
                     Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: badgeColor.withOpacity(0.12), borderRadius: BorderRadius.circular(4)), child: Text(badgeText, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: badgeColor))),
                   ]),
                   subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -384,6 +461,22 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
           if (!_isVoided && (!_isDraft || _canUnlock))
             IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
                 tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
+          if (_superviseFlow && _isAdmin && !_isVoided) ...[
+            if (_detail['supervised_at'] == null)
+              OutlinedButton.icon(
+                icon: _superviseBusy
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                label: const Text('Supervise'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                onPressed: _superviseBusy ? null : _supervise)
+            else
+              TextButton.icon(
+                icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+                onPressed: _clearSupervision),
+            const SizedBox(width: 4),
+          ],
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
           if (_canDelete && !_isVoided) IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _void),
         ])),
@@ -397,6 +490,23 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
           if (_isLocked) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
         ]),
         _SriInfoStrip(address: cust?['address'] as String?, contact: cust?['contact_person'] as String?, phone: cust?['phone'] as String?, salesperson: _meta.salespersonName, preparedBy: _meta.preparedBy),
+        if (_superviseFlow && !_isVoided) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: (_detail['supervised_at'] != null ? AppTheme.success : Colors.orange).withOpacity(0.07),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: (_detail['supervised_at'] != null ? AppTheme.success : Colors.orange).withOpacity(0.3))),
+          child: Row(children: [
+            Icon(_detail['supervised_at'] != null ? Icons.verified : Icons.hourglass_top, size: 16,
+                color: _detail['supervised_at'] != null ? AppTheme.success : Colors.orange),
+            const SizedBox(width: 8),
+            Expanded(child: Text(
+              _detail['supervised_at'] != null
+                  ? 'Supervised by ${_detail['supervised_by_name'] ?? 'admin'} on ${DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['supervised_at'] as String).toLocal())}.'
+                  : (_isAdmin
+                      ? 'Awaiting supervision. Review this invoice, then tap "Supervise" above. (Non-blocking — it posts regardless.)'
+                      : 'Awaiting admin supervision. This does not block posting.'),
+              style: TextStyle(fontSize: 12, color: _detail['supervised_at'] != null ? AppTheme.success : Colors.orange))),
+          ])),
         if (_isDraft) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.success.withOpacity(0.25))),
           child: const Row(children: [Icon(Icons.edit_note, size: 15, color: AppTheme.success), SizedBox(width: 8), Expanded(child: Text('Enter selling prices and discounts, then click "Issue Invoice" to return stock to inventory.', style: TextStyle(fontSize: 12, color: AppTheme.success)))])),

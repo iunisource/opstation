@@ -47,7 +47,8 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
   static const _tables = <String>[
     'purchase_invoices', // piReviewPendingProvider
     'purchase_return_invoices', // priReviewPendingProvider
-    'sales_invoices', // siReviewPendingProvider
+    'sales_invoices', // siReviewPendingProvider + siSupervisePendingProvider
+    'sales_return_invoices', // sriSupervisePendingProvider
     'purchase_grns', // grnPendingInvoiceCountProvider + grnSupervisePendingProvider
     'purchase_orders', // poPendingApprovalCountProvider
     'customers', // customerSupervisePendingProvider
@@ -194,6 +195,8 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(piReviewPendingProvider);
     ref.invalidate(priReviewPendingProvider);
     ref.invalidate(siReviewPendingProvider);
+    ref.invalidate(siSupervisePendingProvider);
+    ref.invalidate(sriSupervisePendingProvider);
     ref.invalidate(grnPendingInvoiceCountProvider);
     ref.invalidate(grnSupervisePendingProvider);
     ref.invalidate(customerSupervisePendingProvider);

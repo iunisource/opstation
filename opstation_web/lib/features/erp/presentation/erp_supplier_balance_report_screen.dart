@@ -337,23 +337,43 @@ class _ErpSupplierBalanceReportScreenState
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-          child: Row(children: [
-            const Text('Supplier Balance Report',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                'Net position: payables + supplier advances (negative = we owe, positive = advance)',
-                style: TextStyle(fontSize: 11.5, color: Colors.black54),
-                overflow: TextOverflow.ellipsis,
+          child: LayoutBuilder(builder: (_, cc) {
+            final narrow = cc.maxWidth < 640;
+            final actions = _loaded
+              ? Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                      icon: const Icon(Icons.print_outlined, size: 18),
+                      label: const Text('Print / PDF'),
+                      onPressed: _print),
+                ])
+              : const SizedBox.shrink();
+            if (narrow) {
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Supplier Balance Report',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                const Text(
+                  'Net position: payables + supplier advances (negative = we owe, positive = advance)',
+                  style: TextStyle(fontSize: 11.5, color: Colors.black54),
+                ),
+                const SizedBox(height: 10),
+                actions,
+              ]);
+            }
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Supplier Balance Report',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Net position: payables + supplier advances (negative = we owe, positive = advance)',
+                  style: TextStyle(fontSize: 11.5, color: Colors.black54),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            if (_loaded)
-              OutlinedButton.icon(
-                  icon: const Icon(Icons.print_outlined, size: 18),
-                  label: const Text('Print / PDF'),
-                  onPressed: _print),
-          ]),
+              actions,
+            ]);
+          }),
         ),
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 24),

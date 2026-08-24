@@ -320,6 +320,42 @@ final productSupervisePendingProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
+// Count of Sales Invoices still awaiting admin supervision (non-blocking review
+// layer), gated by org.si_supervise_flow. Drives the Sales Invoice menu badge.
+final siSupervisePendingProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.si_supervise_flow').maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from('sales_invoices').select('id')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null)
+        .neq('is_voided', true);
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+
+// Count of Sales Return Invoices still awaiting admin supervision, gated by
+// org.sri_supervise_flow. Drives the Sales Return Invoice menu badge.
+final sriSupervisePendingProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.sri_supervise_flow').maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from('sales_return_invoices').select('id')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null)
+        .neq('is_voided', true);
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+
 // Count of job cards awaiting acknowledgement (queued & not yet noted) for the
 // current org, gated by org.job_ack_flow. Drives the Manufacturing → Job Card
 // pendency badge. Invalidated by the Job Card screen on acknowledge + realtime.
@@ -742,6 +778,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
   final productSupervisePending = ref.watch(productSupervisePendingProvider).valueOrNull ?? 0;
+  final siSupervisePending = ref.watch(siSupervisePendingProvider).valueOrNull ?? 0;
+  final sriSupervisePending = ref.watch(sriSupervisePendingProvider).valueOrNull ?? 0;
   final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
   final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
   final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
@@ -819,11 +857,11 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
       if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
       if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location, badge: doRemarkPending),
-      if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending),
+      if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending + siSupervisePending),
     ];
     final salesReturns = <Widget>[
       if (show('/erp/sales-returns')) _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
-      if (show('/erp/sales-return-invoices')) _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location),
+      if (show('/erp/sales-return-invoices')) _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location, badge: sriSupervisePending),
     ];
     final salesLedgersReports = <Widget>[
       if (show('/erp/customer-ledger')) _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
@@ -990,7 +1028,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
-          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending + doRemarkPending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending + doRemarkPending + siSupervisePending + sriSupervisePending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),

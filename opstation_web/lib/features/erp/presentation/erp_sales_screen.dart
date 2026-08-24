@@ -2358,6 +2358,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _detailLoading = false;
   bool _datesEditable = false;
   bool _reviewFlow = false; // org.doc_review_flow_si: support docs + admin review
+  bool _superviseFlow = false; // org.si_supervise_flow: non-blocking admin supervise mark
+  bool _superviseBusy = false;
   String _search = '';
   String _siStatusFilter = 'all'; // all | draft | under_review | rejected | posted | voided
   final Map<String, TextEditingController> _discountCtrl = {};
@@ -2393,7 +2395,9 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       final res = await q.order('created_at', ascending: false);
       bool reviewFlow = _reviewFlow;
       try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (c?['value'] as String?) == 'true'; } catch (_) {}
-      setState(() { _invoices = List<Map<String,dynamic>>.from(res); _reviewFlow = reviewFlow; _listLoading = false; });
+      bool superviseFlow = _superviseFlow;
+      try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.si_supervise_flow').maybeSingle(); superviseFlow = (c?['value'] as String?) == 'true'; } catch (_) {}
+      setState(() { _invoices = List<Map<String,dynamic>>.from(res); _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _listLoading = false; });
     } catch (_) { setState(() => _listLoading = false); }
   }
 
@@ -2423,10 +2427,13 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       try { final cc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (cc?['value'] as String?) == 'true'; } catch (_) {}
       bool reviewFlow = _reviewFlow;
       try { final rc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (rc?['value'] as String?) == 'true'; } catch (_) {}
+      bool superviseFlow = _superviseFlow;
+      try { final sc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.si_supervise_flow').maybeSingle(); superviseFlow = (sc?['value'] as String?) == 'true'; } catch (_) {}
       bool priceEditable = _priceEditable;
       try { final pc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.si_price_editable').maybeSingle(); priceEditable = (pc?['value'] as String?) == 'true'; } catch (_) {}
       setState(() {
         _reviewFlow = reviewFlow;
+        _superviseFlow = superviseFlow;
         _priceEditable = priceEditable;
         _detail = Map<String,dynamic>.from(inv);
         _items = List<Map<String,dynamic>>.from(items);
@@ -2530,6 +2537,60 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     } catch (e) {
       if (mounted) _showSnack('Could not save remarks: $e');
     }
+  }
+
+  // ── Supervision: a NON-BLOCKING admin review mark (org.si_supervise_flow).
+  // Independent of posting — the invoice posts regardless of supervision.
+  Future<void> _supervise() async {
+    if (!_isAdmin) { _showSnack('Only admins can supervise'); return; }
+    if (_superviseBusy) return;
+    setState(() => _superviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      await Supabase.instance.client.from('sales_invoices').update({
+        'supervised_by': userId, 'supervised_at': now,
+        'supervised_by_name': userName,
+        'supervised_signature_url': sigUrl,
+        'supervised_stamp_url': stampUrl,
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
+      if (mounted) setState(() {
+        _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
+        _detail['supervised_by_name'] = userName;
+        _detail['supervised_signature_url'] = sigUrl;
+        _detail['supervised_stamp_url'] = stampUrl;
+      });
+      _showSnack('Marked as supervised');
+    } catch (e) { _showSnack('Failed: $e'); }
+    finally { if (mounted) setState(() => _superviseBusy = false); }
+  }
+
+  Future<void> _clearSupervision() async {
+    if (!_isAdmin) return;
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Clear supervision?'),
+      content: const Text('Remove the supervised mark on this invoice? This does not affect posting or the ledger.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Clear'))],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('sales_invoices').update({
+        'supervised_by': null, 'supervised_at': null,
+        'supervised_by_name': null, 'supervised_signature_url': null, 'supervised_stamp_url': null,
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'unsupervised', null);
+      if (mounted) setState(() {
+        _detail['supervised_by'] = null; _detail['supervised_at'] = null;
+        _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
+      });
+      _showSnack('Supervision cleared');
+    } catch (e) { _showSnack('Failed: $e'); }
   }
 
   Future<void> _printSI() async {
@@ -2884,6 +2945,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                     Text(inv['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
+                                    if (_superviseFlow && inv['supervised_at'] == null && inv['is_voided'] != true) ...[
+                                      const Tooltip(message: 'Awaiting supervision', child: Icon(Icons.verified_user_outlined, size: 14, color: Colors.orange)),
+                                      const SizedBox(width: 4),
+                                    ],
                                     _siListBadge(inv),
                                   ]),
                                   Text('SO: ${inv['sales_orders']?['voucher_number'] ?? '-'} · DO: ${inv['delivery_orders']?['voucher_number'] ?? '-'}',
@@ -2966,6 +3031,22 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               tooltip: _isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
             ),
+          if (_superviseFlow && _isAdmin && !(_detail['is_voided'] as bool? ?? false)) ...[
+            if (_detail['supervised_at'] == null)
+              OutlinedButton.icon(
+                icon: _superviseBusy
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                label: const Text('Supervise'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                onPressed: _superviseBusy ? null : _supervise)
+            else
+              TextButton.icon(
+                icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+                onPressed: _clearSupervision),
+            const SizedBox(width: 8),
+          ],
           IconButton(
             icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
             tooltip: 'Print / PDF',
@@ -3154,6 +3235,25 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   : null,
             ),
             const SizedBox(height: 16),
+            if (_superviseFlow && !(_detail['is_voided'] as bool? ?? false)) ...[
+              Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: (_detail['supervised_at'] != null ? AppTheme.success : Colors.orange).withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: (_detail['supervised_at'] != null ? AppTheme.success : Colors.orange).withOpacity(0.3))),
+                child: Row(children: [
+                  Icon(_detail['supervised_at'] != null ? Icons.verified : Icons.hourglass_top, size: 16,
+                      color: _detail['supervised_at'] != null ? AppTheme.success : Colors.orange),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(
+                    _detail['supervised_at'] != null
+                        ? 'Supervised by ${_detail['supervised_by_name'] ?? 'admin'} on ${DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['supervised_at'] as String).toLocal())}.'
+                        : (_isAdmin
+                            ? 'Awaiting supervision. Review this invoice, then tap "Supervise" above. (Non-blocking — it posts regardless.)'
+                            : 'Awaiting admin supervision. This does not block posting.'),
+                    style: TextStyle(fontSize: 12, color: _detail['supervised_at'] != null ? AppTheme.success : Colors.orange))),
+                ])),
+            ],
             if (_reviewFlow) ...[
               if (_isPendingReview)
                 Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

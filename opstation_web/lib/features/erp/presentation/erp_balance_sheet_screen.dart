@@ -176,11 +176,18 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
     return Container(
       color: AppTheme.background, padding: const EdgeInsets.all(32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Expanded(child: Text('Balance Sheet', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800))),
-          IconButton(onPressed: (_loading || _bsRows.isEmpty) ? null : _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
-          IconButton(onPressed: _refreshWithSweep, icon: const Icon(Icons.refresh), tooltip: 'Refresh (posts pending POS cost)'),
-        ]),
+        LayoutBuilder(builder: (_, cc) {
+          final narrow = cc.maxWidth < 640;
+          final titleBlock = const Text('Balance Sheet', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800));
+          final actions = Wrap(spacing: 8, runSpacing: 8, children: [
+            IconButton(onPressed: (_loading || _bsRows.isEmpty) ? null : _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
+            IconButton(onPressed: _refreshWithSweep, icon: const Icon(Icons.refresh), tooltip: 'Refresh (posts pending POS cost)'),
+          ]);
+          if (narrow) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const SizedBox(height: 10), actions]);
+          }
+          return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const Spacer(), actions]);
+        }),
         const SizedBox(height: 4),
         Text(scope.label(allSelected: _allBranches, selected: branch), style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),

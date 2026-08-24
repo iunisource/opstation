@@ -379,6 +379,30 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.si_supervise_flow',
+    'Supervision for Sales Invoices',
+    'When ON, admins get a "Supervise" action on each Sales Invoice as an extra '
+        'review layer, and a pendency counter on the Sales → Sales Invoice menu '
+        'shows how many invoices are still awaiting supervision. Supervision is '
+        'NON-BLOCKING — an invoice still posts exactly as before whether or not it '
+        'has been supervised; this only records that an admin checked it. Existing '
+        'invoices were auto-supervised, so only invoices created from now on '
+        'appear. This is separate from "Support docs & admin review" above (that '
+        'flow blocks posting until approved). When OFF, no counter shows.',
+  ),
+  _AdminToggle(
+    'org.sri_supervise_flow',
+    'Supervision for Sales Return Invoices',
+    'When ON, admins get a "Supervise" action on each Sales Return Invoice as an '
+        'extra review layer, and a pendency counter on the Sales → Sales Return '
+        'Invoice menu shows how many are still awaiting supervision. Supervision is '
+        'NON-BLOCKING — the return invoice still issues/posts exactly as before '
+        'whether or not it has been supervised. Existing invoices were '
+        'auto-supervised, so only invoices created from now on appear. When OFF, no '
+        'counter shows.',
+  ),
+
+  _AdminToggle(
     'org.customer_supervise_flow',
     'Supervision for new customers',
     'When ON, every newly-created customer must be "Supervised" by an admin or '
@@ -432,6 +456,8 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.customer_targets_enabled',
     'org.srn_date_editable',
     'org.doc_review_flow_si',
+    'org.si_supervise_flow',
+    'org.sri_supervise_flow',
     'org.customer_supervise_flow',
     'org.customer_edit_alert',
     'org.quotation_custom_company',

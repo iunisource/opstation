@@ -396,17 +396,22 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       color: AppTheme.background,
       padding: const EdgeInsets.all(24),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Text('Account Activity Report', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-          const Spacer(),
-          if (_loaded && _entries.isNotEmpty) Row(children: [
-            OutlinedButton.icon(icon: const Icon(Icons.table_view_outlined, size: 16), label: const Text('Excel', style: TextStyle(fontSize: 12)),
-              onPressed: _exportExcel, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10))),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
-              onPressed: _print, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10))),
-          ]),
-        ]),
+        LayoutBuilder(builder: (_, cc) {
+          final narrow = cc.maxWidth < 640;
+          final titleBlock = const Text('Account Activity Report', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800));
+          final actions = (_loaded && _entries.isNotEmpty)
+            ? Wrap(spacing: 8, runSpacing: 8, children: [
+                OutlinedButton.icon(icon: const Icon(Icons.table_view_outlined, size: 16), label: const Text('Excel', style: TextStyle(fontSize: 12)),
+                  onPressed: _exportExcel, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10))),
+                OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
+                  onPressed: _print, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10))),
+              ])
+            : const SizedBox.shrink();
+          if (narrow) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const SizedBox(height: 10), actions]);
+          }
+          return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const Spacer(), actions]);
+        }),
         const SizedBox(height: 16),
 
         // ── Filters ───────────────────────────────────────────────

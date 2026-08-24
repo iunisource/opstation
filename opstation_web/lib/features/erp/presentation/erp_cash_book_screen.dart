@@ -259,13 +259,13 @@ class _ErpCashBookScreenState extends ConsumerState<ErpCashBookScreen> {
       color: AppTheme.background,
       padding: const EdgeInsets.all(24),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        LayoutBuilder(builder: (_, cc) {
+          final narrow = cc.maxWidth < 640;
+          final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Cash Book', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
             Text(branchLabel, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-          ]),
-          const Spacer(),
-          Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          ]);
+          final actions = Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
             if (canToggleAll)
               Row(mainAxisSize: MainAxisSize.min, children: [
                 Checkbox(value: _allBranches, visualDensity: VisualDensity.compact,
@@ -290,8 +290,12 @@ class _ErpCashBookScreenState extends ConsumerState<ErpCashBookScreen> {
               onPressed: _rows.isEmpty ? null : _print,
               style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
             ),
-          ]),
-        ]),
+          ]);
+          if (narrow) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const SizedBox(height: 10), actions]);
+          }
+          return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const Spacer(), actions]);
+        }),
         const SizedBox(height: 16),
         if (_error != null) Container(
           margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(10),
