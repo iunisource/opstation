@@ -613,24 +613,28 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
     }
   }
 
-  // Active time = sum of (started -> paused) intervals from the audit trail.
-  // Excludes paused gaps. If currently running, counts up to now.
+  // Actual time on the floor = sum of (start -> stop) intervals from the audit
+  // trail. A job can be started/stopped many times across days; this excludes
+  // the gaps in between. If it's currently on the floor, counts up to now.
+  static const _startActions = {'started', 'floor_started'};
+  static const _stopActions = {'paused', 'floor_stopped', 'floor_removed', 'floor_finished', 'completed', 'cancelled'};
   Duration _activeTime() {
     DateTime? runningSince;
     Duration total = Duration.zero;
     for (final a in _audit) {
       final action = a['action'] as String?;
-      final t = _ts(a['created_at']);
-      if (t == null) continue;
-      if (action == 'started') {
+      final t = _ts(a['created_at'] ?? a['performed_at']);
+      if (t == null || action == null) continue;
+      if (_startActions.contains(action)) {
         runningSince ??= t;
-      } else if (action == 'paused' || action == 'completed' || action == 'cancelled') {
+      } else if (_stopActions.contains(action)) {
         if (runningSince != null) { total += t.difference(runningSince); runningSince = null; }
       }
     }
     if (runningSince != null) total += _now.difference(runningSince);
     return total;
   }
+  bool get _currentlyOnFloor => widget.job['on_floor'] == true;
 
   String? _runOperator(Map<String, dynamic> r) {
     final id = r['operator_id'] as String?;
@@ -655,6 +659,26 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
 
   DateTime? _ts(dynamic v) { if (v == null) return null; try { return DateTime.parse(v as String).toLocal(); } catch (_) { return null; } }
   static String _num(dynamic v) { final d = (v as num? ?? 0).toDouble(); return d == d.roundToDouble() ? d.toStringAsFixed(0) : d.toString(); }
+
+  // Icon + colour + human label for each audit-trail action.
+  (IconData, Color, String) _auditMeta(String action) {
+    switch (action) {
+      case 'created': return (Icons.add_circle, Colors.blue, 'Created');
+      case 'acknowledged': return (Icons.how_to_reg, Colors.indigo, 'Acknowledged by manager');
+      case 'started': return (Icons.play_circle_fill, Colors.green, 'Started');
+      case 'floor_started': return (Icons.play_circle_fill, AppTheme.primary, 'Put on the floor');
+      case 'paused': return (Icons.pause_circle_filled, Colors.orange, 'Paused');
+      case 'floor_stopped': return (Icons.stop_circle, Colors.orange, 'Stopped (off the floor)');
+      case 'floor_removed': return (Icons.stop_circle, Colors.orange, 'Taken off the floor');
+      case 'floor_finished': return (Icons.flag_circle, Colors.green, 'Finished — ready to close');
+      case 'closed_short': return (Icons.flag, Colors.brown, 'Closed short');
+      case 'completed': return (Icons.check_circle, Color(0xFF15803D), 'Completed');
+      case 'cancelled': return (Icons.cancel, Colors.grey, 'Cancelled / Voided');
+      default:
+        final label = action.isEmpty ? 'Event' : action.replaceAll('_', ' ');
+        return (Icons.fiber_manual_record, AppTheme.textSecondary, '${label[0].toUpperCase()}${label.substring(1)}');
+    }
+  }
 
   String _fmtDur(Duration d) {
     if (d.isNegative) d = Duration.zero;
@@ -685,29 +709,57 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
       completed ??= _ts(j['updated_at']);
     }
 
-    String timerLabel; String timerValue; Color timerColor;
-    if (isCancelled) { timerLabel = 'Status'; timerValue = 'Cancelled'; timerColor = Colors.grey; }
-    else if (started == null) { timerLabel = 'Not started'; timerValue = '—'; timerColor = Colors.orange; }
-    else if (isDone && completed != null) { timerLabel = 'Total time'; timerValue = _fmtDur(completed.difference(started)); timerColor = Colors.green.shade700; }
-    else { timerLabel = estimated ? 'Elapsed (since first batch)' : 'Elapsed'; timerValue = _fmtDur(_now.difference(started)); timerColor = AppTheme.primary; }
+    // Primary metric is ACTUAL time on the floor (sum of start→stop spans),
+    // not raw wall-clock since start — that was the confusing "Elapsed".
+    final onFloorTotal = _activeTime();
+
+    // Build one merged, time-ordered event list from the audit trail + batches,
+    // so every start / stop / finish / batch / completion shows with who + when.
+    final rows = <Map<String, dynamic>>[];
+    // Created is always first (from the job itself, in case audit lacks it).
+    rows.add({'t': created, 'kind': 'created'});
+    for (final a in _audit) {
+      final action = a['action'] as String? ?? '';
+      // Batches are rendered from job_card_runs (they carry the quantities);
+      // skip the audit duplicates and low-value noise.
+      if (action == 'batch_posted' || action == 'updated' || action == 'created') continue;
+      rows.add({'t': _ts(a['created_at'] ?? a['performed_at']), 'kind': 'audit', 'action': action, 'who': a['performed_by_name'] as String?, 'notes': a['notes'] as String?});
+    }
+    for (final r in _runs) {
+      rows.add({'t': _ts(r['created_at']) ?? _ts(r['run_date']), 'kind': 'run', 'run': r});
+    }
+    // Sort by time; nulls sink to the bottom.
+    rows.sort((x, y) {
+      final tx = x['t'] as DateTime?; final ty = y['t'] as DateTime?;
+      if (tx == null) return 1; if (ty == null) return -1;
+      return tx.compareTo(ty);
+    });
 
     final events = <Widget>[];
-    events.add(_event(Icons.add_circle, Colors.blue, 'Created', created, null, first: true));
-    if (startedReal != null && !startedBad) events.add(_event(Icons.play_circle_fill, Colors.green, 'Started', startedReal, null));
-    for (final r in _runs) {
-      final rt = _ts(r['created_at']) ?? _ts(r['run_date']);
-      final prod = _num(r['produced_qty']); final acc = _num(r['accepted_qty']); final rej = _num(r['rejected_qty']);
-      final rstatus = r['status'] as String? ?? 'draft';
-      final op = _runOperator(r);
-      final qcLines = _runQc(r['id'] as String? ?? '');
-      final detail = StringBuffer('Produced $prod  ·  Accepted $acc  ·  Rejected $rej');
-      if (op != null) detail.write('\nBy $op');
-      for (final q in qcLines) { detail.write('\n$q'); }
-      events.add(_event(Icons.inventory_2, Colors.teal, 'Batch #${r['run_no'] ?? ''}${rstatus == 'posted' ? '' : ' (draft)'}', rt,
-        detail.toString()));
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      final first = i == 0; final last = i == rows.length - 1;
+      final t = row['t'] as DateTime?;
+      if (row['kind'] == 'created') {
+        events.add(_event(Icons.add_circle, Colors.blue, 'Created', t, null, first: first, last: last));
+      } else if (row['kind'] == 'run') {
+        final r = row['run'] as Map<String, dynamic>;
+        final prod = _num(r['produced_qty']); final acc = _num(r['accepted_qty']); final rej = _num(r['rejected_qty']);
+        final rstatus = r['status'] as String? ?? 'draft';
+        final op = _runOperator(r);
+        final qcLines = _runQc(r['id'] as String? ?? '');
+        final detail = StringBuffer('Produced $prod  ·  Accepted $acc  ·  Rejected $rej');
+        if (op != null) detail.write('\nBy $op');
+        for (final q in qcLines) { detail.write('\n$q'); }
+        events.add(_event(Icons.inventory_2, Colors.teal, 'Batch #${r['run_no'] ?? ''}${rstatus == 'posted' ? '' : ' (draft)'}', t, detail.toString(), first: first, last: last));
+      } else {
+        final meta = _auditMeta(row['action'] as String? ?? '');
+        final who = (row['who'] as String?)?.trim();
+        final notes = (row['notes'] as String?)?.trim();
+        final detail = [if (who != null && who.isNotEmpty) 'By $who', if (notes != null && notes.isNotEmpty) notes].join('\n');
+        events.add(_event(meta.$1, meta.$2, meta.$3, t, detail.isEmpty ? null : detail, first: first, last: last));
+      }
     }
-    if (isDone) events.add(_event(Icons.check_circle, Colors.green.shade700, 'Completed', completed, null, last: true));
-    else if (isCancelled) events.add(_event(Icons.cancel, Colors.grey, 'Cancelled', _ts(j['updated_at']), null, last: true));
 
     return Dialog(
       child: ConstrainedBox(
@@ -722,21 +774,36 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
             IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.pop(context)),
           ])),
           Container(width: double.infinity, margin: const EdgeInsets.fromLTRB(20, 0, 20, 8), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(color: timerColor.withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
+            decoration: BoxDecoration(color: (_currentlyOnFloor ? AppTheme.primary : Colors.deepPurple).withOpacity(0.08), borderRadius: BorderRadius.circular(10)),
             child: Column(children: [
+              // Real work time: total spent on the floor (sum of start→stop spans).
               Row(children: [
-                Text(timerLabel, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                const Spacer(),
-                Text(timerValue, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: timerColor)),
-              ]),
-              if (_audit.any((a) => a['action'] == 'started')) ...[
-                const SizedBox(height: 8),
                 Row(children: [
-                  const Text('Active time (excludes pauses)', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                  const Spacer(),
-                  Text(_fmtDur(_activeTime()), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.deepPurple)),
+                  Text('Time on the floor', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  if (_currentlyOnFloor) ...[
+                    const SizedBox(width: 6),
+                    Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                      child: const Text('on floor now', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                  ],
                 ]),
-              ],
+                const Spacer(),
+                Text(started == null && onFloorTotal == Duration.zero ? '—' : _fmtDur(onFloorTotal),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _currentlyOnFloor ? AppTheme.primary : Colors.deepPurple)),
+              ]),
+              const SizedBox(height: 8),
+              // Calendar time (what "Elapsed" used to show) — clearly labelled so
+              // it isn't mistaken for actual working time.
+              Row(children: [
+                Text(isDone ? 'Lead time (created → done)' : (started == null ? 'Not started yet' : 'Calendar time since started'),
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                const Spacer(),
+                Text(
+                  isCancelled ? 'Cancelled'
+                    : started == null ? '—'
+                    : isDone && completed != null ? _fmtDur(completed.difference(created ?? started))
+                    : _fmtDur(_now.difference(started)),
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+              ]),
             ])),
           const Divider(height: 1),
           Flexible(child: _loading

@@ -1585,7 +1585,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 <div class="hdr">
   <div><h1>Job Card</h1><div class="sub">$branch</div></div>
   <div style="display:flex;align-items:flex-start;gap:16px">
-    <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div>${withPrices ? '' : '<div class="sub" style="color:#b45309;font-weight:700">Internal copy - no costing</div>'}</div>
+    <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div></div>
     $qrBlock
   </div>
 </div>
@@ -1612,6 +1612,8 @@ $runSection
 
   void _printJobCard({bool withPrices = true}) {
     if (_current == null) { _snack('Open a saved job card to print'); return; }
+    // Printing the job card is restricted to users allowed to view costing.
+    if (!_canViewCost) { _snack('You do not have permission to print job cards'); return; }
     // Never emit a priced copy for a user who isn't allowed to see prices.
     final priced = withPrices && _canViewCost;
     try {
@@ -2003,7 +2005,7 @@ $runSection
               if (_current != null) IconButton(icon: const Icon(Icons.fact_check_outlined, size: 20), onPressed: _showQcHistory, tooltip: 'QC History', visualDensity: VisualDensity.compact),
               if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail', visualDensity: VisualDensity.compact),
               if (_current != null && _canViewCost) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)', visualDensity: VisualDensity.compact),
-              if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
+              if (_current != null && _canViewCost) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
               if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
               if (_current != null && _status != 'completed' && _status != 'cancelled')
                 Padding(

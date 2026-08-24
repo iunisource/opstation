@@ -66,7 +66,9 @@ class _FloorScanScreenState extends State<FloorScanScreen> {
           _busy = false;
           _doneMessage = action == 'start'
               ? 'Job marked ON THE FLOOR. You can close this page.'
-              : 'Job marked FINISHED. Your supervisor will post the final quantity.';
+              : action == 'stop'
+                  ? 'Job STOPPED and taken off the floor. Scan again to start it later.'
+                  : 'Job marked FINISHED. Your supervisor will post the final quantity.';
         });
       }
     } catch (_) {
@@ -144,7 +146,11 @@ class _FloorScanScreenState extends State<FloorScanScreen> {
     final finished = j['finished'] == true;
     final closed = j['closed'] == true;
     final canStart = j['can_start'] == true;
+    final canStop = j['can_stop'] == true;
     final canFinish = j['can_finish'] == true;
+    final planned = (j['planned'] as num?)?.toDouble() ?? 0;
+    final produced = (j['produced'] as num?)?.toDouble() ?? 0;
+    String qtyTxt(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -156,6 +162,19 @@ class _FloorScanScreenState extends State<FloorScanScreen> {
           const SizedBox(height: 4),
           Text(product + (sku.isNotEmpty ? '  ·  $sku' : ''), textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Color(0xFF5B6473))),
         ],
+        const SizedBox(height: 14),
+        // Quantity: how much to make and how much is done.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(color: const Color(0xFFF3F6FC), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFDCE6FA))),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+            _qtyStat('To make', qtyTxt(planned)),
+            Container(width: 1, height: 30, color: const Color(0xFFDCE6FA)),
+            _qtyStat('Done', qtyTxt(produced)),
+            Container(width: 1, height: 30, color: const Color(0xFFDCE6FA)),
+            _qtyStat('Left', qtyTxt((planned - produced) < 0 ? 0 : planned - produced)),
+          ]),
+        ),
         const SizedBox(height: 16),
         _statusPill(onFloor: onFloor, finished: finished, closed: closed),
         const SizedBox(height: 22),
@@ -179,6 +198,13 @@ class _FloorScanScreenState extends State<FloorScanScreen> {
               color: _brand,
               onTap: _busy ? null : () => _act('start'),
             ),
+          if (canStop)
+            _bigButton(
+              label: 'Stop — pause for now',
+              icon: Icons.stop_rounded,
+              color: const Color(0xFFD97706),
+              onTap: _busy ? null : () => _act('stop'),
+            ),
           if (canFinish)
             _bigButton(
               label: 'Finished — ready to close',
@@ -188,8 +214,8 @@ class _FloorScanScreenState extends State<FloorScanScreen> {
             ),
           const SizedBox(height: 6),
           Text(
-            canFinish
-                ? 'Tap Finished only when the whole job is done. Your supervisor still posts the final quantity.'
+            canStop
+                ? 'Stop just takes it off the floor for now — you can start it again later. Tap Finished only when the whole job is done; your supervisor posts the final quantity.'
                 : 'Tap Start when you begin work on this job.',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A93A3), height: 1.4),
@@ -214,6 +240,12 @@ class _FloorScanScreenState extends State<FloorScanScreen> {
     );
     if (ok == true) _act('finish');
   }
+
+  Widget _qtyStat(String label, String value) => Column(mainAxisSize: MainAxisSize.min, children: [
+    Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _ink)),
+    const SizedBox(height: 2),
+    Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF5B6473))),
+  ]);
 
   Widget _statusPill({required bool onFloor, required bool finished, required bool closed}) {
     String label; Color c; IconData ic;
