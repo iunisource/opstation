@@ -42,23 +42,23 @@ class DownloadAppButton extends ConsumerWidget {
             }
           },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              color: AppTheme.textPrimary,
+              color: AppTheme.primary,
               borderRadius: BorderRadius.circular(30),
               boxShadow: [
                 BoxShadow(
-                  color: AppTheme.textPrimary.withOpacity(0.28),
-                  blurRadius: 14,
+                  color: AppTheme.primary.withOpacity(0.35),
+                  blurRadius: 16,
                   offset: const Offset(0, 6),
                 ),
               ],
             ),
             child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.android, color: Color(0xFF3DDC84), size: 20),
+              Icon(Icons.android, color: Colors.white, size: 20),
               SizedBox(width: 8),
               Text('Get the Android app',
-                  style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                  style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w700)),
             ]),
           ),
         ),
