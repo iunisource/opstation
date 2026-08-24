@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
@@ -1021,8 +1022,7 @@ class _ErpAdminSettingsScreenState
           final matches = q.isEmpty
               ? _orgUsers
               : _orgUsers
-                  .where((us) =>
-                      ((us['name'] as String? ?? '').toLowerCase().contains(q)))
+                  .where((us) => matchesQuery('${us['name'] ?? ''}', q))
                   .toList();
           return AlertDialog(
             title: Text(u.label,
@@ -1224,9 +1224,7 @@ class _ErpAdminSettingsScreenState
     final out = <Widget>[];
 
     bool matches(_AdminToggle t) =>
-        q.isEmpty ||
-        t.title.toLowerCase().contains(q) ||
-        t.subtitle.toLowerCase().contains(q);
+        matchesQuery('${t.title} ${t.subtitle}', q);
 
     void section(String title, IconData icon, List<_AdminToggle> allItems) {
       final items = allItems.where(matches).toList();

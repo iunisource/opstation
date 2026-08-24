@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -540,7 +541,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _grns.where((r) {
-      final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) || ((r['purchase_orders']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = matchesQuery('${r['voucher_number'] ?? ''} ${r['suppliers']?['name'] ?? ''} ${r['purchase_orders']?['voucher_number'] ?? ''}', q);
       final st = r['status'] as String? ?? 'draft';
       final stNorm = st == 'saved' ? 'received' : st; // fold legacy 'saved'
       final matchStatus = _statusFilter == 'all' || stNorm == _statusFilter;
@@ -776,7 +777,7 @@ class _PoPickerDialogState extends State<_PoPickerDialog> {
   @override
   Widget build(BuildContext context) {
     final q = _q.toLowerCase();
-    final filtered = widget.pos.where((p) => q.isEmpty || (p['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((p['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q)).toList();
+    final filtered = widget.pos.where((p) => matchesQuery('${p['voucher_number'] ?? ''} ${p['suppliers']?['name'] ?? ''}', q)).toList();
     return AlertDialog(
       title: Text('Select Confirmed PO  ·  ${widget.pos.length} available'),
       content: SizedBox(width: 520, height: 440, child: Column(children: [

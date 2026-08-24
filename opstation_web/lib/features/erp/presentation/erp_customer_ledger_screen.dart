@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_table.dart';
@@ -60,9 +61,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     setState(() {
       _highlightIndex = -1;
       _showDropdown = true;
-      _filteredCustomers = q.isEmpty ? _customers : _customers.where((c) =>
-          (c['shop_name'] as String? ?? '').toLowerCase().contains(q) ||
-          (c['code'] as String? ?? '').toLowerCase().contains(q)).toList();
+      _filteredCustomers = _customers.where((c) =>
+          matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q)).toList();
     });
   }
 
@@ -591,10 +591,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           if (_dateTo != null && d.isAfter(_dateTo!.add(const Duration(days: 1)))) return false;
         }
       }
-      final q = _entrySearchCtrl.text.toLowerCase();
-      if (q.isNotEmpty) {
-        if (!(e['description'] as String).toLowerCase().contains(q) && !(e['voucher'] as String).toLowerCase().contains(q)) return false;
-      }
+      if (!matchesQuery('${e['description'] ?? ''} ${e['voucher'] ?? ''}', _entrySearchCtrl.text)) return false;
       return true;
     }).toList();
     // Recalculate running balance for filtered view

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -92,8 +93,7 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
 
   List<Map<String, dynamic>> _filterProducts(String q) {
     if (q.isEmpty) return _products.take(50).toList();
-    final ql = q.toLowerCase();
-    return _products.where((p) => (p['label'] as String).toLowerCase().contains(ql)).take(200).toList();
+    return _products.where((p) => matchesQuery('${p['label'] ?? ''}', q)).take(200).toList();
   }
 
   Future<void> _loadVouchers() async {
@@ -247,11 +247,8 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
-      final q = _listSearch.toLowerCase();
-      return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             (v['reason'] as String? ?? '').toLowerCase().contains(q);
-    }).toList();
+    final filtered = _vouchers.where((v) =>
+      matchesQuery('${v['voucher_number'] ?? ''} ${v['reason'] ?? ''}', _listSearch)).toList();
 
     return Container(color: AppTheme.background, child: Row(children: [
       if (_drawerOpen) Container(width: 300,

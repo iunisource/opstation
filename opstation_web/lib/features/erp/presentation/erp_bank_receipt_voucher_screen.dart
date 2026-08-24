@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -676,15 +677,8 @@ class _ErpBankReceiptVoucherScreenState
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _listSearch.isEmpty
-        ? _vouchers
-        : _vouchers.where((v) {
-            final q = _listSearch.toLowerCase();
-            return (v['voucher_number'] as String? ?? '')
-                    .toLowerCase()
-                    .contains(q) ||
-                (v['customer_name'] as String? ?? '').toLowerCase().contains(q);
-          }).toList();
+    final filtered = _vouchers.where((v) =>
+        matchesQuery('${v['voucher_number'] ?? ''} ${v['customer_name'] ?? ''}', _listSearch)).toList();
 
     return Container(
       color: AppTheme.background,
@@ -1292,8 +1286,7 @@ class _CustomerDropdownState extends State<_CustomerDropdown> {
   List<Map<String, dynamic>> get _filtered => _q.isEmpty
       ? widget.customers.take(80).toList()
       : widget.customers
-          .where(
-              (c) => (c['label'] as String).toLowerCase().contains(_q.toLowerCase()))
+          .where((c) => matchesQuery('${c['label'] ?? ''}', _q))
           .take(200)
           .toList();
 
@@ -1422,8 +1415,7 @@ class _SearchableListState extends State<_SearchableList> {
   List<Map<String, dynamic>> get _filtered => _q.isEmpty
       ? widget.items
       : widget.items
-          .where((a) =>
-              (a['label'] as String).toLowerCase().contains(_q.toLowerCase()))
+          .where((a) => matchesQuery('${a['label'] ?? ''}', _q))
           .toList();
 
   @override

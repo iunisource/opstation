@@ -8,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 import '../../intelligence/widgets/searchable_dropdown.dart';
 
@@ -534,12 +535,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   }
 
   List<Map<String, dynamic>> get _visibleRows {
-    final q = _searchCtrl.text.trim().toLowerCase();
-    if (q.isEmpty) return _rows;
-    return _rows.where((r) {
-      return '${r['name']}'.toLowerCase().contains(q) ||
-          '${r['sub']}'.toLowerCase().contains(q);
-    }).toList();
+    final q = _searchCtrl.text;
+    return _rows.where((r) => matchesQuery('${r['name']} ${r['sub']}', q)).toList();
   }
 
   // ───────────────────────────────────────────────── build
@@ -746,10 +743,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setDlg) {
-        final q = searchCtrl.text.trim().toLowerCase();
-        final visible = q.isEmpty
-            ? options
-            : options.where((o) => o.toLowerCase().contains(q)).toList();
+        final visible =
+            options.where((o) => matchesQuery(o, searchCtrl.text)).toList();
         return AlertDialog(
           title: Text(title, style: const TextStyle(fontSize: 17)),
           content: SizedBox(

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -153,14 +154,12 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
 
   List<Map<String, dynamic>> _filterProducts(String q) {
     if (q.isEmpty) return _products.take(50).toList();
-    final ql = q.toLowerCase();
-    return _products.where((p) => (p['label'] as String).toLowerCase().contains(ql)).take(200).toList();
+    return _products.where((p) => matchesQuery('${p['label'] ?? ''}', q)).take(200).toList();
   }
 
   List<Map<String, dynamic>> _filterCustomers(String q) {
     if (q.isEmpty) return _customers.take(50).toList();
-    final ql = q.toLowerCase();
-    return _customers.where((c) => (c['label'] as String).toLowerCase().contains(ql)).take(200).toList();
+    return _customers.where((c) => matchesQuery('${c['label'] ?? ''}', q)).take(200).toList();
   }
 
   List<Map<String, dynamic>> get _activeReasons => _reasons.where((r) => r['is_active'] != false).toList();
@@ -448,11 +447,8 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
   // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
-    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
-      final q = _listSearch.toLowerCase();
-      final cust = (_custLabel[v['customer_id']] ?? '').toLowerCase();
-      return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || cust.contains(q);
-    }).toList();
+    final filtered = _vouchers.where((v) =>
+      matchesQuery('${v['voucher_number'] ?? ''} ${_custLabel[v['customer_id']] ?? ''}', _listSearch)).toList();
 
     return Container(color: AppTheme.background, child: Column(children: [
       _modeBar(),

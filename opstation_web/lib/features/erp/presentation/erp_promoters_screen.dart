@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 
 /// Promoter management — CRUD for sales promoters plus their commission floors.
@@ -575,14 +576,10 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
-    final q = _search.toLowerCase();
-    final filtered = q.isEmpty
-        ? _promoters
-        : _promoters
-            .where((p) =>
-                (p['name'] as String? ?? '').toLowerCase().contains(q) ||
-                (p['phone'] as String? ?? '').toLowerCase().contains(q))
-            .toList();
+    final q = _search;
+    final filtered = _promoters
+        .where((p) => matchesQuery('${p['name'] ?? ''} ${p['phone'] ?? ''}', q))
+        .toList();
 
     return Container(
       color: AppTheme.background,

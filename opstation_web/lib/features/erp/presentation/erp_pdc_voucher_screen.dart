@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 
 /// PDC Voucher — post-dated / cheque-in-hand register.
 ///
@@ -235,8 +236,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
           final filtered = q.isEmpty
               ? _customers.take(100).toList()
               : _customers
-                  .where((c) =>
-                      (c['label'] as String).toLowerCase().contains(q.toLowerCase()))
+                  .where((c) => matchesQuery('${c['label'] ?? ''}', q))
                   .take(300)
                   .toList();
           return AlertDialog(
@@ -756,13 +756,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
     final filtered = _listSearch.isEmpty
         ? _vouchers
         : _vouchers.where((v) {
-            final q = _listSearch.toLowerCase();
-            return (v['voucher_number'] as String? ?? '')
-                    .toLowerCase()
-                    .contains(q) ||
-                (v['cash_account_name'] as String? ?? '')
-                    .toLowerCase()
-                    .contains(q);
+            return matchesQuery('${v['voucher_number'] ?? ''} ${v['cash_account_name'] ?? ''}', _listSearch);
           }).toList();
 
     return Container(
@@ -1436,8 +1430,7 @@ class _SearchableListState extends State<_SearchableList> {
   List<Map<String, dynamic>> get _filtered => _q.isEmpty
       ? widget.items
       : widget.items
-          .where((a) =>
-              (a['label'] as String).toLowerCase().contains(_q.toLowerCase()))
+          .where((a) => matchesQuery('${a['label'] ?? ''}', _q))
           .toList();
 
   @override

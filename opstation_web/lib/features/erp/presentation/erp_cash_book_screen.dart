@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/reports/branch_scope.dart';
@@ -91,12 +92,9 @@ class _ErpCashBookScreenState extends ConsumerState<ErpCashBookScreen> {
   }
 
   List<Map<String, dynamic>> get _display {
-    final q = _searchCtrl.text.trim().toLowerCase();
-    if (q.isEmpty) return _rows;
+    final q = _searchCtrl.text;
     return _rows.where((e) =>
-      (e['voucher_no'] as String? ?? '').toLowerCase().contains(q) ||
-      (e['particulars'] as String? ?? '').toLowerCase().contains(q) ||
-      (e['narration'] as String? ?? '').toLowerCase().contains(q)).toList();
+      matchesQuery('${e['voucher_no'] ?? ''} ${e['particulars'] ?? ''} ${e['narration'] ?? ''}', q)).toList();
   }
 
   Future<void> _pickRange() async {

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
@@ -135,8 +136,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
 
   List<Map<String, dynamic>> _filterProducts(String q) {
     if (q.isEmpty) return _products.take(50).toList();
-    final ql = q.toLowerCase();
-    return _products.where((p) => (p['label'] as String).toLowerCase().contains(ql)).take(200).toList();
+    return _products.where((p) => matchesQuery('${p['label'] ?? ''}', q)).take(200).toList();
   }
 
   Future<void> _loadBoms() async {
@@ -149,13 +149,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   }
 
   List<Map<String, dynamic>> _filterBoms(String q) {
-    final ql = q.toLowerCase();
     final list = _boms.where((b) {
-      if (ql.isEmpty) return true;
-      final code = (b['code'] as String? ?? '').toLowerCase();
-      final name = (b['name'] as String? ?? '').toLowerCase();
-      final pn = (_prodLabel[b['product_id']] ?? '').toLowerCase();
-      return code.contains(ql) || name.contains(ql) || pn.contains(ql);
+      return matchesQuery('${b['code'] ?? ''} ${b['name'] ?? ''} ${_prodLabel[b['product_id']] ?? ''}', q);
     }).take(200).toList();
     return list.map((b) => {
       'id': b['id'],
@@ -457,9 +452,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   @override
   Widget build(BuildContext context) {
     final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
-      final q = _listSearch.toLowerCase();
-      final pn = (_prodLabel[v['product_id']] ?? '').toLowerCase();
-      return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || pn.contains(q);
+      return matchesQuery('${v['voucher_number'] ?? ''} ${_prodLabel[v['product_id']] ?? ''}', _listSearch);
     }).toList();
 
     return Container(color: AppTheme.background, child: Row(children: [

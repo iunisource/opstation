@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -76,11 +77,10 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
   void dispose() { _searchCtrl.dispose(); super.dispose(); }
 
   void _filter() {
-    final q = _searchCtrl.text.toLowerCase();
+    final q = _searchCtrl.text;
     setState(() {
       _filtered = q.isEmpty ? _items : _items.where((i) =>
-          (i['name'] as String? ?? '').toLowerCase().contains(q) ||
-          (i['sku'] as String? ?? '').toLowerCase().contains(q)).toList();
+          matchesQuery('${i['name'] ?? ''} ${i['sku'] ?? ''}', q)).toList();
     });
   }
 

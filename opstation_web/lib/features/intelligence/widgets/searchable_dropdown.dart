@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/search/text_search.dart';
+
 /// A dropdown look-alike whose picker opens as a dialog with a search box.
 ///
 /// Options are (id, label) pairs. When [allLabel] is non-null an "All" row
@@ -99,7 +101,7 @@ class _SearchDialogState extends State<_SearchDialog> {
     final matches = q.isEmpty
         ? widget.options
         : widget.options
-            .where((o) => o.value.toLowerCase().contains(q))
+            .where((o) => matchesQuery(o.value, q))
             .toList();
     return Dialog(
       child: ConstrainedBox(

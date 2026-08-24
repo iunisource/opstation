@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'dart:js_util' as js_util;
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
@@ -346,10 +347,7 @@ class _ErpRetailerOrdersScreenState
       builder: (c) => StatefulBuilder(builder: (c, setS) {
         final q = ctrl.text.trim().toLowerCase();
         final matches = _products.values
-            .where((p) =>
-                q.isEmpty ||
-                '${p['name']}'.toLowerCase().contains(q) ||
-                '${p['sku'] ?? ''}'.toLowerCase().contains(q))
+            .where((p) => matchesQuery('${p['name']} ${p['sku'] ?? ''}', q))
             .take(50)
             .toList();
         return AlertDialog(

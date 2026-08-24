@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:html' as html;
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -142,8 +143,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
 
   List<Map<String, dynamic>> _filter(List<Map<String, dynamic>> src, String q) {
     if (q.isEmpty) return src.take(60).toList();
-    final ql = q.toLowerCase();
-    return src.where((e) => (e['label'] as String).toLowerCase().contains(ql)).take(200).toList();
+    return src.where((e) => matchesQuery('${e['label'] ?? ''}', q)).take(200).toList();
   }
 
   Future<void> _pickDate(bool isFrom) async {
@@ -188,10 +188,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
 
   List<Map<String, dynamic>> get _visible {
     var out = _search.isEmpty ? List<Map<String, dynamic>>.from(_rows) : _rows.where((r) =>
-      (r['product']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false) ||
-      (r['sku']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false) ||
-      (r['party']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false) ||
-      (r['sale_number']?.toString().toLowerCase().contains(_search.toLowerCase()) ?? false)
+      matchesQuery('${r['product'] ?? ''} ${r['sku'] ?? ''} ${r['party'] ?? ''} ${r['sale_number'] ?? ''}', _search)
     ).toList();
     if (_negCostOnly) {
       out = out.where((r) => ((r['unit_cost'] as num?)?.toDouble() ?? 0) < 0

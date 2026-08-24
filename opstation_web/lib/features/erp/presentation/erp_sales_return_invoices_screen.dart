@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
@@ -318,7 +319,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _invoices.where((r) {
-      final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['customers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q) || ((r['sales_returns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = matchesQuery('${r['voucher_number'] ?? ''} ${r['customers']?['shop_name'] ?? ''} ${r['sales_returns']?['voucher_number'] ?? ''}', q);
       final locked = r['is_locked'] as bool? ?? false;
       final matchFilter = _filter == 'all' || (_filter == 'draft' && !locked) || (_filter == 'issued' && locked);
       return matchSearch && matchFilter;
@@ -459,7 +460,7 @@ class _SrnPickerDialogState extends State<_SrnPickerDialog> {
   String _q = '';
   @override Widget build(BuildContext context) {
     final q = _q.toLowerCase();
-    final filtered = widget.srns.where((s) => q.isEmpty || (s['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((s['customers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q)).toList();
+    final filtered = widget.srns.where((s) => matchesQuery('${s['voucher_number'] ?? ''} ${s['customers']?['shop_name'] ?? ''}', q)).toList();
     return AlertDialog(
       title: Text('Pick a confirmed SRN  ·  ${widget.srns.length} eligible'),
       content: SizedBox(width: 520, height: 440, child: Column(children: [

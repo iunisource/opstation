@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
 import 'dart:html' as html;
@@ -174,7 +175,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
     final result = await showDialog<_FilterResult>(context: context, builder: (ctx) => StatefulBuilder(builder: (c, setS) {
       final q = searchCtrl.text.toLowerCase();
-      final shown = (q.isEmpty ? values : values.where((v) => v.toLowerCase().contains(q)).toList());
+      final shown = values.where((v) => matchesQuery(v, q)).toList();
       return AlertDialog(
         title: Text('Condition: ${_label(field)}'),
         content: SizedBox(width: 400, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -492,9 +493,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   }
 
   Widget _configPanel() {
-    final q = _fieldSearch.trim().toLowerCase();
-    final dims = q.isEmpty ? _dims : _dims.where((m) => (m['label'] as String).toLowerCase().contains(q)).toList();
-    final measures = q.isEmpty ? _measures : _measures.where((m) => (m['label'] as String).toLowerCase().contains(q)).toList();
+    final q = _fieldSearch;
+    final dims = _dims.where((m) => matchesQuery('${m['label']}', q)).toList();
+    final measures = _measures.where((m) => matchesQuery('${m['label']}', q)).toList();
     return Container(
       decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
       child: SingleChildScrollView(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

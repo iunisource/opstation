@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -122,10 +123,8 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
 
   List<Map<String, dynamic>> _filterAccounts(String q) {
     if (q.isEmpty) return _allAccounts.take(50).toList();
-    final ql = q.toLowerCase();
     return _allAccounts.where((a) =>
-      (a['label'] as String).toLowerCase().contains(ql) ||
-      (a['sub'] as String).toLowerCase().contains(ql)
+      matchesQuery('${a['label'] ?? ''} ${a['sub'] ?? ''}', q)
     ).take(200).toList();
   }
 
@@ -477,8 +476,8 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         _loadVouchers();
       }
     });
-    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) { final q = _listSearch.toLowerCase(); return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || (v['cash_account_name'] as String? ?? '').toLowerCase().contains(q); }).toList();
-    final cashFiltered = _cashAccSearch.isEmpty ? _cashAccounts : _cashAccounts.where((a) => (a['label'] as String).toLowerCase().contains(_cashAccSearch.toLowerCase())).toList();
+    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) { return matchesQuery('${v['voucher_number'] ?? ''} ${v['cash_account_name'] ?? ''}', _listSearch); }).toList();
+    final cashFiltered = _cashAccSearch.isEmpty ? _cashAccounts : _cashAccounts.where((a) => matchesQuery('${a['label'] ?? ''}', _cashAccSearch)).toList();
 
     return Container(color: AppTheme.background, child: Row(children: [
       // ── DRAWER ─────────────────────────────────────────────────
@@ -603,7 +602,7 @@ class _SearchableDropdownState extends State<_SearchableDropdown> {
   bool _open = false;
   String _q = '';
 
-  List<Map<String, dynamic>> get _filtered => _q.isEmpty ? widget.items : widget.items.where((a) => (a['label'] as String).toLowerCase().contains(_q.toLowerCase())).toList();
+  List<Map<String, dynamic>> get _filtered => _q.isEmpty ? widget.items : widget.items.where((a) => matchesQuery('${a['label'] ?? ''}', _q)).toList();
 
   @override Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     InkWell(onTap: () => setState(() => _open = !_open), child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(border: Border.all(color: _open ? AppTheme.primary : AppTheme.border), borderRadius: BorderRadius.circular(6)), child: Row(children: [Expanded(child: Text(widget.value.isNotEmpty ? widget.value : widget.hint, style: TextStyle(fontSize: 13, color: widget.value.isEmpty ? Colors.grey : AppTheme.textPrimary), overflow: TextOverflow.ellipsis)), Icon(_open ? Icons.expand_less : Icons.expand_more, size: 16, color: AppTheme.textSecondary)]))),

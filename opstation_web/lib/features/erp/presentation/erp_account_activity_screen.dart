@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:excel/excel.dart' as xlsx;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -89,10 +90,8 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
   List<Map<String, dynamic>> _filterAccounts(String q) {
     if (q.isEmpty) return _accounts.take(50).toList();
-    final ql = q.toLowerCase();
     return _accounts.where((a) =>
-      (a['label'] as String? ?? '').toLowerCase().contains(ql) ||
-      (a['account_group'] as String? ?? '').toLowerCase().contains(ql)
+      matchesQuery('${a['label'] ?? ''} ${a['account_group'] ?? ''}', q)
     ).take(200).toList();
   }
 
@@ -391,7 +390,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
     final fmt = const MoneyFmt();
     final accFiltered = _filterAccounts(_accQuery);
     final branchName = (_sidebarBranch?['name'] as String?) ?? 'Current Branch';
-    final shown = _txnQuery.isEmpty ? _entries : _entries.where((e) => (((e['entry_number'] as String?) ?? '').toLowerCase().contains(_txnQuery) || ((e['description'] as String?) ?? '').toLowerCase().contains(_txnQuery))).toList();
+    final shown = _entries.where((e) => matchesQuery('${e['entry_number'] ?? ''} ${e['description'] ?? ''}', _txnQuery)).toList();
 
     return Container(
       color: AppTheme.background,

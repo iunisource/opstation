@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 import '../../orders/models/order.dart';
 import '../services/dispatch_order_service.dart';
@@ -115,10 +116,9 @@ class _DispatchOrdersScreenState
     if (_searchTerm.isNotEmpty) {
       final q = _searchTerm.toLowerCase();
       list = list.where((o) {
-        return (o.customerName?.toLowerCase().contains(q) ?? false) ||
-            (o.customerCode?.toLowerCase().contains(q) ?? false) ||
-            (o.soInvoiceNumber?.toLowerCase().contains(q) ?? false) ||
-            (o.driverName?.toLowerCase().contains(q) ?? false);
+        return matchesQuery(
+            '${o.customerName ?? ''} ${o.customerCode ?? ''} ${o.soInvoiceNumber ?? ''} ${o.driverName ?? ''}',
+            q);
       });
     }
     return list.toList();

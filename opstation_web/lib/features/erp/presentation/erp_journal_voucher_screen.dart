@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -123,10 +124,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
 
   List<Map<String,dynamic>> _filterAccounts(String q) {
     if (q.isEmpty) return _allAccounts.take(50).toList();
-    final ql = q.toLowerCase();
     return _allAccounts.where((a) =>
-      (a['label'] as String? ?? '').toLowerCase().contains(ql) ||
-      (a['sub']   as String? ?? '').toLowerCase().contains(ql)
+      matchesQuery('${a['label'] ?? ''} ${a['sub'] ?? ''}', q)
     ).take(200).toList();
   }
 
@@ -450,8 +449,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     final canWrite = _current == null ? canAdd : (canAdd || canEdit);
     final editable = !_isLocked && canWrite;
     final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
-      final q = _listSearch.toLowerCase();
-      return (v['entry_number'] as String? ?? '').toLowerCase().contains(q) || (v['description'] as String? ?? '').toLowerCase().contains(q);
+      return matchesQuery('${v['entry_number'] ?? ''} ${v['description'] ?? ''}', _listSearch);
     }).toList();
 
     return Container(color: AppTheme.background, child: Row(children: [

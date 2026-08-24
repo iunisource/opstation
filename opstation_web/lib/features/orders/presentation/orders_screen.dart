@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 import '../models/order.dart';
 import '../services/order_service.dart';
@@ -109,12 +110,9 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
     final q = _searchQ.trim().toLowerCase();
     if (q.isEmpty) return _orders;
     return _orders.where((o) {
-      final inName = (o.customerName ?? '').toLowerCase().contains(q);
-      final inCode = (o.customerCode ?? '').toLowerCase().contains(q);
-      final inNotes = (o.notes ?? '').toLowerCase().contains(q);
-      final inSalesperson =
-          (o.salespersonName ?? '').toLowerCase().contains(q);
-      return inName || inCode || inNotes || inSalesperson;
+      return matchesQuery(
+          '${o.customerName ?? ''} ${o.customerCode ?? ''} ${o.notes ?? ''} ${o.salespersonName ?? ''}',
+          q);
     }).toList();
   }
 

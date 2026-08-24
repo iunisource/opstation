@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/permissions/access_control.dart';
@@ -127,7 +128,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     final eff = _effectiveBranch();
     return _rows.where((r) {
       if (eff != null && r.branchId != eff) return false;
-      if (_search.isNotEmpty) { final q = _search.toLowerCase(); if (!r.label.toLowerCase().contains(q) && !r.code.toLowerCase().contains(q)) return false; }
+      if (_search.isNotEmpty) { if (!matchesQuery('${r.label} ${r.code}', _search)) return false; }
       return true;
     }).toList();
   }

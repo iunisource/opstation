@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
@@ -697,11 +698,9 @@ $docsHtml
     final canEdit = access?.canEditDoc('hr_employees') ?? false;
     _canWrite = _current == null ? canAdd : canEdit;
     final filtered = _listSearch.isEmpty ? _employees : _employees.where((e) {
-      final q = _listSearch.toLowerCase();
-      return (e['full_name'] as String? ?? '').toLowerCase().contains(q)
-        || (e['employee_code'] as String? ?? '').toLowerCase().contains(q)
-        || (e['phone'] as String? ?? '').toLowerCase().contains(q)
-        || (e['cnic'] as String? ?? '').toLowerCase().contains(q);
+      return matchesQuery(
+        '${e['full_name'] ?? ''} ${e['employee_code'] ?? ''} ${e['phone'] ?? ''} ${e['cnic'] ?? ''}',
+        _listSearch);
     }).toList();
 
     // Desktop: list + detail side by side. Mobile: the list fills the screen and

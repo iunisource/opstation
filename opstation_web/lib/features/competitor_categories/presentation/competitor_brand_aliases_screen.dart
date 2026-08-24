@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -59,9 +60,7 @@ class _CompetitorBrandAliasesScreenState
     final q = _searchCtrl.text.toLowerCase();
     setState(() {
       _filtered = _items.where((c) {
-        if (q.isEmpty) return true;
-        return (c['alias'] as String? ?? '').toLowerCase().contains(q) ||
-            (c['canonical'] as String? ?? '').toLowerCase().contains(q);
+        return matchesQuery('${c['alias'] ?? ''} ${c['canonical'] ?? ''}', q);
       }).toList();
     });
   }

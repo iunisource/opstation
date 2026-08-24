@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -318,11 +319,7 @@ class _ErpCustomerBalanceReportScreenState
       final rows = <Map<String, dynamic>>[];
       for (final r in (g['rows'] as List).cast<Map<String, dynamic>>()) {
         if (!_showZero && ((r['bal3'] as num?)?.toDouble() ?? 0) == 0) continue;
-        if (q.isNotEmpty) {
-          final nm = (r['shop_name'] as String? ?? '').toLowerCase();
-          final cd = (r['code'] as String? ?? '').toLowerCase();
-          if (!nm.contains(q) && !cd.contains(q)) continue;
-        }
+        if (!matchesQuery('${r['shop_name'] ?? ''} ${r['code'] ?? ''}', q)) continue;
         rows.add(r);
       }
       if (rows.isEmpty) continue; // group emptied by the zero filter
@@ -956,11 +953,8 @@ class _SearchableDropdownDialogState<T>
   @override
   Widget build(BuildContext context) {
     final q = _q.toLowerCase().trim();
-    final filtered = q.isEmpty
-        ? widget.options
-        : widget.options
-            .where((o) => o.$2.toLowerCase().contains(q))
-            .toList();
+    final filtered =
+        widget.options.where((o) => matchesQuery(o.$2, q)).toList();
     return Dialog(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420, maxHeight: 480),

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -229,12 +230,9 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
 
   List<Map<String, dynamic>> get _visible {
     final list = _stageDocs[_selected] ?? const [];
-    final q = _searchCtrl.text.trim().toLowerCase();
-    if (q.isEmpty) return list;
+    final q = _searchCtrl.text;
     return list
-        .where((d) =>
-            '${d['voucher']}'.toLowerCase().contains(q) ||
-            '${d['party'] ?? ''}'.toLowerCase().contains(q))
+        .where((d) => matchesQuery('${d['voucher']} ${d['party'] ?? ''}', q))
         .toList();
   }
 

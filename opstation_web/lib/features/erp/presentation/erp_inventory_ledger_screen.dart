@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -142,9 +143,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     return _products.where((p) {
       if (_mainGroupFilter != null && (p['product_main_group'] as String? ?? '') != _mainGroupFilter) return false;
       if (_groupFilter != null && (p['product_group'] as String? ?? '') != _groupFilter) return false;
-      if (q.isEmpty) return true;
-      return (p['name'] as String? ?? '').toLowerCase().contains(q) ||
-             (p['sku'] as String? ?? '').toLowerCase().contains(q);
+      return matchesQuery('${p['name'] ?? ''} ${p['sku'] ?? ''}', q);
     }).toList();
   }
 
@@ -427,16 +426,14 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           if (_dateFrom != null && dt.isBefore(_dateFrom!)) return false;
           if (_dateTo != null && dt.isAfter(_dateTo!.add(const Duration(days: 1)))) return false;
         }
-        if (q.isNotEmpty) {
-          final type = _displayType(m).toLowerCase();
-          final notes = (m['notes'] as String? ?? '').toLowerCase();
-          final refType = (m['reference_type'] as String? ?? '').toLowerCase();
-          final refId = m['reference_id'] as String?;
-          final vno = refId != null ? (_voucherNumbers[refId] ?? '').toLowerCase() : '';
-          final dateStr = m['moved_at'] != null
-              ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()).toLowerCase() : '';
-          if (!(type.contains(q) || notes.contains(q) || refType.contains(q) || vno.contains(q) || dateStr.contains(q))) return false;
-        }
+        final type = _displayType(m);
+        final notes = (m['notes'] as String? ?? '');
+        final refType = (m['reference_type'] as String? ?? '');
+        final refId = m['reference_id'] as String?;
+        final vno = refId != null ? (_voucherNumbers[refId] ?? '') : '';
+        final dateStr = m['moved_at'] != null
+            ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '';
+        if (!matchesQuery('$type $notes $refType $vno $dateStr', q)) return false;
         return true;
       }).toList();
     });

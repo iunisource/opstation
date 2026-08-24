@@ -3,6 +3,7 @@ import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -666,7 +667,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _invoices.where((r) {
-      final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) || ((r['purchase_grns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = matchesQuery('${r['voucher_number'] ?? ''} ${r['suppliers']?['name'] ?? ''} ${r['purchase_grns']?['voucher_number'] ?? ''}', q);
       final locked = r['is_locked'] as bool? ?? false;
       final review = r['review_status'] as String?;
       final matchFilter = _filter == 'all'
@@ -964,7 +965,7 @@ class _GrnPickerForPiDialogState extends State<_GrnPickerForPiDialog> {
   String _q = '';
   @override Widget build(BuildContext context) {
     final q = _q.toLowerCase();
-    final filtered = widget.grns.where((g) => q.isEmpty || (g['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((g['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q)).toList();
+    final filtered = widget.grns.where((g) => matchesQuery('${g['voucher_number'] ?? ''} ${g['suppliers']?['name'] ?? ''}', q)).toList();
     return AlertDialog(
       title: Text('Select Confirmed GRN  ·  ${widget.grns.length} available'),
       content: SizedBox(width: 520, height: 440, child: Column(children: [

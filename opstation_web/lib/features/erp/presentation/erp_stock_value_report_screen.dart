@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
@@ -157,12 +158,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
       if (_fClass != null && r['class'] != _fClass) return false;
       if (_fMov != null && r['mov'] != _fMov) return false;
       if (_hideZero && (r['qty'] as double) == 0) return false;
-      if (_search.trim().isNotEmpty) {
-        final q = _search.trim().toLowerCase();
-        final name = (r['name'] as String? ?? '').toLowerCase();
-        final sku = (r['sku'] as String? ?? '').toLowerCase();
-        if (!name.contains(q) && !sku.contains(q)) return false;
-      }
+      if (!matchesQuery('${r['name'] ?? ''} ${r['sku'] ?? ''}', _search)) return false;
       return true;
     }).toList();
     if (_sortKey.isNotEmpty) {
@@ -477,10 +473,8 @@ class _BranchMultiSelectDialogState extends State<_BranchMultiSelectDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final q = _searchCtrl.text.trim().toLowerCase();
-    final matches = q.isEmpty
-        ? widget.branches
-        : widget.branches.where((b) => (b['name'] as String? ?? '').toLowerCase().contains(q)).toList();
+    final matches = widget.branches
+        .where((b) => matchesQuery('${b['name'] ?? ''}', _searchCtrl.text)).toList();
     return AlertDialog(
       title: const Text('Select branches', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
       content: SizedBox(

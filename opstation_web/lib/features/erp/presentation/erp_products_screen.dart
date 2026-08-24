@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:excel/excel.dart' as xls;
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
@@ -180,10 +181,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       if (_fMain != null && p['product_main_group'] != _fMain) return false;
       if (_fGroup != null && p['product_group'] != _fGroup) return false;
       if (_fSub != null && p['product_sub_group'] != _fSub) return false;
-      if (q.isEmpty) return true;
-      return (p['name'] as String? ?? '').toLowerCase().contains(q) ||
-          (p['sku'] as String? ?? '').toLowerCase().contains(q) ||
-          (p['barcode'] as String? ?? '').toLowerCase().contains(q);
+      return matchesQuery('${p['name'] ?? ''} ${p['sku'] ?? ''} ${p['barcode'] ?? ''}', q);
     }).toList();
   }
 

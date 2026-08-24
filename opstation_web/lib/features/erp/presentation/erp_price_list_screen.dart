@@ -155,14 +155,20 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     return true;
   }
 
+  // Split a search into words; a product matches when EVERY word appears
+  // somewhere in its name or SKU (order/adjacency don't matter).
+  List<String> _terms(String s) =>
+      s.trim().toLowerCase().split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+  bool _matchTerms(_P p, List<String> terms) {
+    if (terms.isEmpty) return true;
+    final hay = '${p.name} ${p.sku}'.toLowerCase();
+    return terms.every(hay.contains);
+  }
+
   // Products matching the group filters + the brand/keyword search.
   List<_P> get _candidates {
-    final q = _searchCtrl.text.trim().toLowerCase();
-    return _products.where((p) {
-      if (!_matchGroups(p)) return false;
-      if (q.isEmpty) return true;
-      return p.name.toLowerCase().contains(q) || p.sku.toLowerCase().contains(q);
-    }).toList()
+    final terms = _terms(_searchCtrl.text);
+    return _products.where((p) => _matchGroups(p) && _matchTerms(p, terms)).toList()
       ..sort(_cmp);
   }
 
@@ -262,10 +268,10 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     final res = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
-        final q = searchCtrl.text.trim().toLowerCase();
-        final matches = (q.isEmpty
+        final terms = _terms(searchCtrl.text);
+        final matches = (terms.isEmpty
                 ? _products.where((p) => temp.contains(p.id))
-                : _products.where((p) => p.name.toLowerCase().contains(q) || p.sku.toLowerCase().contains(q)))
+                : _products.where((p) => _matchTerms(p, terms)))
             .toList()
           ..sort(_cmp);
         final shown = matches.take(400).toList();
@@ -284,7 +290,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
               Row(children: [
                 Text('${temp.length} selected', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                 const Spacer(),
-                if (q.isNotEmpty)
+                if (terms.isNotEmpty)
                   TextButton(onPressed: () => setD(() => temp.addAll(shown.map((p) => p.id))), child: Text('Add all ${shown.length}')),
                 TextButton(onPressed: () => setD(() => temp.clear()), child: const Text('Clear')),
               ]),
@@ -292,7 +298,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                 constraints: const BoxConstraints(maxHeight: 380),
                 child: shown.isEmpty
                     ? Center(child: Padding(padding: const EdgeInsets.all(24),
-                        child: Text(q.isEmpty ? 'Type a brand or product to search…' : 'No matches.',
+                        child: Text(terms.isEmpty ? 'Type a brand or product to search…' : 'No matches.',
                             style: const TextStyle(color: AppTheme.textSecondary))))
                     : ListView.builder(
                         shrinkWrap: true, itemCount: shown.length,

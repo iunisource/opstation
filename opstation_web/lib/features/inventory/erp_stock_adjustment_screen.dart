@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/format/money.dart';
+import '../../core/search/text_search.dart';
 import '../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../auth/auth_controller.dart';        // exposes currentUserProvider (WebUser: id, orgId)
 
@@ -652,15 +653,8 @@ class _ErpStockAdjustmentScreenState
 
   // ── side drawer: saved vouchers ───────────────────────────────────
   Widget _buildDrawer() {
-    final filtered = _listSearch.isEmpty
-        ? _vouchers
-        : _vouchers.where((v) {
-            final q = _listSearch.toLowerCase();
-            return (v['voucher_number'] as String? ?? '')
-                    .toLowerCase()
-                    .contains(q) ||
-                (v['remarks'] as String? ?? '').toLowerCase().contains(q);
-          }).toList();
+    final filtered = _vouchers.where((v) => matchesQuery(
+        '${v['voucher_number'] ?? ''} ${v['remarks'] ?? ''}', _listSearch)).toList();
 
     return Container(
       width: 300,

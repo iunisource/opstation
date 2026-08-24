@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -272,11 +273,8 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
           final q = searchCtrl.text.toLowerCase();
           final filtered = (q.isEmpty
                   ? _allCustomers.take(30)
-                  : _allCustomers.where((c) =>
-                      (c['shop_name'] as String? ?? '')
-                          .toLowerCase()
-                          .contains(q) ||
-                      (c['code'] as String? ?? '').toLowerCase().contains(q)))
+                  : _allCustomers.where((c) => matchesQuery(
+                      '${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q)))
               .toList();
           return AlertDialog(
             title: const Text('Select customer'),

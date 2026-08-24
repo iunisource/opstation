@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -99,7 +100,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
       _showDrop = true;
       _filtered = q.isEmpty
           ? _suppliers
-          : _suppliers.where((s) => (s['name'] as String? ?? '').toLowerCase().contains(q)).toList();
+          : _suppliers.where((s) => matchesQuery('${s['name'] ?? ''}', q)).toList();
     });
   }
 
@@ -615,10 +616,8 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     final q = _searchCtrl.text.toLowerCase().trim();
     final list = q.isEmpty
         ? _suppliers
-        : _suppliers.where((s) =>
-            (s['name'] as String? ?? '').toLowerCase().contains(q) ||
-            (s['contact_person'] as String? ?? '').toLowerCase().contains(q) ||
-            (s['phone'] as String? ?? '').toLowerCase().contains(q)).toList();
+        : _suppliers.where((s) => matchesQuery(
+            '${s['name'] ?? ''} ${s['contact_person'] ?? ''} ${s['phone'] ?? ''}', q)).toList();
     return Padding(
       padding: const EdgeInsets.fromLTRB(32, 20, 32, 24),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

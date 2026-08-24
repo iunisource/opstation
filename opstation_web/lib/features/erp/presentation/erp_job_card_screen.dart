@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
@@ -313,12 +314,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   }
 
   List<Map<String, dynamic>> _filterCustomers(String q) {
-    final ql = q.toLowerCase();
     final list = _customers.where((c) {
-      if (ql.isEmpty) return true;
-      final sn = (c['shop_name'] as String? ?? '').toLowerCase();
-      final cd = (c['code'] as String? ?? '').toLowerCase();
-      return sn.contains(ql) || cd.contains(ql);
+      return matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q);
     }).take(200).toList();
     return list.map((c) => {'id': c['id'], 'label': _custLabel[c['id']] ?? (c['shop_name'] ?? '')}).toList();
   }
@@ -337,13 +334,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   }
 
   List<Map<String, dynamic>> _filterBoms(String q) {
-    final ql = q.toLowerCase();
     final list = _boms.where((b) {
-      if (ql.isEmpty) return true;
-      final code = (b['code'] as String? ?? '').toLowerCase();
-      final name = (b['name'] as String? ?? '').toLowerCase();
-      final pn = (_prodLabel[b['product_id']] ?? '').toLowerCase();
-      return code.contains(ql) || name.contains(ql) || pn.contains(ql);
+      return matchesQuery('${b['code'] ?? ''} ${b['name'] ?? ''} ${_prodLabel[b['product_id']] ?? ''}', q);
     }).take(200).toList();
     return list.map((b) => {'id': b['id'], 'label': "${b['code'] ?? ''} — ${_prodLabel[b['product_id']] ?? (b['name'] ?? '')}"}).toList();
   }
@@ -1824,9 +1816,7 @@ $runSection
         ? _jobs
         : _jobs.where((j) => j['branch_id'] == branchId).toList();
     final searched = _listSearch.isEmpty ? byBranch : byBranch.where((j) {
-      final q = _listSearch.toLowerCase();
-      final pn = (_prodLabel[j['product_id']] ?? '').toLowerCase();
-      return (j['job_number'] as String? ?? '').toLowerCase().contains(q) || pn.contains(q);
+      return matchesQuery('${j['job_number'] ?? ''} ${_prodLabel[j['product_id']] ?? ''}', _listSearch);
     }).toList();
 
     // Status filter chips (in addition to search).

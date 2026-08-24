@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
@@ -513,11 +514,8 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) {
         final raw = q.trim();
         final ql = raw.toLowerCase();
-        final filtered = ql.isEmpty
-            ? _customers
-            : _customers.where((c) =>
-                (c['shop_name'] as String? ?? '').toLowerCase().contains(ql) ||
-                (c['phone'] as String? ?? '').toLowerCase().contains(ql)).toList();
+        final filtered = _customers.where((c) =>
+            matchesQuery('${c['shop_name'] ?? ''} ${c['phone'] ?? ''}', ql)).toList();
         return Dialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: ConstrainedBox(
@@ -878,10 +876,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         default:
           if (status != _statusFilter) return false;
       }
-      if (q.isEmpty) return true;
-      final vn = (r['voucher_number'] as String? ?? '').toLowerCase();
-      final cn = (r['_customer_name'] as String? ?? '').toLowerCase();
-      return vn.contains(q) || cn.contains(q);
+      return matchesQuery('${r['voucher_number'] ?? ''} ${r['_customer_name'] ?? ''}', q);
     }).toList();
 
     return Padding(

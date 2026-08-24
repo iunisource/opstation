@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -114,8 +115,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
 
   List<Map<String, dynamic>> _filterProducts(String q) {
     if (q.isEmpty) return _products.take(50).toList();
-    final ql = q.toLowerCase();
-    return _products.where((p) => (p['label'] as String).toLowerCase().contains(ql)).take(200).toList();
+    return _products.where((p) => matchesQuery('${p['label'] ?? ''}', q)).take(200).toList();
   }
 
   Future<void> _loadBranches() async {
@@ -332,9 +332,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
   @override
   Widget build(BuildContext context) {
     final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
-      final q = _listSearch.toLowerCase();
-      return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-             (v['branches']?['name'] as String? ?? '').toLowerCase().contains(q);
+      return matchesQuery('${v['voucher_number'] ?? ''} ${v['branches']?['name'] ?? ''}', _listSearch);
     }).toList();
 
     return Container(color: AppTheme.background, child: Row(children: [
@@ -485,10 +483,10 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
   }
 
   Widget _linesSection() {
-    final q = _lineSearch.trim().toLowerCase();
+    final q = _lineSearch.trim();
     final matches = [
       for (var i = 0; i < _lines.length; i++)
-        if (q.isEmpty || _lines[i].productLabel.toLowerCase().contains(q)) i
+        if (matchesQuery(_lines[i].productLabel, _lineSearch)) i
     ];
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),

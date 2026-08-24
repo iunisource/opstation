@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
@@ -554,9 +555,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _returns.where((r) {
-      final matchSearch = q.isEmpty ||
-          (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-          ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = matchesQuery(
+          '${r['voucher_number'] ?? ''} ${r['suppliers']?['name'] ?? ''}', q);
       final st = r['status'] as String? ?? 'draft';
       final matchStatus = _filter == 'all' || st == _filter;
       return matchSearch && matchStatus;
@@ -838,9 +838,7 @@ class _SupplierSelectDialogState extends State<_SupplierSelectDialog> {
   Widget build(BuildContext context) {
     final q = _q.toLowerCase().trim();
     final filtered = widget.suppliers.where((c) {
-      if (q.isEmpty) return true;
-      return (c['name'] as String? ?? '').toLowerCase().contains(q) ||
-             (c['code'] as String? ?? '').toLowerCase().contains(q);
+      return matchesQuery('${c['name'] ?? ''} ${c['code'] ?? ''}', q);
     }).toList();
     return AlertDialog(
       title: Text('Select Supplier  ·  ${widget.suppliers.length} total'),

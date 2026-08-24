@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -243,7 +244,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
     final q = _search.trim().toLowerCase();
     var rows = _rows;
     if (_filter != 'ALL') rows = rows.where((r) => r.status == _filter).toList();
-    if (q.isNotEmpty) rows = rows.where((r) => r.name.toLowerCase().contains(q)).toList();
+    if (q.isNotEmpty) rows = rows.where((r) => matchesQuery(r.name, q)).toList();
 
     final mrr = _rows.where((r) => r.paying).fold<num>(0, (a, r) => a + r.amount);
     int cnt(String s) => _rows.where((r) => r.status == s).length;

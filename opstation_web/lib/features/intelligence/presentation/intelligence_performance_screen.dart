@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
@@ -165,9 +166,7 @@ class _IntelligencePerformanceScreenState
   }
 
   bool _matchesSearch(String text) {
-    final q = _searchCtrl.text.trim().toLowerCase();
-    if (q.isEmpty) return true;
-    return text.toLowerCase().contains(q);
+    return matchesQuery(text, _searchCtrl.text);
   }
 
   // ── Build ────────────────────────────────────────────────────────────────

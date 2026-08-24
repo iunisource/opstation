@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/team_report_pdf.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
@@ -111,9 +112,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   }
 
   bool _matchesCustomer(String cid, String q) {
-    if (q.isEmpty) return true;
-    return _custName(cid).toLowerCase().contains(q) ||
-        _custCode(cid).toLowerCase().contains(q);
+    return matchesQuery('${_custName(cid)} ${_custCode(cid)}', q);
   }
 
   Widget _searchBox(TextEditingController ctrl, String hint) => Padding(
@@ -1159,8 +1158,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     return _trips.where((t) {
       final s = DateTime.tryParse(t['started_at'] as String? ?? '')?.toLocal();
       if (s == null || !_inVisitRange(s)) return false;
-      if (q.isNotEmpty &&
-          !(t['route_name'] as String? ?? '').toLowerCase().contains(q)) {
+      if (q.isNotEmpty && !matchesQuery('${t['route_name'] ?? ''}', q)) {
         return false;
       }
       return true;

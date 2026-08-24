@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
 import 'dart:html' as html;
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
@@ -170,10 +171,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     final q = _searchCtrl.text.toLowerCase();
     setState(() {
       _filtered = _customers.where((c) {
-        final matchesSearch = q.isEmpty ||
-            (c['shop_name'] as String? ?? '').toLowerCase().contains(q) ||
-            (c['code'] as String? ?? '').toLowerCase().contains(q) ||
-            (c['phone'] as String? ?? '').toLowerCase().contains(q);
+        final matchesSearch = matchesQuery(
+            '${c['shop_name'] ?? ''} ${c['code'] ?? ''} ${c['phone'] ?? ''}', q);
         if (!matchesSearch) return false;
         // Route assignment filter (independent of the missing-info filter).
         if (_routeFilter == 'assigned' &&

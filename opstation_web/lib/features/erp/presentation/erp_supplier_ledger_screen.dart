@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/format/money.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_table.dart';
@@ -55,13 +56,11 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _entrySearchCtrl.dispose(); super.dispose(); }
 
   void _onSearchChanged() {
-    final q = _searchCtrl.text.toLowerCase();
     setState(() {
       _highlightIndex = -1;
       _showDropdown = true;
-      _filteredSuppliers = q.isEmpty ? _suppliers : _suppliers.where((c) =>
-          (c['name'] as String? ?? '').toLowerCase().contains(q) ||
-          (c['code'] as String? ?? '').toLowerCase().contains(q)).toList();
+      _filteredSuppliers = _suppliers.where((c) =>
+          matchesQuery('${c['name'] ?? ''} ${c['code'] ?? ''}', _searchCtrl.text)).toList();
     });
   }
 
@@ -324,10 +323,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           if (_dateTo != null && d.isAfter(_dateTo!.add(const Duration(days: 1)))) return false;
         }
       }
-      final q = _entrySearchCtrl.text.toLowerCase();
-      if (q.isNotEmpty) {
-        if (!(e['description'] as String).toLowerCase().contains(q) && !(e['voucher'] as String).toLowerCase().contains(q)) return false;
-      }
+      if (!matchesQuery('${e['description']} ${e['voucher']}', _entrySearchCtrl.text)) return false;
       return true;
     }).toList();
     // Recalculate running balance for filtered view

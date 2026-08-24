@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
@@ -447,7 +448,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                               final expanded = _sessionExpanded[sid] ?? false;
                               final txns = _sessionTxns[sid] ?? [];
                               final q = _sessionSearch.toLowerCase();
-                              final filteredTxns = q.isEmpty ? txns : txns.where((t) { final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase(); final ph = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase(); final tr = (t['transaction_number'] as String? ?? '').toLowerCase(); return cu.contains(q) || ph.contains(q) || tr.contains(q); }).toList();
+                              final filteredTxns = q.isEmpty ? txns : txns.where((t) { return matchesQuery('${t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? ''} ${t['pos_customers']?['phone'] ?? ''} ${t['transaction_number'] ?? ''}', q); }).toList();
                               final openedAt = s['opened_at'] != null
                                   ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(s['opened_at'] as String).toLocal())
                                   : '-';
@@ -956,14 +957,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     showDialog(
       context: context,
       builder: (dctx) => StatefulBuilder(builder: (dctx, setModal) {
-        final ql = q.trim().toLowerCase();
         // Preserve real cart indices while filtering.
         final rows = <MapEntry<int, Map<String, dynamic>>>[];
         for (var i = 0; i < _cart.length; i++) {
           final it = _cart[i];
-          final name = (it['name'] as String? ?? '').toLowerCase();
-          final sku = (it['sku'] as String? ?? '').toLowerCase();
-          if (ql.isEmpty || name.contains(ql) || sku.contains(ql)) rows.add(MapEntry(i, it));
+          if (matchesQuery('${it['name'] ?? ''} ${it['sku'] ?? ''}', q)) rows.add(MapEntry(i, it));
         }
         double billTotal = 0;
         for (final it in _cart) {
@@ -1184,8 +1182,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     setState(() {
       _search = q;
       _displayProducts = q.isEmpty ? _allProducts : _allProducts.where((p) =>
-          (p['name'] as String? ?? '').toLowerCase().contains(q.toLowerCase()) ||
-          (p['sku'] as String? ?? '').toLowerCase().contains(q.toLowerCase())).toList();
+          matchesQuery('${p['name'] ?? ''} ${p['sku'] ?? ''}', q)).toList();
     });
   }
 
@@ -1409,8 +1406,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           final list = ql.isEmpty
               ? _promoters
               : _promoters.where((p) =>
-                  ((p['name'] as String? ?? '').toLowerCase().contains(ql)) ||
-                  ((p['phone'] as String? ?? '').toLowerCase().contains(ql))).toList();
+                  matchesQuery('${p['name'] ?? ''} ${p['phone'] ?? ''}', ql)).toList();
           return Dialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: ConstrainedBox(
@@ -2296,9 +2292,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                 onChanged: (q) {
                   final ql = q.toLowerCase();
                   final matches = q.isEmpty ? <Map<String, dynamic>>[] : _customers.where((c) =>
-                      (c['shop_name'] as String? ?? '').toLowerCase().contains(ql) ||
-                      (c['phone'] as String? ?? '').toLowerCase().contains(ql) ||
-                      (c['code'] as String? ?? '').toLowerCase().contains(ql)
+                      matchesQuery('${c['shop_name'] ?? ''} ${c['phone'] ?? ''} ${c['code'] ?? ''}', ql)
                     ).take(8).toList();
                   setState(() { _showCustomerDropdown = q.isNotEmpty; _filteredCustomers = matches; });
                 },
@@ -2349,10 +2343,10 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
                   ]))
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-                    itemCount: (_cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList()).length,
+                    itemCount: (_cartSearch.isEmpty ? _cart : _cart.where((it) => matchesQuery('${it['name'] ?? ''}', _cartSearch)).toList()).length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (_, i) {
-                      final billView = _cartSearch.isEmpty ? _cart : _cart.where((it) => (it['name'] as String? ?? '').toLowerCase().contains(_cartSearch.toLowerCase())).toList();
+                      final billView = _cartSearch.isEmpty ? _cart : _cart.where((it) => matchesQuery('${it['name'] ?? ''}', _cartSearch)).toList();
                       final item = billView[i];
                       final cartIdx = _cart.indexOf(item);
                       final qty = item['quantity'] as double;
@@ -2827,7 +2821,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     final searchCtrl = TextEditingController();
     return showDialog<Map<String, dynamic>>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) {
       final q = searchCtrl.text.trim().toLowerCase();
-      final list = q.isEmpty ? _suppliers : _suppliers.where((s) => (s['name'] as String? ?? '').toLowerCase().contains(q)).toList();
+      final list = q.isEmpty ? _suppliers : _suppliers.where((s) => matchesQuery('${s['name'] ?? ''}', q)).toList();
       return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420, maxHeight: 500), child: Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(padding: const EdgeInsets.fromLTRB(16, 14, 8, 6), child: Row(children: [
           const Expanded(child: Text('Select supplier', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
@@ -2953,7 +2947,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     final searchCtrl = TextEditingController();
     return showDialog<Map<String, dynamic>>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx2, setS) {
       final q = searchCtrl.text.trim().toLowerCase();
-      final list = q.isEmpty ? _customers : _customers.where((c) => ((c['shop_name'] as String? ?? '') + (c['code'] as String? ?? '')).toLowerCase().contains(q)).toList();
+      final list = q.isEmpty ? _customers : _customers.where((c) => matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q)).toList();
       return Dialog(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420, maxHeight: 500), child: Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(padding: const EdgeInsets.fromLTRB(16, 14, 8, 6), child: Row(children: [
           const Expanded(child: Text('Select customer', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
@@ -3326,11 +3320,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   List<Map<String, dynamic>> get _filtered {
     final q = _q.toLowerCase();
     return _transactions.where((t) {
-      final custName = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? '') as String).toLowerCase();
-      final txnId = (t['id'] as String? ?? '').toLowerCase();
-      final txnNum = (t['transaction_number'] as String? ?? '').toLowerCase();
-      final phone = (t['pos_customers']?['phone'] as String? ?? '').toLowerCase();
-      final matchSearch = q.isEmpty || custName.contains(q) || txnId.contains(q) || txnNum.contains(q) || phone.contains(q);
+      final matchSearch = matchesQuery('${t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? ''} ${t['id'] ?? ''} ${t['transaction_number'] ?? ''} ${t['pos_customers']?['phone'] ?? ''}', q);
       final ts = t['transacted_at'] != null ? DateTime.parse(t['transacted_at'] as String).toLocal() : null;
       final matchFrom = _dateFrom == null || (ts != null && !ts.isBefore(_dateFrom!));
       final matchTo = _dateTo == null || (ts != null && !ts.isAfter(_dateTo!.add(const Duration(days: 1))));

@@ -6,6 +6,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:excel/excel.dart' as xls;
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -99,15 +100,10 @@ class _ErpProductionPlanScreenState extends ConsumerState<ErpProductionPlanScree
   }
 
   List<Map<String, dynamic>> get _filtered {
-    final q = _searchCtrl.text.trim().toLowerCase();
+    final q = _searchCtrl.text.trim();
     return _rows.where((r) {
       if (_status != 'all' && (r['status'] as String? ?? '') != _status) return false;
-      if (q.isNotEmpty) {
-        final name = (r['component_name'] as String? ?? '').toLowerCase();
-        final sku = (r['component_sku'] as String? ?? '').toLowerCase();
-        final drv = (r['driven_by'] as String? ?? '').toLowerCase();
-        if (!name.contains(q) && !sku.contains(q) && !drv.contains(q)) return false;
-      }
+      if (!matchesQuery('${r['component_name'] ?? ''} ${r['component_sku'] ?? ''} ${r['driven_by'] ?? ''}', q)) return false;
       return true;
     }).toList();
   }
@@ -627,7 +623,7 @@ class _SupplierPickerDialogState extends State<_SupplierPickerDialog> {
     final list = _q.isEmpty
         ? widget.suppliers
         : widget.suppliers.where((s) =>
-            (s['name'] as String? ?? '').toLowerCase().contains(_q.toLowerCase())).toList();
+            matchesQuery('${s['name'] ?? ''}', _q)).toList();
     return AlertDialog(
       title: const Text('Choose supplier for the draft PO', style: TextStyle(fontSize: 16)),
       content: SizedBox(

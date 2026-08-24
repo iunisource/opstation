@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpSuppliersScreen extends ConsumerStatefulWidget {
@@ -85,16 +86,10 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
   }
 
   void _filter() {
-    final q = _searchCtrl.text.toLowerCase();
     setState(() {
-      _filtered = _suppliers.where((s) {
-        if (q.isEmpty) return true;
-        final cat = (_catNames[s['category_id']] ?? '').toLowerCase();
-        return (s['name'] as String? ?? '').toLowerCase().contains(q) ||
-            (s['phone'] as String? ?? '').toLowerCase().contains(q) ||
-            (s['email'] as String? ?? '').toLowerCase().contains(q) ||
-            cat.contains(q);
-      }).toList();
+      _filtered = _suppliers.where((s) => matchesQuery(
+          '${s['name'] ?? ''} ${s['phone'] ?? ''} ${s['email'] ?? ''} ${_catNames[s['category_id']] ?? ''}',
+          _searchCtrl.text)).toList();
     });
   }
 

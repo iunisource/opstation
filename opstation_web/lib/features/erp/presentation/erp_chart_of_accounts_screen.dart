@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -385,8 +386,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
 
   bool _hasDescendantMatch(String nodeId, String q) {
     for (final child in _accounts.where((a) => a['parent_id'] == nodeId)) {
-      if ((child['name'] as String).toLowerCase().contains(q)) return true;
-      if ((child['code'] as String? ?? '').toLowerCase().contains(q)) return true;
+      if (matchesQuery('${child['name']} ${child['code'] ?? ''}', q)) return true;
       if (_hasDescendantMatch(child['id'] as String, q)) return true;
     }
     return false;
@@ -407,7 +407,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       final expanded = _treeExpanded[id] ?? false;
       final color = _groupColor(group);
       final q = _search.toLowerCase();
-      final selfMatch = q.isEmpty || name.toLowerCase().contains(q) || code.toLowerCase().contains(q);
+      final selfMatch = matchesQuery('$name $code', q);
       final descMatch = q.isNotEmpty && _hasDescendantMatch(id, q);
       if (q.isNotEmpty && !selfMatch && !descMatch) continue;
       final isEffExpanded = (descMatch && q.isNotEmpty) || expanded;

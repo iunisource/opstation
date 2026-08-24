@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
@@ -487,10 +488,9 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _invoices.where((r) {
-      final matchSearch = q.isEmpty ||
-          (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-          ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q) ||
-          ((r['purchase_returns']?['voucher_number'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = matchesQuery(
+          '${r['voucher_number'] ?? ''} ${r['suppliers']?['name'] ?? ''} ${r['purchase_returns']?['voucher_number'] ?? ''}',
+          q);
       final matchFilter = _filter == 'all' || (r['status'] as String? ?? 'draft') == _filter;
       return matchSearch && matchFilter;
     }).toList();
@@ -745,9 +745,8 @@ class _PrnPickerDialogState extends State<_PrnPickerDialog> {
   @override
   Widget build(BuildContext context) {
     final q = _q.toLowerCase();
-    final filtered = widget.prns.where((s) =>
-        (s['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-        ((s['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q)).toList();
+    final filtered = widget.prns.where((s) => matchesQuery(
+        '${s['voucher_number'] ?? ''} ${s['suppliers']?['name'] ?? ''}', q)).toList();
     return AlertDialog(
       title: Text('Pick a saved PRN  ·  ${widget.prns.length} eligible'),
       content: SizedBox(width: 520, height: 460, child: Column(children: [

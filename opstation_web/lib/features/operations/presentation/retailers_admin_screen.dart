@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -309,7 +310,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
         final ql = q.trim().toLowerCase();
         final visible = ql.isEmpty
             ? _allBrands
-            : _allBrands.where((b) => b.toLowerCase().contains(ql)).toList();
+            : _allBrands.where((b) => matchesQuery(b, ql)).toList();
         return AlertDialog(
           title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Brands — ${c['shop_name']}', style: const TextStyle(fontSize: 16)),

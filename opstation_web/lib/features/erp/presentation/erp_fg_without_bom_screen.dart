@@ -6,6 +6,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
@@ -158,8 +159,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
     return _rows.where((r) {
       if (!_matchesType(r)) return false;
       if (_group != 'all' && r.group != _group) return false;
-      if (q.isEmpty) return true;
-      return r.name.toLowerCase().contains(q) || r.sku.toLowerCase().contains(q);
+      return matchesQuery('${r.name} ${r.sku}', q);
     }).toList()
       ..sort((a, b) {
         final byStock = b.stock.compareTo(a.stock);

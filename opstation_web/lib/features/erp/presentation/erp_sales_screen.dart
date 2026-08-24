@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
@@ -762,10 +763,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   List<Map<String, dynamic>> get _filteredOrders {
     return _orders.where((o) {
       final matchStatus = _statusFilter == 'all' || o['status'] == _statusFilter;
-      final q = _search.toLowerCase();
-      final matchSearch = q.isEmpty ||
-          (o['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-          (o['customers']?['shop_name'] as String? ?? '').toLowerCase().contains(q);
+      final matchSearch = matchesQuery('${o['voucher_number'] ?? ''} ${o['customers']?['shop_name'] ?? ''}', _search);
       return matchStatus && matchSearch;
     }).toList();
   }
@@ -1406,6 +1404,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Delivery Order',
+      checkedByLabel: 'Received By',
       orgName: user?.orgName ?? 'Opstation',
       branchName: _detail['branches']?['name'] as String?,
       date: date,
@@ -1582,12 +1581,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (ctx, setS) {
-          final filteredSos = (sos as List).where((s) {
-            if (soSearch.isEmpty) return true;
-            final q = soSearch.toLowerCase();
-            return (s['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-                (s['customers']?['shop_name'] as String? ?? '').toLowerCase().contains(q);
-          }).toList();
+          final filteredSos = (sos as List).where((s) =>
+            matchesQuery('${s['voucher_number'] ?? ''} ${s['customers']?['shop_name'] ?? ''}', soSearch)).toList();
           return AlertDialog(
             title: const Text('New Delivery Order'),
             contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -1940,11 +1935,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   List<Map<String, dynamic>> get _filteredOrders => _orders.where((o) {
     final matchStatus = _statusFilter == 'all' || o['status'] == _statusFilter;
-    final q = _search.toLowerCase();
-    final matchSearch = q.isEmpty ||
-        (o['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-        (o['sales_orders']?['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-        (o['customers']?['shop_name'] as String? ?? '').toLowerCase().contains(q);
+    final matchSearch = matchesQuery('${o['voucher_number'] ?? ''} ${o['sales_orders']?['voucher_number'] ?? ''} ${o['customers']?['shop_name'] ?? ''}', _search);
     return matchStatus && matchSearch;
   }).toList();
 
@@ -2586,6 +2577,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     await VoucherPdf.printVoucher(
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Invoice',
+      checkedByLabel: 'Received By',
       orgName: user?.orgName ?? 'Opstation',
       branchName: _detail['branches']?['name'] as String?,
       date: date,
@@ -2826,11 +2818,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   List<Map<String, dynamic>> get _filteredInvoices => _invoices.where((i) {
     // Status filter (derived from is_voided / is_locked / review_status)
     if (_siStatusFilter != 'all' && _siStatus(i) != _siStatusFilter) return false;
-    final q = _search.toLowerCase();
-    return q.isEmpty ||
-        (i['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-        (i['sales_orders']?['voucher_number'] as String? ?? '').toLowerCase().contains(q) ||
-        (i['customers']?['shop_name'] as String? ?? '').toLowerCase().contains(q);
+    return matchesQuery('${i['voucher_number'] ?? ''} ${i['sales_orders']?['voucher_number'] ?? ''} ${i['customers']?['shop_name'] ?? ''}', _search);
   }).toList();
 
   @override
@@ -3343,9 +3331,7 @@ class _CustomerSelect extends StatelessWidget {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) {
           final filtered = list.where((c) =>
-            search.isEmpty ||
-            (c['shop_name'] as String? ?? '').toLowerCase().contains(search.toLowerCase()) ||
-            (c['code'] as String? ?? '').toLowerCase().contains(search.toLowerCase())
+            matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', search)
           ).toList();
           return AlertDialog(
             title: Text('Select Customer  ·  ${list.length} total'),

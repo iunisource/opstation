@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -790,7 +791,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
     final filtered = _pos.where((r) {
-      final matchSearch = q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['suppliers']?['name'] as String?) ?? '').toLowerCase().contains(q);
+      final matchSearch = matchesQuery('${r['voucher_number'] ?? ''} ${r['suppliers']?['name'] ?? ''}', q);
       final disp = poDisplayStatus(r);
       final matchFilter = _filter == 'all'
           || (_filter == 'pending' && _poIsPending(r, _orgApprovalRequired))
@@ -1122,7 +1123,7 @@ class _SupplierPickDialogState extends State<_SupplierPickDialog> {
   @override
   Widget build(BuildContext context) {
     final q = _q.toLowerCase();
-    final filtered = widget.suppliers.where((s) => q.isEmpty || (s['name'] as String? ?? '').toLowerCase().contains(q)).toList();
+    final filtered = widget.suppliers.where((s) => matchesQuery('${s['name'] ?? ''}', q)).toList();
     return AlertDialog(
       title: Text('Select Supplier  ·  ${widget.suppliers.length} total'),
       content: SizedBox(width: 480, height: 440, child: Column(children: [

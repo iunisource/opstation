@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
@@ -1131,8 +1132,7 @@ class _IntelligenceDashboardScreenState
         ? const <Map<String, dynamic>>[]
         : _trendCustomers
             .where((c) =>
-                (c['shop_name'] as String? ?? '').toLowerCase().contains(q) ||
-                (c['code'] as String? ?? '').toLowerCase().contains(q))
+                matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q))
             .take(8)
             .toList();
 
@@ -1654,7 +1654,7 @@ class _IntelligenceDashboardScreenState
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
         final q = query.trim().toLowerCase();
         final filtered =
-            q.isEmpty ? all : all.where((e) => e.value.toLowerCase().contains(q)).toList();
+            q.isEmpty ? all : all.where((e) => matchesQuery(e.value, q)).toList();
         return AlertDialog(
           contentPadding: const EdgeInsets.fromLTRB(0, 14, 0, 0),
           title: const Text('Filter by market', style: TextStyle(fontSize: 16)),

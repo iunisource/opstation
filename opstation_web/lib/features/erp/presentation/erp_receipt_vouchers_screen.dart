@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
@@ -447,7 +448,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         _loadVouchers();
       }
     });
-    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) { final q = _listSearch.toLowerCase(); return (v['voucher_number'] as String? ?? '').toLowerCase().contains(q) || (v['cash_account_name'] as String? ?? '').toLowerCase().contains(q); }).toList();
+    final filtered = _vouchers.where((v) => matchesQuery('${v['voucher_number'] ?? ''} ${v['cash_account_name'] ?? ''}', _listSearch)).toList();
     final cashFiltered = _cashAccSearch.isEmpty ? _cashAccounts : _cashAccounts.where((a) => (a['label'] as String).toLowerCase().contains(_cashAccSearch.toLowerCase())).toList();
 
     return Container(color: AppTheme.background, child: Row(children: [

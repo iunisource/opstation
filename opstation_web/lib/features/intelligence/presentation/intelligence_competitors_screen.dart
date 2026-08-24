@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
@@ -171,8 +172,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
     final q = _customerSearchCtrl.text.toLowerCase();
     if (q.isNotEmpty) {
       result = result.where((c) =>
-        (c['shop_name'] as String).toLowerCase().contains(q) ||
-        (c['code'] as String? ?? '').toLowerCase().contains(q)
+        matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q)
       );
     }
     if (_selectedRouteId != null) {

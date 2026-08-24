@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
@@ -402,7 +403,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
 
   Widget _buildList() {
     final q = _search.toLowerCase().trim();
-    final filtered = _returns.where((r) => q.isEmpty || (r['voucher_number'] as String? ?? '').toLowerCase().contains(q) || ((r['customers']?['shop_name'] as String?) ?? '').toLowerCase().contains(q)).toList();
+    final filtered = _returns.where((r) => matchesQuery('${r['voucher_number'] ?? ''} ${r['customers']?['shop_name'] ?? ''}', q)).toList();
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
       Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 12), child: Row(children: [
         const Expanded(child: Text('Sales Return Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
@@ -565,7 +566,7 @@ class _CustomerPickDialogState extends State<_CustomerPickDialog> {
   String _q = '';
   @override Widget build(BuildContext context) {
     final q = _q.toLowerCase();
-    final filtered = widget.customers.where((c) => q.isEmpty || (c['shop_name'] as String? ?? '').toLowerCase().contains(q) || (c['code'] as String? ?? '').toLowerCase().contains(q)).toList();
+    final filtered = widget.customers.where((c) => matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q)).toList();
     return AlertDialog(
       title: Text('Select Customer  ·  ${widget.customers.length} total'),
       content: SizedBox(width: 480, height: 440, child: Column(children: [
