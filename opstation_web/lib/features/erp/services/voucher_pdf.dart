@@ -39,6 +39,61 @@ class VoucherPdf {
     }
   }
 
+  /// Canonical short key for a voucher type, used to match the per-type logo
+  /// selection saved in Admin Settings (org.logo_voucher_types). Keep these keys
+  /// in sync with CompanyLogoSettings in the admin UI.
+  static String _voucherKey(String label) {
+    final l = label.toLowerCase();
+    if (l.contains('sales return')) return 'sri';
+    if (l.contains('purchase return')) return 'pri';
+    if (l.contains('sales invoice')) return 'si';
+    if (l.contains('purchase invoice')) return 'pi';
+    if (l.contains('delivery')) return 'do';
+    if (l.contains('grn') || l.contains('goods receipt')) return 'grn';
+    if (l.contains('quotation')) return 'quotation';
+    if (l.contains('sales order')) return 'so';
+    if (l.contains('purchase order')) return 'po';
+    if (l.contains('stock transfer')) return 'stock_transfer';
+    return l.replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+  }
+
+  /// Company logo for the voucher header, gated by:
+  ///   org.show_logo_on_vouchers  (master toggle; default OFF/unset -> no logo)
+  ///   org.logo_url               (the uploaded image)
+  ///   org.logo_voucher_types     (comma-separated keys; unset row => all types)
+  /// Returns null (no logo) unless the master toggle is on, a logo is uploaded,
+  /// and this voucher type is selected. Never lets a config/image read break the
+  /// print — any failure just prints without a logo.
+  static Future<pw.ImageProvider?> _voucherLogo(String voucherTypeLabel) async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key,value')
+          .inFilter('key', const [
+            'org.show_logo_on_vouchers',
+            'org.logo_url',
+            'org.logo_voucher_types',
+          ]);
+      final cfg = <String, String?>{};
+      for (final r in rows as List) {
+        cfg[r['key'] as String] = r['value'] as String?;
+      }
+      if (cfg['org.show_logo_on_vouchers'] != 'true') return null;
+      final url = cfg['org.logo_url'];
+      if (url == null || url.isEmpty) return null;
+      // Type selection: a present row lists the enabled keys (empty string =>
+      // none). An absent row means the selection was never narrowed => all types.
+      if (cfg.containsKey('org.logo_voucher_types')) {
+        final raw = cfg['org.logo_voucher_types'] ?? '';
+        final set = raw.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+        if (!set.contains(_voucherKey(voucherTypeLabel))) return null;
+      }
+      return await networkImage(url);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Builds the download/title base: Party_Date_DocType
   /// e.g. "Ali ES_1 Aug 2026_Sales Invoice". Falls back to the voucher number
   /// when no party is on the document (e.g. stock transfers use branches).
@@ -122,6 +177,7 @@ class VoucherPdf {
         (isQuotation || await _showOrgName(isPurchase)) ? orgName : '';
     final fileBase = _fileBase(voucherTypeLabel, voucherNumber, date,
         party: customerOrSupplier);
+    final logoImage = await _voucherLogo(voucherTypeLabel);
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
       orgName: effectiveOrg, branchName: branchName, date: date,
@@ -136,7 +192,7 @@ class VoucherPdf {
       checkedByLabel: checkedByLabel, checkedByName: checkedByName, checkedByAt: checkedByAt,
       checkedBySignatureUrl: checkedBySignatureUrl, checkedByStampUrl: checkedByStampUrl,
       footerNote: footerNote, relatedRefs: relatedRefs,
-      watermark: watermark, docTitle: fileBase,
+      watermark: watermark, docTitle: fileBase, logoImage: logoImage,
     );
     await _output(await doc.save(), fileBase);
   }
@@ -158,6 +214,7 @@ class VoucherPdf {
   }) async {
     final fileBase = _fileBase('Stock Transfer', voucherNumber, date,
         party: '$fromBranch to $toBranch');
+    final logoImage = await _voucherLogo('Stock Transfer');
     final doc = pw.Document(title: fileBase, author: orgName);
 
     pw.Widget kv(String k, String v) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
@@ -184,10 +241,17 @@ class VoucherPdf {
       margin: const pw.EdgeInsets.all(28),
       build: (ctx) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-          pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-            if (orgName.isNotEmpty) pw.Text(orgName, style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
-            pw.SizedBox(height: 2),
-            pw.Text('STOCK TRANSFER', style: pw.TextStyle(fontSize: 11, color: _accent, fontWeight: pw.FontWeight.bold, letterSpacing: 1)),
+          pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            if (logoImage != null) ...[
+              pw.Container(height: 40, constraints: const pw.BoxConstraints(maxWidth: 130),
+                  child: pw.Image(logoImage, fit: pw.BoxFit.contain, alignment: pw.Alignment.centerLeft)),
+              pw.SizedBox(width: 10),
+            ],
+            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              if (orgName.isNotEmpty) pw.Text(orgName, style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 2),
+              pw.Text('STOCK TRANSFER', style: pw.TextStyle(fontSize: 11, color: _accent, fontWeight: pw.FontWeight.bold, letterSpacing: 1)),
+            ]),
           ]),
           pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
             pw.Text(voucherNumber, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
@@ -311,6 +375,7 @@ class VoucherPdf {
         (isQuotation || await _showOrgName(isPurchase)) ? orgName : '';
     final fileBase = _fileBase(voucherTypeLabel, voucherNumber, date,
         party: customerOrSupplier);
+    final logoImage = await _voucherLogo(voucherTypeLabel);
     final doc = await _buildDoc(
       voucherNumber: voucherNumber, voucherTypeLabel: voucherTypeLabel,
       orgName: effectiveOrg, branchName: branchName, date: date,
@@ -325,7 +390,7 @@ class VoucherPdf {
       checkedByLabel: checkedByLabel, checkedByName: checkedByName, checkedByAt: checkedByAt,
       checkedBySignatureUrl: checkedBySignatureUrl, checkedByStampUrl: checkedByStampUrl,
       footerNote: footerNote, relatedRefs: relatedRefs,
-      watermark: watermark, docTitle: fileBase,
+      watermark: watermark, docTitle: fileBase, logoImage: logoImage,
     );
     return doc.save();
   }
@@ -367,6 +432,7 @@ class VoucherPdf {
     Map<String, String>? relatedRefs,
     String? watermark, // optional diagonal page watermark, e.g. 'VOIDED'
     String? docTitle,
+    pw.ImageProvider? logoImage, // optional company logo in the header band
   }) async {
     final doc = pw.Document(
       title: docTitle,
@@ -485,6 +551,13 @@ class VoucherPdf {
           padding: const pw.EdgeInsets.all(16),
           decoration: pw.BoxDecoration(color: _bg, borderRadius: pw.BorderRadius.circular(8)),
           child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            if (logoImage != null) ...[
+              pw.Container(
+                height: 46, constraints: const pw.BoxConstraints(maxWidth: 150),
+                child: pw.Image(logoImage, fit: pw.BoxFit.contain, alignment: pw.Alignment.centerLeft),
+              ),
+              pw.SizedBox(width: 12),
+            ],
             pw.Expanded(
               child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
                 // Company name only. Branch is shown once, in the meta grid below.

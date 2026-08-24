@@ -8,6 +8,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
+import '../widgets/company_logo_settings.dart';
 
 /// An optional numeric parameter attached to a toggle. Shown (and saved) only
 /// while the parent toggle is ON. Stored in `app_config` as a string.
@@ -1543,6 +1544,10 @@ class _ErpAdminSettingsScreenState
                   SignatureStampSettings(
                     orgId: ref.read(currentUserProvider)?.orgId ?? '',
                     userId: ref.read(currentUserProvider)?.id,
+                  ),
+                  const SizedBox(height: 16),
+                  CompanyLogoSettings(
+                    orgId: ref.read(currentUserProvider)?.orgId ?? '',
                   ),
                   const SizedBox(height: 16),
                   _FooterNotesPanel(
