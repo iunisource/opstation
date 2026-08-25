@@ -31,6 +31,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   bool _detailLoading = false;
   String _search = '';
   String _filter = 'all';
+  String _supFilter = 'all'; // supervision filter: all | yes | no
   bool _superviseFlow = false; // org.sri_supervise_flow: non-blocking admin supervise mark
   bool _superviseBusy = false;
 
@@ -395,8 +396,14 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       final matchSearch = matchesQuery('${r['voucher_number'] ?? ''} ${r['customers']?['shop_name'] ?? ''} ${r['sales_returns']?['voucher_number'] ?? ''}', q);
       final locked = r['is_locked'] as bool? ?? false;
       final matchFilter = _filter == 'all' || (_filter == 'draft' && !locked) || (_filter == 'issued' && locked);
-      return matchSearch && matchFilter;
+      bool matchSup = true;
+      if (_superviseFlow && _supFilter != 'all') {
+        final sup = r['supervised_at'] != null;
+        matchSup = _supFilter == 'yes' ? sup : !sup && r['is_voided'] != true;
+      }
+      return matchSearch && matchFilter && matchSup;
     }).toList();
+    final supPending = _invoices.where((r) => r['supervised_at'] == null && r['is_voided'] != true).length;
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
       Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 12), child: Row(children: [
         const Expanded(child: Text('Sales Return Invoices', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
@@ -413,6 +420,18 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         const SizedBox(width: 6),
         _SriTab(label: 'Issued', value: 'issued', current: _filter, onTap: (v) => setState(() => _filter = v)),
       ])),
+      if (_superviseFlow) ...[
+        const SizedBox(height: 8),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
+          const Text('Supervision', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 8),
+          Expanded(child: Wrap(spacing: 6, runSpacing: 6, children: [
+            _SriTab(label: 'All', value: 'all', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
+            _SriTab(label: 'Supervised', value: 'yes', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
+            _SriTab(label: 'Pending${supPending > 0 ? ' ($supPending)' : ''}', value: 'no', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
+          ])),
+        ])),
+      ],
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
           : filtered.isEmpty ? const Center(child: Text('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))

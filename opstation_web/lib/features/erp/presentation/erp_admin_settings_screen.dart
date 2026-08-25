@@ -368,6 +368,19 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.pi_supervise_flow',
+    'Supervision for Purchase Invoices',
+    'When ON, admins get a "Supervise" action on each Purchase Invoice as an '
+        'extra review layer, and a pendency counter on the Purchase → Purchase '
+        'Invoices menu shows how many invoices are still awaiting supervision. '
+        'Supervision is NON-BLOCKING — an invoice still posts exactly as before '
+        'whether or not it has been supervised. Existing invoices were '
+        'auto-supervised, so only invoices created from now on appear. This is '
+        'separate from "Support docs & admin review" (that flow blocks posting '
+        'until approved). When OFF, no counter shows.',
+  ),
+
+  _AdminToggle(
     'org.grn_supervise_flow',
     'Supervision, documents & comments on GRNs',
     'When ON, Goods Receipt Notes gain a Support Documents panel (attach images / '
@@ -473,6 +486,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.pri_price_editable',
     'org.doc_review_flow_pi',
     'org.doc_review_flow_pri',
+    'org.pi_supervise_flow',
     'org.grn_supervise_flow',
   ]),
   _ToggleGroup('Manufacturing', Icons.precision_manufacturing_outlined, [

@@ -338,6 +338,23 @@ final siSupervisePendingProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
+// Count of Purchase Invoices still awaiting admin supervision, gated by
+// org.pi_supervise_flow. Drives the Purchase Invoices menu badge.
+final piSupervisePendingProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.pi_supervise_flow').maybeSingle();
+    if ((cfg?['value'] as String?) != 'true') return 0;
+    final res = await client.from('purchase_invoices').select('id')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null);
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+
 // Count of Sales Return Invoices still awaiting admin supervision, gated by
 // org.sri_supervise_flow. Drives the Sales Return Invoice menu badge.
 final sriSupervisePendingProvider = FutureProvider<int>((ref) async {
@@ -780,6 +797,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final productSupervisePending = ref.watch(productSupervisePendingProvider).valueOrNull ?? 0;
   final siSupervisePending = ref.watch(siSupervisePendingProvider).valueOrNull ?? 0;
   final sriSupervisePending = ref.watch(sriSupervisePendingProvider).valueOrNull ?? 0;
+  final piSupervisePending = ref.watch(piSupervisePendingProvider).valueOrNull ?? 0;
   final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
   final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
   final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
@@ -828,7 +846,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
       if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
       if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location, badge: grnSupervisePending),
-      if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending + grnPendingInvoice),
+      if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending + grnPendingInvoice + piSupervisePending),
     ];
     final purReturns = <Widget>[
       if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
@@ -1023,7 +1041,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
            '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
            '/erp/supplier-ledger', '/erp/supplier-aging'],
-          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice),
+          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice + piSupervisePending),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',

@@ -197,6 +197,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(siReviewPendingProvider);
     ref.invalidate(siSupervisePendingProvider);
     ref.invalidate(sriSupervisePendingProvider);
+    ref.invalidate(piSupervisePendingProvider);
     ref.invalidate(grnPendingInvoiceCountProvider);
     ref.invalidate(grnSupervisePendingProvider);
     ref.invalidate(customerSupervisePendingProvider);

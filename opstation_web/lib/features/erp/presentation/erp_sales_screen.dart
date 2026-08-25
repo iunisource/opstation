@@ -2362,6 +2362,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _superviseBusy = false;
   String _search = '';
   String _siStatusFilter = 'all'; // all | draft | under_review | rejected | posted | voided
+  String _siSupFilter = 'all'; // supervision filter: all | yes | no (only when supervise flow on)
   final Map<String, TextEditingController> _discountCtrl = {};
   final Map<String, TextEditingController> _priceCtrl = {};
   bool _priceEditable = false; // org.si_price_editable
@@ -2879,8 +2880,38 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   List<Map<String, dynamic>> get _filteredInvoices => _invoices.where((i) {
     // Status filter (derived from is_voided / is_locked / review_status)
     if (_siStatusFilter != 'all' && _siStatus(i) != _siStatusFilter) return false;
+    // Supervision filter (only when the supervise flow is on).
+    if (_superviseFlow && _siSupFilter != 'all') {
+      final sup = i['supervised_at'] != null;
+      if (_siSupFilter == 'yes' && !sup) return false;
+      if (_siSupFilter == 'no' && (sup || i['is_voided'] == true)) return false;
+    }
     return matchesQuery('${i['voucher_number'] ?? ''} ${i['sales_orders']?['voucher_number'] ?? ''} ${i['customers']?['shop_name'] ?? ''}', _search);
   }).toList();
+
+  int get _siSupPendingCount => _invoices.where((i) => i['supervised_at'] == null && i['is_voided'] != true).length;
+
+  Widget _siSupChip(String value, String label, {int? count}) {
+    final active = _siSupFilter == value;
+    return GestureDetector(
+      onTap: () => setState(() => _siSupFilter = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primary : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: active ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
+          if (count != null && count > 0) ...[
+            const SizedBox(width: 5),
+            Text('$count', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: active ? Colors.white70 : Colors.orange)),
+          ],
+        ]),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2921,6 +2952,18 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                     _siFilterChip('voided', 'Voided'),
                   ]),
                 ),
+                if (_superviseFlow) ...[
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    const Text('Supervision', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 8),
+                    Expanded(child: Wrap(spacing: 6, runSpacing: 6, children: [
+                      _siSupChip('all', 'All'),
+                      _siSupChip('yes', 'Supervised'),
+                      _siSupChip('no', 'Pending', count: _siSupPendingCount),
+                    ])),
+                  ]),
+                ],
               ]),
             ),
             const Divider(height: 1),
