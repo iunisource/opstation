@@ -1,3 +1,5 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -330,7 +332,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
           final vRes = await client
               .from('visits')
               .select(
-                  'trip_id, amount, customer_id, timestamp, receipt_number, status')
+                  'trip_id, amount, customer_id, timestamp, receipt_number, status, captured_lat, captured_lng')
               .inFilter('trip_id', [for (final t in trips) t['id'] as String]);
           final perTrip = <String, int>{};
           final perTripAmt = <String, int>{};
@@ -353,6 +355,8 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                 'receipt': (v['receipt_number'] as String?) ?? '',
                 'trip_id': tid,
                 'route_name': routeNameByTrip[tid] ?? '—',
+                'lat': (v['captured_lat'] as num?)?.toDouble(),
+                'lng': (v['captured_lng'] as num?)?.toDouble(),
               });
             }
             perTrip[tid] = (perTrip[tid] ?? 0) + 1;
@@ -1390,12 +1394,18 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   }
 
   /// One visit row for the Visits tab (shop, type badge, time, amount).
+  /// Outside-geofence and no-location visits also surface the captured GPS
+  /// coordinates as a clickable link that opens the spot in Google Maps —
+  /// so an admin can see exactly where the entry was actually made.
   Widget _visitRecordCard(Map<String, dynamic> v) {
     final cid = v['cid'] as String?;
     final key = _visitTypeKey((v['status'] as String?) ?? '');
     final (label, color, icon) = _visitTypeMeta(key);
     final t = v['t'] as DateTime;
     final amount = (v['amount'] as int?) ?? 0;
+    final lat = v['lat'] as double?;
+    final lng = v['lng'] as double?;
+    final showCoords = key == 'outside' || key == 'noLocation';
     return _card(Row(children: [
       Icon(icon, size: 20, color: color),
       const SizedBox(width: 12),
@@ -1408,6 +1418,36 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
               '${_custCode(cid).isNotEmpty ? '${_custCode(cid)} · ' : ''}${v['route_name'] ?? '—'} · ${DateFormat('d MMM yyyy · HH:mm').format(t)}',
               style: const TextStyle(
                   fontSize: 11, color: AppTheme.textSecondary)),
+          if (showCoords) ...[
+            const SizedBox(height: 3),
+            if (lat != null && lng != null)
+              InkWell(
+                onTap: () => html.window.open(
+                    'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+                    '_blank'),
+                borderRadius: BorderRadius.circular(4),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.place_outlined, size: 13, color: color),
+                  const SizedBox(width: 3),
+                  Text(
+                      '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: color,
+                          decoration: TextDecoration.underline,
+                          decorationColor: color)),
+                  const SizedBox(width: 3),
+                  Icon(Icons.open_in_new, size: 11, color: color),
+                ]),
+              )
+            else
+              const Text('No coordinates recorded',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontStyle: FontStyle.italic,
+                      color: AppTheme.textSecondary)),
+          ],
         ]),
       ),
       const SizedBox(width: 8),
