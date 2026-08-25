@@ -116,34 +116,48 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
           .toList();
 
       // Stage 2: derived tables, scoped via the org-scoped ids above.
-      // Chunked because PostgREST caps unbounded selects at 1000 rows
-      // and its query string maxes around 8 KB — both of which bit
-      // earlier versions of this screen on orgs with many customers.
+      // Chunked (batch size 50) because PostgREST caps unbounded selects at
+      // 1000 rows and its query string maxes around 8 KB. The batches are fired
+      // CONCURRENTLY (not one-after-another as before) so a 1000-customer org
+      // loads in a few round-trips of wall time instead of 20+ serial ones.
       const batchSize = 50;
-      final visits = <Map<String, dynamic>>[];
-      for (var i = 0; i < customerIds.length; i += batchSize) {
-        final end = (i + batchSize).clamp(0, customerIds.length);
-        final slice = customerIds.sublist(i, end);
-        final batch = await client
-            .from('visits')
-            .select(
-                'id, customer_id, trip_id, amount, status, timestamp, user_id')
-            .inFilter('customer_id', slice)
-            .gte('timestamp', cutoffIso)
-            .limit(5000);
-        visits.addAll((batch as List).cast<Map<String, dynamic>>());
-      }
-      final routeStops = <Map<String, dynamic>>[];
-      for (var i = 0; i < routeIds.length; i += batchSize) {
-        final end = (i + batchSize).clamp(0, routeIds.length);
-        final slice = routeIds.sublist(i, end);
-        final batch = await client
-            .from('route_stops')
-            .select('route_id, customer_id')
-            .inFilter('route_id', slice)
-            .limit(5000);
-        routeStops.addAll((batch as List).cast<Map<String, dynamic>>());
-      }
+      List<List<String>> chunk(List<String> ids) => [
+        for (var i = 0; i < ids.length; i += batchSize)
+          ids.sublist(i, (i + batchSize).clamp(0, ids.length)),
+      ];
+
+      final visitFutures = [
+        for (final slice in chunk(customerIds))
+          client
+              .from('visits')
+              .select('id, customer_id, trip_id, amount, status, timestamp, user_id')
+              .inFilter('customer_id', slice)
+              .gte('timestamp', cutoffIso)
+              .limit(5000),
+      ];
+      final stopFutures = [
+        for (final slice in chunk(routeIds))
+          client
+              .from('route_stops')
+              .select('route_id, customer_id')
+              .inFilter('route_id', slice)
+              .limit(5000),
+      ];
+
+      // Run both sets of batches at once; the browser naturally caps in-flight
+      // requests per host, so this stays polite while cutting wall time sharply.
+      final stage2 = await Future.wait([
+        Future.wait(visitFutures),
+        Future.wait(stopFutures),
+      ]);
+      final visits = <Map<String, dynamic>>[
+        for (final b in (stage2[0]))
+          ...(b as List).cast<Map<String, dynamic>>(),
+      ];
+      final routeStops = <Map<String, dynamic>>[
+        for (final b in (stage2[1]))
+          ...(b as List).cast<Map<String, dynamic>>(),
+      ];
 
       final userNames = <String, String>{
         for (final u in users)
@@ -427,10 +441,10 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
         [
           byId[id]!.code,
           byId[id]!.name,
-          byId[id]!.group.isEmpty ? '—' : byId[id]!.group,
-          ncMap[id] ?? '—',
-          nvMap[id] ?? '—',
-          skMap[id] ?? '—',
+          byId[id]!.group.isEmpty ? '-' : byId[id]!.group,
+          ncMap[id] ?? '-',
+          nvMap[id] ?? '-',
+          skMap[id] ?? '-',
           (peopleById[id]!.toList()..sort()).join(', '),
         ],
     ];

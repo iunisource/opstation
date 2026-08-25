@@ -27,6 +27,17 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   RealtimeChannel? _channel;
   Timer? _debounce;
 
+  // Customers on the map
+  bool _showCustomers = false;
+  bool _customersLoading = false;
+  List<_Cust> _customers = [];
+
+  // Route selection
+  List<Map<String, dynamic>> _routes = [];
+  String? _selectedRouteId;
+  bool _routeLoading = false;
+  List<_Cust> _routeStops = []; // selected route's customers, in stop order
+
   @override
   void initState() {
     super.initState();
@@ -174,9 +185,18 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         }
       }
 
+      // Routes for the selector (cheap; names only).
+      List<Map<String, dynamic>> routes = _routes;
+      try {
+        final r = await client.from('sales_routes')
+            .select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
+        routes = (r as List).cast<Map<String, dynamic>>();
+      } catch (_) {}
+
       if (!mounted) return;
       setState(() {
         _users = result;
+        _routes = routes;
         _loading = false;
         _lastRefresh = DateTime.now();
       });
@@ -323,6 +343,81 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     }
   }
 
+  // ── Customers ───────────────────────────────────────────────────────────────
+  Future<void> _loadCustomers() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    setState(() => _customersLoading = true);
+    try {
+      final rows = await Supabase.instance.client.from('customers')
+          .select('id, shop_name, code, latitude, longitude')
+          .eq('org_id', orgId).eq('is_active', true).limit(20000);
+      final list = <_Cust>[];
+      for (final c in (rows as List)) {
+        final lat = c['latitude'], lng = c['longitude'];
+        if (lat == null || lng == null) continue;
+        list.add(_Cust(
+          id: c['id'] as String,
+          name: (c['shop_name'] as String?) ?? '(no name)',
+          code: (c['code'] as String?) ?? '',
+          lat: (lat as num).toDouble(),
+          lng: (lng as num).toDouble(),
+        ));
+      }
+      if (mounted) setState(() { _customers = list; _customersLoading = false; });
+    } catch (e) {
+      if (mounted) setState(() => _customersLoading = false);
+    }
+  }
+
+  Future<void> _toggleCustomers() async {
+    final on = !_showCustomers;
+    setState(() => _showCustomers = on);
+    if (on && _customers.isEmpty) await _loadCustomers();
+  }
+
+  // ── Route selection ─────────────────────────────────────────────────────────
+  Future<void> _selectRoute(String? routeId) async {
+    setState(() { _selectedRouteId = routeId; _routeStops = []; });
+    if (routeId == null) return;
+    setState(() => _routeLoading = true);
+    try {
+      final client = Supabase.instance.client;
+      final stops = await client.from('route_stops')
+          .select('customer_id, position, customers(id, shop_name, code, latitude, longitude)')
+          .eq('route_id', routeId).order('position');
+      final list = <_Cust>[];
+      for (final s in (stops as List)) {
+        final c = s['customers'] as Map<String, dynamic>?;
+        if (c == null) continue;
+        final lat = c['latitude'], lng = c['longitude'];
+        if (lat == null || lng == null) continue;
+        list.add(_Cust(
+          id: c['id'] as String,
+          name: (c['shop_name'] as String?) ?? '(no name)',
+          code: (c['code'] as String?) ?? '',
+          lat: (lat as num).toDouble(),
+          lng: (lng as num).toDouble(),
+        ));
+      }
+      if (!mounted) return;
+      setState(() { _routeStops = list; _routeLoading = false; });
+      // Fit the map to the route.
+      if (list.length == 1) {
+        _mapController.move(LatLng(list.first.lat, list.first.lng), 14);
+      } else if (list.length > 1) {
+        final lats = list.map((c) => c.lat).toList()..sort();
+        final lngs = list.map((c) => c.lng).toList()..sort();
+        _mapController.fitCamera(CameraFit.bounds(
+          bounds: LatLngBounds(LatLng(lats.first, lngs.first), LatLng(lats.last, lngs.last)),
+          padding: const EdgeInsets.all(80),
+        ));
+      }
+    } catch (e) {
+      if (mounted) setState(() => _routeLoading = false);
+    }
+  }
+
   Color _freshnessColor(DateTime ts) {
     final mins = DateTime.now().difference(ts).inMinutes;
     if (mins < 30) return AppTheme.success;
@@ -358,6 +453,55 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     );
   }
 
+  Widget _customerDot() => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: AppTheme.textSecondary, width: 2),
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
+        ),
+        child: const Center(child: Icon(Icons.storefront, size: 9, color: AppTheme.textSecondary)),
+      );
+
+  Widget _routeStopPin(int n) => Container(
+        decoration: BoxDecoration(
+          color: AppTheme.primary,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2),
+          boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
+        ),
+        alignment: Alignment.center,
+        child: Text('$n', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+      );
+
+  void _showCustSheet(_Cust c, {int? stopNo}) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(width: 40, height: 40, alignment: Alignment.center,
+              decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+              child: stopNo != null
+                  ? Text('$stopNo', style: const TextStyle(fontWeight: FontWeight.w800, color: AppTheme.primary))
+                  : const Icon(Icons.storefront, color: AppTheme.primary, size: 20)),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(c.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              if (c.code.isNotEmpty) Text(c.code, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ])),
+          ]),
+          if (stopNo != null) ...[
+            const SizedBox(height: 8),
+            Text('Route stop #$stopNo', style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          ],
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -376,6 +520,16 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               userAgentPackageName: 'com.opstation.web',
               maxNativeZoom: 19,
             ),
+            // Planned route path (selected route, stops in order).
+            if (_routeStops.length >= 2)
+              PolylineLayer(polylines: [
+                Polyline(
+                  points: [for (final c in _routeStops) LatLng(c.lat, c.lng)],
+                  color: AppTheme.primary.withOpacity(0.7),
+                  strokeWidth: 3,
+                ),
+              ]),
+            // Salesperson travel lines (how/where they moved today).
             if (_showTracks)
               PolylineLayer(
                 polylines: [
@@ -387,6 +541,32 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     ),
                 ],
               ),
+            // Customer markers: a selected route shows its numbered stops;
+            // otherwise the "show customers" toggle shows every located customer.
+            if (_selectedRouteId != null)
+              MarkerLayer(markers: [
+                for (var i = 0; i < _routeStops.length; i++)
+                  Marker(
+                    point: LatLng(_routeStops[i].lat, _routeStops[i].lng),
+                    width: 30, height: 30, alignment: Alignment.center,
+                    child: GestureDetector(
+                      onTap: () => _showCustSheet(_routeStops[i], stopNo: i + 1),
+                      child: _routeStopPin(i + 1),
+                    ),
+                  ),
+              ])
+            else if (_showCustomers)
+              MarkerLayer(markers: [
+                for (final c in _customers)
+                  Marker(
+                    point: LatLng(c.lat, c.lng),
+                    width: 18, height: 18, alignment: Alignment.center,
+                    child: GestureDetector(
+                      onTap: () => _showCustSheet(c),
+                      child: _customerDot(),
+                    ),
+                  ),
+              ]),
             MarkerLayer(
               markers: [
                 for (final u in _users)
@@ -426,11 +606,58 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             ),
           ),
         ),
+        // Route selector
+        Positioned(
+          top: 64,
+          left: 16,
+          child: Card(
+            elevation: 4,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.alt_route, size: 18, color: AppTheme.primary),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 190,
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String?>(
+                      isExpanded: true,
+                      value: _selectedRouteId,
+                      hint: const Text('Select a route', style: TextStyle(fontSize: 13)),
+                      items: [
+                        const DropdownMenuItem<String?>(value: null, child: Text('No route', style: TextStyle(fontSize: 13))),
+                        ..._routes.map((r) => DropdownMenuItem<String?>(
+                            value: r['id'] as String,
+                            child: Text(r['name'] as String? ?? '-', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))),
+                      ],
+                      onChanged: _routeLoading ? null : _selectRoute,
+                    ),
+                  ),
+                ),
+                if (_routeLoading)
+                  const Padding(padding: EdgeInsets.only(left: 6), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)))
+                else if (_selectedRouteId != null)
+                  Text('  ${_routeStops.length}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+              ]),
+            ),
+          ),
+        ),
         // Action buttons on the right (separate Positioned so the middle stays clickable for pan/zoom)
         Positioned(
           top: 16,
           right: 16,
           child: Row(mainAxisSize: MainAxisSize.min, children: [
+            FloatingActionButton.small(
+              heroTag: 'customers_toggle',
+              onPressed: _customersLoading ? null : _toggleCustomers,
+              backgroundColor: _showCustomers ? AppTheme.primary : Colors.white,
+              foregroundColor: _showCustomers ? Colors.white : AppTheme.primary,
+              tooltip: _showCustomers ? 'Hide customers' : 'Show customers',
+              child: _customersLoading
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.storefront_outlined),
+            ),
+            const SizedBox(width: 8),
             FloatingActionButton.small(
               heroTag: 'tracks_toggle',
               onPressed: _toggleTracks,
@@ -623,6 +850,15 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       ),
     );
   }
+}
+
+class _Cust {
+  final String id;
+  final String name;
+  final String code;
+  final double lat;
+  final double lng;
+  _Cust({required this.id, required this.name, required this.code, required this.lat, required this.lng});
 }
 
 class _UserLoc {
