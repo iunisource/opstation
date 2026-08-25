@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
 import 'dart:ui_web' as ui_web;
+import 'package:zxing2/qrcode.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,10 +51,13 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
   // camera
   static const _viewType = 'job-kiosk-camera-view';
   html.VideoElement? _video;
-  Object? _detector;
+  Object? _detector;              // native BarcodeDetector (Chrome/Android) if present
+  bool _useNative = false;
+  html.CanvasElement? _canvas;    // scratch canvas for the zxing fallback
+  final _zxing = QRCodeReader();  // pure-Dart QR decoder — works in every browser
   Timer? _scanLoop;
   bool _cameraOn = false;
-  bool _cameraSupported = false;
+  bool _cameraSupported = false;  // true once getUserMedia succeeds (camera works)
   DateTime _camCooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
@@ -150,17 +155,21 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
   }
 
   Future<void> _initCamera() async {
+    // Use the browser's native QR detector when it exists (fast); otherwise fall
+    // back to the bundled zxing decoder so the camera still works everywhere
+    // (Firefox, Safari, older Chrome — none of which ship BarcodeDetector).
     try {
       final ctor = js_util.getProperty(html.window, 'BarcodeDetector');
-      if (ctor == null) { setState(() => _cameraSupported = false); return; }
-      _detector = js_util.callConstructor(ctor, [js_util.jsify({'formats': ['qr_code']})]);
-      _cameraSupported = true;
-      await _startCamera();
-    } catch (_) { setState(() => _cameraSupported = false); }
+      if (ctor != null) {
+        _detector = js_util.callConstructor(ctor, [js_util.jsify({'formats': ['qr_code']})]);
+        _useNative = true;
+      }
+    } catch (_) { _useNative = false; }
+    await _startCamera();
   }
 
   Future<void> _startCamera() async {
-    if (!_cameraSupported || _cameraOn) return;
+    if (_cameraOn) return;
     try {
       final media = html.window.navigator.mediaDevices;
       if (media == null) { setState(() => _cameraSupported = false); return; }
@@ -168,10 +177,12 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
       _video?.srcObject = stream;
       await _video?.play();
       _cameraOn = true;
+      _cameraSupported = true;
       _scanLoop?.cancel();
-      _scanLoop = Timer.periodic(const Duration(milliseconds: 350), (_) => _scanFrame());
+      _scanLoop = Timer.periodic(const Duration(milliseconds: 400), (_) => _scanFrame());
       if (mounted) setState(() {});
     } catch (_) {
+      // Only a real camera failure (no device / permission denied) lands here.
       _cameraOn = false;
       if (mounted) setState(() => _cameraSupported = false);
     }
@@ -189,20 +200,53 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
   }
 
   Future<void> _scanFrame() async {
-    if (_busy || _detector == null || _video == null) return;
+    if (_busy || _video == null || !_cameraOn) return;
     if (DateTime.now().isBefore(_camCooldownUntil)) return;
+    String? raw;
     try {
-      final res = await js_util.promiseToFuture(js_util.callMethod(_detector!, 'detect', [_video]));
-      final len = js_util.getProperty(res, 'length');
-      if (len is int && len > 0) {
-        final first = js_util.getProperty(res, '0');
-        final raw = js_util.getProperty(first, 'rawValue');
-        if (raw is String && raw.trim().isNotEmpty) {
-          _camCooldownUntil = DateTime.now().add(const Duration(seconds: 4));
-          _process(raw.trim());
+      if (_useNative && _detector != null) {
+        final res = await js_util.promiseToFuture(js_util.callMethod(_detector!, 'detect', [_video]));
+        final len = js_util.getProperty(res, 'length');
+        if (len is int && len > 0) {
+          final v = js_util.getProperty(js_util.getProperty(res, '0'), 'rawValue');
+          if (v is String) raw = v;
         }
+      } else {
+        raw = _decodeWithZxing();
       }
-    } catch (_) { /* frame not ready — ignore */ }
+    } catch (_) { /* frame not ready / no code — ignore */ }
+    if (raw != null && raw.trim().isNotEmpty) {
+      _camCooldownUntil = DateTime.now().add(const Duration(seconds: 4));
+      _process(raw.trim());
+    }
+  }
+
+  // Grab the current video frame and decode any QR in it with the pure-Dart
+  // zxing reader. Returns the QR text, or null if none found this frame.
+  String? _decodeWithZxing() {
+    final vw = _video!.videoWidth, vh = _video!.videoHeight;
+    if (vw == 0 || vh == 0) return null;
+    // Downscale to keep decoding fast; QR still resolves well at ~480px.
+    final scale = vw > 480 ? 480 / vw : 1.0;
+    final w = (vw * scale).round(), h = (vh * scale).round();
+    _canvas ??= html.CanvasElement();
+    _canvas!..width = w..height = h;
+    final ctx = _canvas!.context2D;
+    ctx.drawImageScaled(_video!, 0, 0, w, h);
+    final data = ctx.getImageData(0, 0, w, h).data; // RGBA Uint8ClampedList
+    final pixels = Int32List(w * h);
+    for (var i = 0, p = 0; p < pixels.length; i += 4, p++) {
+      final r = data[i], g = data[i + 1], b = data[i + 2];
+      pixels[p] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+    }
+    try {
+      final source = RGBLuminanceSource(w, h, pixels);
+      final bitmap = BinaryBitmap(HybridBinarizer(source));
+      final result = _zxing.decode(bitmap);
+      return result.text;
+    } catch (_) {
+      return null; // no QR in this frame
+    }
   }
 
   // Extract the floor token from a scanned QR: either a full URL that contains
