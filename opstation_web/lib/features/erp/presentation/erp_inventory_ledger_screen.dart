@@ -233,21 +233,26 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     final qtyStr = qtyAbs == qtyAbs.roundToDouble() ? qtyAbs.toStringAsFixed(0) : qtyAbs.toStringAsFixed(2);
     final cost = (m['unit_cost'] as num?)?.toDouble() ?? 0;
     final at = cost > 0 ? ' @ ${cost.toStringAsFixed(2)}' : '';
+    // Use the movement's own unit of measure (g, kg, pcs, …) rather than always
+    // saying "pcs" — a gram-tracked product reading "reduced by 7495200 pcs"
+    // while the amount column said "g" was confusing.
+    final uomRaw = (m['uoms']?['abbreviation'] as String?)?.trim();
+    final unit = (uomRaw == null || uomRaw.isEmpty) ? 'pcs' : uomRaw;
     // A GRN quantity edit posts a system correction (never a manual tweak) —
     // label it as such and tie it back to the GRN so the ledger isn't ambiguous.
     if (ref == 'grn_qty_correction') {
       final refId = m['reference_id'] as String?;
       final vno = refId != null ? _voucherNumbers[refId] : null;
       final dir = qty < 0 ? 'reduced' : 'increased';
-      return '${vno ?? 'GRN'} quantity $dir by $qtyStr pcs';
+      return '${vno ?? 'GRN'} quantity $dir by $qtyStr $unit';
     }
     final t = type.isNotEmpty ? type : ref;
-    if (t.contains('sale') && t.contains('return')) return 'Sale return $qtyStr pcs$at';
-    if (t.contains('pos')) return 'Sold $qtyStr pcs$at';
-    if (t.contains('sale')) return 'Sold $qtyStr pcs$at';
-    if (t.contains('purchase') && t.contains('return')) return 'Purchase return $qtyStr pcs$at';
-    if (t.contains('purchase') || t.contains('grn') || t.contains('goods_received')) return 'Received $qtyStr pcs$at';
-    if (t.contains('damage')) return 'Damaged $qtyStr pcs$at';
+    if (t.contains('sale') && t.contains('return')) return 'Sale return $qtyStr $unit$at';
+    if (t.contains('pos')) return 'Sold $qtyStr $unit$at';
+    if (t.contains('sale')) return 'Sold $qtyStr $unit$at';
+    if (t.contains('purchase') && t.contains('return')) return 'Purchase return $qtyStr $unit$at';
+    if (t.contains('purchase') || t.contains('grn') || t.contains('goods_received')) return 'Received $qtyStr $unit$at';
+    if (t.contains('damage')) return 'Damaged $qtyStr $unit$at';
     if (t.contains('transfer')) {
       final refId = m['reference_id'] as String?;
       final info = refId != null ? _transferInfo[refId] : null;
@@ -261,8 +266,8 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         return 'Received $qtyStr units${from != null ? ' from $from' : ''}$noteSuffix';
       }
     }
-    if (t.contains('adjust')) return 'Adjusted $qtyStr pcs$at';
-    if (t.contains('opening')) return 'Opening stock $qtyStr pcs$at';
+    if (t.contains('adjust')) return 'Adjusted $qtyStr $unit$at';
+    if (t.contains('opening')) return 'Opening stock $qtyStr $unit$at';
     if (t.contains('production') || t.contains('manufactur') || t.contains('job')) {
       final refId = m['reference_id'] as String?;
       final info = refId != null ? _productionInfo[refId] : null;
@@ -275,7 +280,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         }
         return 'Produced $fg';
       }
-      return 'Produced $qtyStr pcs$at';
+      return 'Produced $qtyStr $unit$at';
     }
     return _friendlyRefLabel(m['reference_type'] as String?);
   }
