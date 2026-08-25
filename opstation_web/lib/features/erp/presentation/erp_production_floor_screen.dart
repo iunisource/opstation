@@ -585,7 +585,7 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
       List auditRows = const [];
       List qcRows = const [];
       try {
-        auditRows = await client.from('job_card_audit_trail').select().eq('job_card_id', jobId).order('created_at');
+        auditRows = await client.from('job_card_audit_trail').select().eq('job_card_id', jobId).order('performed_at');
       } catch (_) {}
       try {
         qcRows = await client.from('qc_inspections').select().eq('job_card_id', jobId);
@@ -623,13 +623,19 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
     Duration total = Duration.zero;
     for (final a in _audit) {
       final action = a['action'] as String?;
-      final t = _ts(a['created_at'] ?? a['performed_at']);
+      final t = _ts(a['performed_at'] ?? a['created_at']);
       if (t == null || action == null) continue;
       if (_startActions.contains(action)) {
         runningSince ??= t;
       } else if (_stopActions.contains(action)) {
         if (runningSince != null) { total += t.difference(runningSince); runningSince = null; }
       }
+    }
+    // Fallback: if it's on the floor right now but the audit trail has no open
+    // start span (e.g. put on the floor before event-logging, or a missed row),
+    // count from on_floor_at so the live timer still runs.
+    if (runningSince == null && _currentlyOnFloor) {
+      runningSince = _ts(widget.job['on_floor_at']);
     }
     if (runningSince != null) total += _now.difference(runningSince);
     return total;
@@ -723,7 +729,7 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
       // Batches are rendered from job_card_runs (they carry the quantities);
       // skip the audit duplicates and low-value noise.
       if (action == 'batch_posted' || action == 'updated' || action == 'created') continue;
-      rows.add({'t': _ts(a['created_at'] ?? a['performed_at']), 'kind': 'audit', 'action': action, 'who': a['performed_by_name'] as String?, 'notes': a['notes'] as String?});
+      rows.add({'t': _ts(a['performed_at'] ?? a['created_at']), 'kind': 'audit', 'action': action, 'who': a['performed_by_name'] as String?, 'notes': a['notes'] as String?});
     }
     for (final r in _runs) {
       rows.add({'t': _ts(r['created_at']) ?? _ts(r['run_date']), 'kind': 'run', 'run': r});
