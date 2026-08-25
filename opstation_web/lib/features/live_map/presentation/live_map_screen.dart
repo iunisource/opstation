@@ -41,6 +41,11 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   // Colour per customer main group (group_name)
   final Map<String, Color> _groupColors = {};
   bool _custListExpanded = false;
+  // When set, only customers in this main group are drawn on the map and listed
+  // in the right panel. Toggled by clicking a group in the MAIN GROUPS legend.
+  String? _selectedGroup;
+  // Search inside the collapsible customer list (right panel).
+  final TextEditingController _custSearchCtrl = TextEditingController();
   static const _groupPalette = <Color>[
     Color(0xFF2F6FED), Color(0xFFEF4444), Color(0xFF16A34A), Color(0xFFF59E0B),
     Color(0xFF9333EA), Color(0xFF0891B2), Color(0xFFDB2777), Color(0xFF65A30D),
@@ -62,18 +67,46 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     }
   }
 
+  bool _matchesGroup(_Cust c) =>
+      _selectedGroup == null || c.group == _selectedGroup;
+
+  // Whether the right panel has a list to show at all (before the search box
+  // narrows it) — so an empty search result never hides the search field.
+  bool get _hasListableCustomers =>
+      _selectedRouteId != null ? _routeStops.isNotEmpty : (_showCustomers && _customers.isNotEmpty);
+
   // Customers currently shown on the map: a selected route's stops (in order),
-  // else every located customer when "show customers" is on.
-  List<_Cust> get _shownCustomers =>
-      _selectedRouteId != null ? _routeStops : (_showCustomers ? _customers : const []);
+  // else every located customer when "show customers" is on. A selected main
+  // group narrows either set to that group.
+  List<_Cust> get _shownCustomers {
+    final base =
+        _selectedRouteId != null ? _routeStops : (_showCustomers ? _customers : const <_Cust>[]);
+    if (_selectedGroup == null) return base;
+    return base.where(_matchesGroup).toList();
+  }
 
   // The list shown in the right-hand collapsible panel: a route's stops stay in
-  // stop order; the "all customers" list is sorted by name.
+  // stop order; the "all customers" list is sorted by name. Narrowed by the
+  // selected group and the search box.
   List<_Cust> get _panelCustomers {
-    if (_selectedRouteId != null) return _routeStops;
-    if (!_showCustomers) return const [];
-    final l = List<_Cust>.from(_customers);
-    l.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    List<_Cust> l;
+    if (_selectedRouteId != null) {
+      l = List<_Cust>.from(_routeStops);
+    } else if (_showCustomers) {
+      l = List<_Cust>.from(_customers)
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    } else {
+      return const [];
+    }
+    if (_selectedGroup != null) l = l.where(_matchesGroup).toList();
+    final q = _custSearchCtrl.text.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      l = l
+          .where((c) =>
+              c.name.toLowerCase().contains(q) ||
+              c.code.toLowerCase().contains(q))
+          .toList();
+    }
     return l;
   }
 
@@ -112,6 +145,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _custSearchCtrl.dispose();
     if (_channel != null) Supabase.instance.client.removeChannel(_channel!);
     super.dispose();
   }
@@ -412,13 +446,21 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   Future<void> _toggleCustomers() async {
     final on = !_showCustomers;
-    setState(() => _showCustomers = on);
+    setState(() {
+      _showCustomers = on;
+      if (!on) {
+        _selectedGroup = null;
+        _custSearchCtrl.clear();
+      }
+    });
     if (on && _customers.isEmpty) await _loadCustomers();
   }
 
   // ── Route selection ─────────────────────────────────────────────────────────
   Future<void> _selectRoute(String? routeId) async {
-    setState(() { _selectedRouteId = routeId; _routeStops = []; });
+    // Clear any group filter so a new route's stops aren't hidden by a stale
+    // selection from the previous view.
+    setState(() { _selectedRouteId = routeId; _routeStops = []; _selectedGroup = null; });
     if (routeId == null) return;
     setState(() => _routeLoading = true);
     try {
@@ -591,18 +633,19 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             if (_selectedRouteId != null)
               MarkerLayer(markers: [
                 for (var i = 0; i < _routeStops.length; i++)
-                  Marker(
-                    point: LatLng(_routeStops[i].lat, _routeStops[i].lng),
-                    width: 30, height: 30, alignment: Alignment.center,
-                    child: GestureDetector(
-                      onTap: () => _showCustSheet(_routeStops[i], stopNo: i + 1),
-                      child: _routeStopPin(i + 1, _groupColor(_routeStops[i].group)),
+                  if (_matchesGroup(_routeStops[i]))
+                    Marker(
+                      point: LatLng(_routeStops[i].lat, _routeStops[i].lng),
+                      width: 30, height: 30, alignment: Alignment.center,
+                      child: GestureDetector(
+                        onTap: () => _showCustSheet(_routeStops[i], stopNo: i + 1),
+                        child: _routeStopPin(i + 1, _groupColor(_routeStops[i].group)),
+                      ),
                     ),
-                  ),
               ])
             else if (_showCustomers)
               MarkerLayer(markers: [
-                for (final c in _customers)
+                for (final c in _shownCustomers)
                   Marker(
                     point: LatLng(c.lat, c.lng),
                     width: 18, height: 18, alignment: Alignment.center,
@@ -726,23 +769,35 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             ),
           ]),
         ),
+        // Bottom-left stack: MAIN GROUPS (clickable filter) above FRESHNESS.
+        // Kept in one Column so the two cards never overlap the route selector.
         Positioned(
           left: 16,
           bottom: 16,
-          child: Card(
-            elevation: 4,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                const Text('FRESHNESS',
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
-                const SizedBox(height: 6),
-                _legendDot(AppTheme.success, '< 30 min'),
-                _legendDot(AppTheme.warning, '< 2 h'),
-                _legendDot(Colors.orange, '< 8 h'),
-                _legendDot(AppTheme.textSecondary, 'older'),
-              ]),
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_groupColors.isNotEmpty && (_showCustomers || _selectedRouteId != null)) ...[
+                _groupsLegendCard(),
+                const SizedBox(height: 10),
+              ],
+              Card(
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                    const Text('FRESHNESS',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+                    const SizedBox(height: 6),
+                    _legendDot(AppTheme.success, '< 30 min'),
+                    _legendDot(AppTheme.warning, '< 2 h'),
+                    _legendDot(Colors.orange, '< 8 h'),
+                    _legendDot(AppTheme.textSecondary, 'older'),
+                  ]),
+                ),
+              ),
+            ],
           ),
         ),
         // Always-visible clickable user legend (right side)
@@ -816,7 +871,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                           ),
                         ),
                       // ── Collapsible customer list ─────────────────────────
-                      if (_panelCustomers.isNotEmpty) ...[
+                      if (_hasListableCustomers) ...[
                         const Divider(height: 14),
                         InkWell(
                           onTap: () => setState(() => _custListExpanded = !_custListExpanded),
@@ -831,58 +886,78 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                             ]),
                           ),
                         ),
-                        if (_custListExpanded)
-                          SizedBox(
-                            height: 240,
-                            child: ListView.builder(
-                                itemCount: _panelCustomers.length,
-                                itemBuilder: (_, i) {
-                                  final c = _panelCustomers[i];
-                                  return InkWell(
-                                    onTap: () => _focusCust(c, stopNo: _selectedRouteId != null ? i + 1 : null),
-                                    borderRadius: BorderRadius.circular(6),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                                      child: Row(children: [
-                                        SizedBox(width: 22, child: Text('${i + 1}.', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-                                        Container(width: 9, height: 9, decoration: BoxDecoration(color: _groupColor(c.group), shape: BoxShape.circle)),
-                                        const SizedBox(width: 8),
-                                        Expanded(child: Text(c.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
-                                      ]),
-                                    ),
-                                  );
-                                },
+                        if (_custListExpanded) ...[
+                          const SizedBox(height: 6),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: SizedBox(
+                              height: 34,
+                              child: TextField(
+                                controller: _custSearchCtrl,
+                                onChanged: (_) => setState(() {}),
+                                style: const TextStyle(fontSize: 12),
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  hintText: 'Search name or code...',
+                                  hintStyle: const TextStyle(fontSize: 12),
+                                  prefixIcon: const Icon(Icons.search, size: 16),
+                                  prefixIconConstraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                                  suffixIcon: _custSearchCtrl.text.isEmpty
+                                      ? null
+                                      : IconButton(
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                                          icon: const Icon(Icons.clear, size: 14),
+                                          onPressed: () => setState(() => _custSearchCtrl.clear()),
+                                        ),
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
                               ),
+                            ),
                           ),
+                          const SizedBox(height: 4),
+                          Builder(builder: (_) {
+                            final list = _panelCustomers;
+                            if (list.isEmpty) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 16),
+                                child: Text('No customers match.',
+                                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                              );
+                            }
+                            return SizedBox(
+                              height: 240,
+                              child: ListView.builder(
+                                  itemCount: list.length,
+                                  itemBuilder: (_, i) {
+                                    final c = list[i];
+                                    // In route mode the label is the true stop
+                                    // position (unaffected by search/group filter).
+                                    final stopNo = _selectedRouteId != null
+                                        ? _routeStops.indexOf(c) + 1
+                                        : i + 1;
+                                    return InkWell(
+                                      onTap: () => _focusCust(c, stopNo: _selectedRouteId != null ? stopNo : null),
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                                        child: Row(children: [
+                                          SizedBox(width: 22, child: Text('$stopNo.', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                                          Container(width: 9, height: 9, decoration: BoxDecoration(color: _groupColor(c.group), shape: BoxShape.circle)),
+                                          const SizedBox(width: 8),
+                                          Expanded(child: Text(c.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
+                                        ]),
+                                      ),
+                                    );
+                                  },
+                                ),
+                            );
+                          }),
+                        ],
                       ],
                     ],
                   ),
-                ),
-              ),
-            ),
-          ),
-        // Groups colour legend
-        if (_groupColors.isNotEmpty && (_showCustomers || _selectedRouteId != null))
-          Positioned(
-            left: 16,
-            top: 112,
-            child: Card(
-              elevation: 4,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 220, maxHeight: 200),
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                    const Text('MAIN GROUPS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
-                    const SizedBox(height: 6),
-                    Flexible(
-                      child: SingleChildScrollView(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                          for (final e in _groupColors.entries) _legendDot(e.value, e.key),
-                        ]),
-                      ),
-                    ),
-                  ]),
                 ),
               ),
             ),
@@ -942,6 +1017,86 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         const SizedBox(width: 8),
         Text(label, style: const TextStyle(fontSize: 11)),
       ]),
+    );
+  }
+
+  /// Clickable MAIN GROUPS legend. Tapping a group filters the map (and the
+  /// customer list) to only that group; tapping the selected group again — or
+  /// the "All groups" row — clears the filter.
+  Widget _groupsLegendCard() {
+    final entries = _groupColors.entries.toList();
+    return Card(
+      elevation: 4,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 220, maxHeight: 240),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              const Text('MAIN GROUPS',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+              if (_selectedGroup != null) ...[
+                const Spacer(),
+                InkWell(
+                  onTap: () => setState(() => _selectedGroup = null),
+                  borderRadius: BorderRadius.circular(4),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text('Clear',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                  ),
+                ),
+              ],
+            ]),
+            const SizedBox(height: 6),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  _groupLegendRow(null, AppTheme.textSecondary, 'All groups'),
+                  for (final e in entries) _groupLegendRow(e.key, e.value, e.key),
+                ]),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _groupLegendRow(String? group, Color color, String label) {
+    final selected = _selectedGroup == group;
+    return InkWell(
+      onTap: () => setState(() {
+        // Tapping the active group clears; "All groups" (group == null) always clears.
+        _selectedGroup = (group == null || _selectedGroup == group) ? null : group;
+      }),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.primary.withOpacity(0.10) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          group == null
+              ? Icon(Icons.done_all, size: 11, color: color)
+              : Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                    color: selected ? AppTheme.primary : AppTheme.textPrimary)),
+          ),
+          if (selected) ...[
+            const SizedBox(width: 6),
+            const Icon(Icons.check, size: 12, color: AppTheme.primary),
+          ],
+        ]),
+      ),
     );
   }
 
