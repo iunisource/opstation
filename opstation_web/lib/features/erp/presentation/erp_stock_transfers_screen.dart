@@ -786,14 +786,34 @@ class _StockTransferVoucherScreenState
       return false;
     }
     try {
-      await Supabase.instance.client.from('stock_transfer_items').insert({
-        'id': 'sti_${DateTime.now().millisecondsSinceEpoch}',
-        'transfer_id': _transfer!['id'],
-        'product_id': _addProductId,
-        'uom_id': _addUomId,
-        'quantity': qty,
-        'unit_cost': 0,
-      });
+      final client = Supabase.instance.client;
+      // Merge into the existing line for this product+UOM rather than adding a
+      // second row. A product appearing twice on one transfer makes the cost
+      // posting write two records for the same product+cost-layer, which the DB
+      // blocks (inventory_cost_consumption_uniq) at dispatch.
+      Map<String, dynamic>? existing;
+      for (final it in _items) {
+        if (it['product_id'] == _addProductId && it['uom_id'] == _addUomId) {
+          existing = it;
+          break;
+        }
+      }
+      if (existing != null) {
+        final newQty =
+            ((existing['quantity'] as num?)?.toDouble() ?? 0) + qty;
+        await client
+            .from('stock_transfer_items')
+            .update({'quantity': newQty}).eq('id', existing['id']);
+      } else {
+        await client.from('stock_transfer_items').insert({
+          'id': 'sti_${DateTime.now().millisecondsSinceEpoch}',
+          'transfer_id': _transfer!['id'],
+          'product_id': _addProductId,
+          'uom_id': _addUomId,
+          'quantity': qty,
+          'unit_cost': 0,
+        });
+      }
       setState(() { _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; });
       await _load();
       return true;
@@ -801,6 +821,38 @@ class _StockTransferVoucherScreenState
       _snack('Failed: $e');
       return false;
     }
+  }
+
+  /// Collapse any duplicate (product + UOM) lines into one, summing quantities.
+  /// Guards the cost-consumption uniqueness rule that a product appearing on two
+  /// lines would violate at dispatch. Runs before dispatch so transfers created
+  /// by bulk import or older data are healed too. Returns true if it merged.
+  Future<bool> _mergeDuplicateItems() async {
+    final byKey = <String, List<Map<String, dynamic>>>{};
+    for (final it in _items) {
+      byKey.putIfAbsent('${it['product_id']}|${it['uom_id']}', () => []).add(it);
+    }
+    final dups = byKey.values.where((g) => g.length > 1).toList();
+    if (dups.isEmpty) return false;
+    final client = Supabase.instance.client;
+    for (final g in dups) {
+      final keep = g.first;
+      var sum = 0.0;
+      for (final it in g) {
+        sum += (it['quantity'] as num?)?.toDouble() ?? 0;
+      }
+      await client
+          .from('stock_transfer_items')
+          .update({'quantity': sum}).eq('id', keep['id']);
+      for (final it in g.skip(1)) {
+        await client
+            .from('stock_transfer_items')
+            .delete()
+            .eq('id', it['id']);
+      }
+    }
+    await _load();
+    return true;
   }
 
   // Enter on Qty: add the line, then reopen the picker for the next product.
@@ -826,6 +878,17 @@ class _StockTransferVoucherScreenState
       _snack('Add items before dispatching');
       return;
     }
+    // Heal any duplicate product lines first so the cost posting can't collide
+    // on inventory_cost_consumption_uniq (same product on two lines).
+    try {
+      if (await _mergeDuplicateItems()) {
+        _snack('Merged duplicate product lines');
+      }
+    } catch (e) {
+      _snack('Could not merge duplicate lines: ${e.toString().split('\n').first}');
+      return;
+    }
+    if (_items.isEmpty) return;
     final client = Supabase.instance.client;
     final orgId = _orgId!;
     final fromBranchId = _transfer!['from_branch_id'] as String;
