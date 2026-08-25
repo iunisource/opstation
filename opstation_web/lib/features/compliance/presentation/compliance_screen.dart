@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:excel/excel.dart' as xls;
 
 import '../../auth/auth_controller.dart';
 
@@ -34,6 +39,22 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
   List<_AnomalyRow> _noVisit = [];
   List<_AnomalyRow> _skipped = [];
 
+  // Filters
+  List<String> _allGroups = [];      // distinct customer group_name values
+  List<String> _allSalespeople = []; // distinct salesperson names
+  String? _fGroup;                   // null => all groups
+  String? _fPerson;                  // null => all salespeople
+
+  bool _matchFilters(_AnomalyRow r) {
+    if (_fGroup != null && r.group != _fGroup) return false;
+    if (_fPerson != null && !r.salespeople.contains(_fPerson)) return false;
+    return true;
+  }
+
+  List<_AnomalyRow> get _fNoCollection => _noCollection.where(_matchFilters).toList();
+  List<_AnomalyRow> get _fNoVisit => _noVisit.where(_matchFilters).toList();
+  List<_AnomalyRow> get _fSkipped => _skipped.where(_matchFilters).toList();
+
   @override
   void initState() {
     super.initState();
@@ -66,7 +87,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
       final stage1 = await Future.wait([
         client
             .from('customers')
-            .select('id, code, shop_name')
+            .select('id, code, shop_name, group_name')
             .eq('org_id', orgId)
             .eq('is_active', true)
             .limit(10000),
@@ -180,6 +201,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
         final cid = c['id'] as String;
         final code = (c['code'] as String?) ?? '';
         final name = (c['shop_name'] as String?) ?? '(no name)';
+        final grp = (c['group_name'] as String?)?.trim() ?? '';
 
         // Trigger 1
         final verifiedVisits = (visitsByCustomer[cid] ?? const [])
@@ -193,8 +215,10 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
           });
           if (allZero) {
             noCol.add(_AnomalyRow(
+              id: cid,
               code: code,
               name: name,
+              group: grp,
               dates: verifiedVisits
                   .map((v) => _fmtDate(v['timestamp'] as String))
                   .toList(),
@@ -227,11 +251,11 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
               .toList();
           if (verifiedCount == 0) {
             noVis.add(_AnomalyRow(
-                code: code, name: name, dates: dates, salespeople: people));
+                id: cid, code: code, name: name, group: grp, dates: dates, salespeople: people));
           }
           if (skippedCount == 3) {
             skipped.add(_AnomalyRow(
-                code: code, name: name, dates: dates, salespeople: people));
+                id: cid, code: code, name: name, group: grp, dates: dates, salespeople: people));
           }
         }
       }
@@ -242,11 +266,21 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
       noVis.sort(byName);
       skipped.sort(byName);
 
+      // Filter option lists, drawn from the flagged rows so the dropdowns only
+      // offer values that actually appear.
+      final all = [...noCol, ...noVis, ...skipped];
+      final groups = all.map((r) => r.group).where((g) => g.isNotEmpty).toSet().toList()..sort();
+      final people = all.expand((r) => r.salespeople).where((p) => p.isNotEmpty).toSet().toList()..sort();
+
       setState(() {
         _loading = false;
         _noCollection = noCol;
         _noVisit = noVis;
         _skipped = skipped;
+        _allGroups = groups;
+        _allSalespeople = people;
+        if (_fGroup != null && !groups.contains(_fGroup)) _fGroup = null;
+        if (_fPerson != null && !people.contains(_fPerson)) _fPerson = null;
       });
     } catch (e) {
       setState(() {
@@ -299,22 +333,183 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
       color: Colors.white,
-      child: Row(
-        children: [
-          const Text('Compliance',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-          const SizedBox(width: 12),
-          const Text('· Last 90 days',
-              style: TextStyle(fontSize: 13, color: _muted)),
-          const Spacer(),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('Refresh'),
-            onPressed: _load,
-          ),
-        ],
-      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(
+          children: [
+            const Text('Compliance',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 12),
+            const Text('· Last 90 days',
+                style: TextStyle(fontSize: 13, color: _muted)),
+            const Spacer(),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
+              label: const Text('PDF / Print'),
+              onPressed: _loading ? null : _generatePdf,
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.grid_on_outlined, size: 16),
+              label: const Text('Excel'),
+              onPressed: _loading ? null : _exportExcel,
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Refresh'),
+              onPressed: _load,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(spacing: 12, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          SizedBox(width: 260, child: _filterDropdown(
+            label: 'Customer main group', value: _fGroup, options: _allGroups,
+            icon: Icons.folder_open_outlined, onChanged: (v) => setState(() => _fGroup = v))),
+          SizedBox(width: 260, child: _filterDropdown(
+            label: 'Salesperson', value: _fPerson, options: _allSalespeople,
+            icon: Icons.person_outline, onChanged: (v) => setState(() => _fPerson = v))),
+          if (_fGroup != null || _fPerson != null)
+            TextButton.icon(
+              icon: const Icon(Icons.clear, size: 15),
+              label: const Text('Clear filters'),
+              onPressed: () => setState(() { _fGroup = null; _fPerson = null; })),
+        ]),
+      ]),
     );
+  }
+
+  Widget _filterDropdown({
+    required String label,
+    required String? value,
+    required List<String> options,
+    required IconData icon,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return DropdownButtonFormField<String?>(
+      value: value,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon, size: 18),
+        isDense: true,
+        border: const OutlineInputBorder(),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      ),
+      items: [
+        const DropdownMenuItem<String?>(value: null, child: Text('All')),
+        ...options.map((o) => DropdownMenuItem<String?>(value: o, child: Text(o, overflow: TextOverflow.ellipsis))),
+      ],
+      onChanged: onChanged,
+    );
+  }
+
+  // ── Combined export matrix ────────────────────────────────────────────────
+  // One row per flagged customer (union of the three filtered lists). Each KPI
+  // column shows the actual dates when the customer is flagged for it, or "—".
+  static const _exportHeaders = ['Code', 'Customer', 'Main Group', 'No Collection', 'No Visit', 'Skipped', 'Salesperson'];
+
+  List<List<String>> _matrixRows() {
+    final nc = _fNoCollection, nv = _fNoVisit, sk = _fSkipped;
+    final ncMap = {for (final r in nc) r.id: r.dates.join(', ')};
+    final nvMap = {for (final r in nv) r.id: r.dates.join(', ')};
+    final skMap = {for (final r in sk) r.id: r.dates.join(', ')};
+    final byId = <String, _AnomalyRow>{};
+    final peopleById = <String, Set<String>>{};
+    for (final r in [...nc, ...nv, ...sk]) {
+      byId[r.id] = r;
+      (peopleById[r.id] ??= <String>{}).addAll(r.salespeople);
+    }
+    final ids = byId.keys.toList()
+      ..sort((a, b) => byId[a]!.name.toLowerCase().compareTo(byId[b]!.name.toLowerCase()));
+    return [
+      for (final id in ids)
+        [
+          byId[id]!.code,
+          byId[id]!.name,
+          byId[id]!.group.isEmpty ? '—' : byId[id]!.group,
+          ncMap[id] ?? '—',
+          nvMap[id] ?? '—',
+          skMap[id] ?? '—',
+          (peopleById[id]!.toList()..sort()).join(', '),
+        ],
+    ];
+  }
+
+  String get _filterCaption {
+    final parts = <String>[];
+    if (_fGroup != null) parts.add('Group: $_fGroup');
+    if (_fPerson != null) parts.add('Salesperson: $_fPerson');
+    return parts.isEmpty ? 'All customers' : parts.join('  ·  ');
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _generatePdf() async {
+    final rows = _matrixRows();
+    if (rows.isEmpty) { _snack('Nothing to export for the current filters.'); return; }
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
+    final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
+    final doc = pw.Document();
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4.landscape,
+      margin: const pw.EdgeInsets.all(24),
+      build: (ctx) => [
+        if (org.isNotEmpty) pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
+        pw.Text('Compliance Report', style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 2),
+        pw.Text('Last 90 days  ·  $_filterCaption', style: pw.TextStyle(fontSize: 9.5, color: PdfColors.grey700)),
+        pw.Text('Generated: $stamp', style: pw.TextStyle(fontSize: 9.5, color: PdfColors.grey700)),
+        pw.SizedBox(height: 12),
+        pw.TableHelper.fromTextArray(
+          headers: _exportHeaders,
+          data: rows,
+          headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
+          cellStyle: const pw.TextStyle(fontSize: 8.5),
+          headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+          cellHeight: 16,
+          columnWidths: {
+            0: const pw.FixedColumnWidth(60),
+            1: const pw.FlexColumnWidth(3),
+            2: const pw.FlexColumnWidth(2),
+            3: const pw.FlexColumnWidth(2.4),
+            4: const pw.FlexColumnWidth(2.4),
+            5: const pw.FlexColumnWidth(2.4),
+            6: const pw.FlexColumnWidth(2.2),
+          },
+          cellAlignment: pw.Alignment.centerLeft,
+        ),
+      ],
+    ));
+    await Printing.layoutPdf(
+      onLayout: (f) async => doc.save(),
+      name: 'compliance-${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
+    );
+  }
+
+  Future<void> _exportExcel() async {
+    final rows = _matrixRows();
+    if (rows.isEmpty) { _snack('Nothing to export for the current filters.'); return; }
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
+    final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
+    final excel = xls.Excel.createExcel();
+    const sheetName = 'Compliance';
+    final sheet = excel[sheetName];
+    final def = excel.getDefaultSheet();
+    if (def != null && def != sheetName) excel.delete(def);
+    if (org.isNotEmpty) sheet.appendRow([xls.TextCellValue(org)]);
+    sheet.appendRow([xls.TextCellValue('Compliance Report')]);
+    sheet.appendRow([xls.TextCellValue('Last 90 days  ·  $_filterCaption')]);
+    sheet.appendRow([xls.TextCellValue('Generated: $stamp')]);
+    sheet.appendRow([xls.TextCellValue('')]);
+    sheet.appendRow([for (final h in _exportHeaders) xls.TextCellValue(h)]);
+    for (final r in rows) {
+      sheet.appendRow([for (final c in r) xls.TextCellValue(c)]);
+    }
+    excel.save(fileName: 'compliance-${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx');
   }
 
   Widget _content() {
@@ -327,7 +522,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
             title: 'No Collection in Last 3 Visits',
             description:
                 'Verified visits with zero amount, three in a row.',
-            rows: _noCollection,
+            rows: _fNoCollection,
             empty: 'No anomalies — every customer has had non-zero collection.',
           ),
           const SizedBox(height: 20),
@@ -335,14 +530,14 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
             title: 'No Visit in Last 3 Routes',
             description:
                 'Customer was on the planned route on three trips, but never verified.',
-            rows: _noVisit,
+            rows: _fNoVisit,
             empty: 'No anomalies — every customer is being visited.',
           ),
           const SizedBox(height: 20),
           _section(
             title: 'Skipped in Last 3 Routes',
             description: 'Customer was marked as skipped on three trips in a row.',
-            rows: _skipped,
+            rows: _fSkipped,
             empty: 'No anomalies — no customer has been skipped repeatedly.',
           ),
         ],
@@ -485,13 +680,17 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
 }
 
 class _AnomalyRow {
+  final String id;
   final String code;
   final String name;
+  final String group;
   final List<String> dates;
   final List<String> salespeople;
   _AnomalyRow({
+    required this.id,
     required this.code,
     required this.name,
+    required this.group,
     required this.dates,
     required this.salespeople,
   });
