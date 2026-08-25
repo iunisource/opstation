@@ -38,6 +38,45 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   bool _routeLoading = false;
   List<_Cust> _routeStops = []; // selected route's customers, in stop order
 
+  // Colour per customer main group (group_name)
+  final Map<String, Color> _groupColors = {};
+  bool _custListExpanded = false;
+  static const _groupPalette = <Color>[
+    Color(0xFF2F6FED), Color(0xFFEF4444), Color(0xFF16A34A), Color(0xFFF59E0B),
+    Color(0xFF9333EA), Color(0xFF0891B2), Color(0xFFDB2777), Color(0xFF65A30D),
+    Color(0xFF7C3AED), Color(0xFFEA580C), Color(0xFF0D9488), Color(0xFF334155),
+  ];
+  static const _noGroupColor = Color(0xFF94A3B8);
+
+  Color _groupColor(String group) =>
+      group.isEmpty ? _noGroupColor : (_groupColors[group] ?? _noGroupColor);
+
+  void _rebuildGroupColors() {
+    final groups = <String>{
+      for (final c in _customers) if (c.group.isNotEmpty) c.group,
+      for (final c in _routeStops) if (c.group.isNotEmpty) c.group,
+    }.toList()..sort();
+    _groupColors.clear();
+    for (var i = 0; i < groups.length; i++) {
+      _groupColors[groups[i]] = _groupPalette[i % _groupPalette.length];
+    }
+  }
+
+  // Customers currently shown on the map: a selected route's stops (in order),
+  // else every located customer when "show customers" is on.
+  List<_Cust> get _shownCustomers =>
+      _selectedRouteId != null ? _routeStops : (_showCustomers ? _customers : const []);
+
+  // The list shown in the right-hand collapsible panel: a route's stops stay in
+  // stop order; the "all customers" list is sorted by name.
+  List<_Cust> get _panelCustomers {
+    if (_selectedRouteId != null) return _routeStops;
+    if (!_showCustomers) return const [];
+    final l = List<_Cust>.from(_customers);
+    l.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return l;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -350,7 +389,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     setState(() => _customersLoading = true);
     try {
       final rows = await Supabase.instance.client.from('customers')
-          .select('id, shop_name, code, latitude, longitude')
+          .select('id, shop_name, code, group_name, latitude, longitude')
           .eq('org_id', orgId).eq('is_active', true).limit(20000);
       final list = <_Cust>[];
       for (final c in (rows as List)) {
@@ -360,11 +399,12 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
           id: c['id'] as String,
           name: (c['shop_name'] as String?) ?? '(no name)',
           code: (c['code'] as String?) ?? '',
+          group: (c['group_name'] as String?)?.trim() ?? '',
           lat: (lat as num).toDouble(),
           lng: (lng as num).toDouble(),
         ));
       }
-      if (mounted) setState(() { _customers = list; _customersLoading = false; });
+      if (mounted) setState(() { _customers = list; _customersLoading = false; _rebuildGroupColors(); });
     } catch (e) {
       if (mounted) setState(() => _customersLoading = false);
     }
@@ -384,7 +424,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     try {
       final client = Supabase.instance.client;
       final stops = await client.from('route_stops')
-          .select('customer_id, position, customers(id, shop_name, code, latitude, longitude)')
+          .select('customer_id, position, customers(id, shop_name, code, group_name, latitude, longitude)')
           .eq('route_id', routeId).order('position');
       final list = <_Cust>[];
       for (final s in (stops as List)) {
@@ -396,12 +436,13 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
           id: c['id'] as String,
           name: (c['shop_name'] as String?) ?? '(no name)',
           code: (c['code'] as String?) ?? '',
+          group: (c['group_name'] as String?)?.trim() ?? '',
           lat: (lat as num).toDouble(),
           lng: (lng as num).toDouble(),
         ));
       }
       if (!mounted) return;
-      setState(() { _routeStops = list; _routeLoading = false; });
+      setState(() { _routeStops = list; _routeLoading = false; _rebuildGroupColors(); });
       // Fit the map to the route.
       if (list.length == 1) {
         _mapController.move(LatLng(list.first.lat, list.first.lng), 14);
@@ -453,19 +494,18 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     );
   }
 
-  Widget _customerDot() => Container(
+  Widget _customerDot(Color c) => Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: c,
           shape: BoxShape.circle,
-          border: Border.all(color: AppTheme.textSecondary, width: 2),
+          border: Border.all(color: Colors.white, width: 2),
           boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
         ),
-        child: const Center(child: Icon(Icons.storefront, size: 9, color: AppTheme.textSecondary)),
       );
 
-  Widget _routeStopPin(int n) => Container(
+  Widget _routeStopPin(int n, Color c) => Container(
         decoration: BoxDecoration(
-          color: AppTheme.primary,
+          color: c,
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white, width: 2),
           boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
@@ -473,6 +513,11 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         alignment: Alignment.center,
         child: Text('$n', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
       );
+
+  void _focusCust(_Cust c, {int? stopNo}) {
+    _mapController.move(LatLng(c.lat, c.lng), 16);
+    _showCustSheet(c, stopNo: stopNo);
+  }
 
   void _showCustSheet(_Cust c, {int? stopNo}) {
     showModalBottomSheet(
@@ -551,7 +596,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     width: 30, height: 30, alignment: Alignment.center,
                     child: GestureDetector(
                       onTap: () => _showCustSheet(_routeStops[i], stopNo: i + 1),
-                      child: _routeStopPin(i + 1),
+                      child: _routeStopPin(i + 1, _groupColor(_routeStops[i].group)),
                     ),
                   ),
               ])
@@ -563,7 +608,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     width: 18, height: 18, alignment: Alignment.center,
                     child: GestureDetector(
                       onTap: () => _showCustSheet(c),
-                      child: _customerDot(),
+                      child: _customerDot(_groupColor(c.group)),
                     ),
                   ),
               ]),
@@ -770,8 +815,74 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                             ]),
                           ),
                         ),
+                      // ── Collapsible customer list ─────────────────────────
+                      if (_panelCustomers.isNotEmpty) ...[
+                        const Divider(height: 14),
+                        InkWell(
+                          onTap: () => setState(() => _custListExpanded = !_custListExpanded),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                            child: Row(children: [
+                              Icon(_custListExpanded ? Icons.expand_more : Icons.chevron_right, size: 16, color: AppTheme.textSecondary),
+                              const SizedBox(width: 4),
+                              Text('${_selectedRouteId != null ? 'ROUTE STOPS' : 'CUSTOMERS'} · ${_panelCustomers.length}',
+                                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+                            ]),
+                          ),
+                        ),
+                        if (_custListExpanded)
+                          SizedBox(
+                            height: 240,
+                            child: ListView.builder(
+                                itemCount: _panelCustomers.length,
+                                itemBuilder: (_, i) {
+                                  final c = _panelCustomers[i];
+                                  return InkWell(
+                                    onTap: () => _focusCust(c, stopNo: _selectedRouteId != null ? i + 1 : null),
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                                      child: Row(children: [
+                                        SizedBox(width: 22, child: Text('${i + 1}.', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                                        Container(width: 9, height: 9, decoration: BoxDecoration(color: _groupColor(c.group), shape: BoxShape.circle)),
+                                        const SizedBox(width: 8),
+                                        Expanded(child: Text(c.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
+                                      ]),
+                                    ),
+                                  );
+                                },
+                              ),
+                          ),
+                      ],
                     ],
                   ),
+                ),
+              ),
+            ),
+          ),
+        // Groups colour legend
+        if (_groupColors.isNotEmpty && (_showCustomers || _selectedRouteId != null))
+          Positioned(
+            left: 16,
+            top: 112,
+            child: Card(
+              elevation: 4,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 220, maxHeight: 200),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                    const Text('MAIN GROUPS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+                    const SizedBox(height: 6),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                          for (final e in _groupColors.entries) _legendDot(e.value, e.key),
+                        ]),
+                      ),
+                    ),
+                  ]),
                 ),
               ),
             ),
@@ -856,9 +967,10 @@ class _Cust {
   final String id;
   final String name;
   final String code;
+  final String group;
   final double lat;
   final double lng;
-  _Cust({required this.id, required this.name, required this.code, required this.lat, required this.lng});
+  _Cust({required this.id, required this.name, required this.code, required this.group, required this.lat, required this.lng});
 }
 
 class _UserLoc {
