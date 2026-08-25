@@ -30,8 +30,11 @@ class RetailerPortalScreen extends ConsumerStatefulWidget {
 class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
   int _tab = 0;
   bool _promptedPwd = false;
+  // Whether this retailer may see their account ledger (admin toggle). Loaded
+  // once on open; the Ledger tab is appended only when true.
+  bool _ledgerEnabled = false;
 
-  static const _tabs = [
+  static const _baseTabs = [
     (icon: Icons.notifications_outlined, label: 'Updates'),
     (icon: Icons.folder_outlined, label: 'Files'),
     (icon: Icons.receipt_long_outlined, label: 'Invoices'),
@@ -39,10 +42,27 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
     (icon: Icons.location_on_outlined, label: 'Location'),
   ];
 
+  List<({IconData icon, String label})> get _tabs => [
+        ..._baseTabs,
+        if (_ledgerEnabled)
+          (icon: Icons.account_balance_wallet_outlined, label: 'Ledger'),
+      ];
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptPassword());
+    _loadLedgerFlag();
+  }
+
+  Future<void> _loadLedgerFlag() async {
+    try {
+      final res =
+          await Supabase.instance.client.rpc('retailer_ledger_enabled');
+      if (mounted) setState(() => _ledgerEnabled = res == true);
+    } catch (_) {
+      // RPC not deployed yet / not permitted — keep the tab hidden.
+    }
   }
 
   void _maybePromptPassword() {
@@ -243,13 +263,14 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
             const Divider(height: 1),
             Expanded(
               child: IndexedStack(
-                index: _tab,
-                children: const [
-                  _NotificationsTab(),
-                  _FilesTab(),
-                  _OrdersTab(),
-                  _ComplaintsTab(),
-                  _LocationTab(),
+                index: _tab.clamp(0, _tabs.length - 1),
+                children: [
+                  const _NotificationsTab(),
+                  const _FilesTab(),
+                  const _OrdersTab(),
+                  const _ComplaintsTab(),
+                  const _LocationTab(),
+                  if (_ledgerEnabled) const _LedgerTab(),
                 ],
               ),
             ),
@@ -1178,5 +1199,345 @@ class _LocationTabState extends ConsumerState<_LocationTab> {
         ),
       ),
     );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Ledger (shown only when the admin enabled it for this retailer)
+// ════════════════════════════════════════════════════════════════════
+class _LedgerTab extends ConsumerStatefulWidget {
+  const _LedgerTab();
+  @override
+  ConsumerState<_LedgerTab> createState() => _LedgerTabState();
+}
+
+class _LedgerTabState extends ConsumerState<_LedgerTab> {
+  bool _loading = true;
+  bool _allowed = true;
+  List<Map<String, dynamic>> _entries = [];
+  double _debit = 0, _credit = 0, _balance = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  static String _num(Map m, List<String> keys) {
+    for (final k in keys) {
+      final val = m[k];
+      if (val == null) continue;
+      final s = val.toString();
+      if (s.isNotEmpty && s != 'null' && DateTime.tryParse(s) != null) return s;
+    }
+    return '';
+  }
+
+  static double _amt(Map m, List<String> keys) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v is num) return v.toDouble();
+      if (v is String) {
+        final p = double.tryParse(v);
+        if (p != null) return p;
+      }
+    }
+    return 0;
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_my_ledger');
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (m['visible'] == false) {
+        if (mounted) setState(() { _allowed = false; _loading = false; });
+        return;
+      }
+      final entries = _build(m);
+      double d = 0, c = 0, bal = 0;
+      for (final e in entries) {
+        d += e['debit'] as double;
+        c += e['credit'] as double;
+        bal += (e['debit'] as double) - (e['credit'] as double);
+        e['balance'] = bal;
+      }
+      if (!mounted) return;
+      setState(() {
+        _entries = entries;
+        _debit = d;
+        _credit = c;
+        _balance = bal;
+        _loading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+      if (mounted) _snack(context, 'Could not load ledger');
+    }
+  }
+
+  // Same sourcing/netting the staff ledger uses, over the raw rows the RPC
+  // returns. Debit = owed by customer, Credit = paid/returned.
+  List<Map<String, dynamic>> _build(Map<String, dynamic> m) {
+    final out = <Map<String, dynamic>>[];
+    List asList(String k) => (m[k] as List?) ?? const [];
+
+    for (final raw in asList('sales_invoices')) {
+      final si = Map<String, dynamic>.from(raw as Map);
+      if (si['is_voided'] == true) continue;
+      final total = _amt(si, const ['total', 'total_amount', 'grand_total', 'net_amount']);
+      if (total <= 0) continue;
+      out.add({
+        'date': _num(si, const ['voucher_date', 'invoice_date', 'si_date', 'date', 'posted_at', 'created_at']),
+        'voucher': (si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '').toString(),
+        'description': (si['remarks'] as String?)?.trim() ?? '',
+        'debit': total, 'credit': 0.0, 'type': 'Sales Invoice',
+      });
+    }
+
+    final pos = [for (final t in asList('pos_transactions')) Map<String, dynamic>.from(t as Map)];
+    final posById = {for (final t in pos) if (t['id'] is String) t['id'] as String: t};
+    for (final t in pos) {
+      final ttype = (t['transaction_type'] as String?) ?? 'sale';
+      final raw = _amt(t, const ['total']);
+      if (ttype == 'expense' || raw == 0) continue;
+      final vno = (t['transaction_number'] as String?)?.isNotEmpty == true
+          ? t['transaction_number'] as String
+          : 'POS';
+      final amt = raw.abs();
+      final isReturn = ttype == 'return' || raw < 0;
+      final dateStr = (t['transacted_at'] ?? t['created_at'] ?? '').toString();
+      if (isReturn) {
+        out.add({'date': dateStr, 'voucher': vno, 'description': '', 'debit': 0.0, 'credit': amt, 'type': 'POS Return'});
+        double cashRefund = amt;
+        Map<String, dynamic>? orig;
+        for (final f in const ['reference_transaction_id', 'original_transaction_id', 'parent_transaction_id', 'ref_transaction_id', 'reference_id']) {
+          final rid = t[f];
+          if (rid is String && posById[rid] != null) { orig = posById[rid]; break; }
+        }
+        if (orig != null) {
+          final ot = _amt(orig, const ['total']);
+          final op = orig['amount_paid'] == null ? ot : _amt(orig, const ['amount_paid']);
+          cashRefund = (amt - (ot - op)).clamp(0.0, amt).toDouble();
+        }
+        if (cashRefund > 0) {
+          out.add({'date': dateStr, 'voucher': vno, 'description': 'Cash refund', 'debit': cashRefund, 'credit': 0.0, 'type': 'POS Refund (Cash)'});
+        }
+      } else {
+        out.add({'date': dateStr, 'voucher': vno, 'description': '', 'debit': amt, 'credit': 0.0, 'type': 'POS Sale'});
+        final paid = (t['amount_paid'] == null ? amt : _amt(t, const ['amount_paid'])).clamp(0.0, amt).toDouble();
+        if (paid > 0) {
+          out.add({'date': dateStr, 'voucher': vno, 'description': 'Paid at POS', 'debit': 0.0, 'credit': paid, 'type': 'POS Payment'});
+        }
+      }
+    }
+
+    for (final raw in asList('sales_return_invoices')) {
+      final sr = Map<String, dynamic>.from(raw as Map);
+      if (sr['is_voided'] == true) continue;
+      final total = _amt(sr, const ['total', 'total_amount', 'grand_total', 'amount', 'net_amount', 'return_total', 'refund_amount', 'value', 'subtotal']);
+      if (total <= 0) continue;
+      out.add({
+        'date': _num(sr, const ['return_date', 'invoice_date', 'voucher_date', 'sri_date', 'srn_date', 'date', 'posted_at', 'created_at']),
+        'voucher': (sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? sr['return_no'] ?? '').toString(),
+        'description': (sr['remarks'] as String?)?.trim() ?? '',
+        'debit': 0.0, 'credit': total, 'type': 'Sale Return',
+      });
+    }
+
+    for (final raw in asList('crv')) {
+      final r = Map<String, dynamic>.from(raw as Map);
+      out.add({
+        'date': (r['date'] ?? '').toString(),
+        'voucher': (r['voucher'] ?? '').toString(),
+        'description': (r['description'] as String?)?.trim() ?? '',
+        'debit': 0.0, 'credit': _amt(r, const ['amount']), 'type': 'Receipt (CRV)',
+      });
+    }
+    for (final raw in asList('cpv')) {
+      final r = Map<String, dynamic>.from(raw as Map);
+      out.add({
+        'date': (r['date'] ?? '').toString(),
+        'voucher': (r['voucher'] ?? '').toString(),
+        'description': (r['description'] as String?)?.trim() ?? '',
+        'debit': _amt(r, const ['amount']), 'credit': 0.0, 'type': 'Payment (CPV)',
+      });
+    }
+    for (final raw in asList('jv')) {
+      final r = Map<String, dynamic>.from(raw as Map);
+      final ref = (r['reference_type'] as String?) ?? 'jv';
+      final opening = ref == 'opening_jv' || ref == 'opening_balance';
+      out.add({
+        'date': (r['date'] ?? '').toString(),
+        'voucher': (r['voucher'] ?? '').toString(),
+        'description': (r['description'] as String?)?.trim() ?? '',
+        'debit': _amt(r, const ['debit']), 'credit': _amt(r, const ['credit']),
+        'type': opening ? 'Opening Balance' : 'Journal (JV)',
+      });
+    }
+
+    int seq(Map e) => (e['type'] == 'POS Payment' || e['type'] == 'POS Refund (Cash)') ? 1 : 0;
+    out.sort((a, b) {
+      final d = (a['date'] as String).compareTo(b['date'] as String);
+      return d != 0 ? d : seq(a).compareTo(seq(b));
+    });
+    return out;
+  }
+
+  String _fmtDate(String iso) {
+    final d = DateTime.tryParse(iso);
+    return d == null ? '-' : DateFormat('d MMM yyyy').format(d.toLocal());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (!_allowed) {
+      return _empty('Ledger is not available for your account.',
+          Icons.account_balance_wallet_outlined);
+    }
+    if (_entries.isEmpty) {
+      return _empty('No ledger entries yet.',
+          Icons.account_balance_wallet_outlined);
+    }
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+        child: Row(children: [
+          Expanded(
+            child: Wrap(spacing: 10, runSpacing: 8, children: [
+              _stat('Total Debit', _debit, AppTheme.primary),
+              _stat('Total Credit', _credit, AppTheme.success),
+              _stat('Balance', _balance, _balance >= 0 ? AppTheme.danger : AppTheme.success),
+            ]),
+          ),
+          OutlinedButton.icon(
+            onPressed: _printLedger,
+            icon: const Icon(Icons.print_outlined, size: 16),
+            label: const Text('Print / PDF'),
+          ),
+        ]),
+      ),
+      const Divider(height: 1),
+      Expanded(
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: _entries.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 6),
+            itemBuilder: (_, i) {
+              final e = _entries[i];
+              final debit = e['debit'] as double;
+              final credit = e['credit'] as double;
+              return Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(children: [
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(
+                        [
+                          if ((e['voucher'] as String).isNotEmpty) e['voucher'],
+                          e['type'],
+                        ].join('  •  '),
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        [
+                          _fmtDate(e['date'] as String),
+                          if ((e['description'] as String).isNotEmpty) e['description'],
+                        ].join('  •  '),
+                        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text(
+                      debit > 0 ? 'Dr ${money(debit)}' : 'Cr ${money(credit)}',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                          color: debit > 0 ? AppTheme.primary : AppTheme.success),
+                    ),
+                    const SizedBox(height: 2),
+                    Text('Bal ${money(e['balance'] as double)}',
+                        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ]),
+                ]),
+              );
+            },
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _stat(String label, double v, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppTheme.border),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(label.toUpperCase(),
+              style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.4)),
+          const SizedBox(height: 2),
+          Text('Rs ${money(v)}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: c)),
+        ]),
+      );
+
+  void _printLedger() {
+    final name = ref.read(currentRetailerProvider)?.name ?? 'Customer';
+    final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final rows = StringBuffer();
+    for (final e in _entries) {
+      final debit = e['debit'] as double;
+      final credit = e['credit'] as double;
+      rows.write('<tr>'
+          '<td>${_fmtDate(e['date'] as String)}</td>'
+          '<td>${e['voucher']}</td>'
+          '<td>${e['description']}</td>'
+          '<td>${e['type']}</td>'
+          '<td class="num">${debit > 0 ? 'Rs ' + money(debit) : '-'}</td>'
+          '<td class="num">${credit > 0 ? 'Rs ' + money(credit) : '-'}</td>'
+          '<td class="num">Rs ${money(e['balance'] as double)}</td>'
+          '</tr>');
+    }
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${name}_Ledger</title>'
+        '<style>@page{margin:0}'
+        '.no-print{margin-bottom:10px}.no-print button{padding:6px 14px;font-size:13px;cursor:pointer}'
+        '@media print{.no-print{display:none}}'
+        'body{font-family:Arial,sans-serif;padding:16px;font-size:10px;color:#000}'
+        '.header{border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:10px}'
+        'h1{font-size:18px;margin:0 0 4px 0}.info{font-size:10px;margin:2px 0}'
+        'table{width:100%;border-collapse:collapse}'
+        'th,td{padding:4px 6px;border-bottom:1px solid #ddd;text-align:left;font-size:9.5px}'
+        'th{background:#f5f5f5;font-weight:700;border-bottom:1.5px solid #000}'
+        '.num{text-align:right;white-space:nowrap}'
+        'tfoot td{font-weight:800;background:#f5f5f5;border-top:2px solid #000}'
+        '</style></head><body>'
+        '<div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>'
+        '<div class="header"><h1>Account Ledger</h1>'
+        '<div class="info"><strong>Customer:</strong> $name</div>'
+        '<div class="info"><strong>Generated:</strong> $gen</div></div>'
+        '<table><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th>'
+        '<th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
+        '<tbody>$rows</tbody>'
+        '<tfoot><tr><td colspan="4">${_entries.length} entries</td>'
+        '<td class="num">Rs ${money(_debit)}</td><td class="num">Rs ${money(_credit)}</td>'
+        '<td class="num">Rs ${money(_balance)}</td></tr></tfoot>'
+        '</table></body></html>';
+    final blob = html.Blob([doc], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+    Future.delayed(const Duration(seconds: 5), () => html.Url.revokeObjectUrl(url));
   }
 }

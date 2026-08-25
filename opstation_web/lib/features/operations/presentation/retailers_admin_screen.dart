@@ -104,7 +104,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
       if (ids.isNotEmpty) {
         final rows = await client
             .from('customers')
-            .select('id, shop_name, code, phone, location_capture_allowed')
+            .select('id, shop_name, code, phone, location_capture_allowed, retailer_ledger_visible')
             .inFilter('id', ids)
             .order('shop_name');
         results = List<Map<String, dynamic>>.from(rows);
@@ -145,7 +145,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
       final client = Supabase.instance.client;
       final rows = await client
           .from('customers')
-          .select('id, shop_name, code, phone, location_capture_allowed')
+          .select('id, shop_name, code, phone, location_capture_allowed, retailer_ledger_visible')
           .eq('org_id', orgId)
           .or('shop_name.ilike.%$q%,code.ilike.%$q%')
           .limit(25);
@@ -429,6 +429,22 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
     }
   }
 
+  /// Show / hide the customer's account ledger in the retailer portal. Stored on
+  /// customers.retailer_ledger_visible; the portal reads it to decide whether to
+  /// surface the Ledger tab (default off — invoices only).
+  Future<void> _toggleLedger(Map<String, dynamic> c, bool val) async {
+    final prev = c['retailer_ledger_visible'] == true;
+    setState(() => c['retailer_ledger_visible'] = val); // optimistic
+    try {
+      await Supabase.instance.client
+          .from('customers')
+          .update({'retailer_ledger_visible': val}).eq('id', c['id']);
+    } catch (e) {
+      setState(() => c['retailer_ledger_visible'] = prev);
+      _snack('Could not update: ${e.toString().split('\n').first}');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final role = ref.watch(currentUserProvider)?.role;
@@ -445,7 +461,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           const Text(
-              'Give a customer a portal/app login, block or re-enable it, and control whether they can share their location.',
+              'Give a customer a portal/app login, block or re-enable it, and control whether they can share their location or see their account ledger.',
               style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           if (!canProvision) ...[
             const SizedBox(height: 8),
@@ -489,6 +505,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                       final loginOn = hasLogin && login['is_active'] == true;
                       final blocked = hasLogin && !loginOn;
                       final locOn = c['location_capture_allowed'] == true;
+                      final ledgerOn = c['retailer_ledger_visible'] == true;
                       return Container(
                         decoration: BoxDecoration(
                           color: Colors.white,
@@ -559,6 +576,13 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                             Switch(
                               value: locOn,
                               onChanged: (v) => _toggleLocation(c, v),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text('Ledger',
+                                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                            Switch(
+                              value: ledgerOn,
+                              onChanged: (v) => _toggleLedger(c, v),
                             ),
                           ]),
                           const SizedBox(width: 12),
