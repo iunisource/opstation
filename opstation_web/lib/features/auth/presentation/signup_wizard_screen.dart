@@ -124,9 +124,16 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
     setState(() { _error = null; _step = 1; });
   }
 
+  // A plan card's "Start free trial" was tapped: remember the plan and submit.
+  Future<void> _startTrialWith(Map<String, dynamic> p) async {
+    if (_submitting) return;
+    _planId = p['id'] as String;
+    await _submit();
+  }
+
   Future<void> _submit() async {
     if (!_step2Valid) {
-      setState(() => _error = 'Your organization name is required.');
+      setState(() => _error = 'Please enter your organization name above before starting your trial.');
       return;
     }
     setState(() { _submitting = true; _error = null; });
@@ -468,9 +475,9 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
           style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
     ),
     const SizedBox(height: 22),
-    const Text('Choose your plan', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _ink)),
+    const Text('Pick a plan to start', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _ink)),
     const SizedBox(height: 2),
-    const Text('Start free for 14 days — no card needed. Switch or upgrade anytime.',
+    const Text('Tap "Start free trial" on the plan you want. It\'s free for 14 days — no card needed, and you can switch anytime.',
         style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
     const SizedBox(height: 12),
     if (_plans.isEmpty)
@@ -479,9 +486,10 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       PlanCards(
         plans: _plans,
         activeId: _planId,
-        onSelect: (p) => setState(() => _planId = p['id'] as String),
-        ctaLabel: (p) => (p['id'] as String) == _planId ? 'Selected' : 'Choose',
-        ctaDisabled: (p) => false,
+        // Each plan's button starts the trial on that plan — no separate step.
+        onSelect: (p) => _startTrialWith(p),
+        ctaLabel: (p) => 'Start free trial',
+        ctaDisabled: (p) => _submitting,
       ),
     const SizedBox(height: 18),
     _field(controller: _note, label: 'Anything we should know?', hint: 'Optional — branches, users, what you need first',
@@ -531,42 +539,44 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       );
 
   Widget _actions() {
-    final primaryEnabled = _step == 0 ? _step1Valid : _step2Valid;
-    return Row(children: [
-      if (_step == 1)
-        OutlinedButton(
+    // Step 2 has no bottom submit — each plan card's "Start free trial" button is
+    // the action. We only offer a Back link there.
+    if (_step == 1) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
           onPressed: _submitting ? null : () => setState(() { _step = 0; _error = null; }),
+          icon: const Icon(Icons.arrow_back, size: 16),
+          label: const Text('Back'),
           style: OutlinedButton.styleFrom(
             foregroundColor: _ink,
             side: const BorderSide(color: AppTheme.border),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
           ),
-          child: const Text('Back'),
         ),
-      if (_step == 1) const SizedBox(width: 12),
-      Expanded(
-        child: ElevatedButton(
-          onPressed: (!primaryEnabled || _submitting) ? null : (_step == 0 ? _next : _submit),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primary,
-            foregroundColor: Colors.white,
-            disabledBackgroundColor: AppTheme.primary.withOpacity(0.35),
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
-            elevation: 0,
-          ),
-          child: _submitting
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Text(_step == 0 ? 'Continue' : 'Create workspace',
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 8),
-                  Icon(_step == 0 ? Icons.arrow_forward : Icons.check, size: 18),
-                ]),
+      );
+    }
+    // Step 1: Continue.
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: (!_step1Valid || _submitting) ? null : _next,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppTheme.primary,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: AppTheme.primary.withOpacity(0.35),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+          elevation: 0,
         ),
+        child: const Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text('Continue', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          SizedBox(width: 8),
+          Icon(Icons.arrow_forward, size: 18),
+        ]),
       ),
-    ]);
+    );
   }
 
   // ── success ────────────────────────────────────────────────────────────────
