@@ -414,7 +414,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     final postedInfo = rawPostedAt != null
         ? rawPostedAt.replaceAll('T', ' ').substring(0, rawPostedAt.length > 16 ? 16 : rawPostedAt.length)
         : '_______________';
-    final htmlStr = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Journal Voucher</title><style>
+    final htmlStr = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Journal Voucher</title><style>@page{margin:0}
       body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db;margin-bottom:4px}
       table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #ddd;padding:8px;text-align:left}
       th{background:#f0f4ff;font-weight:600}.total{font-weight:700}.num{text-align:right}

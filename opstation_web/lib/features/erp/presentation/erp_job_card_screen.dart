@@ -1551,8 +1551,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       '${withPrices ? '<tfoot><tr><td colspan="4">Components total</td><td class="r">${_money(comp)}</td></tr></tfoot>' : ''}</table>';
 
     return '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Job Card $jobNo${withPrices ? '' : ' (Internal)'}</title>
-<style>
-  @page { size: A4; margin: 14mm; }
+<style>@page{margin:0}
+  @page { size: A4; margin:0; }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; font-size: 12px; margin: 0; }
   .toolbar { padding: 10px 0; }

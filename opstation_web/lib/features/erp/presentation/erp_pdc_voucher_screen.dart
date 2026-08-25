@@ -720,7 +720,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
           '<td style="text-align:right">${_fmt.format(amt)}</td></tr>';
     }).join();
     final html_str =
-        '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PDC Voucher</title><style>
+        '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PDC Voucher</title><style>@page{margin:0}
       body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db}
       table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:7px;text-align:left;font-size:11px}
       th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:1.1em}.footer{margin-top:40px;display:flex;justify-content:space-between}

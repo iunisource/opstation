@@ -290,8 +290,8 @@ class _ErpSupplierBalanceReportScreenState
             ? 'Inactive'
             : 'All';
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Supplier Balance Report</title>'
-        '<style>'
-        '@page { size: A4 landscape; margin: 0.6cm; } '
+        '<style>@page{margin:0}'
+        '@page { size: A4 landscape; margin:0; } '
         '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; } '
         'body { font-family: Arial, sans-serif; padding: 4px; font-size: 10px; color: #000; } '
         'h1 { font-size: 15px; margin: 0 0 2px 0; } '

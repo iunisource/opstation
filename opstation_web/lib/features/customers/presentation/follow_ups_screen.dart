@@ -655,8 +655,8 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
             '</td><td>' + desc + '</td><td>' + asgName + '</td><td>' + status + '</td></tr>');
       }
 
-      final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Follow-ups</title><style>'
-          '@page { margin: 0.6cm; } '
+      final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Follow-ups</title><style>@page{margin:0}'
+          '@page { margin:0; } '
           'body { font-family: Arial, sans-serif; padding: 16px; font-size: 11px; color: #000; margin: 0; } '
           'h1 { font-size: 18px; margin: 0 0 4px 0; } '
           '.info { font-size: 10px; color: #555; margin: 2px 0; } '

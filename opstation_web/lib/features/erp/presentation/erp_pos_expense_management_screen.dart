@@ -113,7 +113,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
     // Category summary
 
     final content = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Expense Report</title>
-<style>
+<style>@page{margin:0}
   body { font-family: Arial, sans-serif; padding: 14px; font-size: 11px; color: #333; }
   h1 { font-size: 14px; margin: 0 0 2px; } h2 { font-size: 11px; color: #666; margin: 0 0 6px; }
   .meta { color: #666; font-size: 10px; margin-bottom: 10px; }
@@ -123,7 +123,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
   .amt { text-align: right; font-weight: bold; }
   .cat { background: #fff3e0; color: #e65100; padding: 1px 5px; border-radius: 4px; font-size: 10px; }
   .total-row td { font-weight: bold; font-size: 12px; border-top: 2px solid #333; background: #f9f9f9; }
-  @media print { .no-print { display: none; } @page { margin: 10mm; } }
+  @media print { .no-print { display: none; } @page { margin:0; } }
 </style></head><body>
 <h1>$orgName — Expense Report</h1>
 <h2>$branchName</h2>

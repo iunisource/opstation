@@ -437,6 +437,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                               Expanded(flex: 1, child: Text(c['code'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary))),
                               Expanded(flex: 3, child: Row(children: [
                                 Flexible(child: Text(c['shop_name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                                if (!(c['is_active'] as bool? ?? true))
+                                  Container(
+                                    margin: const EdgeInsets.only(left: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                    decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                                    child: Text('Deactivated', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: AppTheme.danger)),
+                                  ),
                                 if (c['latitude'] != null && c['longitude'] != null)
                                   const Padding(
                                     padding: EdgeInsets.only(left: 6),

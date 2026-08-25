@@ -600,7 +600,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         : '';
     final notesHtml = (notes != null && notes.isNotEmpty) ? '<h3>Notes</h3><div style="font-size:12px">' + esc(notes) + '</div>' : '';
     final content = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(e['full_name'] as String?)}</title>
-<style>
+<style>@page{margin:0}
 *{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#000;padding:24px;max-width:760px;margin:0 auto}
 .head{display:flex;align-items:center;gap:16px;border-bottom:2px solid #333;padding-bottom:14px;margin-bottom:8px}
 .photo{width:88px;height:88px;border-radius:50%;object-fit:cover;border:1px solid #999}

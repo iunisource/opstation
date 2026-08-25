@@ -404,8 +404,8 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
 
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>BOM ${esc(code)}</title>'
-        '<style>'
-        '@page { size: A4; margin: 1cm; } '
+        '<style>@page{margin:0}'
+        '@page { size: A4; margin:0; } '
         '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; } '
         'body { font-family: Arial, sans-serif; color: #000; font-size: 12px; } '
         'h1 { font-size: 18px; margin: 0 0 4px 0; } '

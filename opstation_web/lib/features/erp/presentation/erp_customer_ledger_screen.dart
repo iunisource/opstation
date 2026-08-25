@@ -1416,8 +1416,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       final fileBase = (customerName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
           .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
       final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + fileBase + '</title>'
-        '<style>'
-        '@page { margin: 0.5cm; } '
+        '<style>@page{margin:0}'
+        '@page { margin:0; } '
         '.no-print { margin-bottom: 10px; display: flex; gap: 8px; } '
         '.no-print button { padding: 6px 14px; font-size: 13px; cursor: pointer; } '
         '@media print { .no-print { display: none; } } '

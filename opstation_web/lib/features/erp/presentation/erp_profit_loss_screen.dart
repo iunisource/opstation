@@ -200,13 +200,13 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
         '<tr class="sub"><td colspan="2">Total ' + title + '</td><td class="num">' + fmt.format(total) + '</td></tr>';
     }
 
-    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Profit and Loss</title><style>'
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Profit and Loss</title><style>@page{margin:0}'
       'body{font-family:Arial,sans-serif;padding:18px;color:#000;font-size:11px}h1{font-size:20px;margin:0 0 2px}'
       '.info{font-size:11px;margin:1px 0;color:#444}table{width:100%;border-collapse:collapse;margin-top:14px}'
       'td{padding:4px 8px;border-bottom:1px solid #eee;font-size:10.5px}.num{text-align:right;white-space:nowrap}'
       '.hd td{font-weight:800;background:#f0f4ff;border-top:1px solid #ccc}.sub td{font-weight:700;border-top:1px solid #999}'
       '.gp td{font-weight:800;background:#eef}.net td{font-weight:800;font-size:13px;background:#f5f5f5;border-top:2px solid #000}'
-      '@page{margin:0.6cm}</style></head><body>'
+      '@page{margin:0}</style></head><body>'
       '<div class="no-print" style="margin-bottom:12px"><button onclick="window.print()">Print</button></div>'
       '<h1>Profit and Loss</h1>'
       '<div class="info"><b>Period:</b> ' + period + '</div>'

@@ -786,8 +786,8 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       final mainGroup = (p['product_main_group'] as String?) ?? '';
       final group = (p['product_group'] as String?) ?? '';
       final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Inventory Ledger - ' + productName + '</title>'
-        '<style>'
-        '@page { margin: 0.5cm; } '
+        '<style>@page{margin:0}'
+        '@page { margin:0; } '
         'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; margin: 0; } '
         '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
         'h1 { font-size: 18px; margin: 0 0 4px 0; } '

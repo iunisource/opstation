@@ -187,7 +187,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
     }).join();
     final doc = '''
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>Promoter Ledger — ${p['name']}</title>
-<style>
+<style>@page{margin:0}
  body{font-family:Arial,sans-serif;padding:24px;color:#222}
  h2{margin:0 0 2px} .sub{color:#666;font-size:12px;margin-bottom:16px}
  .stats{display:flex;gap:28px;margin:12px 0 18px}

@@ -286,7 +286,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
     final leadCols = multi ? (2 + _activeBranches.length + 1) : 6;
 
     final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Value Report</title>'
-        '<style>'
+        '<style>@page{margin:0}'
         'body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px}'
         'h1{font-size:18px;margin:0 0 2px}'
         '.muted{color:#666;font-size:12px;margin:2px 0}'

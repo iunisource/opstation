@@ -339,7 +339,7 @@ class _ErpSkippedReceiptsReportScreenState
       b.write('<p class="ok">No skipped receipt serials in this period.</p>');
     }
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-        '<title>Skipped Receipt Serials — ${_esc(_orgName)}</title><style>'
+        '<title>Skipped Receipt Serials — ${_esc(_orgName)}</title><style>@page{margin:0}'
         'body{font-family:Arial,sans-serif;padding:22px;color:#111;font-size:12px}'
         'h1{font-size:20px;margin:0 0 2px}'
         'h3{font-size:13px;margin:18px 0 6px;border-bottom:1px solid #eee;padding-bottom:4px}'
@@ -353,7 +353,7 @@ class _ErpSkippedReceiptsReportScreenState
         '.note{color:#166534;font-weight:400;font-variant-numeric:normal}'
         '.ok{color:#15803d;font-size:13px;margin-top:16px}'
         '.foot{margin-top:22px;font-size:10px;color:#888;border-top:1px solid #ccc;padding-top:8px}'
-        '@media print{.no-print{display:none}}@page{margin:0.7cm}'
+        '@media print{.no-print{display:none}}@page{margin:0}'
         '</style></head><body>'
         '<div class="no-print" style="margin-bottom:12px">'
         '<button onclick="window.print()">Print / Save PDF</button></div>'

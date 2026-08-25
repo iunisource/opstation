@@ -893,7 +893,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     final dims = [..._rows, ..._cols];
     final buf = StringBuffer();
     buf.write('<!doctype html><html><head><meta charset="utf-8"><title>Report — ${_esc(sourceLabel)}</title>');
-    buf.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#1a1a1a}'
+    buf.write('<style>@page{margin:0}body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#1a1a1a}'
         'h1{font-size:18px;margin:0 0 4px}.meta{font-size:12px;color:#555;margin-bottom:14px}'
         'table{border-collapse:collapse;width:100%;font-size:12px}'
         'th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f3f4f6}'

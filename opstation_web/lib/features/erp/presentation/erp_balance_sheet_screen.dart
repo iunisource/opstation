@@ -123,13 +123,13 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
       return b.toString();
     }
 
-    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Balance Sheet</title><style>'
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Balance Sheet</title><style>@page{margin:0}'
       'body{font-family:Arial,sans-serif;padding:18px;color:#000;font-size:11px}h1{font-size:20px;margin:0 0 2px}'
       '.info{font-size:11px;margin:1px 0;color:#444}.cols{display:flex;gap:24px;margin-top:14px}.col{flex:1}'
       'h2{font-size:13px;margin:0 0 6px;border-bottom:2px solid #000;padding-bottom:3px}'
       'table{width:100%;border-collapse:collapse}td{padding:3px 6px;border-bottom:1px solid #eee;font-size:10.5px}'
       '.num{text-align:right;white-space:nowrap}tfoot td{font-weight:800;border-top:2px solid #000;border-bottom:none;background:#f5f5f5}'
-      '.chk{margin-top:14px;font-weight:700}@page{margin:0.6cm}</style></head><body>'
+      '.chk{margin-top:14px;font-weight:700}@page{margin:0}</style></head><body>'
       '<div class="no-print" style="margin-bottom:12px"><button onclick="window.print()">Print</button></div>'
       '<h1>Balance Sheet</h1>'
       '<div class="info"><b>As of:</b> ' + asOf + '</div>'

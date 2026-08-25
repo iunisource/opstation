@@ -366,12 +366,12 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       final bal = (e['balance'] as num?)?.toDouble() ?? 0;
       rows.write('<tr><td>' + date + '</td><td>' + ((e['entry_number'] as String?) ?? '') + '</td><td>' + ((e['description'] as String?) ?? '') + '</td><td class="num">' + (dr > 0 ? fmt.format(dr) : '') + '</td><td class="num">' + (cr > 0 ? fmt.format(cr) : '') + '</td><td class="num bold">' + _bal(bal) + '</td></tr>');
     }
-    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Account Activity</title><style>'
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Account Activity</title><style>@page{margin:0}'
       'body{font-family:Arial,sans-serif;padding:16px;font-size:11px;color:#000;-webkit-user-select:text;user-select:text}h1{font-size:18px;margin:0 0 4px}'
       '.info{font-size:11px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:10px}'
       'th,td{border:1px solid #999;padding:5px 7px;text-align:left;font-size:10px}'
       'th{background:#f0f4ff;font-weight:700;border-bottom:1.5px solid #000}.num{text-align:right;white-space:nowrap}.bold{font-weight:800}'
-      'tfoot td{font-weight:800;background:#f5f5f5;border-top:2px solid #000}@page{margin:0.5cm}</style></head><body>'
+      'tfoot td{font-weight:800;background:#f5f5f5;border-top:2px solid #000}@page{margin:0}</style></head><body>'
       '<div class="no-print" style="margin-bottom:10px"><button onclick="window.print()">Print</button></div>'
       '<h1>Account Activity Report</h1>'
       '<div class="info"><b>Account:</b> ' + (_account!['label'] as String? ?? '') + '</div>'

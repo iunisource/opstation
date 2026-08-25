@@ -520,7 +520,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           : '${DateFormat('d MMM').format(from)} &ndash; ${DateFormat('d MMM yyyy').format(to)}';
       final fontSize = (!single && days.length > 20) ? 8 : (!single ? 9 : 11);
       final htmlContent = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Attendance Register</title>
-<style>
+<style>@page{margin:0}
 *{box-sizing:border-box}
 body{font-family:Arial,Helvetica,sans-serif;padding:18px;color:#000}
 h1{font-size:18px;margin:0 0 2px}
@@ -536,7 +536,7 @@ td.emp .code{display:block;color:#777;font-size:0.85em;font-weight:400}
 table.matrix th.day,table.matrix td.day{text-align:center;padding:3px 2px;width:18px}
 table.trail{font-size:10px;margin-top:6px}
 .legend{font-size:10px;color:#555;margin-top:8px}
-@media print{body{padding:6px}@page{size:landscape;margin:8mm}}
+@media print{body{padding:6px}@page{size:landscape;margin:0}}
 </style></head><body>
 <h1>Attendance Register</h1>
 <div class="meta">$headerDate &nbsp;|&nbsp; $branchLabel &nbsp;|&nbsp; Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}</div>

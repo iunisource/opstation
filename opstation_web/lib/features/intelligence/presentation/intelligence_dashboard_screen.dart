@@ -662,8 +662,8 @@ class _IntelligenceDashboardScreenState
     }
 
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-        '<title>Intelligence Dashboard</title><style>'
-        '@page { margin: 0.6cm; } '
+        '<title>Intelligence Dashboard</title><style>@page{margin:0}'
+        '@page { margin:0; } '
         'body { font-family: Arial, sans-serif; padding: 16px; font-size: 11px; color: #000; } '
         'h1 { font-size: 18px; margin: 0 0 4px 0; } '
         'h2 { font-size: 13px; margin: 16px 0 6px 0; } '
@@ -1905,7 +1905,7 @@ class _IntelligenceDashboardScreenState
     }
 
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-        '<title>Task Sheet — ${_esc(scopeName)}</title><style>'
+        '<title>Task Sheet — ${_esc(scopeName)}</title><style>@page{margin:0}'
         'body{font-family:Arial,sans-serif;padding:22px;color:#111;font-size:12px}'
         'h1{font-size:20px;margin:0 0 2px}h3{font-size:13px;margin:20px 0 6px}'
         '.info{font-size:11px;margin:1px 0;color:#444}'
@@ -1920,7 +1920,7 @@ class _IntelligenceDashboardScreenState
         '.assign{margin:6px 0 2px;font-size:12px}'
         '.foot{margin-top:22px;font-size:10px;color:#888;border-top:1px solid #ccc;padding-top:8px}'
         '@media print{.no-print{display:none}}'
-        '@page{margin:0.7cm}</style></head><body>'
+        '@page{margin:0}</style></head><body>'
         '<div class="no-print" style="margin-bottom:12px">'
         '<button onclick="window.print()">Print / Save PDF</button></div>'
         '<h1>Field Task Sheet</h1>'

@@ -104,7 +104,7 @@ class _ErpOverheadsSummaryScreenState extends ConsumerState<ErpOverheadsSummaryS
           '</tr>';
     }).join();
     final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Overheads Summary</title>'
-        '<style>'
+        '<style>@page{margin:0}'
         'body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px}'
         'h1{font-size:18px;margin:0 0 2px}'
         '.muted{color:#666;font-size:12px;margin:2px 0}'

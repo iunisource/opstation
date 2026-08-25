@@ -446,7 +446,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final postedBy = _currentVoucher!['posted_by_name'] as String? ?? '_______________';
     final rawPostedAt = _currentVoucher!['posted_at'] as String?;
     final postedAtStr = rawPostedAt != null ? '  (' + rawPostedAt.replaceAll('T', ' ').substring(0, rawPostedAt.length > 16 ? 16 : rawPostedAt.length) + ')' : '';
-    final html_str = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Payment Voucher</title><style>
+    final html_str = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Payment Voucher</title><style>@page{margin:0}
       body{font-family:Arial,sans-serif;padding:14px;color:#333;font-size:11px}h2{text-align:center;color:#1a56db;font-size:16px;margin:0 0 6px}
       table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #ddd;padding:3px 6px;text-align:left;font-size:10px}
       th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:11px}.footer{margin-top:26px;display:flex;justify-content:space-between}

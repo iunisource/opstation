@@ -1088,8 +1088,8 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
         '</div>';
 
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Super Summary</title>'
-        '<style>'
-        '@page { size: A4; margin: 0.7cm; } '
+        '<style>@page{margin:0}'
+        '@page { size: A4; margin:0; } '
         '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; } '
         'body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; font-size: 11px; margin: 0; padding: 4px; } '
         '.hd { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:3px solid #1e2a78; padding-bottom:8px; margin-bottom:12px; } '

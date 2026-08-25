@@ -400,7 +400,7 @@ window.__qcbt = window.__qcbt || {
     final specLine = spec.trim().isEmpty ? '' : '<div class="spec">${esc(spec)}</div>';
 
     final doc =
-      '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>QC Label</title><style>'
+      '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>QC Label</title><style>@page{margin:0}'
       '@page{size:2in 1in;margin:0}'
       'html,body{margin:0;padding:0;width:2in;height:1in;font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact}'
       '.lab{box-sizing:border-box;width:2in;height:1in;padding:2mm 3mm;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}'

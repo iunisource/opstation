@@ -207,8 +207,8 @@ class _ErpCashBookScreenState extends ConsumerState<ErpCashBookScreen> {
       rows.write('<tr><td>' + dateStr + '</td><td>' + _vrCode(e['ref_type'] as String?) + '</td><td>' + (e['voucher_no'] as String? ?? '') + '</td><td>' + (e['particulars'] as String? ?? '') + '</td><td>' + (e['narration'] as String? ?? '') + '</td><td class="num">' + (dr > 0 ? _fmt.format(dr) : '-') + '</td><td class="num">' + (cr > 0 ? _fmt.format(cr) : '-') + '</td><td class="num bold">' + _fmt.format(bal) + '</td></tr>');
     }
 
-    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Cash Book</title><style>'
-      '@page { margin: 0.5cm; } '
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Cash Book</title><style>@page{margin:0}'
+      '@page { margin:0; } '
       'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; margin: 0; } '
       '.header { border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
       'h1 { font-size: 18px; margin: 0 0 4px 0; } .info { font-size: 10px; margin: 2px 0; } '

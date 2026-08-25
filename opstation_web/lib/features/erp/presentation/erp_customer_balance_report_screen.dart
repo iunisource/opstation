@@ -440,8 +440,8 @@ class _ErpCustomerBalanceReportScreenState
     final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
     final spanLabel = _span == '3W' ? '3 Weeks' : '3 Months';
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Customer Balance Report</title>'
-        '<style>'
-        '@page { size: A4 landscape; margin: 0.5cm; } '
+        '<style>@page{margin:0}'
+        '@page { size: A4 landscape; margin:0; } '
         '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; } '
         'body { font-family: Arial, sans-serif; padding: 3px; font-size: 9px; color: #000; } '
         'h1 { font-size: 13px; margin: 0 0 2px 0; } '

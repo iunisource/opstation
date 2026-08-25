@@ -270,7 +270,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     final rows = _visible;
     final b = StringBuffer();
     b.write('<!doctype html><html><head><meta charset="utf-8"><title>Margin Report</title>');
-    b.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:22px;color:#1a1a1a}'
+    b.write('<style>@page{margin:0}body{font-family:Arial,Helvetica,sans-serif;margin:22px;color:#1a1a1a}'
       'h1{font-size:18px;margin:0 0 4px}.meta{font-size:12px;color:#555;margin-bottom:12px}'
       'table{border-collapse:collapse;width:100%;font-size:11px}'
       'th,td{border:1px solid #ddd;padding:4px 6px}th{background:#1e2a78;color:#fff;text-align:left}'
