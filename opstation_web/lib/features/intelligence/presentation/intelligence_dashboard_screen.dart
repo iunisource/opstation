@@ -320,7 +320,15 @@ class _IntelligenceDashboardScreenState
           custPresent[cid] = (custPresent[cid] ?? 0) + 1;
         }
       }
-      final auditedCustomers = custTotal.keys.toSet();
+      // Only active customers are surfaced in Intelligence. custRaw is fetched
+      // with is_active=true, so any audited customer missing from it has been
+      // deactivated — drop it from every rollup so it neither shows as an
+      // "Unnamed shop" nor inflates the counts. Guarded so an empty customer
+      // fetch never blanks the whole dashboard.
+      final activeCustIds = {for (final c in custRaw) c['id'] as String};
+      final auditedCustomers = activeCustIds.isEmpty
+          ? custTotal.keys.toSet()
+          : custTotal.keys.where(activeCustIds.contains).toSet();
 
       // ── 3. Route / salesman attribution (from the parallel fetch) ───────
       final routeName = {
@@ -1499,8 +1507,11 @@ class _IntelligenceDashboardScreenState
 
   // The list of shops inside an expanded "Unassigned" bucket, sorted by name.
   Widget _unassignedShops(_GroupScore g) {
+    // Only active customers carry a resolved name; skip any without one so a
+    // deactivated shop never shows up here as "Unnamed shop".
     final names = g.customers
-        .map((cid) => _custName[cid] ?? 'Unnamed shop')
+        .where((cid) => _custName[cid] != null)
+        .map((cid) => _custName[cid]!)
         .toList()
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return Container(
