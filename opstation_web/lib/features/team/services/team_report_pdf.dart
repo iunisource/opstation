@@ -42,6 +42,101 @@ class TeamReportPdf {
     return pdf.save();
   }
 
+  /// Visit-level report for a member filtered to ONE visit type (verified /
+  /// outside / no-location / skipped / recorded). rows: [{t: DateTime, shop,
+  /// code, route, amount, receipt}].
+  static Future<Uint8List> visitTypeReport({
+    required String orgName,
+    required String memberName,
+    required String period,
+    required String typeLabel,
+    required List<Map<String, dynamic>> rows,
+  }) async {
+    final pdf = pw.Document();
+    final theme = await _loadTheme();
+    final df = DateFormat('d MMM yyyy');
+    final tf = DateFormat('HH:mm');
+    final totAmt = rows.fold<int>(0, (s, r) => s + ((r['amount'] as int?) ?? 0));
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(24),
+        theme: theme,
+        header: (ctx) => _header(orgName, 'Team Report — $memberName', _today()),
+        footer: (ctx) => _footer(ctx),
+        build: (ctx) => [
+          pw.SizedBox(height: 12),
+          pw.Text('Period: $period',
+              style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+          pw.Text('Visit type: $typeLabel   ·   ${rows.length} visits',
+              style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 12),
+          if (rows.isEmpty)
+            pw.Text('No visits of this type in this period.',
+                style: const pw.TextStyle(color: PdfColors.grey600))
+          else
+            pw.Table(
+              border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+              columnWidths: const {
+                0: pw.FixedColumnWidth(80),
+                1: pw.FlexColumnWidth(3),
+                2: pw.FlexColumnWidth(2),
+                3: pw.FixedColumnWidth(65),
+                4: pw.FixedColumnWidth(60),
+              },
+              children: [
+                pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+                  children: [
+                    _th('Date'),
+                    _th('Shop'),
+                    _th('Route'),
+                    _th('Collected', right: true),
+                    _th('Receipt'),
+                  ],
+                ),
+                ...rows.map((r) {
+                  final t = r['t'] as DateTime?;
+                  final code = (r['code'] as String?) ?? '';
+                  final amount = (r['amount'] as int?) ?? 0;
+                  return pw.TableRow(children: [
+                    _td(t == null
+                        ? '—'
+                        : '${df.format(t)}\n${tf.format(t)}'),
+                    _padCell(pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          pw.Text((r['shop'] as String?) ?? '(unknown)',
+                              style: const pw.TextStyle(fontSize: 8)),
+                          if (code.isNotEmpty)
+                            pw.Text(code,
+                                style: const pw.TextStyle(
+                                    fontSize: 6.5, color: PdfColors.grey600)),
+                        ])),
+                    _td((r['route'] as String?) ?? '—'),
+                    _td(amount > 0 ? 'Rs $amount' : '-',
+                        right: true, bold: true),
+                    _td((r['receipt'] as String?) ?? '-'),
+                  ]);
+                }),
+                pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+                  children: [
+                    _td('TOTAL', bold: true),
+                    _td(''),
+                    _td(''),
+                    _td('Rs $totAmt', right: true, bold: true),
+                    _td(''),
+                  ],
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+    return pdf.save();
+  }
+
   /// Detailed Market Visit Report for ONE trip: header info + every visit
   /// with time, shop, status, amount and receipt.
   static Future<Uint8List> marketVisitReport({

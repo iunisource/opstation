@@ -74,6 +74,13 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   List<Map<String, dynamic>> _trips = [];
   int _visitCount = 0;
   int _collected = 0;
+  // Individual visit records (every type: verified / outside / no-location /
+  // skipped / recorded) so the Visits & Reports tabs can show them all and
+  // filter by type. {cid, status, t: DateTime, amount, receipt, trip_id,
+  // route_name}
+  final List<Map<String, dynamic>> _visitRecords = [];
+  // Selected visit-type pill for the Visits / Reports tabs.
+  String _visitTypeFilter = 'all';
 
   // Placement audit: customer_id -> product_id -> latest audit row
   final Map<String, Map<String, Map<String, dynamic>>> _audit = {};
@@ -155,36 +162,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       final client = Supabase.instance.client;
       _visitEvents.clear();
       _surveyEvents.clear();
-
-      // ── Routes assigned to this member ──────────────────────────────────
-      final assigns = await client
-          .from('route_assignments')
-          .select('route_id')
-          .eq('user_id', _uid);
-      final routeIds = [for (final a in assigns) a['route_id'] as String];
-      List<Map<String, dynamic>> routes = [];
-      _routeStopCount.clear();
-      _routeCustomerIds.clear();
-      if (routeIds.isNotEmpty) {
-        final r = await client
-            .from('sales_routes')
-            .select('id, name, kind, is_active')
-            .inFilter('id', routeIds)
-            .order('name');
-        routes = List<Map<String, dynamic>>.from(r);
-        final stops = await client
-            .from('route_stops')
-            .select('route_id, customer_id')
-            .inFilter('route_id', routeIds);
-        _routeStops.clear();
-        for (final s in stops) {
-          final rid = s['route_id'] as String;
-          final cid = s['customer_id'] as String;
-          _routeStopCount[rid] = (_routeStopCount[rid] ?? 0) + 1;
-          _routeStops.putIfAbsent(rid, () => []).add(cid);
-          _routeCustomerIds.add(cid);
-        }
-      }
+      _visitRecords.clear();
 
       // ── Visits: cover BOTH the last 30 days (for the stat tiles and the
       // Today/Week/Month strip) and the user-selected range, whichever is
@@ -195,21 +173,164 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       final fetchFrom = _visitsFrom.isBefore(def30) ? _visitsFrom : def30;
       final fetchTo = (_visitsTo.isAfter(today0) ? _visitsTo : today0)
           .add(const Duration(days: 1));
-      List<Map<String, dynamic>> trips = [];
+
+      // ── Kick off every independent fetch concurrently. Each future guards
+      // itself so one failure (e.g. a table absent for some roles) leaves the
+      // rest intact. Assigning them to variables starts them in parallel; we
+      // await below to collect results while the requests run together.
+      final assignsFut = () async {
+        try {
+          return List<Map<String, dynamic>>.from(await client
+              .from('route_assignments')
+              .select('route_id')
+              .eq('user_id', _uid));
+        } catch (_) {
+          return <Map<String, dynamic>>[];
+        }
+      }();
+      final tripsFut = () async {
+        try {
+          return List<Map<String, dynamic>>.from(await client
+              .from('trips')
+              .select()
+              .eq('user_id', _uid)
+              .gte('started_at', DateFormat('yyyy-MM-dd').format(fetchFrom))
+              .lt('started_at', DateFormat('yyyy-MM-dd').format(fetchTo))
+              .order('started_at', ascending: false));
+        } catch (_) {
+          return <Map<String, dynamic>>[];
+        }
+      }();
+      final auditFut = () async {
+        try {
+          return List<Map<String, dynamic>>.from(await client
+              .from('placement_audit')
+              .select(
+                  'customer_id, product_id, is_present, surveyed_at, surveyed_by_user_id')
+              .eq('org_id', orgId)
+              .order('surveyed_at', ascending: false)
+              .limit(20000));
+        } catch (_) {
+          return <Map<String, dynamic>>[];
+        }
+      }();
+      final prodsFut = () async {
+        try {
+          return List<Map<String, dynamic>>.from(await client
+              .from('intelligence_products')
+              .select('id, name')
+              .eq('org_id', orgId));
+        } catch (_) {
+          return <Map<String, dynamic>>[];
+        }
+      }();
+      final catsFut = () async {
+        try {
+          return List<Map<String, dynamic>>.from(await client
+              .from('competitor_categories')
+              .select('id, name')
+              .eq('org_id', orgId));
+        } catch (_) {
+          return <Map<String, dynamic>>[];
+        }
+      }();
+      final actsFut = () async {
+        try {
+          return List<Map<String, dynamic>>.from(await client
+              .from('customer_activities')
+              .select('*')
+              .eq('org_id', orgId)
+              .inFilter('status', ['open', 'in_progress', 'pending'])
+              .order('due_date', ascending: true)
+              .limit(2000));
+        } catch (_) {
+          return <Map<String, dynamic>>[];
+        }
+      }();
+      // Competitor spotting: surveyed_by_user_id may not exist on older DBs.
+      final spotFut = () async {
+        try {
+          return {
+            'hasSurveyor': true,
+            'rows': List<Map<String, dynamic>>.from(await client
+                .from('competitor_spotting')
+                .select(
+                    'customer_id, category_id, brand_name, price, surveyed_at, surveyed_by_user_id')
+                .eq('org_id', orgId)
+                .order('surveyed_at', ascending: false)
+                .limit(20000)),
+          };
+        } catch (_) {
+          try {
+            return {
+              'hasSurveyor': false,
+              'rows': List<Map<String, dynamic>>.from(await client
+                  .from('competitor_spotting')
+                  .select(
+                      'customer_id, category_id, brand_name, price, surveyed_at')
+                  .eq('org_id', orgId)
+                  .order('surveyed_at', ascending: false)
+                  .limit(20000)),
+            };
+          } catch (_) {
+            return {'hasSurveyor': false, 'rows': <Map<String, dynamic>>[]};
+          }
+        }
+      }();
+
+      // ── Routes assigned to this member (needs assigns) → then stops ──────
+      final assigns = await assignsFut;
+      final routeIds = [for (final a in assigns) a['route_id'] as String];
+      List<Map<String, dynamic>> routes = [];
+      _routeStopCount.clear();
+      _routeStops.clear();
+      _routeCustomerIds.clear();
+      if (routeIds.isNotEmpty) {
+        final routesFut = () async {
+          try {
+            return List<Map<String, dynamic>>.from(await client
+                .from('sales_routes')
+                .select('id, name, kind, is_active')
+                .inFilter('id', routeIds)
+                .order('name'));
+          } catch (_) {
+            return <Map<String, dynamic>>[];
+          }
+        }();
+        final stopsFut = () async {
+          try {
+            return List<Map<String, dynamic>>.from(await client
+                .from('route_stops')
+                .select('route_id, customer_id')
+                .inFilter('route_id', routeIds));
+          } catch (_) {
+            return <Map<String, dynamic>>[];
+          }
+        }();
+        routes = await routesFut;
+        final stops = await stopsFut;
+        for (final s in stops) {
+          final rid = s['route_id'] as String;
+          final cid = s['customer_id'] as String;
+          _routeStopCount[rid] = (_routeStopCount[rid] ?? 0) + 1;
+          _routeStops.putIfAbsent(rid, () => []).add(cid);
+          _routeCustomerIds.add(cid);
+        }
+      }
+
+      // ── Visits (needs trips) ────────────────────────────────────────────
+      final trips = await tripsFut;
       int visitCount = 0, collected = 0;
-      try {
-        final tRes = await client
-            .from('trips')
-            .select()
-            .eq('user_id', _uid)
-            .gte('started_at', DateFormat('yyyy-MM-dd').format(fetchFrom))
-            .lt('started_at', DateFormat('yyyy-MM-dd').format(fetchTo))
-            .order('started_at', ascending: false);
-        trips = List<Map<String, dynamic>>.from(tRes);
-        if (trips.isNotEmpty) {
+      if (trips.isNotEmpty) {
+        try {
+          final routeNameByTrip = <String, String>{
+            for (final t in trips)
+              t['id'] as String: (t['route_name'] as String?) ?? '—',
+          };
           final vRes = await client
               .from('visits')
-              .select('trip_id, amount, customer_id, timestamp, receipt_number, status')
+              .select(
+                  'trip_id, amount, customer_id, timestamp, receipt_number, status')
               .inFilter('trip_id', [for (final t in trips) t['id'] as String]);
           final perTrip = <String, int>{};
           final perTripAmt = <String, int>{};
@@ -224,9 +345,19 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                 'receipt': (v['receipt_number'] as String?) ?? '',
                 'status': (v['status'] as String?) ?? '',
               });
+              _visitRecords.add({
+                'cid': v['customer_id'] as String?,
+                'status': (v['status'] as String?) ?? '',
+                't': vdt,
+                'amount': (v['amount'] as int?) ?? 0,
+                'receipt': (v['receipt_number'] as String?) ?? '',
+                'trip_id': tid,
+                'route_name': routeNameByTrip[tid] ?? '—',
+              });
             }
             perTrip[tid] = (perTrip[tid] ?? 0) + 1;
-            perTripAmt[tid] = (perTripAmt[tid] ?? 0) + ((v['amount'] as int?) ?? 0);
+            perTripAmt[tid] =
+                (perTripAmt[tid] ?? 0) + ((v['amount'] as int?) ?? 0);
             visitCount++;
             collected += (v['amount'] as int?) ?? 0;
           }
@@ -244,18 +375,13 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
               collected += e['amount'] as int;
             }
           }
-        }
-      } catch (_) {/* trips tables may not exist for some roles */}
+        } catch (_) {/* visits table may not exist for some roles */}
+      }
 
-      // ── Placement audit ─────────────────────────────────────────────────
+      // ── Placement audit (needs _routeCustomerIds for attribution) ───────
       _audit.clear();
-      try {
-        final rows = await client
-            .from('placement_audit')
-            .select('customer_id, product_id, is_present, surveyed_at, surveyed_by_user_id')
-            .eq('org_id', orgId)
-            .order('surveyed_at', ascending: false)
-            .limit(20000);
+      {
+        final rows = await auditFut;
         for (final a in rows) {
           final cid = a['customer_id'] as String?;
           final pid = a['product_id'] as String?;
@@ -273,38 +399,18 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
           _audit.putIfAbsent(cid, () => {});
           _audit[cid]!.putIfAbsent(pid, () => Map<String, dynamic>.from(a));
         }
-        final prods = await client
-            .from('intelligence_products')
-            .select('id, name')
-            .eq('org_id', orgId);
+        final prods = await prodsFut;
         _productNames
           ..clear()
           ..addAll({for (final p in prods) p['id'] as String: (p['name'] as String?) ?? '-'});
-      } catch (_) {}
+      }
 
       // ── Competitor spotting ─────────────────────────────────────────────
       _spot.clear();
-      try {
-        List rows;
-        bool hasSurveyor = true;
-        try {
-          rows = await client
-              .from('competitor_spotting')
-              .select('customer_id, category_id, brand_name, price, surveyed_at, surveyed_by_user_id')
-              .eq('org_id', orgId)
-              .order('surveyed_at', ascending: false)
-              .limit(20000);
-        } catch (_) {
-          // Column surveyed_by_user_id may not exist — fall back to route
-          // attribution only.
-          hasSurveyor = false;
-          rows = await client
-              .from('competitor_spotting')
-              .select('customer_id, category_id, brand_name, price, surveyed_at')
-              .eq('org_id', orgId)
-              .order('surveyed_at', ascending: false)
-              .limit(20000);
-        }
+      {
+        final spotRes = await spotFut;
+        final hasSurveyor = spotRes['hasSurveyor'] as bool;
+        final rows = spotRes['rows'] as List;
         for (final s in rows) {
           final cid = s['customer_id'] as String?;
           final catId = s['category_id'] as String?;
@@ -322,25 +428,16 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
           _spot.putIfAbsent(cid, () => {});
           _spot[cid]!.putIfAbsent(catId, () => Map<String, dynamic>.from(s));
         }
-        final cats = await client
-            .from('competitor_categories')
-            .select('id, name')
-            .eq('org_id', orgId);
+        final cats = await catsFut;
         _categoryNames
           ..clear()
           ..addAll({for (final c in cats) c['id'] as String: (c['name'] as String?) ?? '-'});
-      } catch (_) {}
+      }
 
       // ── Tasks: open activities assigned to member or on their customers ─
       List<Map<String, dynamic>> tasks = [];
-      try {
-        final acts = await client
-            .from('customer_activities')
-            .select('*')
-            .eq('org_id', orgId)
-            .inFilter('status', ['open', 'in_progress', 'pending'])
-            .order('due_date', ascending: true)
-            .limit(2000);
+      {
+        final acts = await actsFut;
         for (final a in acts) {
           final cid = a['customer_id'] as String?;
           final assignee = (a['assigned_to'] ?? a['assignee_id']) as String?;
@@ -348,13 +445,15 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
             tasks.add(Map<String, dynamic>.from(a));
           }
         }
-      } catch (_) {}
+      }
 
       // ── Customer names for everything we reference ──────────────────────
       final wantedCust = <String>{
         ..._routeCustomerIds,
         ..._audit.keys,
         ..._spot.keys,
+        for (final v in _visitRecords)
+          if (v['cid'] != null) v['cid'] as String,
         for (final t in tasks)
           if (t['customer_id'] != null) t['customer_id'] as String,
       };
@@ -1174,6 +1273,154 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     }).toList();
   }
 
+  // ── Visit-type buckets (verified / outside / no-location / skipped /
+  // recorded). Used by the Visits & Reports tabs to show every visit type
+  // and to power the filter pills.
+  static String _visitTypeKey(String status) {
+    switch (status) {
+      case 'verified':
+        return 'verified';
+      case 'outside':
+        return 'outside';
+      case 'noLocation':
+        return 'noLocation';
+      case 'skipped':
+        return 'skipped';
+      default:
+        return 'recorded';
+    }
+  }
+
+  static const List<String> _visitTypeOrder = [
+    'verified',
+    'outside',
+    'noLocation',
+    'skipped',
+    'recorded',
+  ];
+
+  (String, Color, IconData) _visitTypeMeta(String key) {
+    switch (key) {
+      case 'verified':
+        return ('Verified', AppTheme.success, Icons.verified_outlined);
+      case 'outside':
+        return ('Outside geofence', Colors.amber.shade800,
+            Icons.location_searching);
+      case 'noLocation':
+        return ('No location', AppTheme.danger, Icons.location_off_outlined);
+      case 'skipped':
+        return ('Skipped', Colors.orange, Icons.skip_next_outlined);
+      default:
+        return ('Recorded', AppTheme.textSecondary, Icons.store_outlined);
+    }
+  }
+
+  /// Visit records inside the selected date range + search, BEFORE the
+  /// visit-type pill filter (so pill counts reflect the full range).
+  List<Map<String, dynamic>> _visitRecordsInRange() {
+    final q = _visitsSearchCtrl.text.trim().toLowerCase();
+    return _visitRecords.where((v) {
+      if (!_inVisitRange(v['t'] as DateTime)) return false;
+      if (q.isNotEmpty) {
+        final cid = v['cid'] as String?;
+        final hay =
+            '${_custName(cid)} ${_custCode(cid)} ${v['route_name'] ?? ''}';
+        if (!matchesQuery(hay, q)) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  /// Apply the current visit-type pill to a range-filtered list.
+  List<Map<String, dynamic>> _applyVisitTypeFilter(
+      List<Map<String, dynamic>> records) {
+    if (_visitTypeFilter == 'all') return records;
+    return records
+        .where((v) =>
+            _visitTypeKey((v['status'] as String?) ?? '') == _visitTypeFilter)
+        .toList();
+  }
+
+  Map<String, int> _visitTypeCounts(List<Map<String, dynamic>> records) {
+    final m = <String, int>{};
+    for (final v in records) {
+      final k = _visitTypeKey((v['status'] as String?) ?? '');
+      m[k] = (m[k] ?? 0) + 1;
+    }
+    return m;
+  }
+
+  /// Filter pill row: All + one pill per visit-type present in the range.
+  Widget _visitTypePills(List<Map<String, dynamic>> rangeRecords) {
+    final counts = _visitTypeCounts(rangeRecords);
+    final total = rangeRecords.length;
+
+    Widget pill(String key, String label, int count, Color color) {
+      final selected = _visitTypeFilter == key;
+      return Padding(
+        padding: const EdgeInsets.only(right: 6, bottom: 6),
+        child: ChoiceChip(
+          label: Text('$label · $count', style: const TextStyle(fontSize: 12)),
+          selected: selected,
+          visualDensity: VisualDensity.compact,
+          selectedColor: color.withOpacity(0.15),
+          backgroundColor: Colors.white,
+          side: BorderSide(
+              color: selected ? color : AppTheme.border,
+              width: selected ? 1.4 : 1),
+          labelStyle: TextStyle(
+              color: selected ? color : AppTheme.textSecondary,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500),
+          onSelected: (_) => setState(() => _visitTypeFilter = key),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          context.isMobile ? 12 : 24, 10, context.isMobile ? 12 : 24, 0),
+      child: Wrap(children: [
+        pill('all', 'All', total, AppTheme.primary),
+        for (final key in _visitTypeOrder)
+          if ((counts[key] ?? 0) > 0)
+            pill(key, _visitTypeMeta(key).$1, counts[key]!,
+                _visitTypeMeta(key).$2),
+      ]),
+    );
+  }
+
+  /// One visit row for the Visits tab (shop, type badge, time, amount).
+  Widget _visitRecordCard(Map<String, dynamic> v) {
+    final cid = v['cid'] as String?;
+    final key = _visitTypeKey((v['status'] as String?) ?? '');
+    final (label, color, icon) = _visitTypeMeta(key);
+    final t = v['t'] as DateTime;
+    final amount = (v['amount'] as int?) ?? 0;
+    return _card(Row(children: [
+      Icon(icon, size: 20, color: color),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(_custName(cid),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          const SizedBox(height: 2),
+          Text(
+              '${_custCode(cid).isNotEmpty ? '${_custCode(cid)} · ' : ''}${v['route_name'] ?? '—'} · ${DateFormat('d MMM yyyy · HH:mm').format(t)}',
+              style: const TextStyle(
+                  fontSize: 11, color: AppTheme.textSecondary)),
+        ]),
+      ),
+      const SizedBox(width: 8),
+      _chip(label, color),
+      const SizedBox(width: 10),
+      Text(amount > 0 ? 'Rs $amount' : '—',
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: amount > 0 ? AppTheme.success : AppTheme.textSecondary)),
+    ]));
+  }
+
   Future<void> _pickVisitsDate(bool isFrom) async {
     final p = await showDatePicker(
         context: context,
@@ -1260,19 +1507,23 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     if (isSurveyor || (_trips.isEmpty && _surveyEvents.isNotEmpty)) {
       return _surveyActivityFeed();
     }
-    final filtered = _tripsFiltered();
-    final fVisits =
-        filtered.fold<int>(0, (s, t) => s + ((t['_visits'] as int?) ?? 0));
+    final inRange = _visitRecordsInRange()
+      ..sort((a, b) => (b['t'] as DateTime).compareTo(a['t'] as DateTime));
+    final shown = _applyVisitTypeFilter(inRange);
+    final fCollected =
+        shown.fold<int>(0, (s, v) => s + ((v['amount'] as int?) ?? 0));
     return Column(children: [
-      _rangeSearchBar('Search route...'),
+      _rangeSearchBar('Search shop, code or route...'),
+      _visitTypePills(inRange),
       Padding(
         padding: EdgeInsets.fromLTRB(
-            context.isMobile ? 12 : 24, 10, context.isMobile ? 12 : 24, 0),
+            context.isMobile ? 12 : 24, 8, context.isMobile ? 12 : 24, 0),
         child: Row(children: [
-          Text('${filtered.length} trips · $fVisits visits',
-              style: const TextStyle(
-                  fontSize: 12, color: AppTheme.textSecondary)),
-          const Spacer(),
+          Expanded(
+            child: Text('${shown.length} visits · Rs $fCollected collected',
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary)),
+          ),
           TextButton.icon(
             onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => SalespersonHistoryScreen(
@@ -1283,47 +1534,15 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
         ]),
       ),
       Expanded(
-        child: filtered.isEmpty
+        child: shown.isEmpty
             ? const Center(
-                child: Text('No trips match this range/search.',
+                child: Text('No visits match this range/type/search.',
                     style: TextStyle(color: AppTheme.textSecondary)))
             : ListView.separated(
                 padding: EdgeInsets.all(context.isMobile ? 12 : 24),
-                itemCount: filtered.length,
+                itemCount: shown.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (_, i) {
-                  final t = filtered[i];
-                  final started = t['started_at'] != null
-                      ? DateTime.parse(t['started_at'] as String).toLocal()
-                      : null;
-                  final ended = t['ended_at'] != null;
-                  return _card(Row(children: [
-                    Icon(ended ? Icons.check_circle : Icons.timelapse,
-                        size: 20,
-                        color: ended ? AppTheme.success : AppTheme.warning),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(t['route_name'] as String? ?? '—',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700, fontSize: 13)),
-                            if (started != null)
-                              Text(DateFormat('d MMM yyyy · HH:mm').format(started),
-                                  style: const TextStyle(
-                                      fontSize: 11,
-                                      color: AppTheme.textSecondary)),
-                          ]),
-                    ),
-                    Text('${t['_visits'] ?? 0} visits',
-                        style: const TextStyle(fontSize: 12)),
-                    const SizedBox(width: 12),
-                    Text('Rs ${t['_amount'] ?? 0}',
-                        style: const TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w700)),
-                  ]));
-                },
+                itemBuilder: (_, i) => _visitRecordCard(shown[i]),
               ),
       ),
     ]);
@@ -1444,8 +1663,14 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   Widget _reportsTab() {
     final isSurvey = _isSurveyMode;
     final df = DateFormat('d MMM yyyy');
+    // Salesperson reports gain the visit-type pills so every visit type
+    // (verified / outside / no-location / skipped / recorded) is reportable.
+    final inRange = isSurvey ? const <Map<String, dynamic>>[] : _visitRecordsInRange();
+    final byType = !isSurvey && _visitTypeFilter != 'all';
     return Column(children: [
-      _rangeSearchBar(isSurvey ? 'Search shop name or code...' : 'Search route...'),
+      _rangeSearchBar(
+          isSurvey ? 'Search shop name or code...' : 'Search shop, code or route...'),
+      if (!isSurvey) _visitTypePills(inRange),
       Padding(
         padding: EdgeInsets.fromLTRB(
             context.isMobile ? 12 : 24, 10, context.isMobile ? 12 : 24, 0),
@@ -1464,8 +1689,129 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
         ]),
       ),
       const SizedBox(height: 10),
-      Expanded(child: isSurvey ? _surveyReportTable() : _tripReportTable()),
+      Expanded(
+          child: isSurvey
+              ? _surveyReportTable()
+              : byType
+                  ? _visitTypeReportTable(_applyVisitTypeFilter(inRange))
+                  : _tripReportTable()),
     ]);
+  }
+
+  /// Visit-level report table shown in the Reports tab when a specific visit
+  /// type is selected via the pills (Date · Shop · Type · Collected).
+  Widget _visitTypeReportTable(List<Map<String, dynamic>> records) {
+    if (records.isEmpty) {
+      return const Center(
+          child: Text('No visits of this type in this range.',
+              style: TextStyle(color: AppTheme.textSecondary)));
+    }
+    final sorted = List<Map<String, dynamic>>.from(records)
+      ..sort((a, b) => (b['t'] as DateTime).compareTo(a['t'] as DateTime));
+    final totAmt =
+        sorted.fold<int>(0, (s, v) => s + ((v['amount'] as int?) ?? 0));
+    final df = DateFormat('d MMM yyyy');
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          context.isMobile ? 12 : 24, 0, context.isMobile ? 12 : 24, 16),
+      child: Container(
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppTheme.border)),
+        child: Column(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: const BoxDecoration(
+                color: AppTheme.background,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
+            child: Row(children: [
+              _reportHeaderCell('Date', flex: 2),
+              _reportHeaderCell('Shop', flex: 4),
+              _reportHeaderCell('Type', flex: 2),
+              _reportHeaderCell('Collected', flex: 2, align: TextAlign.right),
+            ]),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.separated(
+              itemCount: sorted.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final v = sorted[i];
+                final cid = v['cid'] as String?;
+                final (label, color, _) =
+                    _visitTypeMeta(_visitTypeKey((v['status'] as String?) ?? ''));
+                final amount = (v['amount'] as int?) ?? 0;
+                return Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(children: [
+                    Expanded(
+                        flex: 2,
+                        child: Text(df.format(v['t'] as DateTime),
+                            style: const TextStyle(fontSize: 12.5))),
+                    Expanded(
+                        flex: 4,
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_custName(cid),
+                                  style: const TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w600)),
+                              if (_custCode(cid).isNotEmpty)
+                                Text(_custCode(cid),
+                                    style: const TextStyle(
+                                        fontSize: 10.5,
+                                        color: AppTheme.textSecondary)),
+                            ])),
+                    Expanded(
+                        flex: 2,
+                        child: Text(label,
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: color))),
+                    Expanded(
+                        flex: 2,
+                        child: Text(amount > 0 ? 'Rs $amount' : '—',
+                            textAlign: TextAlign.right,
+                            style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: amount > 0
+                                    ? AppTheme.success
+                                    : AppTheme.textSecondary))),
+                  ]),
+                );
+              },
+            ),
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(children: [
+              const Expanded(
+                  flex: 8,
+                  child: Text('TOTAL',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textSecondary))),
+              Expanded(
+                  flex: 2,
+                  child: Text('Rs $totAmt',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.success))),
+            ]),
+          ),
+        ]),
+      ),
+    );
   }
 
   Widget _reportHeaderCell(String t, {int flex = 2, TextAlign align = TextAlign.left}) =>
@@ -1721,6 +2067,36 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   Future<void> _printReport() async {
     try {
       final df = DateFormat('d MMM yyyy');
+      // When a specific visit type is selected, export the visit-level list so
+      // the PDF matches what's on screen; otherwise the trip/survey summary.
+      if (!_isSurveyMode && _visitTypeFilter != 'all') {
+        final shown = _applyVisitTypeFilter(_visitRecordsInRange())
+          ..sort((a, b) => (b['t'] as DateTime).compareTo(a['t'] as DateTime));
+        final typeLabel = _visitTypeMeta(_visitTypeFilter).$1;
+        final vbytes = await TeamReportPdf.visitTypeReport(
+          orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+          memberName: _uname,
+          period: '${df.format(_visitsFrom)} \u2013 ${df.format(_visitsTo)}',
+          typeLabel: typeLabel,
+          rows: [
+            for (final v in shown)
+              {
+                't': v['t'],
+                'shop': _custName(v['cid'] as String?),
+                'code': _custCode(v['cid'] as String?),
+                'route': v['route_name'],
+                'amount': (v['amount'] as int?) ?? 0,
+                'receipt': v['receipt'],
+              }
+          ],
+        );
+        await Printing.layoutPdf(
+          onLayout: (_) async => vbytes,
+          name:
+              'team_visits_${_visitTypeFilter}_${_uname.replaceAll(' ', '_')}_${DateFormat('yyyyMMdd').format(_visitsTo)}.pdf',
+        );
+        return;
+      }
       final bytes = await TeamReportPdf.periodReport(
         orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
         memberName: _uname,

@@ -25,6 +25,9 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   // route_id -> rpc_route_target_achievement row (target/achieved/etc).
   // Populated only when the customer-targets toggle is ON.
   final Map<String, Map<String, dynamic>> _routeAch = {};
+  // route_id -> assigned salesperson name (from route_assignments + users).
+  // One route maps to one salesperson under our assignment rule.
+  final Map<String, String> _routeAssignee = {};
 
   @override
   void initState() {
@@ -53,6 +56,28 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
       final stops = await client
           .from('route_stops')
           .select('route_id, customer_id, position');
+      // Route -> salesperson assignment. route_assignments maps a route to
+      // the user who runs it; users gives us the display name.
+      final assignments = await client
+          .from('route_assignments')
+          .select('route_id, user_id');
+      final teamUsers = await client
+          .from('users')
+          .select('id, name')
+          .eq('org_id', orgId);
+      final userNameById = <String, String>{
+        for (final u in (teamUsers as List))
+          (u as Map)['id'] as String: ((u)['name'] as String? ?? '').trim(),
+      };
+      _routeAssignee.clear();
+      for (final a in (assignments as List)) {
+        final m = a as Map;
+        final rid = m['route_id'] as String?;
+        final uid = m['user_id'] as String?;
+        if (rid == null || uid == null) continue;
+        final nm = userNameById[uid];
+        if (nm != null && nm.isNotEmpty) _routeAssignee[rid] = nm;
+      }
       // Paginate past PostgREST's 1000-row default cap
       final List<Map<String, dynamic>> customers = [];
       {
@@ -63,6 +88,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
               .from('customers')
               .select('id, shop_name, code')
               .eq('org_id', orgId)
+              .eq('is_active', true)
               .order('shop_name')
               .range(offset, offset + pageSize - 1);
           customers.addAll(List<Map<String, dynamic>>.from(page));
@@ -320,6 +346,39 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                         style: const TextStyle(
                                             color: AppTheme.textSecondary,
                                             fontSize: 13)),
+                                    const SizedBox(height: 4),
+                                    Builder(builder: (_) {
+                                      final assignee = _routeAssignee[
+                                          r['id'] as String];
+                                      final assigned = assignee != null &&
+                                          assignee.isNotEmpty;
+                                      return Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.person_outline,
+                                                size: 14,
+                                                color: assigned
+                                                    ? AppTheme.primary
+                                                    : AppTheme.textSecondary),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                                assigned
+                                                    ? assignee
+                                                    : 'Unassigned',
+                                                style: TextStyle(
+                                                    color: assigned
+                                                        ? AppTheme.primary
+                                                        : AppTheme
+                                                            .textSecondary,
+                                                    fontSize: 12.5,
+                                                    fontWeight: assigned
+                                                        ? FontWeight.w600
+                                                        : FontWeight.w400,
+                                                    fontStyle: assigned
+                                                        ? FontStyle.normal
+                                                        : FontStyle.italic)),
+                                          ]);
+                                    }),
                                   ])),
                               Container(
                                 padding: const EdgeInsets.symmetric(

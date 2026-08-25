@@ -164,6 +164,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
             .from('customers')
             .select('id, shop_name, code')
             .eq('org_id', orgId)
+            .eq('is_active', true)
             .inFilter('id', latest.keys.toList());
         customers = List<Map<String, dynamic>>.from(rows);
         customers.sort((a, b) => (a['shop_name'] as String).compareTo(b['shop_name'] as String));

@@ -253,7 +253,7 @@ class _IntelligenceDashboardScreenState
         pageAll((f, t) => client.from('route_stops').select('route_id, customer_id').range(f, t)),
         pageAll((f, t) => client.from('route_assignments').select('user_id, route_id').range(f, t)),
         client.from('users').select('id, name').eq('org_id', orgId),
-        pageAll((f, t) => client.from('customers').select('id, shop_name, code').eq('org_id', orgId).range(f, t)),
+        pageAll((f, t) => client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).range(f, t)),
         pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
         pageAll((f, t) => client
             .from('competitor_spotting')
@@ -1086,6 +1086,7 @@ class _IntelligenceDashboardScreenState
           .from('customers')
           .select('id, shop_name, code')
           .eq('org_id', orgId)
+          .eq('is_active', true)
           .order('shop_name')
           .limit(10000);
       if (mounted) {
