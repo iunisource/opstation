@@ -928,6 +928,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/manufacturing/job-card')) _menuItem(context, 'Job Card', Icons.assignment_outlined, '/manufacturing/job-card', location, badge: jobAckPending),
       if (show('/manufacturing/qc-checkpoints')) _menuItem(context, 'QC Checkpoints', Icons.fact_check_outlined, '/manufacturing/qc-checkpoints', location),
       if (show('/manufacturing/qc-station')) _menuItem(context, 'QC Station', Icons.checklist_outlined, '/manufacturing/qc-station', location),
+      if (show('/manufacturing/job-kiosk')) _menuItem(context, 'Job Kiosk', Icons.qr_code_scanner_outlined, '/manufacturing/job-kiosk', location),
     ];
     final mfgVoucherItems = <Widget>[
       if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)', Icons.account_tree_outlined, '/manufacturing/product-assembly', location),
@@ -1038,7 +1039,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
-          ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station',
+          ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station', '/manufacturing/job-kiosk',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
            '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary', '/erp/fg-without-bom'],
           _trimDividers(manufacturingItems), badge: jobAckPending),

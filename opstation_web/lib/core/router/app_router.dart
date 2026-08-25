@@ -17,6 +17,7 @@ import '../../features/erp/presentation/erp_overheads_summary_screen.dart';
 import '../../features/erp/presentation/erp_job_card_screen.dart';
 import '../../features/erp/presentation/erp_qc_checkpoints_screen.dart';
 import '../../features/erp/presentation/erp_qc_station_screen.dart';
+import '../../features/erp/presentation/erp_job_kiosk_screen.dart';
 import '../../features/erp/presentation/erp_production_floor_screen.dart';
 import '../../features/erp/presentation/erp_production_plan_screen.dart';
 import '../../features/erp/presentation/erp_report_builder_screen.dart';
@@ -376,6 +377,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/job-card', builder: (_, __) => const ErpJobCardScreen()),
       GoRoute(path: '/manufacturing/qc-checkpoints', builder: (_, __) => const ErpQcCheckpointsScreen()),
       GoRoute(path: '/manufacturing/qc-station', builder: (_, __) => const ErpQcStationScreen()),
+      GoRoute(path: '/manufacturing/job-kiosk', builder: (_, __) => const ErpJobKioskScreen()),
       GoRoute(path: '/manufacturing/production-floor', builder: (_, __) => const ErpProductionFloorScreen()),
       // Registered in the permission registry (so it rendered as a menu item)
       // but had no GoRoute — same pre-existing gap as the HR attendance screens.
