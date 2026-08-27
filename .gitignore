@@ -41,3 +41,6 @@
 *.iml
 **/node_modules/
 .firebase/
+*.zip
+*.bak
+*.bak[0-9]
