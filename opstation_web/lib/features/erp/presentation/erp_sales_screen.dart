@@ -3089,7 +3089,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             final total = (s['discount_total'] as num?)?.toDouble() ?? 0;
             final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
             final desc = items.map((di) {
-              final name = _products.firstWhere((p) => p['id'] == di['product_id'], orElse: () => const {})['name'] ?? 'product';
+              final line = _items.firstWhere((it) => it['product_id'] == di['product_id'], orElse: () => const {});
+              final name = (line['products']?['name'] as String?) ?? 'product';
               return '$name: ${_n4((di['discount_percent'] as num?))}%';
             }).join(', ');
             return CheckboxListTile(
