@@ -56,6 +56,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   final Map<String, TextEditingController> _lineRateCtrls = {};
   final Map<String, TextEditingController> _lineDescCtrls = {}; // free-text item descriptions
 
+  // The seed batch (from Low Stock "Make PO") already applied, so revisiting
+  // the same URL doesn't create a duplicate PO but a NEW seed batch does.
+  String? _seedHandled;
+
   @override
   void initState() {
     super.initState();
@@ -67,15 +71,36 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     }
   }
 
+  // go_router REUSES a mounted screen when navigating to the same route with
+  // new query params — initState never re-runs. Low Stock's "Make PO" lands
+  // here whenever the Purchase screen was already visited this session, so the
+  // seed must also be handled on widget update or it is silently ignored.
+  @override
+  void didUpdateWidget(covariant ErpPurchaseScreen old) {
+    super.didUpdateWidget(old);
+    final seed = widget.seedProductId;
+    if (seed != null && seed != old.seedProductId && seed != _seedHandled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _seedNewPo());
+    }
+    if (widget.focusId != null && widget.focusId != old.focusId) {
+      _loadDetail(widget.focusId!);
+    }
+  }
+
   // Seed a brand-new PO from the Low Stock report's "Make PO": pick a supplier,
-  // create the draft, then auto-add the shortfall product line.
+  // create the draft, then auto-add the shortfall product line(s).
   Future<void> _seedNewPo() async {
+    final seed = widget.seedProductId;
+    if (seed == null || seed == _seedHandled) return;
+    _seedHandled = seed;
     if (_suppliers.isEmpty || _products.isEmpty) { await _loadLookups(); }
-    await _createNew(); // supplier pick + create + load detail
-    final poId = _detail['id'] as String?;
-    if (poId == null) return; // user cancelled the supplier picker
+    // _createNew returns the new PO's id once its detail is fully loaded —
+    // reading _detail immediately after used to race the unawaited load and
+    // bail out with a created-but-empty (or seemingly uncreated) PO.
+    final poId = await _createNew(); // supplier pick + create + load detail
+    if (poId == null) { _seedHandled = null; return; } // supplier picker cancelled — allow retry
     // seedProductId / seedQty may be comma-separated for a bulk "Make PO".
-    final ids = (widget.seedProductId ?? '').split(',').where((e) => e.trim().isNotEmpty).toList();
+    final ids = seed.split(',').where((e) => e.trim().isNotEmpty).toList();
     final qtys = (widget.seedQty ?? '').split(',');
     for (var i = 0; i < ids.length; i++) {
       final pid = ids[i].trim();
@@ -447,11 +472,14 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     } catch (e) { print('[Audit PO] $e'); }
   }
 
-  Future<void> _createNew() async {
+  /// Creates a draft PO (supplier pick + insert + detail load) and returns its
+  /// id, or null if cancelled/failed. The detail load is AWAITED so callers
+  /// (notably the Low Stock seed flow) can add lines immediately after.
+  Future<String?> _createNew() async {
     final orgId = _orgId; final branchId = _branchId;
-    if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
+    if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return null; }
     final picked = await showDialog<Map<String, dynamic>?>(context: context, builder: (_) => _SupplierPickDialog(suppliers: _suppliers));
-    if (picked == null) return;
+    if (picked == null) return null;
     setState(() => _detailLoading = true);
     SavingOverlay.show(context, label: 'Creating…');
     try {
@@ -468,8 +496,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await _logAudit(poId, 'created', 'PO $vNum created');
       _showSnack('$vNum created — add items below');
       await _loadList();
-      _loadDetail(poId);
-    } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
+      await _loadDetail(poId);
+      return poId;
+    } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); return null; }
     finally { SavingOverlay.hide(); }
   }
 

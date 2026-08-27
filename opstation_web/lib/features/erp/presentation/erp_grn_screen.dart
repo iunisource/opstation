@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import '../../../core/utils/friendly_error.dart';
@@ -35,6 +37,10 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool _adjustBusy = false;
   List<Map<String, dynamic>> _items = [];
   Map<String, TextEditingController> _receivedCtrl = {};
+  // Autosave for draft received-qty edits — previously the value only saved on
+  // Enter, so a typed 0 was silently lost on blur/navigation and the line
+  // confirmed at its full defaulted quantity.
+  final Map<String, Timer> _qtySaveDebounce = {};
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
@@ -61,7 +67,11 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     }
   }
   @override
-  void dispose() { for (final c in _receivedCtrl.values) c.dispose(); super.dispose(); }
+  void dispose() {
+    for (final t in _qtySaveDebounce.values) t.cancel();
+    for (final c in _receivedCtrl.values) c.dispose();
+    super.dispose();
+  }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -364,9 +374,24 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
 
   Future<void> _confirmReceipt() async {
     if (_items.isEmpty) { _showSnack('No items to receive'); return; }
+    // Summarise from the CURRENT editors (unsaved edits included) so the admin
+    // sees exactly what will post: zero lines are skipped by confirm_grn and
+    // stay open on the PO for a later GRN.
+    int zeroLines = 0;
+    for (final it in _items) {
+      final id = it['id'] as String;
+      final q = double.tryParse(_receivedCtrl[id]?.text ?? '') ??
+          ((it['qty_received'] as num?)?.toDouble() ?? 0);
+      if (q <= 0) zeroLines++;
+    }
+    final recvLines = _items.length - zeroLines;
+    if (recvLines == 0) { _showSnack('All lines are zero — nothing to receive'); return; }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Confirm Goods Receipt?'),
-      content: const Text('Stock will be added to inventory and this GRN will be locked.'),
+      content: Text(
+          '$recvLines of ${_items.length} line${_items.length == 1 ? '' : 's'} will be received into stock.'
+          '${zeroLines > 0 ? '\n\n$zeroLines line${zeroLines == 1 ? '' : 's'} with ZERO quantity will NOT be received — they stay open on the PO and can be received on a later GRN.' : ''}'
+          '\n\nStock will be added to inventory and this GRN will be locked.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Confirm'))],
     ));
@@ -734,6 +759,14 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                       ? TextField(controller: _receivedCtrl[id],
                           decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4)),
                           textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          // Autosave (debounced) so a typed value — especially 0 —
+                          // persists even without pressing Enter.
+                          onChanged: _isDraft ? (_) {
+                            _qtySaveDebounce[id]?.cancel();
+                            _qtySaveDebounce[id] = Timer(const Duration(milliseconds: 800), () {
+                              if (mounted && _isDraft) _saveReceivedQty(id);
+                            });
+                          } : null,
                           onSubmitted: _isDraft ? (_) => _saveReceivedQty(id) : null)
                       : Text(received.toStringAsFixed(received % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
                 ]));
