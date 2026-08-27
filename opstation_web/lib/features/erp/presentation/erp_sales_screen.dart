@@ -1261,7 +1261,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               ]),
             ),
 
-            if (_focEnabled) ...[
+            if (_focEnabled || _items.any((it) => it['is_foc'] == true)) ...[
               const SizedBox(height: 16),
               _buildFocSection(),
             ],

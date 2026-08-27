@@ -21,6 +21,7 @@ class ErpSchemesScreen extends ConsumerStatefulWidget {
 class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
   bool _loading = true;
   bool _enabled = false; // org.schemes_enabled
+  bool _focEnabled = false; // org.foc_enabled — free units land in the FOC section
   List<Map<String, dynamic>> _schemes = [];
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _customers = [];
@@ -43,15 +44,17 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
     try {
       final client = Supabase.instance.client;
       final results = await Future.wait([
-        client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.schemes_enabled').maybeSingle(),
+        client.from('app_config').select('key,value').eq('org_id', orgId).inFilter('key', ['org.schemes_enabled', 'org.foc_enabled']),
         client.from('schemes').select('*, scheme_slabs(*), scheme_products(product_id), scheme_customers(customer_id), scheme_branches(branch_id)').eq('org_id', orgId).order('priority').order('name'),
         client.from('products').select('id, name, sku, base_uom_id').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(10000),
         client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name'),
       ]);
       if (!mounted) return;
+      final cfg = {for (final r in results[0] as List) r['key'] as String: (r['value'] as String? ?? '')};
       setState(() {
-        _enabled = ((results[0] as Map?)?['value'] as String?) == 'true';
+        _enabled = cfg['org.schemes_enabled'] == 'true';
+        _focEnabled = cfg['org.foc_enabled'] == 'true';
         _schemes = List<Map<String, dynamic>>.from(results[1] as List);
         _products = List<Map<String, dynamic>>.from(results[2] as List);
         _customers = List<Map<String, dynamic>>.from(results[3] as List);
@@ -87,6 +90,8 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
         customers: _customers,
         branches: _branches,
         createdBy: ref.read(currentUserProvider)?.id,
+        focFlowEnabled: _focEnabled,
+        onEnableFocFlow: _enableFocFlow,
       ),
     );
     if (saved == true) _load();
@@ -126,6 +131,22 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
     } catch (e) {
       setState(() => _enabled = !v);
       _snack(friendlyError('Could not change the switch', e));
+    }
+  }
+
+  // Enable org.foc_enabled so free units from Buy-X-Get-Y schemes are visible
+  // in the FOC section of the Sales Order.
+  Future<bool> _enableFocFlow() async {
+    final orgId = _orgId; if (orgId == null) return false;
+    try {
+      await Supabase.instance.client.from('app_config').upsert({
+        'key': 'org.foc_enabled', 'value': 'true', 'org_id': orgId,
+      }, onConflict: 'key,org_id,branch_id');
+      if (mounted) setState(() => _focEnabled = true);
+      return true;
+    } catch (e) {
+      _snack(friendlyError('Could not enable the FOC section', e));
+      return false;
     }
   }
 
@@ -308,6 +329,8 @@ class _SchemeFormDialog extends StatefulWidget {
     required this.customers,
     required this.branches,
     required this.createdBy,
+    required this.focFlowEnabled,
+    required this.onEnableFocFlow,
   });
   final String orgId;
   final Map<String, dynamic>? scheme;
@@ -315,6 +338,8 @@ class _SchemeFormDialog extends StatefulWidget {
   final List<Map<String, dynamic>> customers;
   final List<Map<String, dynamic>> branches;
   final String? createdBy;
+  final bool focFlowEnabled;
+  final Future<bool> Function() onEnableFocFlow;
 
   @override
   State<_SchemeFormDialog> createState() => _SchemeFormDialogState();
@@ -348,10 +373,12 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
   final List<_SlabRow> _slabs = [];
 
   bool _saving = false;
+  late bool _focFlow; // local mirror of org.foc_enabled
 
   @override
   void initState() {
     super.initState();
+    _focFlow = widget.focFlowEnabled;
     final s = widget.scheme;
     if (s != null) {
       _nameCtrl.text = s['name'] as String? ?? '';
@@ -468,6 +495,25 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
     if (!_allProducts && _prodIds.isEmpty) { _snack('Pick at least one product, or switch to All products'); return; }
     if (!_allCustomers && _custIds.isEmpty) { _snack('Pick at least one customer, or switch to All customers'); return; }
     if (!_allBranches && _branchIds.isEmpty) { _snack('Pick at least one branch, or switch to All branches'); return; }
+
+    // A Buy-X-Get-Y scheme puts free units in the FOC section — which is only
+    // visible when the FOC products flow is on. Offer to enable it now.
+    if (_type == 'foc' && !_focFlow) {
+      final choice = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+        title: const Text('Enable FOC section?'),
+        content: const Text('This is a Buy X get Y free scheme. Free units are added to the FOC section of the Sales Order, which is currently OFF for this org — the free goods would not appear there.\n\nEnable the FOC products flow so they show up?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'skip'), child: const Text('Save without it')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, 'enable'), child: const Text('Enable & save')),
+        ],
+      ));
+      if (choice == null || choice == 'cancel') return;
+      if (choice == 'enable') {
+        final ok = await widget.onEnableFocFlow();
+        if (ok && mounted) setState(() => _focFlow = true);
+      }
+    }
 
     setState(() => _saving = true);
     final client = Supabase.instance.client;
@@ -701,6 +747,24 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
         ]),
         const SizedBox(height: 6),
         const Text('FOC schemes are suggested on the Sales Order (free goods are added as FOC lines and flow to the invoice).', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        if (!_focFlow) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: Colors.orange.withOpacity(0.10), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+            child: Row(children: [
+              const Icon(Icons.warning_amber_rounded, size: 18, color: Colors.deepOrange),
+              const SizedBox(width: 8),
+              const Expanded(child: Text('The FOC section is currently OFF on Sales Orders, so free units would not be shown. Enable the FOC products flow to place them there.', style: TextStyle(fontSize: 11.5, color: Colors.deepOrange))),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: () async { final ok = await widget.onEnableFocFlow(); if (ok && mounted) setState(() => _focFlow = true); },
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrange, visualDensity: VisualDensity.compact),
+                child: const Text('Enable FOC', style: TextStyle(fontSize: 12)),
+              ),
+            ]),
+          ),
+        ],
       ]),
     );
   }
