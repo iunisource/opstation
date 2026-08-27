@@ -130,6 +130,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   String? _focUomId;
   final _focQtyCtrl = TextEditingController(text: '1');
   bool _focEnabled = false;
+  bool _schemesEnabled = false; // org.schemes_enabled — FOC schemes on the SO
+  bool _schemeBusy = false;
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
   bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
@@ -164,11 +166,14 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final client = Supabase.instance.client;
       final p = await client.from('products').select('id, name, sku, base_uom_id, selling_price, product_main_group').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
       final u = await client.from('uoms').select().eq('org_id', orgId).order('name');
-      bool focOn = false;
+      bool focOn = false; bool schemesOn = false;
       try {
-        final cfg = await client.from('app_config').select('value')
-            .eq('org_id', orgId).eq('key', 'org.foc_enabled').maybeSingle();
-        focOn = (cfg?['value'] as String?) == 'true';
+        final cfg = await client.from('app_config').select('key,value')
+            .eq('org_id', orgId).inFilter('key', ['org.foc_enabled', 'org.schemes_enabled']);
+        for (final r in cfg as List) {
+          if (r['key'] == 'org.foc_enabled') focOn = (r['value'] as String?) == 'true';
+          if (r['key'] == 'org.schemes_enabled') schemesOn = (r['value'] as String?) == 'true';
+        }
       } catch (_) {}
       bool hideOn = false; final Map<String, Set<String>> hiddenBy = {};
       try {
@@ -179,7 +184,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           for (final r in hr as List) { (hiddenBy[r['branch_id'] as String] ??= <String>{}).add(r['main_group'] as String); }
         }
       } catch (_) {}
-      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _focEnabled = focOn; _hideGroupsEnabled = hideOn; _hiddenByBranch = hiddenBy; });
+      if (mounted) setState(() { _products = List<Map<String,dynamic>>.from(p); _uoms = List<Map<String,dynamic>>.from(u); _focEnabled = focOn; _schemesEnabled = schemesOn; _hideGroupsEnabled = hideOn; _hiddenByBranch = hiddenBy; });
       _ensureCustomers();
     } catch (_) {}
   }
@@ -681,6 +686,137 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
+  // ── Schemes: detect eligible FOC schemes for the current lines and, on
+  // confirm, add the free goods as FOC lines. Slab-discount schemes execute on
+  // the Sales Invoice (where prices are set), not here.
+  Future<void> _checkSchemes() async {
+    if (_schemeBusy) return;
+    final orgId = _orgId; if (orgId == null) return;
+    final custId = _detail['customer_id'] as String?;
+    final branchId = _detail['branch_id'] as String? ?? _branchId;
+    final lines = _items.where((it) => it['is_foc'] != true).map((it) => {
+          'product_id': it['product_id'],
+          'qty': (it['quantity'] as num?)?.toDouble() ?? 0,
+          'unit_price': 0,
+        }).toList();
+    if (lines.isEmpty) { _showSnack('Add some order lines first'); return; }
+    setState(() => _schemeBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('scheme_suggest', params: {
+        'p_org': orgId, 'p_branch': branchId, 'p_customer': custId, 'p_lines': lines,
+      });
+      final all = List<Map<String, dynamic>>.from((res as List?) ?? const []);
+      final foc = all.where((s) => s['type'] == 'foc').toList();
+      if (!mounted) return;
+      setState(() => _schemeBusy = false);
+      if (foc.isEmpty) { _showSnack('No schemes apply to this order right now'); return; }
+      await _showSchemeSuggestions(foc, custId, branchId);
+    } catch (e) {
+      if (mounted) setState(() => _schemeBusy = false);
+      _showSnack(friendlyError('Could not check schemes', e));
+    }
+  }
+
+  Future<void> _showSchemeSuggestions(List<Map<String, dynamic>> foc, String? custId, String? branchId) async {
+    final selected = {for (final s in foc) s['scheme_id'] as String: true};
+    final apply = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+      return AlertDialog(
+        title: const Row(children: [Icon(Icons.local_offer_outlined, color: AppTheme.primary), SizedBox(width: 8), Text('Schemes available')]),
+        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Align(alignment: Alignment.centerLeft, child: Text('Confirm which schemes to apply. Free goods are added as FOC lines.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          const SizedBox(height: 8),
+          ...foc.map((s) {
+            final id = s['scheme_id'] as String;
+            final items = List<Map<String, dynamic>>.from(s['free_items'] as List? ?? const []);
+            final desc = items.map((fi) {
+              final fp = fi['free_product_id'] as String?;
+              final name = _products.firstWhere((p) => p['id'] == fp, orElse: () => const {})['name'] ?? 'product';
+              return '${_plain4((fi['free_qty'] as num?)?.toDouble())} × $name';
+            }).join(', ');
+            return CheckboxListTile(
+              value: selected[id] ?? false,
+              onChanged: (v) => setLocal(() => selected[id] = v ?? false),
+              title: Text(s['name'] as String? ?? 'Scheme', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              subtitle: Text('Free: $desc', style: const TextStyle(fontSize: 12)),
+              dense: true,
+              controlAffinity: ListTileControlAffinity.leading,
+            );
+          }),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apply selected')),
+        ],
+      );
+    }));
+    if (apply != true) return;
+    final chosen = foc.where((s) => selected[s['scheme_id']] == true).toList();
+    if (chosen.isEmpty) return;
+    await _applyFocSchemes(chosen, custId, branchId);
+  }
+
+  Future<void> _applyFocSchemes(List<Map<String, dynamic>> schemes, String? custId, String? branchId) async {
+    final orgId = _orgId; if (orgId == null) return;
+    setState(() => _schemeBusy = true);
+    final client = Supabase.instance.client;
+    final user = ref.read(currentUserProvider);
+    int applied = 0;
+    try {
+      for (final s in schemes) {
+        final items = List<Map<String, dynamic>>.from(s['free_items'] as List? ?? const []);
+        double totalFree = 0;
+        for (final fi in items) {
+          final freeProd = fi['free_product_id'] as String?;
+          final freeQty = (fi['free_qty'] as num?)?.toDouble() ?? 0;
+          if (freeProd == null || freeQty <= 0) continue;
+          final prod = _products.firstWhere((p) => p['id'] == freeProd, orElse: () => const {});
+          final uomId = prod['base_uom_id'] as String?;
+          if (uomId == null) continue;
+          // Idempotent: update an existing FOC line for this product, else add.
+          final existing = _items.firstWhere((it) => it['is_foc'] == true && it['product_id'] == freeProd, orElse: () => const {});
+          if (existing.isNotEmpty) {
+            await client.from('sales_order_items').update({'quantity': freeQty}).eq('id', existing['id']);
+          } else {
+            final itemId = 'soi_${DateTime.now().microsecondsSinceEpoch}';
+            await client.from('sales_order_items').insert({
+              'id': itemId,
+              'sales_order_id': _detail['id'],
+              'product_id': freeProd, 'uom_id': uomId,
+              'quantity': freeQty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
+              'is_foc': true,
+            });
+          }
+          totalFree += freeQty;
+        }
+        // Log the redemption.
+        await client.from('scheme_redemptions').insert({
+          'id': 'rdm_${DateTime.now().microsecondsSinceEpoch}_$applied',
+          'org_id': orgId,
+          'scheme_id': s['scheme_id'],
+          'scheme_name': s['name'],
+          'scheme_type': 'foc',
+          'voucher_type': 'SO',
+          'voucher_id': _detail['id'],
+          'voucher_number': _detail['voucher_number'],
+          'customer_id': custId,
+          'branch_id': branchId,
+          'benefit_type': 'foc',
+          'free_qty': totalFree,
+          'applied_by': user?.id,
+          'applied_by_name': user?.name,
+          'meta': {'free_items': items},
+        });
+        applied++;
+      }
+      if (mounted) { _showSnack('Applied $applied scheme(s)'); }
+      await _loadDetail(_detail['id'] as String);
+    } catch (e) {
+      _showSnack(friendlyError('Could not apply the scheme', e));
+    } finally {
+      if (mounted) setState(() => _schemeBusy = false);
+    }
+  }
+
   Future<void> _deleteItem(String itemId) async {
     if (!_canEditLines) { _showSnack('Cannot remove: $_doMsg'); return; }
     try {
@@ -894,6 +1030,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           _StatusChip(status: status.replaceAll('_', ' '), color: _statusColor(status)),
           if (isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
           const Spacer(),
+          if (_schemesEnabled && _canEditLines && _items.any((it) => it['is_foc'] != true)) ...[
+            OutlinedButton.icon(
+              onPressed: _schemeBusy ? null : _checkSchemes,
+              icon: _schemeBusy
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.local_offer_outlined, size: 16, color: AppTheme.primary),
+              label: const Text('Schemes'),
+              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+            ),
+            const SizedBox(width: 8),
+          ],
           if (_canEdit) ...[
             ElevatedButton(onPressed: _confirmOrder, child: const Text('Confirm Order')),
             const SizedBox(width: 8),
@@ -2523,6 +2670,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   final Map<String, TextEditingController> _discountCtrl = {};
   final Map<String, TextEditingController> _priceCtrl = {};
   bool _priceEditable = false; // org.si_price_editable
+  bool _schemesEnabled = false; // org.schemes_enabled — slab-discount schemes on the SI
+  bool _schemeBusy = false;
   final TextEditingController _remarksCtrl = TextEditingController();
 
   @override
@@ -2605,13 +2754,21 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
         canSup = _isAdmin || (uid2 != null && extraIds2.contains(uid2));
       } catch (_) {}
-      bool priceEditable = _priceEditable;
-      try { final pc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.si_price_editable').maybeSingle(); priceEditable = (pc?['value'] as String?) == 'true'; } catch (_) {}
+      bool priceEditable = _priceEditable; bool schemesOn = _schemesEnabled;
+      try {
+        final pc = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
+            .inFilter('key', ['org.si_price_editable', 'org.schemes_enabled']);
+        for (final r in pc as List) {
+          if (r['key'] == 'org.si_price_editable') priceEditable = (r['value'] as String?) == 'true';
+          if (r['key'] == 'org.schemes_enabled') schemesOn = (r['value'] as String?) == 'true';
+        }
+      } catch (_) {}
       setState(() {
         _reviewFlow = reviewFlow;
         _superviseFlow = superviseFlow;
         _canSupervise = canSup;
         _priceEditable = priceEditable;
+        _schemesEnabled = schemesOn;
         _detail = Map<String,dynamic>.from(inv);
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
@@ -2886,6 +3043,135 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           (item['unit_price'] as num?)?.toDouble() ?? 0;
     }
     return (item['unit_price'] as num?)?.toDouble() ?? 0;
+  }
+
+  // ── Schemes: detect eligible quantity-slab discount schemes for the invoice
+  // lines (real prices) and, on confirm, set each line's discount percent.
+  Future<void> _checkSchemes() async {
+    if (_schemeBusy) return;
+    if (_isLocked) { _showSnack('Unlock the invoice to apply a scheme discount'); return; }
+    final orgId = _orgId; if (orgId == null) return;
+    final custId = (_detail['customer_id'] as String?) ?? (_detail['sales_orders']?['customer_id'] as String?);
+    final branchId = _detail['branch_id'] as String?;
+    final lines = _items.where((it) => it['is_foc'] != true).map((it) => {
+          'product_id': it['product_id'],
+          'qty': (it['qty_delivered'] as num?)?.toDouble() ?? 0,
+          'unit_price': _siPrice(it),
+        }).toList();
+    if (lines.isEmpty) { _showSnack('No priced lines to check'); return; }
+    setState(() => _schemeBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('scheme_suggest', params: {
+        'p_org': orgId, 'p_branch': branchId, 'p_customer': custId, 'p_lines': lines,
+      });
+      final all = List<Map<String, dynamic>>.from((res as List?) ?? const []);
+      final slab = all.where((s) => s['type'] == 'qty_slab').toList();
+      if (!mounted) return;
+      setState(() => _schemeBusy = false);
+      if (slab.isEmpty) { _showSnack('No discount schemes apply to this invoice right now'); return; }
+      await _showSlabSuggestions(slab, custId, branchId);
+    } catch (e) {
+      if (mounted) setState(() => _schemeBusy = false);
+      _showSnack(friendlyError('Could not check schemes', e));
+    }
+  }
+
+  Future<void> _showSlabSuggestions(List<Map<String, dynamic>> slab, String? custId, String? branchId) async {
+    final selected = {for (final s in slab) s['scheme_id'] as String: true};
+    final apply = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+      return AlertDialog(
+        title: const Row(children: [Icon(Icons.local_offer_outlined, color: AppTheme.primary), SizedBox(width: 8), Text('Discount schemes available')]),
+        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Align(alignment: Alignment.centerLeft, child: Text('Confirm which discount schemes to apply. Each sets the line discount %.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          const SizedBox(height: 8),
+          ...slab.map((s) {
+            final id = s['scheme_id'] as String;
+            final total = (s['discount_total'] as num?)?.toDouble() ?? 0;
+            final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
+            final desc = items.map((di) {
+              final name = _products.firstWhere((p) => p['id'] == di['product_id'], orElse: () => const {})['name'] ?? 'product';
+              return '$name: ${_n4((di['discount_percent'] as num?))}%';
+            }).join(', ');
+            return CheckboxListTile(
+              value: selected[id] ?? false,
+              onChanged: (v) => setLocal(() => selected[id] = v ?? false),
+              title: Text(s['name'] as String? ?? 'Scheme', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              subtitle: Text('$desc\nApprox. Rs ${_n4(total)} off', style: const TextStyle(fontSize: 12)),
+              isThreeLine: true,
+              dense: true,
+              controlAffinity: ListTileControlAffinity.leading,
+            );
+          }),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apply selected')),
+        ],
+      );
+    }));
+    if (apply != true) return;
+    final chosen = slab.where((s) => selected[s['scheme_id']] == true).toList();
+    if (chosen.isEmpty) return;
+    await _applySlabSchemes(chosen, custId, branchId);
+  }
+
+  Future<void> _applySlabSchemes(List<Map<String, dynamic>> schemes, String? custId, String? branchId) async {
+    final orgId = _orgId; if (orgId == null) return;
+    setState(() => _schemeBusy = true);
+    final client = Supabase.instance.client;
+    final user = ref.read(currentUserProvider);
+    int applied = 0;
+    try {
+      // Set the per-line discount % from each chosen scheme (highest wins if two
+      // schemes touch the same line).
+      for (final s in schemes) {
+        final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
+        for (final di in items) {
+          final pid = di['product_id'] as String?;
+          final pct = (di['discount_percent'] as num?)?.toDouble() ?? 0;
+          final line = _items.firstWhere((it) => it['is_foc'] != true && it['product_id'] == pid, orElse: () => const {});
+          if (line.isEmpty) continue;
+          final id = line['id'] as String;
+          final cur = double.tryParse(_discountCtrl[id]?.text ?? '0') ?? 0;
+          if (pct > cur) {
+            _discountCtrl[id] ??= TextEditingController();
+            _discountCtrl[id]!.text = _plain4(pct);
+          }
+        }
+      }
+      // Persist discounts + recompute totals (without locking).
+      final (subtotal, discountTotal) = await _writeItemDiscounts();
+      await client.from('sales_invoices').update({
+        'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
+      }).eq('id', _detail['id']);
+      // Log a redemption per scheme.
+      for (final s in schemes) {
+        await client.from('scheme_redemptions').insert({
+          'id': 'rdm_${DateTime.now().microsecondsSinceEpoch}_$applied',
+          'org_id': orgId,
+          'scheme_id': s['scheme_id'],
+          'scheme_name': s['name'],
+          'scheme_type': 'qty_slab',
+          'voucher_type': 'SI',
+          'voucher_id': _detail['id'],
+          'voucher_number': _detail['voucher_number'],
+          'customer_id': custId,
+          'branch_id': branchId,
+          'benefit_type': 'discount',
+          'discount_amount': (s['discount_total'] as num?)?.toDouble() ?? 0,
+          'applied_by': user?.id,
+          'applied_by_name': user?.name,
+          'meta': {'discount_items': s['discount_items']},
+        });
+        applied++;
+      }
+      if (mounted) _showSnack('Applied $applied scheme(s) — review and Save');
+      await _loadDetail(_detail['id'] as String);
+    } catch (e) {
+      _showSnack(friendlyError('Could not apply the scheme', e));
+    } finally {
+      if (mounted) setState(() => _schemeBusy = false);
+    }
   }
 
   Future<(double, double)> _writeItemDiscounts() async {
@@ -3220,6 +3506,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           const SizedBox(width: 12),
           if (_isLocked) const _LockedBadge(),
           const Spacer(),
+          if (_schemesEnabled && !_isLocked && !(_detail['is_voided'] as bool? ?? false) && _items.any((it) => it['is_foc'] != true)) ...[
+            OutlinedButton.icon(
+              onPressed: _schemeBusy ? null : _checkSchemes,
+              icon: _schemeBusy
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.local_offer_outlined, size: 16, color: AppTheme.primary),
+              label: const Text('Schemes'),
+              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+            ),
+            const SizedBox(width: 8),
+          ],
           if (!_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
             if (!_reviewFlow) ...[
               ElevatedButton(onPressed: _saveDiscounts, child: const Text('Save')),

@@ -456,6 +456,21 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.schemes_enabled',
+    'Schemes & Offers engine',
+    'When ON, the Schemes & Offers tool goes live: as a salesperson builds a '
+        'Sales Order or Sales Invoice, the app detects any eligible scheme '
+        '(Buy X get Y free, or a quantity-slab discount) for that customer, '
+        'branch and the products on the voucher, and suggests it — the user '
+        'confirms before it is applied. FOC free goods are added on the Sales '
+        'Order; slab discounts are applied on the Sales Invoice. Create and '
+        'manage the schemes under Sales → Schemes & Offers (each scheme also '
+        'has its own active switch and validity dates). When OFF, nothing is '
+        'suggested and no scheme is applied, but you can still build schemes. '
+        'This same switch is mirrored at the top of the Schemes screen.',
+  ),
+
+  _AdminToggle(
     'org.station_master_enabled',
     'Station Master assistant',
     'When ON, a "Station Master" helper bubble appears for everyone in this '
@@ -530,6 +545,9 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Assistant', Icons.hub_outlined, [
     'org.station_master_enabled',
+  ]),
+  _ToggleGroup('Schemes & Offers', Icons.local_offer_outlined, [
+    'org.schemes_enabled',
   ]),
 ];
 

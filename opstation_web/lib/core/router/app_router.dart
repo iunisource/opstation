@@ -124,6 +124,8 @@ import '../../features/erp/presentation/erp_inventory_ledger_screen.dart';
 import '../../features/erp/presentation/erp_fg_without_bom_screen.dart';
 import '../../features/erp/presentation/erp_price_list_screen.dart';
 import '../../features/erp/presentation/erp_quotation_screen.dart';
+import '../../features/erp/presentation/erp_schemes_screen.dart';
+import '../../features/erp/presentation/erp_schemes_report_screen.dart';
 import '../../features/erp/presentation/erp_demand_plan_screen.dart';
 import '../../features/erp/presentation/erp_pos_catalog_screen.dart';
 import '../../features/erp/presentation/erp_pos_config_screen.dart';
@@ -436,6 +438,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             seedQty: state.uri.queryParameters['seedQty'],
             seedBranchId: state.uri.queryParameters['seedBranch'])),
           GoRoute(path: '/erp/sales',     builder: (_, state) => ErpSalesScreen(focusId: state.uri.queryParameters['focus'])),
+          GoRoute(path: '/erp/schemes',   builder: (_, __) => const ErpSchemesScreen()),
+          GoRoute(path: '/erp/schemes-report', builder: (_, __) => const ErpSchemesReportScreen()),
           GoRoute(path: '/erp/field-orders', builder: (_, __) => const ErpFieldOrdersScreen()),
           GoRoute(path: '/erp/retailer-orders', builder: (_, __) => const ErpRetailerOrdersScreen()),
           GoRoute(path: '/erp/sales-report', builder: (_, __) => const ErpSalesReportScreen()),
