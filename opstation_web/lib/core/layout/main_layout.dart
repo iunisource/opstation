@@ -1024,9 +1024,14 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     ];
 
     // Legacy combined list (still used for isNotEmpty guards)
+    // Everything an erpUser can possibly see — used to decide whether their nav
+    // renders at all. MUST include every section splitErpMenus() can show:
+    // reportItems was missing here, so a user whose only grant was a report
+    // (e.g. report.skipped_receipts_report.view) got a completely empty menu.
     final erpMenuItems = <Widget>[
       ...inventoryItems, ...purchaseItems, ...salesItems, ...posItems,
-      ...financialItems, ...manufacturingItems, ...hrItems, ...erpAdminItems,
+      ...reportItems, ...financialItems, ...manufacturingItems, ...hrItems,
+      ...erpAdminItems,
     ];
 
     List<Widget> splitErpMenus() => [
@@ -1162,7 +1167,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ...splitErpMenus(),
         ],
 
-        if (isErpUser && erpMenuItems.isNotEmpty)
+        // Assets/Facility grants live outside erpMenuItems (their menu is built
+        // inline from show()), so count them in the gate too.
+        if (isErpUser &&
+            (erpMenuItems.isNotEmpty || show('/assets') || show('/facility')))
           ...splitErpMenus(),
   ];
 }
