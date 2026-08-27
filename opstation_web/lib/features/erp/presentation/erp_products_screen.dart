@@ -568,7 +568,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         // Code-128, which encodes any ASCII.
         final isEan13 = code.length == 13 && RegExp(r'^\d{13}$').hasMatch(code);
         final symbology = isEan13 ? bc.Barcode.ean13() : bc.Barcode.code128();
-        svg = symbology.toSvg(code, width: 200, height: 58, fontHeight: 14);
+        svg = symbology.toSvg(code, width: 260, height: 90, fontHeight: 20);
       } catch (_) {
         continue; // unencodable value — skip this label
       }
@@ -582,25 +582,32 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       }
     }
 
+    // Fixed 2in x 1in (50.8mm x 25.4mm) labels for a label/thermal printer —
+    // one label per page so a roll of die-cut labels feeds one-per-label.
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Barcode Labels</title>'
-        '<style>@page{margin:0}'
+        '<style>'
+        '@page{size:50.8mm 25.4mm;margin:0}'
         '*{box-sizing:border-box}'
-        'body{font-family:Arial,sans-serif;margin:0;padding:8mm}'
-        '.no-print{margin-bottom:10px}.no-print button{padding:6px 14px;font-size:13px;cursor:pointer}'
+        'html,body{margin:0;padding:0;font-family:Arial,sans-serif}'
+        '.no-print{padding:10px}.no-print button{padding:6px 14px;font-size:13px;cursor:pointer}'
         '@media print{.no-print{display:none}}'
-        '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4mm}'
-        '.label{border:1px dashed #bbb;border-radius:4px;padding:6px 8px;text-align:center;'
-        'break-inside:avoid;page-break-inside:avoid}'
-        '@media print{.label{border-color:transparent}}'
-        '.name{font-size:11px;font-weight:700;line-height:1.2;overflow:hidden;'
-        'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:26px}'
-        '.sku{font-size:9.5px;color:#555;margin:1px 0 3px}'
-        '.bars svg{width:100%;height:auto;max-height:70px}'
+        '.label{width:50.8mm;height:25.4mm;padding:1mm 1.5mm;text-align:center;overflow:hidden;'
+        'display:flex;flex-direction:column;justify-content:center;align-items:stretch;'
+        'page-break-after:always;break-after:page}'
+        '.label:last-child{page-break-after:auto;break-after:auto}'
+        '.name{font-size:6.5pt;font-weight:700;line-height:1.1;white-space:nowrap;'
+        'overflow:hidden;text-overflow:ellipsis}'
+        '.sku{font-size:5.5pt;color:#333;line-height:1.1}'
+        '.bars{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;margin-top:0.5mm}'
+        '.bars svg{max-width:100%;max-height:15mm;width:auto;height:auto}'
+        '@media screen{.label{border:1px dashed #bbb;margin:6px auto}}'
         '</style></head><body>'
         '<div class="no-print"><button onclick="window.print()">Print</button>'
         '<span style="font-size:12px;color:#666;margin-left:10px">'
-        '${withCode.length} product(s) x $copies label(s). Dashed borders do not print.</span></div>'
-        '<div class="grid">$labels</div>'
+        '${withCode.length} product(s) x $copies label(s) = ${withCode.length * copies} label(s), '
+        '2"x1" each. Set the printer paper size to your label (2x1 in / 50.8x25.4 mm) and margins to None. '
+        'Dashed borders are screen-only.</span></div>'
+        '$labels'
         '</body></html>';
     final blob = html.Blob([doc], 'text/html;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
