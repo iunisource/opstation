@@ -13,6 +13,7 @@ import '../notifications/notifications_menu_tile.dart';
 import '../notifications/notification_bell.dart';
 import '../notifications/global_job_alert.dart';
 import '../notifications/global_transfer_alert.dart';
+import '../notifications/user_reminders.dart';
 import '../notifications/global_badge_sync.dart';
 import '../onboarding/first_login_tour.dart';
 import '../station_master/station_master.dart';
@@ -678,7 +679,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
+        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
       );
     }
 
@@ -691,7 +692,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
             Expanded(child: Column(children: [const TrialBanner(), Expanded(child: widget.child)])),
           ]),
           const GlobalJobAlert(),
-          const GlobalTransferAlert(),
+          const GlobalTransferAlert(), const UserRemindersEngine(),
           const GlobalBadgeSync(),
           const FirstLoginTour(),
           const StationMaster(),
@@ -707,7 +708,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           Expanded(child: widget.child),
         ]),
         const GlobalJobAlert(),
-        const GlobalTransferAlert(),
+        const GlobalTransferAlert(), const UserRemindersEngine(),
         const GlobalBadgeSync(),
         const FirstLoginTour(),
         const StationMaster(),

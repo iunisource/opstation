@@ -21,8 +21,9 @@ final transferOpenRequestProvider = StateProvider<String?>((ref) => null);
 /// it runs on EVERY screen while logged in — buzzer + banner fire even when the
 /// Stock Transfers screen is not open and even when the tab is minimised.
 ///
-/// Scope: any in_transit transfer touching a branch this user can see (either
-/// endpoint), except one this user dispatched themselves. The buzzer is a
+/// Scope: in_transit transfers whose RECEIVING branch is one of this user's
+/// branches (admins: their currently selected branch), except one this user
+/// dispatched themselves. The sending side is never buzzed — it already knows. The buzzer is a
 /// shorter 12-second klaxon. It stops when EITHER banner button is clicked:
 /// "Open & Accept" (go accept it) or "Ignore" (silence it for this session; the
 /// transfer stays pending and still counts on the badge).
@@ -163,6 +164,7 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
     if (orgId == null) return;
     try {
       final branchIds = await ref.read(userBranchIdsProvider.future);
+      final selBranch = ref.read(selectedBranchProvider)?['id'] as String?;
       final rows = await Supabase.instance.client
           .from('stock_transfers')
           .select('id, from_branch_id, to_branch_id, dispatched_by, dispatched_at')
@@ -173,10 +175,15 @@ class _GlobalTransferAlertState extends ConsumerState<GlobalTransferAlert> {
       String? newest;
       for (final t in rows as List) {
         final id = t['id'] as String;
-        // In scope for this user?
-        final inScope = branchIds == null ||
-            branchIds.contains(t['from_branch_id']) ||
-            branchIds.contains(t['to_branch_id']);
+        // Buzzer + banner go to the RECEIVING branch only — the people who
+        // must accept the goods. (The sending branch already knows; it
+        // dispatched. Everyone still sees the badge count.) Branch-allocated
+        // users: their branches must include the destination. Admins (all
+        // branches): alert only while their ACTIVE branch is the destination.
+        final toBranch = t['to_branch_id'];
+        final inScope = branchIds != null
+            ? branchIds.contains(toBranch)
+            : (selBranch != null && selBranch == toBranch);
         if (!inScope) continue;
         if ((t['dispatched_by'] as String?) == uid) continue; // not my own dispatch
         if (_ignored.contains(id)) continue; // silenced this session

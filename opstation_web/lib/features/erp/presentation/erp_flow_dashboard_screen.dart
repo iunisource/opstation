@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/notifications/user_reminders.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
@@ -304,6 +305,19 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
             ),
           ),
           const Spacer(),
+          IconButton(
+            onPressed: () => showUserReminderDialog(
+              context,
+              ref,
+              route: widget.purchase ? '/erp/purchase-dashboard' : '/erp/sales-dashboard',
+              routeLabel: widget.purchase ? 'Purchase Dashboard' : 'Sales Dashboard',
+              presetMessage: widget.purchase
+                  ? 'Check pending POs and their statuses'
+                  : 'Check pending sales orders and deliveries',
+            ),
+            icon: const Icon(Icons.alarm_add_outlined),
+            tooltip: 'Remind me',
+          ),
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh), tooltip: 'Refresh'),
         ]),
         const SizedBox(height: 2),
