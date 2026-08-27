@@ -1463,13 +1463,24 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                 )),
                                 Expanded(
                                     flex: 3,
-                                    child: Row(children: [
-                                      Flexible(child: Text(p['name'] as String? ?? '',
-                                          style: const TextStyle(fontWeight: FontWeight.w600),
-                                          overflow: TextOverflow.ellipsis)),
+                                    // Badge sits BELOW the name (not beside it) so a
+                                    // long product name keeps the full column width;
+                                    // up to 2 lines, full name on hover.
+                                    child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                      Tooltip(
+                                        message: p['name'] as String? ?? '',
+                                        waitDuration: const Duration(milliseconds: 400),
+                                        child: Text(p['name'] as String? ?? '',
+                                            style: const TextStyle(fontWeight: FontWeight.w600),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis),
+                                      ),
                                       if (_productSuperviseEnabled && p['supervised_at'] == null)
                                         Container(
-                                          margin: const EdgeInsets.only(left: 6),
+                                          margin: const EdgeInsets.only(top: 3),
                                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                                           decoration: BoxDecoration(color: Colors.amber.shade700.withOpacity(0.14), borderRadius: BorderRadius.circular(4)),
                                           child: Text('Supervision pending', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.amber.shade800)),

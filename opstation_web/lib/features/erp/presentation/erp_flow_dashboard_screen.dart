@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../widgets/voucher_remarks_panel.dart';
 
 /// Statuses that mean the order is finished and owes nothing further.
 const _terminalStatuses = {
@@ -64,6 +65,9 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
   List<Map<String, dynamic>> _branches = [];
   final Map<String, String> _partyNames = {}; // supplier/customer id -> name
   final Map<String, List<Map<String, dynamic>>> _stageDocs = {};
+  // Purchase dashboard extras for pending POs: comment-thread counts
+  // (voucher_remarks, voucher_type 'PO') keyed by PO id.
+  final Map<String, int> _poCommentCounts = {};
 
   final _money = NumberFormat('#,##0');
 
@@ -187,6 +191,7 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
                 'amount': r.containsKey('grand_total') ? _d(r['grand_total']) : null,
                 'age': _ageDays(r['voucher_date']),
                 'status': status,
+                'est_pickup': r['est_pickup_date'],
               };
 
           if (st.step == 1) {
@@ -224,6 +229,31 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
 
       drafts.sort((a, b) => (b['age'] ?? -1).compareTo(a['age'] ?? -1));
       _stageDocs[_kDrafts] = drafts;
+
+      // Comment counts for pending POs (threads live in voucher_remarks).
+      _poCommentCounts.clear();
+      if (widget.purchase) {
+        final poIds = [
+          for (final d in _stageDocs['po'] ?? const <Map<String, dynamic>>[])
+            '${d['id']}'
+        ];
+        for (var i = 0; i < poIds.length; i += 200) {
+          final chunk =
+              poIds.sublist(i, i + 200 > poIds.length ? poIds.length : i + 200);
+          try {
+            final rem = await c
+                .from('voucher_remarks')
+                .select('voucher_id')
+                .eq('org_id', orgId)
+                .eq('voucher_type', 'PO')
+                .inFilter('voucher_id', chunk);
+            for (final r in rem) {
+              final v = '${r['voucher_id']}';
+              _poCommentCounts[v] = (_poCommentCounts[v] ?? 0) + 1;
+            }
+          } catch (_) {/* remarks table absent — counts stay 0 */}
+        }
+      }
 
       if (!mounted) return;
       setState(() => _loading = false);
@@ -464,6 +494,10 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
           const Expanded(flex: 3, child: Text('Voucher', style: _hStyle)),
           const Expanded(flex: 2, child: Text('Date', style: _hStyle)),
           Expanded(flex: 4, child: Text(_isSupplier ? 'Supplier' : 'Customer', style: _hStyle)),
+          if (widget.purchase && _selected == 'po') ...const [
+            Expanded(flex: 2, child: Text('Est. Pickup', style: _hStyle)),
+            Expanded(flex: 2, child: Text('Comments', style: _hStyle, textAlign: TextAlign.center)),
+          ],
           if (hasAmount)
             const Expanded(flex: 2, child: Text('Amount', style: _hStyle, textAlign: TextAlign.right)),
           const Expanded(flex: 2, child: Text('Age', style: _hStyle, textAlign: TextAlign.right)),
@@ -537,6 +571,10 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
                     style: const TextStyle(fontSize: 13),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
+          if (widget.purchase && st.key == 'po') ...[
+            Expanded(flex: 2, child: _pickupCell(d)),
+            Expanded(flex: 2, child: _commentsCell(d)),
+          ],
           if (hasAmount)
             Expanded(
                 flex: 2,
@@ -556,6 +594,151 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
         ]),
       ),
     );
+  }
+
+  // ── Pending-PO extras: Est. Pickup date + comment thread ────────────────
+
+  /// Inline date-picker chip. Shows the saved date (red once it has passed),
+  /// or "Set date". Its tap is its own — it never opens the PO row.
+  Widget _pickupCell(Map<String, dynamic> d) {
+    final raw = d['est_pickup'];
+    DateTime? dt;
+    if (raw != null && '$raw'.isNotEmpty) dt = DateTime.tryParse('$raw');
+    final overdue = dt != null && dt.isBefore(DateTime.now());
+    final color = dt == null
+        ? AppTheme.textSecondary
+        : overdue
+            ? AppTheme.danger
+            : AppTheme.textPrimary;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: InkWell(
+        onTap: () => _pickPickupDate(d),
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.event_outlined, size: 14, color: color),
+            const SizedBox(width: 4),
+            Text(
+              dt == null ? 'Set date' : DateFormat('d MMM').format(dt),
+              style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: dt == null ? FontWeight.w400 : FontWeight.w600,
+                  fontStyle: dt == null ? FontStyle.italic : FontStyle.normal,
+                  color: color),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickPickupDate(Map<String, dynamic> d) async {
+    final raw = d['est_pickup'];
+    final initial =
+        (raw != null && '$raw'.isNotEmpty ? DateTime.tryParse('$raw') : null) ??
+            DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(2100),
+      helpText: 'Estimated pickup date · ${d['voucher']}',
+    );
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client
+          .from('purchase_orders')
+          .update({'est_pickup_date': iso}).eq('id', d['id']);
+      setState(() => d['est_pickup'] = iso);
+    } catch (e) {
+      _snack('Could not save pickup date: ${e.toString().split('\n').first}');
+    }
+  }
+
+  /// Comment count chip; tap opens the PO's remark thread in a modal.
+  Widget _commentsCell(Map<String, dynamic> d) {
+    final n = _poCommentCounts['${d['id']}'] ?? 0;
+    return Center(
+      child: InkWell(
+        onTap: () => _openComments(d),
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(n > 0 ? Icons.forum : Icons.add_comment_outlined,
+                size: 15, color: n > 0 ? AppTheme.primary : AppTheme.textSecondary),
+            if (n > 0) ...[
+              const SizedBox(width: 4),
+              Text('$n',
+                  style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.primary)),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openComments(Map<String, dynamic> d) async {
+    final user = ref.read(currentUserProvider);
+    final orgId = _orgId;
+    if (orgId == null) return;
+    await showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560, maxHeight: 640),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                const Icon(Icons.forum_outlined, size: 18, color: AppTheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Comments · ${d['voucher']}',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                      overflow: TextOverflow.ellipsis),
+                ),
+                IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () =>
+                        Navigator.of(context, rootNavigator: true).pop()),
+              ]),
+              const SizedBox(height: 8),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: VoucherRemarksPanel(
+                    voucherType: 'PO',
+                    voucherId: '${d['id']}',
+                    orgId: orgId,
+                    userId: user?.id,
+                    userName: user?.name,
+                    canWrite: true,
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+    // Refresh this PO's comment count after the modal closes.
+    try {
+      final rem = await Supabase.instance.client
+          .from('voucher_remarks')
+          .select('id')
+          .eq('org_id', orgId)
+          .eq('voucher_type', 'PO')
+          .eq('voucher_id', '${d['id']}');
+      if (mounted) {
+        setState(() => _poCommentCounts['${d['id']}'] = (rem as List).length);
+      }
+    } catch (_) {}
   }
 
   String _fmtDate(dynamic d) {
