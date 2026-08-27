@@ -173,13 +173,38 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
     try {
       final media = html.window.navigator.mediaDevices;
       if (media == null) { setState(() => _cameraSupported = false); return; }
-      final stream = await media.getUserMedia({'video': {'facingMode': 'environment'}});
+      // Ask for a higher-resolution feed — QR codes resolve from further away,
+      // so workers don't have to hold the card right against the lens.
+      final stream = await media.getUserMedia({
+        'video': {
+          'facingMode': 'environment',
+          'width': {'ideal': 1280},
+          'height': {'ideal': 720},
+        }
+      });
       _video?.srcObject = stream;
       await _video?.play();
+      // Mirror the PREVIEW when the camera faces the user — laptops fall back
+      // to the front cam even though we asked for 'environment', and an
+      // unmirrored front-cam view feels inverted (moving the card left moves
+      // it right on screen), which is what made aiming so hard. Decoding is
+      // untouched: both detectors read raw frames, not the mirrored display.
+      try {
+        String? facing;
+        final tracks = stream.getVideoTracks();
+        if (tracks.isNotEmpty) {
+          facing = tracks.first.getSettings()['facingMode'] as String?;
+        }
+        _video?.style.transform =
+            (facing == 'environment') ? '' : 'scaleX(-1)';
+      } catch (_) {
+        _video?.style.transform = 'scaleX(-1)';
+      }
       _cameraOn = true;
       _cameraSupported = true;
       _scanLoop?.cancel();
-      _scanLoop = Timer.periodic(const Duration(milliseconds: 400), (_) => _scanFrame());
+      // Faster loop: a code held briefly in frame is caught sooner.
+      _scanLoop = Timer.periodic(const Duration(milliseconds: 250), (_) => _scanFrame());
       if (mounted) setState(() {});
     } catch (_) {
       // Only a real camera failure (no device / permission denied) lands here.
@@ -226,8 +251,9 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
   String? _decodeWithZxing() {
     final vw = _video!.videoWidth, vh = _video!.videoHeight;
     if (vw == 0 || vh == 0) return null;
-    // Downscale to keep decoding fast; QR still resolves well at ~480px.
-    final scale = vw > 480 ? 480 / vw : 1.0;
+    // Downscale to keep decoding fast; 640px balances speed with enough
+    // detail to read a code held at arm's length.
+    final scale = vw > 640 ? 640 / vw : 1.0;
     final w = (vw * scale).round(), h = (vh * scale).round();
     _canvas ??= html.CanvasElement();
     _canvas!..width = w..height = h;
@@ -307,13 +333,25 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0B1220),
-      body: SafeArea(child: Stack(children: [
-        // Invisible keyboard-wedge sink for hardware scanners.
-        Offstage(offstage: true, child: SizedBox(width: 0, height: 0, child: TextField(
-          controller: _wedgeCtrl, focusNode: _wedgeFocus, autofocus: true,
-          onSubmitted: _onWedgeSubmitted,
-          inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'\s'))],
-        ))),
+      // Any tap re-arms the hardware-scanner input.
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => _refocusWedge(),
+        child: SafeArea(child: Stack(children: [
+        // Keyboard-wedge sink for hardware barcode/QR scanners. Kept laid-out
+        // (1x1, transparent) rather than Offstage — an unpainted input cannot
+        // grab focus at load, which made USB scanners dead until a click.
+        Positioned(
+          left: 0, top: 0, width: 1, height: 1,
+          child: Opacity(
+            opacity: 0,
+            child: TextField(
+              controller: _wedgeCtrl, focusNode: _wedgeFocus, autofocus: true,
+              onSubmitted: _onWedgeSubmitted,
+              inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'\s'))],
+            ),
+          ),
+        ),
         Center(child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),
           child: Padding(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -343,11 +381,17 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
                       'Camera not available on this device.\nUse a USB / Bluetooth QR scanner instead — just scan the job card.',
                       textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 14)))),
             )),
-            const SizedBox(height: 18),
+            const SizedBox(height: 8),
+            if (_cameraSupported)
+              const Text('Hold the QR steady inside the box, 15–25 cm from the camera — or use a USB scanner.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 12),
             _resultCard(),
           ])),
         )),
       ])),
+      ),
     );
   }
 
