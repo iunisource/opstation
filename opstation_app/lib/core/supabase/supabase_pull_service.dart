@@ -161,6 +161,39 @@ class SupabasePullService {
     }
   }
 
+  /// Targeted pull of routes + their stops for one org — used by the
+  /// salesperson home's realtime subscription when an admin edits a route,
+  /// and by the on-resume catch-up. Stops are replaced wholesale (the admin
+  /// edit deletes + re-inserts them) and routes that no longer exist in the
+  /// cloud are pruned locally so deletions propagate without a re-login.
+  Future<void> pullRoutesAndStops(String orgId) async {
+    try {
+      final routes = await _sync.pullTable('sales_routes', orgId);
+      final stops = await _sync.pullTable('route_stops', null);
+      await _db.transaction(() async {
+        // Prune this org's routes that vanished from the cloud.
+        final cloudIds = {for (final r in routes) r['id'] as String};
+        final local = await (_db.select(_db.salesRoutesTable)
+              ..where((t) => t.orgId.equals(orgId)))
+            .get();
+        for (final l in local) {
+          if (!cloudIds.contains(l.id)) {
+            await (_db.delete(_db.salesRoutesTable)
+                  ..where((t) => t.id.equals(l.id)))
+                .go();
+          }
+        }
+        await _pullRoutes(routes);
+        // Stops carry no org_id; mirror pullOrgData and replace wholesale so
+        // removed stops disappear too.
+        await _db.delete(_db.routeStops).go();
+        await _pullRouteStops(stops);
+      });
+    } catch (e) {
+      print('pullRoutesAndStops failed: $e');
+    }
+  }
+
   /// Pull a single user record into local DB (used for fresh install
   /// when the user has no org or is superadmin).
   Future<void> pullUserRecord(Map<String, dynamic> r) async {

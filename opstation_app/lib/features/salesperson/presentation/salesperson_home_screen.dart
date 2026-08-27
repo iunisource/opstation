@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -63,7 +65,8 @@ class SalespersonHomeScreen extends ConsumerStatefulWidget {
   ConsumerState<SalespersonHomeScreen> createState() => _SalespersonHomeScreenState();
 }
 
-class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
+class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
+    with WidgetsBindingObserver {
   _Period _period = _Period.today;
 
   /// Id of the route currently being started, so its Start button can
@@ -72,54 +75,98 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen> {
   /// user from kicking off a second trip.
   String? _startingRouteId;
 
-  /// Realtime subscription to route_assignments changes for this user so
-  /// the home auto-refreshes within ~1s of admin saving — no app restart
-  /// or manual pull needed. Requires the route_assignments table to be in
-  /// the supabase_realtime publication.
-  RealtimeChannel? _routeAssignmentsChannel;
+  /// Realtime subscription so the home auto-refreshes within ~1s of an admin
+  /// change — no app restart or manual pull needed. Watches THREE tables:
+  /// route_assignments (assign/unassign), sales_routes and route_stops (route
+  /// edits). Requires those tables to be in the supabase_realtime publication.
+  ///
+  /// Two deliberate choices, both fixing "stale until re-login" reports:
+  ///  - NO server-side user_id filter on route_assignments: Postgres DELETE
+  ///    events only carry the old row's primary key (default replica
+  ///    identity), so a user_id filter silently drops every unassignment.
+  ///    Events are rare and tiny; we refresh on any and let the pull decide.
+  ///  - The channel is torn down and rebuilt every time the app returns to
+  ///    the foreground: Android kills the websocket in the background and a
+  ///    dead channel never recovers on its own. The resubscribe also runs a
+  ///    catch-up pull for anything missed while suspended.
+  RealtimeChannel? _routesRealtimeChannel;
+  Timer? _refreshDebounce;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _setupRealtime());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Heal a socket the OS killed while backgrounded, then catch up on
+      // anything that changed while we weren't listening.
+      _setupRealtime();
+      _scheduleRefresh();
+    }
   }
 
   void _setupRealtime() {
     final user = ref.read(authControllerProvider).valueOrNull;
     if (user == null) return;
-    _routeAssignmentsChannel = Supabase.instance.client
-        .channel('route_assignments_${user.id}')
+    // Rebuild from scratch — resubscribing a dead channel is unreliable.
+    try {
+      _routesRealtimeChannel?.unsubscribe();
+    } catch (_) {}
+    _routesRealtimeChannel = Supabase.instance.client
+        .channel('routes_realtime_${user.id}')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'route_assignments',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'user_id',
-            value: user.id,
-          ),
-          callback: (_) => _refreshAssignments(),
+          callback: (_) => _scheduleRefresh(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'sales_routes',
+          callback: (_) => _scheduleRefresh(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'route_stops',
+          callback: (_) => _scheduleRefresh(),
         )
         .subscribe();
+  }
+
+  /// Debounced: an admin saving a route fires a burst of events (stops are
+  /// replaced wholesale — N deletes + N inserts). Coalesce them into one pull.
+  void _scheduleRefresh() {
+    _refreshDebounce?.cancel();
+    _refreshDebounce =
+        Timer(const Duration(milliseconds: 600), _refreshAssignments);
   }
 
   Future<void> _refreshAssignments() async {
     final user = ref.read(authControllerProvider).valueOrNull;
     if (user == null) return;
-    print('Realtime: route_assignments change for ${user.id} -> refresh');
+    print('Realtime: routes/assignments change -> refresh for ${user.id}');
+    final pull = ref.read(supabasePullServiceProvider);
     try {
-      await ref
-          .read(supabasePullServiceProvider)
-          .pullRouteAssignmentsForUser(user.id);
+      await pull.pullRouteAssignmentsForUser(user.id);
+      final orgId = user.organizationId;
+      if (orgId != null) await pull.pullRoutesAndStops(orgId);
     } catch (e) {
-      print('pullRouteAssignmentsForUser failed: $e');
+      print('routes realtime refresh failed: $e');
     }
     if (mounted) ref.invalidate(_allRoutesProvider);
   }
 
   @override
   void dispose() {
-    _routeAssignmentsChannel?.unsubscribe();
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshDebounce?.cancel();
+    _routesRealtimeChannel?.unsubscribe();
     super.dispose();
   }
 

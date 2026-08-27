@@ -373,7 +373,7 @@
           <div class="icon-tile w-12 h-12 grid place-items-center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/></svg></div>
           <span class="eyebrow text-faint">On the road</span>
         </div>
-        <h3 class="display font-bold text-xl mt-5">Opstation App</h3><div class="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-100 text-ink px-3 py-1.5 text-xs font-semibold"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#3DDC84" stroke-width="2" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg> Available on Android</div>
+        <h3 class="display font-bold text-xl mt-5">Opstation App</h3>
         <p class="text-muted text-sm mt-2 leading-relaxed">Built for the field team on the road. Mark shop visits, book orders on the spot, record collections at the counter, run delivery routes and log reimbursements &mdash; all on mobile, online or off. Everything captured flows straight back to the office in real time.</p>
         <div class="mt-6 space-y-2.5">
           <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Shop visits, order capture and collections &mdash; online or offline</span></div>
@@ -561,7 +561,6 @@
           <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> CRM &amp; customer follow-ups</li>
           <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Live map &amp; team tracking</li>
           <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Core reports</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Android app included</li>
         </ul>
         <a href="https://app.opstationerp.com/signup" class="mt-7 inline-flex justify-center rounded-xl border border-brand-500 text-brand-600 font-semibold py-3 hover:bg-slate-50 transition">Start free trial</a>
       </div>
@@ -576,7 +575,6 @@
           <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Sales &amp; invoicing</li>
           <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Market Intelligence</li>
           <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Full reports suite</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Android app included</li>
         </ul>
         <a href="https://app.opstationerp.com/signup" class="mt-7 inline-flex justify-center rounded-xl border border-brand-500 text-brand-600 font-semibold py-3 hover:bg-slate-50 transition">Start free trial</a>
       </div>
@@ -593,12 +591,11 @@
           <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Financial reporting</li>
           <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Asset &amp; facility management</li>
           <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Unlimited users</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Android app included</li>
         </ul>
         <a href="https://app.opstationerp.com/signup" class="mt-7 inline-flex justify-center rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold py-3 transition">Start free trial</a>
       </div>
     </div>
-    <p class="text-center text-muted text-sm mt-10">All plans include a 14-day free trial and the Opstation Android app. Upgrade, downgrade or cancel anytime.</p>
+    <p class="text-center text-muted text-sm mt-10">All plans include a 14-day free trial. Upgrade, downgrade or cancel anytime.</p>
   </div>
 </section>
 
