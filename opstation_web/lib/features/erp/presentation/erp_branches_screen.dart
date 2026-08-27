@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpBranchesScreen extends ConsumerStatefulWidget {
   const ErpBranchesScreen({super.key});
@@ -54,7 +55,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
       _showSnack(newVal ? 'Branch activated' : 'Branch deactivated');
       _load();
     } catch (e) {
-      _showSnack('Failed: $e');
+      _showSnack(friendlyError('That did not save', e));
     }
   }
 
@@ -117,7 +118,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed: $e')));
+                      SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               }
             },

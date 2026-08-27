@@ -10,6 +10,7 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/widgets/product_picker.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Sales Return Note (SRN) — Intent only, like SO.
 /// Items: Product | UOM | Qty ONLY. No prices, no stock movement.
@@ -81,7 +82,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
       if (mounted) setState(() { _detail['voucher_date'] = iso; final i = _returns.indexWhere((r) => r['id'] == _detail['id']); if (i >= 0) _returns[i]['voucher_date'] = iso; });
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void>? _customersFuture;
@@ -168,7 +169,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       await _logAudit(retId, 'created', '$vNum created');
       _showSnack('$vNum created — add items, then confirm');
       await _loadList(); _loadDetail(retId);
-    } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
+    } catch (e) { setState(() => _detailLoading = false); _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Same full-screen searchable picker used on PO / SO (core/widgets/product_picker.dart).
@@ -217,14 +218,14 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           'products': {'name': prod['name'], 'sku': prod['sku']}, 'uoms': {'abbreviation': uom['abbreviation']}});
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1'; _addRowKey++;
       });
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _deleteItem(String itemId) async {
     try {
       await Supabase.instance.client.from('sales_return_items').delete().eq('id', itemId);
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Stock posting now lives in atomic DB functions (confirm_sales_return /
@@ -248,7 +249,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       });
       _showSnack('Confirmed — stock returned to inventory; ready to generate the Sales Return Invoice');
       _loadDetail(_detail['id'] as String); _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _generateInvoice() async {
@@ -300,7 +301,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       });
       _showSnack('$vNum created — open Sales Return Invoices to review prices and issue');
       _loadDetail(srnId); _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _toggleLock() async {
@@ -334,7 +335,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         _showSnack(newLocked ? 'Locked' : 'Unlocked');
       }
       _loadDetail(_detail['id'] as String); _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _void() async {
@@ -363,7 +364,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       });
       _showSnack('Voided');
       _loadDetail(_detail['id'] as String); _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _print() async {

@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Superadmin Subscription Dashboard — every org's SaaS billing state, history,
 /// and the actions to manage it. Reads via RLS (superAdmin full access); all
@@ -105,7 +106,7 @@ class _State extends ConsumerState<SubscriptionsScreen> {
       _toast(ok);
       await _load();
     } catch (e) {
-      _toast('Failed: $e');
+      _toast(friendlyError('That did not work', e));
     }
   }
 

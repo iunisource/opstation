@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Inventory Integrity Check — two different questions, deliberately separate.
 ///
@@ -129,7 +130,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$n document(s) marked reviewed')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
     } finally {
       if (mounted) setState(() => _baselining = false);
     }
@@ -159,7 +160,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$n document(s) restored')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
     } finally {
       if (mounted) setState(() => _baselining = false);
     }

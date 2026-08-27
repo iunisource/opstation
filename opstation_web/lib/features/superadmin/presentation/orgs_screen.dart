@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/auth/password_hasher.dart';
 import '../../../core/modules/app_modules.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class OrgsScreen extends ConsumerStatefulWidget {
   const OrgsScreen({super.key});
@@ -97,7 +98,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e')),
+          SnackBar(content: Text(friendlyError('That did not save', e))),
         );
       }
     }
@@ -112,7 +113,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
       _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
       }
     }
   }
@@ -649,7 +650,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     if (dCtx.mounted) {
                       setS(() => states[m.key] = !val);
                       ScaffoldMessenger.of(dCtx).showSnackBar(
-                        SnackBar(content: Text('Failed: $err')),
+                        SnackBar(content: Text(friendlyError('That did not work', err))),
                       );
                     }
                   }

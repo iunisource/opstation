@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpReceiptVouchersScreen extends ConsumerStatefulWidget {
   const ErpReceiptVouchersScreen({super.key});
@@ -235,7 +236,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       }
       if (post && orgId != null) await _postCrvToGL(orgId!, bid, dateStr, validLines, total);
       await _loadVouchers();
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     SavingOverlay.hide();
     setState(() => _saving = false);
   }
@@ -328,7 +329,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         _newVoucher();
         await _loadVouchers();
       }
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _loadAudit(String voucherId) async {
@@ -410,7 +411,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
       await Supabase.instance.client.from('crv_vouchers').update({'status': 'draft'}).eq('id', _currentVoucher!['id'] as String);
       setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; }); _logAudit('unlocked', notes: 'Voucher reopened for editing');
       _snack('Voucher unlocked for editing');
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   void _print() {

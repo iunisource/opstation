@@ -13,6 +13,7 @@ import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Purchase Invoice (PI) — Stage 3 of purchase flow.
 /// Created from a saved GRN. User enters unit cost + discount per line.
@@ -107,9 +108,9 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to \$iso');
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
       _loadList();
-    } catch (e) { _showSnack('Failed: \$e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
 
@@ -219,7 +220,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
           builder: (_) => _GrnPickerForPiDialog(grns: List<Map<String, dynamic>>.from(grns)));
       if (picked == null) return;
       await _createFromGrn(picked);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _createFromGrn(Map<String, dynamic> grn) async {
@@ -278,7 +279,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       await _logAudit(piId, 'created', 'PI $vNum from GRN ${grn['voucher_number']}');
       _showSnack('$vNum created — enter costs then save');
       await _loadList(); _loadDetail(piId);
-    } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
+    } catch (e) { setState(() => _detailLoading = false); _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _saveItemCost(String itemId) async {
@@ -473,7 +474,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       // The source GRN just flipped to 'invoiced' — refresh the "awaiting
       // invoice" count so the "+" badge and Purchase menu drop by one.
       ref.invalidate(grnPendingInvoiceCountProvider);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); _postingCore = false; }
   }
 
@@ -509,7 +510,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       _showSnack('Sent for review — an admin will approve and post it');
       _loadList();
       ref.invalidate(piReviewPendingProvider);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); }
   }
 
@@ -559,7 +560,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       _showSnack('Invoice rejected');
       _loadList();
       ref.invalidate(piReviewPendingProvider);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _toggleLock() async {
@@ -575,7 +576,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _showSnack(newLocked ? 'Locked' : 'Unlocked');
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _delete() async {
@@ -606,7 +607,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       _showSnack('Deleted — GRN restored');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // ── Supervision: a NON-BLOCKING admin review mark (org.pi_supervise_flow).
@@ -633,7 +634,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         if (idx >= 0) _invoices[idx]['supervised_at'] = now;
       });
       _showSnack('Marked as supervised');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
 
@@ -659,7 +660,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         if (idx >= 0) _invoices[idx]['supervised_at'] = null;
       });
       _showSnack('Supervision cleared');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _print() async {

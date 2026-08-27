@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpStockScreen extends ConsumerStatefulWidget {
   const ErpStockScreen({super.key});
@@ -148,7 +149,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed: $e')));
+                      SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               }
             },

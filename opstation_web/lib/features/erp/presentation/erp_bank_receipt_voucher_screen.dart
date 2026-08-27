@@ -10,6 +10,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Bank Receipt Voucher (BRV) — post-dated cheque (PDC) register.
 ///
@@ -331,7 +332,7 @@ class _ErpBankReceiptVoucherScreenState
       if (mounted) setState(() => _currentVoucher = created);
       await _loadVouchers();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
     if (mounted) setState(() => _saving = false);
   }
@@ -582,7 +583,7 @@ class _ErpBankReceiptVoucherScreenState
       setState(() => line.status = 'bounced');
       _snack('Cheque marked bounced');
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 
@@ -618,7 +619,7 @@ class _ErpBankReceiptVoucherScreenState
       _newVoucher();
       await _loadVouchers();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 

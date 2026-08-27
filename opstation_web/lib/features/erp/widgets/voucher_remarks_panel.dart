@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Internal remarks trail for a voucher (screen-only — never printed).
 /// Any user can add a remark; the full trail is kept and shown here. Rows are
@@ -101,7 +102,7 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
       _ctrl.clear();
       await _load();
       widget.onRead?.call(); // refresh badge — a new remark raises the counter
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _saving = false);
   }
 
@@ -120,7 +121,7 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
       }).inFilter('id', ids);
       await _load();
       widget.onRead?.call(); // clear the badge
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _saving = false);
   }
 

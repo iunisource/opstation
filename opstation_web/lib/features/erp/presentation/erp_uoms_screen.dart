@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpUomsScreen extends ConsumerStatefulWidget {
   const ErpUomsScreen({super.key});
@@ -66,7 +67,7 @@ class _ErpUomsScreenState extends ConsumerState<ErpUomsScreen> {
         _showSnack('UOM deleted');
         _load();
       } catch (e) {
-        _showSnack('Failed: $e');
+        _showSnack(friendlyError('That did not save', e));
       }
     }
   }
@@ -128,7 +129,7 @@ class _ErpUomsScreenState extends ConsumerState<ErpUomsScreen> {
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed: $e')));
+                      SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               }
             },

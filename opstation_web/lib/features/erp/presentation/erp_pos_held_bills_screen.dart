@@ -7,6 +7,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpPosHeldBillsScreen extends ConsumerStatefulWidget {
   const ErpPosHeldBillsScreen({super.key});
@@ -54,7 +55,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
       await Supabase.instance.client.from('pos_held_bills').update({'status': 'cancelled'}).eq('id', bill['id'] as String);
       await _load();
       _snack('Bill cancelled');
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _continueBill(Map<String, dynamic> bill) async {
@@ -75,7 +76,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
       if (mounted) {
         Navigator.pop(context, bill);
       }
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   List<Map<String, dynamic>> get _filtered {

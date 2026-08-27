@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 const _taxonomyTypes = {
   'product_type': 'Product Type',
@@ -136,7 +137,7 @@ class _ErpProductClassificationsScreenState
                 _load();
               } catch (e) {
                 if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed: $e')));
+                    SnackBar(content: Text(friendlyError('That did not save', e))));
               }
             },
             child: Text(item == null ? 'Add' : 'Save'),
@@ -213,7 +214,7 @@ class _ErpProductClassificationsScreenState
         _showSnack('Deleted');
         _load();
       } catch (e) {
-        _showSnack('Failed: $e');
+        _showSnack(friendlyError('That did not save', e));
       }
     }
   }
@@ -275,7 +276,7 @@ class _ErpProductClassificationsScreenState
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed: $e')));
+                      SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               }
             },
@@ -311,7 +312,7 @@ class _ErpProductClassificationsScreenState
         _showSnack('UOM deleted');
         _load();
       } catch (e) {
-        _showSnack('Failed: $e');
+        _showSnack(friendlyError('That did not save', e));
       }
     }
   }

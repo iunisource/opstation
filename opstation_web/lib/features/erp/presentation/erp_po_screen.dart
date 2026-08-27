@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
+import '../../../core/utils/friendly_error.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -178,9 +179,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to \$iso');
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
       _loadList();
-    } catch (e) { _showSnack('Failed: \$e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
 
@@ -422,7 +423,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) _items[idx]['unit_cost'] = rate;
       });
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _toggleRates(bool v) async {
@@ -432,7 +433,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           .eq('id', _detail['id']);
       setState(() { _detail['show_rates'] = v; });
       _syncLineCtrls();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Inline edit of an existing line's ordered qty. Allowed while lines are
@@ -457,7 +458,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       });
       await _logAudit(_detail['id'] as String, 'line_edited', 'Qty changed to ${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2)}');
       await _resetApprovalIfNeeded();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _logAudit(String id, String action, String? details) async {
@@ -498,7 +499,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await _loadList();
       await _loadDetail(poId);
       return poId;
-    } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); return null; }
+    } catch (e) { setState(() => _detailLoading = false); _showSnack(friendlyError('That did not save', e)); return null; }
     finally { SavingOverlay.hide(); }
   }
 
@@ -513,11 +514,20 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final itemId = 'poi_${DateTime.now().microsecondsSinceEpoch}';
     try {
       final initialCost = _showRates ? (_prodCost[_addProductId] ?? 0) : 0;
-      await Supabase.instance.client.from('purchase_order_items').insert({
+      final row = {
         'id': itemId, 'purchase_order_id': _detail['id'],
         'product_id': _addProductId, 'uom_id': _addUomId,
         'quantity_ordered': qty, 'quantity_received': 0, 'unit_cost': initialCost,
-      });
+      };
+      try {
+        await Supabase.instance.client.from('purchase_order_items').insert(row);
+      } on PostgrestException catch (pe) {
+        // A 42501 here is nearly always the auth token mid-refresh — one quiet
+        // retry absorbs the blink instead of surfacing a scary RLS error.
+        if (pe.code != '42501') rethrow;
+        await Future.delayed(const Duration(milliseconds: 400));
+        await Supabase.instance.client.from('purchase_order_items').insert(row);
+      }
       setState(() {
         _items.add({'id': itemId, 'product_id': _addProductId, 'uom_id': _addUomId,
           'quantity_ordered': qty, 'quantity_received': 0, 'unit_cost': initialCost,
@@ -527,7 +537,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       });
       await _resetApprovalIfNeeded();
       return true;
-    } catch (e) { _showSnack('Failed: $e'); return false; }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); return false; }
   }
 
   // Open the product picker (keyboard nav), set product + default UOM, then
@@ -564,7 +574,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
       _syncLineCtrls();
       await _resetApprovalIfNeeded();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _confirmOrder() async {
@@ -582,7 +592,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _toggleLock() async {
@@ -599,7 +609,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       _showSnack(newLocked ? 'Locked' : 'Unlocked');
       ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _delete() async {
@@ -622,7 +632,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       _showSnack('Deleted');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _approve() async {
@@ -640,7 +650,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); }
   }
 
@@ -683,7 +693,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Outstanding = ordered minus received across all lines. Drives the
@@ -719,7 +729,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await _resetApprovalIfNeeded();
       _loadDetail(_detail['id'] as String);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Short-close: the vendor order is finished but less arrived than ordered.
@@ -751,7 +761,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   String _trimQty(double q) => q % 1 == 0 ? q.toStringAsFixed(0) : q.toStringAsFixed(2);

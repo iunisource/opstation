@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Admin Settings card: each admin uploads their own signature, and the org
 /// uploads one company stamp. Both feed the "Approved By" block on invoice PDFs
@@ -89,7 +90,7 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
         if (mounted) setState(() => _sigUrl = url);
         _snack('Signature saved');
       }
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _busySig = false);
   }
 
@@ -106,7 +107,7 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
         if (mounted) setState(() => _stampUrl = url);
         _snack('Company stamp saved');
       }
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _busyStamp = false);
   }
 

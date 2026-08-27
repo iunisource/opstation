@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/auth_controller.dart';
 import '../../orders/models/order.dart';
 import '../services/dispatch_order_service.dart';
+import '../../../core/utils/friendly_error.dart';
 
 enum BulkAssignMode { assignNew, editExisting }
 
@@ -142,7 +143,7 @@ class _BulkAssignModalState extends ConsumerState<BulkAssignModal> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Failed: $e';
+        _error = friendlyError('That did not work', e);
         _busy = false;
       });
     }
@@ -175,7 +176,7 @@ class _BulkAssignModalState extends ConsumerState<BulkAssignModal> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Failed: $e';
+        _error = friendlyError('That did not work', e);
         _busy = false;
       });
     }
@@ -222,7 +223,7 @@ class _BulkAssignModalState extends ConsumerState<BulkAssignModal> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Failed: $e';
+        _error = friendlyError('That did not work', e);
         _busy = false;
       });
     }

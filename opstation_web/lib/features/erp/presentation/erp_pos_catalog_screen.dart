@@ -6,6 +6,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpPosCatalogScreen extends ConsumerStatefulWidget {
   const ErpPosCatalogScreen({super.key});
@@ -253,7 +254,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                   _showSnack(item == null ? 'Item added' : 'Item updated');
                   _load();
                 } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               },
               child: Text(item == null ? 'Add' : 'Save'),
@@ -316,7 +317,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                   _showSnack('Copied $copied items to ${selected.length} branch(es)');
                 } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               },
               child: const Text('Copy'),

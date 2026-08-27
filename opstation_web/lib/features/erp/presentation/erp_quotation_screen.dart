@@ -10,6 +10,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../../../core/widgets/product_picker.dart';
+import '../../../core/utils/friendly_error.dart';
 
 // ============================================================================
 // QUOTATION VOUCHER  (Sales module)
@@ -479,7 +480,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       setState(() => _doc!['status'] = status);
       await _loadList();
       _toast('Marked as ${status[0].toUpperCase()}${status.substring(1)}');
-    } catch (e) { _toast('Failed: $e'); }
+    } catch (e) { _toast(friendlyError('That did not save', e)); }
   }
 
   // Display name for a quotation: a registered customer's shop_name, else the

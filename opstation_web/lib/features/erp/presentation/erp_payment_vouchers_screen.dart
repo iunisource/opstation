@@ -6,6 +6,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpPaymentVouchersScreen extends ConsumerStatefulWidget {
   const ErpPaymentVouchersScreen({super.key});
@@ -146,7 +147,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
                   _showSnack(voucher == null ? 'Payment voucher created' : 'Updated');
                   _load();
                 } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               },
               child: Text(voucher == null ? 'Create' : 'Save'),

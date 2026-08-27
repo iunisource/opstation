@@ -13,9 +13,11 @@ String friendlyError(String action, Object e) {
     if (code == 'PGRST205' || code == 'PGRST202' || msg.contains('schema cache')) {
       return '$action: this feature needs a database update that has not been applied yet. Please contact your administrator.';
     }
-    // RLS / permission denied.
+    // RLS / permission denied. In practice this is almost always a transient
+    // auth-token refresh blink (the write passes on retry), so lead with
+    // "try again" rather than accusing the user of lacking permission.
     if (code == '42501' || msg.contains('permission denied') || msg.contains('row-level security')) {
-      return '$action: you do not have permission for this action.';
+      return '$action: something went wrong, please try again. (If it keeps happening, you may not have permission for this action.)';
     }
     // Duplicate key.
     if (code == '23505' || msg.contains('duplicate key')) {

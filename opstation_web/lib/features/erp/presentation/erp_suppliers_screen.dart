@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpSuppliersScreen extends ConsumerStatefulWidget {
   const ErpSuppliersScreen({super.key, this.focusId});
@@ -170,7 +171,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
           .eq('id', s['id']);
       _showSnack(newVal ? 'Supplier activated' : 'Supplier deactivated');
       _load();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // ─────────────────────── Manage supplier categories ───────────────────────
@@ -198,7 +199,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
           s.contains('unique')) {
         return 'That category already exists.';
       }
-      return 'Failed: $e';
+      return friendlyError('That did not work', e);
     }
 
     await showDialog(
@@ -271,7 +272,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
             }).eq('id', c['id']);
             await reload();
           } catch (e) {
-            _showSnack('Failed: $e');
+            _showSnack(friendlyError('That did not save', e));
           }
         }
 
@@ -540,7 +541,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                 _showSnack(supplier == null ? 'Supplier added' : 'Supplier updated');
                 _load();
               } catch (e) {
-                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
               }
             },
             child: Text(supplier == null ? 'Add' : 'Save'),

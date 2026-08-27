@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpProductsScreen extends ConsumerStatefulWidget {
   const ErpProductsScreen({super.key, this.focusId});
@@ -359,7 +360,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       _showSnack(newVal ? 'Product activated' : 'Product deactivated');
       _load();
     } catch (e) {
-      _showSnack('Failed: $e');
+      _showSnack(friendlyError('That did not save', e));
     }
   }
 
@@ -446,7 +447,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
       });
       _showSnack('"${product['name']}" pushed to POS catalog for ${picked['name']}');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _delete(String id) async {
@@ -1203,7 +1204,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 } catch (e) {
                   if (ctx.mounted) {
                     ScaffoldMessenger.of(ctx).showSnackBar(
-                        SnackBar(content: Text('Failed: $e')));
+                        SnackBar(content: Text(friendlyError('That did not save', e))));
                   }
                 }
               },

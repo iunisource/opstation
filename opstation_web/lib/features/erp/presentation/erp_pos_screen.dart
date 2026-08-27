@@ -15,6 +15,7 @@ import 'dart:html' as html;
 import 'erp_pos_held_bills_screen.dart';
 import 'dart:js_util' as js_util;
 import 'dart:js_util' as js_util;
+import '../../../core/utils/friendly_error.dart';
 
 // Cash actually collected for a transaction: the Cash tender from
 // payment_details, or a legacy fallback for old rows without tenders.
@@ -304,7 +305,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                     _openSession(_activeSession!);
                   }
                 } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               },
               child: const Text('Open Session'),
@@ -1572,7 +1573,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       // Refresh only this session's transactions (one fast query) so the
       // receipts panel updates. Catalog / customers / prices are unchanged.
       await _refreshSessionTxns();
-    } catch (e) { _showSnack('Failed: $e'); } finally { setState(() => _checkingOut = false); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); } finally { setState(() => _checkingOut = false); }
   }
 
   Future<void> _processReturn(Map<String, dynamic> originalTxn, List<Map<String, dynamic>> returnItems) async {
@@ -1636,7 +1637,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       });
       _showSnack('Return processed — Rs. ${money(returnTotal)} refunded');
       await _loadData();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _showQuickAddCustomer() async {
@@ -1685,7 +1686,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final newCust = {'id': id, 'shop_name': name, 'code': code, 'phone': phoneCtrl.text.trim(), 'cnic': cnicCtrl.text.trim(), 'source': 'pos'};
       setState(() { _customers.add(newCust); _selectedCustomer = newCust; _selectedPosCustomer = null; _customerSearchCtrl.clear(); });
       _showSnack('Customer "$name" added');
-    } catch (e) { _showSnack('Failed: $e'); } finally { _checkingOut = false; }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); } finally { _checkingOut = false; }
   }
 
   Future<void> _closeSession() async {
@@ -1776,7 +1777,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       await _exportSummary(); // ask bill-wise vs combined on close (restored)
       widget.onUpdated();
       if (mounted) Navigator.of(context).pop();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   /// Asks whether the product breakdown should be per-transaction (bill-wise,
@@ -2813,7 +2814,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       await client.rpc('post_cpv', params: {'p_voucher_id': vid});
       _showSnack('Payment posted: $vNum • Rs. ${money(total)}');
       _loadData();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Searchable supplier picker for a payment line.
@@ -2940,7 +2941,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       await client.rpc('post_crv', params: {'p_voucher_id': vid});
       _showSnack('Receipt posted: $vNum • Rs. ${money(total)}');
       _loadData();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<Map<String, dynamic>?> _pickCustomerDialog() async {
@@ -2995,7 +2996,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       });
       await _loadData();
       _showSnack('Bill held — tap to restore');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _restoreBill(Map<String, dynamic> bill) async {

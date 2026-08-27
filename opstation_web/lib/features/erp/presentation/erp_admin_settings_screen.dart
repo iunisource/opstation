@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
 import '../widgets/company_logo_settings.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// An optional numeric parameter attached to a toggle. Shown (and saved) only
 /// while the parent toggle is ON. Stored in `app_config` as a string.
@@ -1806,7 +1807,7 @@ class _FiscalYearPanelState extends State<_FiscalYearPanel> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);

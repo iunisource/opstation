@@ -10,6 +10,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Purchase Return Invoices (PRI) — stage 2 of the purchase return flow.
 ///
@@ -184,7 +185,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
           builder: (_) => _PrnPickerDialog(prns: List<Map<String, dynamic>>.from(prns)));
       if (picked == null) return;
       await _generateFromPrn(picked);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _generateFromPrn(Map<String, dynamic> prn) async {
@@ -266,7 +267,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       _loadDetail(invId);
     } catch (e) {
       setState(() => _detailLoading = false);
-      _showSnack('Failed: $e');
+      _showSnack(friendlyError('That did not save', e));
     }
   }
 
@@ -378,7 +379,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       _showSnack('Issued — posted to ledger');
       _loadDetail(invId);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _toggleLock() async {
@@ -393,7 +394,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _showSnack(newLocked ? 'Locked' : 'Unlocked');
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _delete() async {
@@ -425,7 +426,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       _showSnack('Deleted — PRN restored');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       await _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _print() async {

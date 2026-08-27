@@ -105,9 +105,9 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to \$iso');
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
       _loadList();
-    } catch (e) { _showSnack('Failed: \$e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
 
@@ -215,7 +215,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           builder: (_) => _PoPickerDialog(pos: available));
       if (picked == null) return;
       await _createGrnFromPo(picked);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _createGrnFromPo(Map<String, dynamic> po) async {
@@ -263,7 +263,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       _showSnack('$vNum created — adjust received qtys then confirm');
       await _loadList();
       _loadDetail(grnId);
-    } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
+    } catch (e) { setState(() => _detailLoading = false); _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); }
   }
 
@@ -413,7 +413,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       _showSnack('Receipt confirmed — stock added to inventory');
       _loadDetail(grnId); _loadList();
     } catch (e) {
-      _showSnack('Failed: $e');
+      _showSnack(friendlyError('That did not save', e));
     } finally {
       SavingOverlay.hide();
       if (mounted) setState(() => _confirmBusy = false);
@@ -433,7 +433,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _showSnack(newLocked ? 'Locked' : 'Unlocked');
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // ── Supervision: a NON-BLOCKING admin review mark. Independent of posting —
@@ -466,7 +466,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _detail['supervised_stamp_url'] = stampUrl;
       });
       _showSnack('Marked as supervised');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
 
@@ -491,7 +491,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
       });
       _showSnack('Supervision cleared');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _delete() async {
@@ -519,7 +519,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       _showSnack('Deleted');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _print() async {

@@ -10,6 +10,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Purchase Return Notes (SRN) — open-ended return documents.
 ///
@@ -206,7 +207,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       _loadDetail(retId);
     } catch (e) {
       setState(() => _detailLoading = false);
-      _showSnack('Failed: $e');
+      _showSnack(friendlyError('That did not save', e));
     }
   }
 
@@ -276,7 +277,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         _addRowKey++; // reset the searchable picker field
       });
       await _recalcTotals();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _deleteItem(String itemId) async {
@@ -284,7 +285,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       await Supabase.instance.client.from('purchase_return_items').delete().eq('id', itemId);
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
       await _recalcTotals();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _recalcTotals() async {
@@ -340,7 +341,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       }
       _loadDetail(_detail['id'] as String);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Returns the name of the first line whose qty exceeds current branch stock, else null.
@@ -374,7 +375,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       _showSnack('Saved — stock returned to supplier');
       _loadDetail(_detail['id'] as String);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _generateInvoice() async {
@@ -462,7 +463,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       _showSnack('$voucherNum created as draft — set prices in Purchase Return Invoices tab');
       _loadDetail(prnId);
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _delete() async {
@@ -497,7 +498,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       _showSnack('Deleted');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       await _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _print() async {

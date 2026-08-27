@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/permissions/permission_registry.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpUsersScreen extends ConsumerStatefulWidget {
   const ErpUsersScreen({super.key});
@@ -245,7 +246,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
       _showSnack(newVal ? 'User activated' : 'User deactivated');
       _load();
     } catch (e) {
-      _showSnack('Failed: $e');
+      _showSnack(friendlyError('That did not save', e));
     }
   }
 
@@ -702,7 +703,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   _load();
                 } catch (e) {
                   if (ctx.mounted) {
-                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
                   }
                 }
               },

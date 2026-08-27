@@ -10,6 +10,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// PDC Voucher — post-dated / cheque-in-hand register.
 ///
@@ -403,7 +404,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
       if (mounted) setState(() => _currentVoucher = created);
       await _loadVouchers();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
     if (mounted) setState(() => _saving = false);
   }
@@ -657,7 +658,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
       setState(() => line.status = 'bounced');
       _snack('Cheque marked bounced');
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 
@@ -693,7 +694,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
       _newVoucher();
       await _loadVouchers();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 

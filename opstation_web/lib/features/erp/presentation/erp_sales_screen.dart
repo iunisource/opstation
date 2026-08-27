@@ -15,6 +15,7 @@ import '../services/voucher_meta.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
+import '../../../core/utils/friendly_error.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -275,7 +276,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     try {
       await Supabase.instance.client.from('sales_orders').update({'voucher_date': iso}).eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   bool get _isDraft => (_detail['status'] as String? ?? 'draft') == 'draft';
@@ -356,7 +357,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       _showSnack('Deleted');
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       await _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _printSO() async {
@@ -425,7 +426,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       _showSnack('SO created');
       await _loadList();
       _loadDetail(id);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _saveHeader() async {
@@ -439,7 +440,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       }).eq('id', _detail['id']);
       _showSnack('Saved');
       _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); }
   }
 
@@ -476,7 +477,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
       });
       return true;
-    } catch (e) { _showSnack('Failed: $e'); return false; }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); return false; }
   }
 
   // Open the product picker (keyboard nav), set product + default UOM, then
@@ -677,7 +678,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         });
         _focProductId = null; _focUomId = null; _focQtyCtrl.text = '1';
       });
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _deleteItem(String itemId) async {
@@ -688,7 +689,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         _items.removeWhere((i) => i['id'] == itemId);
         _qtyControllers.remove(itemId)?.dispose();
       });
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _confirmOrder() async {
@@ -714,7 +715,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       _showSnack('Order confirmed');
       await _loadList();
       await _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); }
   }
 
@@ -729,7 +730,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'SO', newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _cancelOrder() async {
@@ -757,7 +758,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       _showSnack('Cancelled');
       await _loadList();
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   List<Map<String, dynamic>> get _filteredOrders {
@@ -1292,7 +1293,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     try {
       await Supabase.instance.client.from('delivery_orders').update({'voucher_date': iso}).eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
@@ -1664,7 +1665,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                     await _loadList();
                   _loadDetail(id);
                 } catch (e) {
-                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
                 }
               },
               child: const Text('Create'),
@@ -1829,7 +1830,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       _showSnack('Delivery saved — stock deducted');
       await _loadList();
       await _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _createInvoice({bool auto = false}) async {
@@ -1915,7 +1916,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       _showSnack('Invoice $voucherNum created');
       await _loadList();
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); }
   }
 
@@ -1930,7 +1931,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   List<Map<String, dynamic>> get _filteredOrders => _orders.where((o) {
@@ -2462,7 +2463,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     try {
       await Supabase.instance.client.from('sales_invoices').update({'voucher_date': iso}).eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   bool get _isLocked => _detail['is_locked'] as bool? ?? true;
@@ -2567,7 +2568,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         _detail['supervised_stamp_url'] = stampUrl;
       });
       _showSnack('Marked as supervised');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
 
@@ -2591,7 +2592,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
       });
       _showSnack('Supervision cleared');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _printSI() async {
@@ -2678,7 +2679,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _logAudit(String voucherId, String action, String? details) async {
@@ -2735,7 +2736,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       _showSnack('Saved & locked');
       await _loadList();
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Review flow: save the invoice's numbers but do NOT lock (so nothing posts),
@@ -2755,7 +2756,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       await _loadList();
       _loadDetail(_detail['id'] as String);
       ref.invalidate(siReviewPendingProvider);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   // Review flow: admin approves a pending invoice, which locks (posts) it and
@@ -2791,7 +2792,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       await _loadList();
       _loadDetail(_detail['id'] as String);
       ref.invalidate(siReviewPendingProvider);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { SavingOverlay.hide(); }
   }
 
@@ -2827,7 +2828,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       await _loadList();
       _loadDetail(_detail['id'] as String);
       ref.invalidate(siReviewPendingProvider);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   int _siStatusCount(String st) {

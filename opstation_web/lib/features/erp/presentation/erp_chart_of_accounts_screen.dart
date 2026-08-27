@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpChartOfAccountsScreen extends ConsumerStatefulWidget {
   const ErpChartOfAccountsScreen({super.key});
@@ -128,7 +129,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       });
       await _load();
       _snack('Level $level account added');
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     ctrl.dispose();
   }
 
@@ -157,7 +158,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       _snack('Account $code created');
       _resetForm();
       await _load();
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     setState(() => _saving = false);
   }
 
@@ -325,7 +326,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       await Supabase.instance.client.from('chart_of_accounts')
           .update(updates).eq('id', acc['id'] as String);
       await _load(); _snack('Account updated');
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     nameCtrl.dispose();
   }
 

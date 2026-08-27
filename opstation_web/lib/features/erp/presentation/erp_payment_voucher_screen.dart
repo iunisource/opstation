@@ -11,6 +11,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class ErpPaymentVoucherScreen extends ConsumerStatefulWidget {
   const ErpPaymentVoucherScreen({super.key});
@@ -253,7 +254,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         _snack('Voucher ${vNum ?? ''} saved');
       }
       await _loadVouchers();
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     SavingOverlay.hide();
     setState(() => _saving = false);
   }
@@ -355,7 +356,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         _newVoucher();
         await _loadVouchers();
       }
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _loadAudit(String voucherId) async {
@@ -437,7 +438,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       await Supabase.instance.client.from('cpv_vouchers').update({'status': 'draft'}).eq('id', _currentVoucher!['id'] as String);
       setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; }); _logAudit('unlocked', notes: 'Voucher reopened for editing');
       _snack('Voucher unlocked for editing');
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   void _print() {

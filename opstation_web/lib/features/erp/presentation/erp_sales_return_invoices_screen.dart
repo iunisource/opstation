@@ -10,6 +10,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Sales Return Invoice (SRI) — Stage 2 of sales return flow.
 /// Created from a confirmed SRN. User sets price + discount per item.
@@ -166,7 +167,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         if (idx >= 0) _invoices[idx]['supervised_at'] = now;
       });
       _showSnack('Marked as supervised');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
 
@@ -193,7 +194,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         if (idx >= 0) _invoices[idx]['supervised_at'] = null;
       });
       _showSnack('Supervision cleared');
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _createNew() async {
@@ -210,7 +211,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
           builder: (_) => _SrnPickerDialog(srns: List<Map<String, dynamic>>.from(srns)));
       if (picked == null) return;
       await _createFromSrn(picked);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _createFromSrn(Map<String, dynamic> srn) async {
@@ -250,7 +251,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       await _logAudit(invId, 'created', 'SRI $vNum from SRN ${srn['voucher_number']}');
       _showSnack('$vNum created — enter prices then issue');
       await _loadList(); _loadDetail(invId);
-    } catch (e) { setState(() => _detailLoading = false); _showSnack('Failed: $e'); }
+    } catch (e) { setState(() => _detailLoading = false); _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _saveItemPrice(String itemId) async {
@@ -313,7 +314,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       await _logAudit(invId, 'issued', 'Return posted to ledger');
       _showSnack('Invoice issued — return posted to the ledger');
       _loadDetail(invId); _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _toggleLock() async {
@@ -325,7 +326,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       await _logAudit(_detail['id'] as String, newLocked ? 'locked' : 'unlocked', null);
       _showSnack(newLocked ? 'Locked' : 'Unlocked');
       _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _void() async {
@@ -351,7 +352,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       await _logAudit(_detail['id'] as String, 'voided', 'SRI voided; GL reversed; SRN restored');
       _showSnack('Voided — ledger reversed, SRN restored');
       _loadDetail(_detail['id'] as String); _loadList();
-    } catch (e) { _showSnack('Failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _print() async {

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/friendly_error.dart';
 
 /// Admin Settings card: upload one company logo and choose which voucher PDFs
 /// print it in the header.
@@ -121,7 +122,7 @@ class _CompanyLogoSettingsState extends State<CompanyLogoSettings> {
         if (mounted) setState(() => _logoUrl = url);
         _snack('Company logo saved');
       }
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _busyLogo = false);
   }
 
@@ -131,7 +132,7 @@ class _CompanyLogoSettingsState extends State<CompanyLogoSettings> {
       await _setConfig('org.logo_url', '');
       if (mounted) setState(() => _logoUrl = null);
       _snack('Company logo removed');
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _busyLogo = false);
   }
 
@@ -141,7 +142,7 @@ class _CompanyLogoSettingsState extends State<CompanyLogoSettings> {
       await _setConfig('org.show_logo_on_vouchers', v ? 'true' : 'false');
       // Persist the current selection too, so the type list is explicit.
       await _setConfig('org.logo_voucher_types', _selected.join(','));
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _busySave = false);
   }
 
@@ -149,7 +150,7 @@ class _CompanyLogoSettingsState extends State<CompanyLogoSettings> {
     setState(() => _busySave = true);
     try {
       await _setConfig('org.logo_voucher_types', _selected.join(','));
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _busySave = false);
   }
 

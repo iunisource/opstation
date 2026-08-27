@@ -9,6 +9,7 @@ import '../../../core/notifications/global_transfer_alert.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
+import '../../../core/utils/friendly_error.dart';
 
 String _stStatusLabel(String s) {
   switch (s) {
@@ -728,7 +729,7 @@ class _StockTransferVoucherScreenState
       widget.onUpdated();
       await _load();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -818,7 +819,7 @@ class _StockTransferVoucherScreenState
       await _load();
       return true;
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
       return false;
     }
   }
@@ -1088,7 +1089,7 @@ class _StockTransferVoucherScreenState
       widget.onUpdated();
       await _load();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1136,7 +1137,7 @@ class _StockTransferVoucherScreenState
       widget.onUpdated();
       await _load();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1232,7 +1233,7 @@ class _StockTransferVoucherScreenState
       widget.onUpdated();
       await _load();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1331,7 +1332,7 @@ class _StockTransferVoucherScreenState
       widget.onUpdated();
       await _load();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1408,7 +1409,7 @@ class _StockTransferVoucherScreenState
       widget.onUpdated();
       await _load();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('That did not save', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
