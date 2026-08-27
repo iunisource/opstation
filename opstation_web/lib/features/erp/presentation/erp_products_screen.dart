@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
 import 'dart:html' as html;
+import 'package:barcode/barcode.dart' as bc;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -512,6 +513,101 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     _load();
   }
 
+  // ── Barcode labels ───────────────────────────────────────────────────────
+  /// Print barcode labels for one or many products. Asks copies-per-product,
+  /// then opens a print page: a grid of self-contained labels (name, SKU,
+  /// EAN-13 barcode — Code-128 for legacy non-EAN values from imports).
+  Future<void> _printBarcodeLabels(List<Map<String, dynamic>> prods) async {
+    final withCode = prods
+        .where((p) => ('${p['barcode'] ?? ''}').trim().isNotEmpty)
+        .toList();
+    if (withCode.isEmpty) {
+      _showSnack('No barcodes yet — save the product once (barcodes are auto-generated).');
+      return;
+    }
+    final copiesCtrl = TextEditingController(text: '1');
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Print barcode labels · ${withCode.length} product${withCode.length == 1 ? '' : 's'}'),
+        content: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Copies per product:'),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 70,
+            child: TextField(
+              controller: copiesCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+              onSubmitted: (_) => Navigator.pop(ctx, true),
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Print')),
+        ],
+      ),
+    );
+    if (go != true) return;
+    final copies = (int.tryParse(copiesCtrl.text.trim()) ?? 1).clamp(1, 500);
+    if (withCode.length < prods.length) {
+      _showSnack('${prods.length - withCode.length} product(s) skipped — no barcode yet.');
+    }
+
+    String esc(Object? v) => '$v'
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final labels = StringBuffer();
+    for (final p in withCode) {
+      final code = '${p['barcode']}'.trim();
+      String svg;
+      try {
+        // Our generated codes are EAN-13; legacy imported values fall back to
+        // Code-128, which encodes any ASCII.
+        final isEan13 = code.length == 13 && RegExp(r'^\d{13}$').hasMatch(code);
+        final symbology = isEan13 ? bc.Barcode.ean13() : bc.Barcode.code128();
+        svg = symbology.toSvg(code, width: 200, height: 58, fontHeight: 14);
+      } catch (_) {
+        continue; // unencodable value — skip this label
+      }
+      final one = '<div class="label">'
+          '<div class="name">${esc(p['name'] ?? '')}</div>'
+          '<div class="sku">${esc(p['sku'] ?? '')}</div>'
+          '<div class="bars">$svg</div>'
+          '</div>';
+      for (var i = 0; i < copies; i++) {
+        labels.write(one);
+      }
+    }
+
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Barcode Labels</title>'
+        '<style>@page{margin:0}'
+        '*{box-sizing:border-box}'
+        'body{font-family:Arial,sans-serif;margin:0;padding:8mm}'
+        '.no-print{margin-bottom:10px}.no-print button{padding:6px 14px;font-size:13px;cursor:pointer}'
+        '@media print{.no-print{display:none}}'
+        '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4mm}'
+        '.label{border:1px dashed #bbb;border-radius:4px;padding:6px 8px;text-align:center;'
+        'break-inside:avoid;page-break-inside:avoid}'
+        '@media print{.label{border-color:transparent}}'
+        '.name{font-size:11px;font-weight:700;line-height:1.2;overflow:hidden;'
+        'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:26px}'
+        '.sku{font-size:9.5px;color:#555;margin:1px 0 3px}'
+        '.bars svg{width:100%;height:auto;max-height:70px}'
+        '</style></head><body>'
+        '<div class="no-print"><button onclick="window.print()">Print</button>'
+        '<span style="font-size:12px;color:#666;margin-left:10px">'
+        '${withCode.length} product(s) x $copies label(s). Dashed borders do not print.</span></div>'
+        '<div class="grid">$labels</div>'
+        '</body></html>';
+    final blob = html.Blob([doc], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+    Future.delayed(const Duration(seconds: 30), () { try { html.Url.revokeObjectUrl(url); } catch (_) {} });
+  }
+
   Future<void> _bulkPushToPOS(BuildContext context) async {
     if (_branches.isEmpty) { _showSnack('No branches found'); return; }
     final picked = await showDialog<Map<String, dynamic>?>(
@@ -997,9 +1093,17 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                           decoration: const InputDecoration(labelText: 'SKU'))),
                   const SizedBox(width: 12),
                   Expanded(
+                      // Barcodes are system-generated (EAN-13) and immutable —
+                      // enforced by a DB trigger; this field is display-only.
                       child: TextField(
                           controller: barcodeCtrl,
-                          decoration: const InputDecoration(labelText: 'Barcode'))),
+                          enabled: false,
+                          decoration: InputDecoration(
+                              labelText: 'Barcode',
+                              hintText: 'Auto-generated on save',
+                              suffixIcon: Icon(Icons.lock_outline,
+                                  size: 15,
+                                  color: AppTheme.textSecondary.withOpacity(0.6))))),
                 ]),
                 const SizedBox(height: 12),
                 _SearchSelect(
@@ -1368,6 +1472,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
+                  onPressed: () => _printBarcodeLabels(
+                      _products.where((p) => _selected.contains('${p['id']}')).toList()),
+                  icon: const Icon(Icons.qr_code_2, size: 16),
+                  label: Text('Barcode labels (${_selected.length})'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
                   onPressed: () => _bulkPushToPOS(context),
                   icon: const Icon(Icons.point_of_sale, size: 16),
                   label: const Text('Push selected to POS'),
@@ -1548,6 +1659,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                         onPressed: () => _pushToPOS(context, p),
                                       );
                                     }),
+                                    IconButton(
+                                      icon: const Icon(Icons.qr_code_2,
+                                          size: 18, color: AppTheme.primary),
+                                      tooltip: 'Print barcode label',
+                                      onPressed: () =>
+                                          _printBarcodeLabels([p]),
+                                    ),
                                     IconButton(
                                       icon: const Icon(Icons.edit_outlined,
                                           size: 18),

@@ -633,6 +633,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = now;
       });
+      ref.invalidate(piSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
@@ -659,6 +660,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = null;
       });
+      ref.invalidate(piSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
@@ -767,7 +769,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         ],
         _PiFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
       ])),
-      if (_superviseFlow) ...[
+      if (_superviseFlow && _isAdmin) ...[
         const SizedBox(height: 8),
         Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
           const Text('Supervision', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),

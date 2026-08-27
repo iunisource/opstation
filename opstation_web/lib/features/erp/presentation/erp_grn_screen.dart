@@ -464,7 +464,12 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _detail['supervised_by_name'] = userName;
         _detail['supervised_signature_url'] = sigUrl;
         _detail['supervised_stamp_url'] = stampUrl;
+        // Patch the list row too so an active "Pending" supervision filter
+        // drops this GRN instantly, without a reload.
+        final idx = _grns.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _grns[idx]['supervised_at'] = now;
       });
+      ref.invalidate(grnSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
@@ -489,7 +494,10 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       if (mounted) setState(() {
         _detail['supervised_by'] = null; _detail['supervised_at'] = null;
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
+        final idx = _grns.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _grns[idx]['supervised_at'] = null;
       });
+      ref.invalidate(grnSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
@@ -592,7 +600,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _GrnFilterTab(label: 'Partial', value: 'partially_received', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
         _GrnFilterTab(label: 'Invoiced', value: 'invoiced', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
       ])),
-      if (_superviseEnabled) ...[
+      if (_superviseEnabled && _isAdmin) ...[
         const SizedBox(height: 8),
         Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
           const Text('Supervision', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),

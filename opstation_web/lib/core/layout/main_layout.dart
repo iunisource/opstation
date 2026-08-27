@@ -279,6 +279,8 @@ final grnSupervisePendingProvider = FutureProvider<int>((ref) async {
     final cfg = await client.from('app_config').select('value')
         .eq('org_id', user.orgId!).eq('key', 'org.grn_supervise_flow').maybeSingle();
     if ((cfg?['value'] as String?) != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    if (!isAdmin) return 0;
     final res = await client.from('purchase_grns').select('id')
         .eq('org_id', user.orgId!)
         .filter('supervised_at', 'is', null)
@@ -297,6 +299,8 @@ final customerSupervisePendingProvider = FutureProvider<int>((ref) async {
     final cfg = await client.from('app_config').select('value')
         .eq('org_id', user.orgId!).eq('key', 'org.customer_supervise_flow').maybeSingle();
     if ((cfg?['value'] as String?) != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    if (!isAdmin) return 0;
     final res = await client.from('customers').select('id')
         .eq('org_id', user.orgId!)
         .filter('supervised_at', 'is', null);
@@ -314,6 +318,8 @@ final productSupervisePendingProvider = FutureProvider<int>((ref) async {
     final cfg = await client.from('app_config').select('value')
         .eq('org_id', user.orgId!).eq('key', 'org.product_supervise_flow').maybeSingle();
     if ((cfg?['value'] as String?) != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    if (!isAdmin) return 0;
     final res = await client.from('products').select('id')
         .eq('org_id', user.orgId!)
         .filter('supervised_at', 'is', null);
@@ -328,14 +334,43 @@ final siSupervisePendingProvider = FutureProvider<int>((ref) async {
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
   try {
-    final cfg = await client.from('app_config').select('value')
-        .eq('org_id', user.orgId!).eq('key', 'org.si_supervise_flow').maybeSingle();
-    if ((cfg?['value'] as String?) != 'true') return 0;
+    final cfgRows = await client.from('app_config').select('key,value')
+        .eq('org_id', user.orgId!)
+        .inFilter('key', ['org.si_supervise_flow', 'org.si_supervisor_users']);
+    final cfgM = {for (final r in cfgRows as List) r['key'] as String: (r['value'] as String? ?? '')};
+    if (cfgM['org.si_supervise_flow'] != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    final extraIds = (cfgM['org.si_supervisor_users'] ?? '')
+        .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (!isAdmin && !extraIds.contains(user.id)) return 0;
     final res = await client.from('sales_invoices').select('id')
         .eq('org_id', user.orgId!)
         .filter('supervised_at', 'is', null)
         .neq('is_voided', true);
     return (res as List).length;
+  } catch (_) { return 0; }
+});
+
+// Count of Delivery Orders still awaiting supervision (non-blocking review
+// layer), gated by org.do_supervise_flow. Drives the Delivery Orders menu badge.
+final doSupervisePendingProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfgRows = await client.from('app_config').select('key,value')
+        .eq('org_id', user.orgId!)
+        .inFilter('key', ['org.do_supervise_flow', 'org.do_supervisor_users']);
+    final cfgM = {for (final r in cfgRows as List) r['key'] as String: (r['value'] as String? ?? '')};
+    if (cfgM['org.do_supervise_flow'] != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    final extraIds = (cfgM['org.do_supervisor_users'] ?? '')
+        .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (!isAdmin && !extraIds.contains(user.id)) return 0;
+    final res = await client.from('delivery_orders').select('id,is_voided')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null);
+    return (res as List).where((r) => r['is_voided'] != true).length;
   } catch (_) { return 0; }
 });
 
@@ -349,6 +384,8 @@ final piSupervisePendingProvider = FutureProvider<int>((ref) async {
     final cfg = await client.from('app_config').select('value')
         .eq('org_id', user.orgId!).eq('key', 'org.pi_supervise_flow').maybeSingle();
     if ((cfg?['value'] as String?) != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    if (!isAdmin) return 0;
     final res = await client.from('purchase_invoices').select('id')
         .eq('org_id', user.orgId!)
         .filter('supervised_at', 'is', null);
@@ -366,6 +403,8 @@ final sriSupervisePendingProvider = FutureProvider<int>((ref) async {
     final cfg = await client.from('app_config').select('value')
         .eq('org_id', user.orgId!).eq('key', 'org.sri_supervise_flow').maybeSingle();
     if ((cfg?['value'] as String?) != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    if (!isAdmin) return 0;
     final res = await client.from('sales_return_invoices').select('id')
         .eq('org_id', user.orgId!)
         .filter('supervised_at', 'is', null)
@@ -793,6 +832,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
   final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
   final doRemarkPending = ref.watch(doRemarkPendingProvider).valueOrNull ?? 0;
+  final doSupervisePending = ref.watch(doSupervisePendingProvider).valueOrNull ?? 0;
   final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
   final productSupervisePending = ref.watch(productSupervisePendingProvider).valueOrNull ?? 0;
@@ -875,7 +915,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/sales')) _menuItem(context, 'Sales Orders',         Icons.receipt_long_outlined,      '/erp/sales',                 location),
       if (show('/erp/field-orders')) _menuItem(context, 'Field Orders',         Icons.tablet_android_outlined,    '/erp/field-orders',          location, badge: fieldOrdersPending),
       if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
-      if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location, badge: doRemarkPending),
+      if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location, badge: doRemarkPending + doSupervisePending),
       if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending + siSupervisePending),
     ];
     final salesReturns = <Widget>[
@@ -1053,7 +1093,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
-          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending + doRemarkPending + siSupervisePending + sriSupervisePending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),

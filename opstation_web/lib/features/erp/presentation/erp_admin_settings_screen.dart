@@ -403,7 +403,23 @@ const List<_AdminToggle> _toggles = [
         'has been supervised; this only records that an admin checked it. Existing '
         'invoices were auto-supervised, so only invoices created from now on '
         'appear. This is separate from "Support docs & admin review" above (that '
-        'flow blocks posting until approved). When OFF, no counter shows.',
+        'flow blocks posting until approved). When OFF, no counter shows. '
+        'Admins and master admins can always supervise; use the user picker '
+        'below to also allow specific non-admin users.',
+    users: _UsersField('org.si_supervisor_users', 'Extra users allowed to supervise Sales Invoices'),
+  ),
+  _AdminToggle(
+    'org.do_supervise_flow',
+    'Supervision for Delivery Orders',
+    'When ON, a "Supervise" action appears on each Delivery Order as an extra '
+        'review layer, and a pendency counter on the Sales → Delivery Orders '
+        'menu shows how many DOs are still awaiting supervision (with a Pending '
+        'filter on the screen). Supervision is NON-BLOCKING — the DO still '
+        'approves, delivers and invoices exactly as before. Existing DOs were '
+        'auto-supervised, so only DOs created from now on appear. Admins and '
+        'master admins can always supervise; use the user picker below to also '
+        'allow specific non-admin users. When OFF, no counter shows.',
+    users: _UsersField('org.do_supervisor_users', 'Extra users allowed to supervise Delivery Orders'),
   ),
   _AdminToggle(
     'org.sri_supervise_flow',
@@ -472,6 +488,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.srn_date_editable',
     'org.doc_review_flow_si',
     'org.si_supervise_flow',
+    'org.do_supervise_flow',
     'org.sri_supervise_flow',
     'org.customer_supervise_flow',
     'org.customer_edit_alert',

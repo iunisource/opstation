@@ -1170,6 +1170,13 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   num? _collectAmount;
   String? _linkedSiId; // most recent live SI id, for the jump-to-SI button
   bool _deliveryFlow = true; // org.delivery_flow_enabled (default on)
+  // ── DO supervision (org.do_supervise_flow): a NON-BLOCKING review mark.
+  // Admins/master admins can always supervise; org.do_supervisor_users
+  // (comma-separated user ids from Admin Settings) adds specific users.
+  bool _doSuperviseFlow = false;
+  bool _doSuperviseBusy = false;
+  bool _canSupervise = false;
+  String _doSupFilter = 'all'; // supervision filter: all | yes | no
 
   @override
   void initState() {
@@ -1194,7 +1201,21 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           .select('*, customers(shop_name), sales_orders(voucher_number)').eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final res = await q.order('created_at', ascending: false);
-      setState(() { _orders = List<Map<String,dynamic>>.from(res); _listLoading = false; });
+      bool supFlow = _doSuperviseFlow; bool canSup = _canSupervise;
+      try {
+        final cfg = await Supabase.instance.client.from('app_config').select('key,value')
+            .eq('org_id', orgId)
+            .inFilter('key', ['org.do_supervise_flow', 'org.do_supervisor_users']);
+        final m = {for (final r in cfg as List) r['key'] as String: (r['value'] as String? ?? '')};
+        supFlow = m['org.do_supervise_flow'] == 'true';
+        final role = ref.read(currentUserProvider)?.role;
+        final uid = ref.read(currentUserProvider)?.id;
+        final extraIds = (m['org.do_supervisor_users'] ?? '')
+            .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+        canSup = role == WebUserRole.masterAdmin || role == WebUserRole.admin ||
+            (uid != null && extraIds.contains(uid));
+      } catch (_) {}
+      setState(() { _orders = List<Map<String,dynamic>>.from(res); _doSuperviseFlow = supFlow; _canSupervise = canSup; _listLoading = false; });
     } catch (_) { setState(() => _listLoading = false); }
   }
 
@@ -1268,13 +1289,21 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       try {
         final cfg = await client.from('app_config').select('key,value')
             .eq('org_id', _orgId ?? '')
-            .inFilter('key', ['org.delivery_flow_enabled', 'org.voucher_dates_editable']);
-        bool flow = true, datesEd = false;
+            .inFilter('key', ['org.delivery_flow_enabled', 'org.voucher_dates_editable', 'org.do_supervise_flow', 'org.do_supervisor_users']);
+        bool flow = true, datesEd = false, supFlow = false;
+        String supUsers = '';
         for (final r in cfg as List) {
           if (r['key'] == 'org.delivery_flow_enabled') flow = r['value'] != 'false';
           if (r['key'] == 'org.voucher_dates_editable') datesEd = r['value'] == 'true';
+          if (r['key'] == 'org.do_supervise_flow') supFlow = r['value'] == 'true';
+          if (r['key'] == 'org.do_supervisor_users') supUsers = (r['value'] as String?) ?? '';
         }
-        if (mounted) setState(() { _deliveryFlow = flow; _datesEditable = datesEd; });
+        final role = ref.read(currentUserProvider)?.role;
+        final uid = ref.read(currentUserProvider)?.id;
+        final extraIds = supUsers.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+        final canSup = role == WebUserRole.masterAdmin || role == WebUserRole.admin ||
+            (uid != null && extraIds.contains(uid));
+        if (mounted) setState(() { _deliveryFlow = flow; _datesEditable = datesEd; _doSuperviseFlow = supFlow; _canSupervise = canSup; });
       } catch (_) {}
     } catch (_) { setState(() => _detailLoading = false); }
   }
@@ -1688,6 +1717,70 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     } catch (_) {}
   }
 
+  // ── Supervision: a NON-BLOCKING review mark (org.do_supervise_flow).
+  // Independent of approval/invoicing — the DO flows exactly as before.
+  Future<void> _superviseDo() async {
+    if (!_canSupervise) { _showSnack('You are not allowed to supervise'); return; }
+    if (_doSuperviseBusy) return;
+    setState(() => _doSuperviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      await Supabase.instance.client.from('delivery_orders').update({
+        'supervised_by': userId, 'supervised_at': now,
+        'supervised_by_name': userName,
+        'supervised_signature_url': sigUrl,
+        'supervised_stamp_url': stampUrl,
+        'updated_at': now,
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'DO', 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
+      if (mounted) setState(() {
+        _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
+        _detail['supervised_by_name'] = userName;
+        _detail['supervised_signature_url'] = sigUrl;
+        _detail['supervised_stamp_url'] = stampUrl;
+        // Patch the list row too so an active "Pending" supervision filter
+        // drops this DO instantly, without a reload.
+        final idx = _orders.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _orders[idx]['supervised_at'] = now;
+      });
+      ref.invalidate(doSupervisePendingProvider);
+      _showSnack('Marked as supervised');
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    finally { if (mounted) setState(() => _doSuperviseBusy = false); }
+  }
+
+  Future<void> _clearDoSupervision() async {
+    if (!_canSupervise) return;
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Clear supervision?'),
+      content: const Text('Remove the supervised mark on this Delivery Order? This does not affect delivery or invoicing.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Clear'))],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('delivery_orders').update({
+        'supervised_by': null, 'supervised_at': null,
+        'supervised_by_name': null, 'supervised_signature_url': null, 'supervised_stamp_url': null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'DO', 'unsupervised', null);
+      if (mounted) setState(() {
+        _detail['supervised_by'] = null; _detail['supervised_at'] = null;
+        _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
+        final idx = _orders.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _orders[idx]['supervised_at'] = null;
+      });
+      ref.invalidate(doSupervisePendingProvider);
+      _showSnack('Supervision cleared');
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+  }
+
   Widget _collectToggle() {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       const Text('Collect', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -1937,8 +2030,38 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   List<Map<String, dynamic>> get _filteredOrders => _orders.where((o) {
     final matchStatus = _statusFilter == 'all' || o['status'] == _statusFilter;
     final matchSearch = matchesQuery('${o['voucher_number'] ?? ''} ${o['sales_orders']?['voucher_number'] ?? ''} ${o['customers']?['shop_name'] ?? ''}', _search);
+    // Supervision filter (only when the supervise flow is on).
+    if (_doSuperviseFlow && _doSupFilter != 'all') {
+      final sup = o['supervised_at'] != null;
+      if (_doSupFilter == 'yes' && !sup) return false;
+      if (_doSupFilter == 'no' && (sup || o['is_voided'] == true)) return false;
+    }
     return matchStatus && matchSearch;
   }).toList();
+
+  int get _doSupPendingCount => _orders.where((o) => o['supervised_at'] == null && o['is_voided'] != true).length;
+
+  Widget _doSupChip(String value, String label, {int? count}) {
+    final active = _doSupFilter == value;
+    return GestureDetector(
+      onTap: () => setState(() => _doSupFilter = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primary : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: active ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
+          if (count != null && count > 0) ...[
+            const SizedBox(width: 5),
+            Text('$count', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: active ? Colors.white70 : Colors.orange)),
+          ],
+        ]),
+      ),
+    );
+  }
 
   Color _statusColor(String s) {
     if (s == 'invoiced') return AppTheme.success;
@@ -1982,6 +2105,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   ],
                   onChanged: (v) => setState(() => _statusFilter = v ?? 'all'),
                 )),
+                if (_doSuperviseFlow && _canSupervise) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(spacing: 6, runSpacing: 6, children: [
+                      _doSupChip('all', 'All'),
+                      _doSupChip('yes', 'Supervised'),
+                      _doSupChip('no', 'Pending', count: _doSupPendingCount),
+                    ]),
+                  ),
+                ],
               ]),
             ),
             const Divider(height: 1),
@@ -2007,6 +2141,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                                     Text(o['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
+                                    if (_doSuperviseFlow && _canSupervise && o['supervised_at'] == null && o['is_voided'] != true) ...[
+                                      const Tooltip(message: 'Awaiting supervision', child: Icon(Icons.verified_user_outlined, size: 14, color: Colors.orange)),
+                                      const SizedBox(width: 4),
+                                    ],
                                     if (o['is_voided'] == true)
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -2084,8 +2222,25 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                 decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
                 child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w700)),
               ),
+            if (_doSuperviseFlow && _canSupervise && !isVoided && _detail['supervised_at'] == null)
+              const _StatusChip(status: 'Supervision Pending', color: Colors.orange),
           ];
           final actionChildren = <Widget>[
+            if (_doSuperviseFlow && _canSupervise && !isVoided) ...[
+              if (_detail['supervised_at'] == null)
+                OutlinedButton.icon(
+                  icon: _doSuperviseBusy
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                  label: const Text('Supervise'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                  onPressed: _doSuperviseBusy ? null : _superviseDo)
+              else
+                TextButton.icon(
+                  icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                  label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+                  onPressed: _clearDoSupervision),
+            ],
             if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
               _collectToggle(),
               ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
@@ -2364,6 +2519,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   String _search = '';
   String _siStatusFilter = 'all'; // all | draft | under_review | rejected | posted | voided
   String _siSupFilter = 'all'; // supervision filter: all | yes | no (only when supervise flow on)
+  bool _canSupervise = false; // admin/master admin, or listed in org.si_supervisor_users
   final Map<String, TextEditingController> _discountCtrl = {};
   final Map<String, TextEditingController> _priceCtrl = {};
   bool _priceEditable = false; // org.si_price_editable
@@ -2397,9 +2553,18 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       final res = await q.order('created_at', ascending: false);
       bool reviewFlow = _reviewFlow;
       try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (c?['value'] as String?) == 'true'; } catch (_) {}
-      bool superviseFlow = _superviseFlow;
-      try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.si_supervise_flow').maybeSingle(); superviseFlow = (c?['value'] as String?) == 'true'; } catch (_) {}
-      setState(() { _invoices = List<Map<String,dynamic>>.from(res); _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _listLoading = false; });
+      bool superviseFlow = _superviseFlow; bool canSup = _canSupervise;
+      try {
+        final cfg = await Supabase.instance.client.from('app_config').select('key,value').eq('org_id', orgId)
+            .inFilter('key', ['org.si_supervise_flow', 'org.si_supervisor_users']);
+        final m = {for (final r in cfg as List) r['key'] as String: (r['value'] as String? ?? '')};
+        superviseFlow = m['org.si_supervise_flow'] == 'true';
+        final uid = ref.read(currentUserProvider)?.id;
+        final extraIds = (m['org.si_supervisor_users'] ?? '')
+            .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+        canSup = _isAdmin || (uid != null && extraIds.contains(uid));
+      } catch (_) {}
+      setState(() { _invoices = List<Map<String,dynamic>>.from(res); _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _canSupervise = canSup; _listLoading = false; });
     } catch (_) { setState(() => _listLoading = false); }
   }
 
@@ -2429,13 +2594,23 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       try { final cc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (cc?['value'] as String?) == 'true'; } catch (_) {}
       bool reviewFlow = _reviewFlow;
       try { final rc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (rc?['value'] as String?) == 'true'; } catch (_) {}
-      bool superviseFlow = _superviseFlow;
-      try { final sc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.si_supervise_flow').maybeSingle(); superviseFlow = (sc?['value'] as String?) == 'true'; } catch (_) {}
+      bool superviseFlow = _superviseFlow; bool canSup = _canSupervise;
+      try {
+        final cfg2 = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
+            .inFilter('key', ['org.si_supervise_flow', 'org.si_supervisor_users']);
+        final m2 = {for (final r in cfg2 as List) r['key'] as String: (r['value'] as String? ?? '')};
+        superviseFlow = m2['org.si_supervise_flow'] == 'true';
+        final uid2 = ref.read(currentUserProvider)?.id;
+        final extraIds2 = (m2['org.si_supervisor_users'] ?? '')
+            .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+        canSup = _isAdmin || (uid2 != null && extraIds2.contains(uid2));
+      } catch (_) {}
       bool priceEditable = _priceEditable;
       try { final pc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.si_price_editable').maybeSingle(); priceEditable = (pc?['value'] as String?) == 'true'; } catch (_) {}
       setState(() {
         _reviewFlow = reviewFlow;
         _superviseFlow = superviseFlow;
+        _canSupervise = canSup;
         _priceEditable = priceEditable;
         _detail = Map<String,dynamic>.from(inv);
         _items = List<Map<String,dynamic>>.from(items);
@@ -2544,7 +2719,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   // ── Supervision: a NON-BLOCKING admin review mark (org.si_supervise_flow).
   // Independent of posting — the invoice posts regardless of supervision.
   Future<void> _supervise() async {
-    if (!_isAdmin) { _showSnack('Only admins can supervise'); return; }
+    if (!_canSupervise) { _showSnack('You are not allowed to supervise'); return; }
     if (_superviseBusy) return;
     setState(() => _superviseBusy = true);
     final userId = ref.read(currentUserProvider)?.id;
@@ -2566,14 +2741,19 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         _detail['supervised_by_name'] = userName;
         _detail['supervised_signature_url'] = sigUrl;
         _detail['supervised_stamp_url'] = stampUrl;
+        // Patch the list row too so an active "Pending" supervision filter
+        // drops this invoice instantly, without a reload.
+        final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _invoices[idx]['supervised_at'] = now;
       });
+      ref.invalidate(siSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
 
   Future<void> _clearSupervision() async {
-    if (!_isAdmin) return;
+    if (!_canSupervise) return;
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Clear supervision?'),
       content: const Text('Remove the supervised mark on this invoice? This does not affect posting or the ledger.'),
@@ -2590,7 +2770,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       if (mounted) setState(() {
         _detail['supervised_by'] = null; _detail['supervised_at'] = null;
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
+        final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
+        if (idx >= 0) _invoices[idx]['supervised_at'] = null;
       });
+      ref.invalidate(siSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
@@ -2953,7 +3136,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                     _siFilterChip('voided', 'Voided'),
                   ]),
                 ),
-                if (_superviseFlow) ...[
+                if (_superviseFlow && _canSupervise) ...[
                   const SizedBox(height: 8),
                   Row(children: [
                     const Text('Supervision', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
@@ -2989,7 +3172,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                     Text(inv['voucher_number'] as String? ?? '-',
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
-                                    if (_superviseFlow && inv['supervised_at'] == null && inv['is_voided'] != true) ...[
+                                    if (_superviseFlow && _canSupervise && inv['supervised_at'] == null && inv['is_voided'] != true) ...[
                                       const Tooltip(message: 'Awaiting supervision', child: Icon(Icons.verified_user_outlined, size: 14, color: Colors.orange)),
                                       const SizedBox(width: 4),
                                     ],
@@ -3075,7 +3258,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               tooltip: _isLocked ? 'Unlock' : 'Lock',
               onPressed: _toggleLock,
             ),
-          if (_superviseFlow && _isAdmin && !(_detail['is_voided'] as bool? ?? false)) ...[
+          if (_superviseFlow && _canSupervise && !(_detail['is_voided'] as bool? ?? false)) ...[
             if (_detail['supervised_at'] == null)
               OutlinedButton.icon(
                 icon: _superviseBusy
@@ -3292,7 +3475,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   Expanded(child: Text(
                     _detail['supervised_at'] != null
                         ? 'Supervised by ${_detail['supervised_by_name'] ?? 'admin'} on ${DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['supervised_at'] as String).toLocal())}.'
-                        : (_isAdmin
+                        : (_canSupervise
                             ? 'Awaiting supervision. Review this invoice, then tap "Supervise" above. (Non-blocking — it posts regardless.)'
                             : 'Awaiting admin supervision. This does not block posting.'),
                     style: TextStyle(fontSize: 12, color: _detail['supervised_at'] != null ? AppTheme.success : Colors.orange))),
