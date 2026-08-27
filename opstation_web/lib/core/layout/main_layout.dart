@@ -928,6 +928,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/customer-aging')) _menuItem(context, 'Customer Aging', Icons.hourglass_bottom_outlined, '/erp/customer-aging', location),
       if (show('/erp/sales-report')) _menuItem(context, 'Sales Report',         Icons.assessment_outlined,        '/erp/sales-report',          location),
       if (show('/erp/sales-return-report')) _menuItem(context, 'Sales Return Report',  Icons.summarize_outlined,         '/erp/sales-return-report',    location),
+      if (show('/erp/dispatch-summary')) _menuItem(context, 'Dispatch Summary',     Icons.local_shipping_outlined,    '/erp/dispatch-summary',       location),
       if (show('/erp/schemes-report')) _menuItem(context, 'Scheme Performance',   Icons.local_offer_outlined,       '/erp/schemes-report',         location),
     ];
     final salesItems = <Widget>[
@@ -1093,7 +1094,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices', '/erp/schemes',
-           '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report', '/erp/schemes-report',
+           '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report', '/erp/dispatch-summary', '/erp/schemes-report',
            '/erp/customer-ledger', '/erp/customer-aging'],
           _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending),
       if (_hasItems(posItems))

@@ -88,6 +88,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('sales_return_invoice', 'Sales Return Invoices', PermKind.doc, '/erp/sales-return-invoices'),
     PermItem('sales_report', 'Sales Report', PermKind.report, '/erp/sales-report'),
     PermItem('sales_return_report', 'Sales Return Report', PermKind.report, '/erp/sales-return-report'),
+    PermItem('dispatch_summary', 'Dispatch Summary', PermKind.report, '/erp/dispatch-summary'),
     PermItem('schemes', 'Schemes & Offers', PermKind.doc, '/erp/schemes'),
     PermItem('schemes_report', 'Scheme Performance', PermKind.report, '/erp/schemes-report'),
   ]),
