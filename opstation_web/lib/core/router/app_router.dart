@@ -170,6 +170,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       // the auth state, so it never bounces to /login.
       if (loc.startsWith('/f/')) return null;
 
+      // Public attendance kiosk — a bookmarked tablet/PC opens this with no
+      // login; the punch RPC resolves the employee's org itself.
+      if (loc == '/kiosk') return null;
+
       final retailer = rAuth.valueOrNull;
       final inRetailerArea = loc == '/r' || loc.startsWith('/r/');
 
@@ -283,6 +287,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/f/:token',
         builder: (_, state) => FloorScanScreen(token: state.pathParameters['token'] ?? ''),
+      ),
+      // Public attendance kiosk — bookmarkable, no login. Works for every org:
+      // the punched employee's own record supplies the org.
+      GoRoute(
+        path: '/kiosk',
+        builder: (_, __) => const HrAttendanceKioskScreen(),
       ),
       GoRoute(
         path: '/r/login',

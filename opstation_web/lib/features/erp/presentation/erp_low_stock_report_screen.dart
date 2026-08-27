@@ -38,33 +38,54 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
     setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
-      final branches = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
-      final branchList = List<Map<String, dynamic>>.from(branches);
+      // All three lookups are independent — fetch them together. Products are
+      // filtered SERVER-SIDE to those with a low-stock threshold (the only ones
+      // this report can ever show), which cuts the payload from the whole
+      // catalogue to a handful of rows and was the main cause of the slow load.
+      final results = await Future.wait([
+        client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name'),
+        client.from('product_taxonomies').select().eq('org_id', orgId).order('name'),
+        client.from('products')
+            .select('id, name, sku, low_stock_limit, product_main_group, product_group, product_class, product_movement_category, uoms(abbreviation)')
+            .eq('org_id', orgId).eq('is_active', true)
+            .gt('low_stock_limit', 0)
+            .limit(10000),
+      ]);
+      final branchList = List<Map<String, dynamic>>.from(results[0] as List);
       _branchId ??= branchList.isNotEmpty ? branchList.first['id'] as String : null;
 
-      final taxonomies = await client.from('product_taxonomies').select().eq('org_id', orgId).order('name');
       final Map<String, List<Map<String, dynamic>>> grouped = {};
-      for (final t in taxonomies as List) {
+      for (final t in results[1] as List) {
         grouped.putIfAbsent(t['taxonomy_type'] as String, () => []).add(Map<String, dynamic>.from(t));
       }
 
       final List<Map<String, dynamic>> rows = [];
       if (_branchId != null) {
-        final products = await client.from('products')
-            .select('id, name, sku, low_stock_limit, product_main_group, product_group, product_class, product_movement_category, uoms(abbreviation)')
-            .eq('org_id', orgId).eq('is_active', true);
-        final byId = {for (final p in products as List) p['id'] as String: Map<String, dynamic>.from(p)};
-        final stock = await client.from('inventory_stock')
-            .select('product_id, quantity').eq('org_id', orgId).eq('branch_id', _branchId!);
-        for (final s in stock as List) {
-          final pid = s['product_id'] as String?;
-          if (pid == null) continue;
-          final p = byId[pid];
-          if (p == null) continue;
+        final byId = {for (final p in results[2] as List) p['id'] as String: Map<String, dynamic>.from(p)};
+        // Only this branch's stock for the threshold products.
+        final Map<String, double> qtyById = {};
+        if (byId.isNotEmpty) {
+          final ids = byId.keys.toList();
+          for (var i = 0; i < ids.length; i += 200) {
+            final chunk = ids.sublist(i, i + 200 > ids.length ? ids.length : i + 200);
+            final stock = await client.from('inventory_stock')
+                .select('product_id, quantity')
+                .eq('org_id', orgId).eq('branch_id', _branchId!)
+                .inFilter('product_id', chunk);
+            for (final s in stock as List) {
+              final pid = s['product_id'] as String?;
+              if (pid == null) continue;
+              qtyById[pid] = (qtyById[pid] ?? 0) + ((s['quantity'] as num?)?.toDouble() ?? 0);
+            }
+          }
+        }
+        byId.forEach((pid, p) {
           final limit = (p['low_stock_limit'] as num?)?.toDouble() ?? 0;
-          if (limit <= 0) continue;                 // no threshold set
-          final qty = (s['quantity'] as num?)?.toDouble() ?? 0;
-          if (qty > limit) continue;                // above threshold → fine
+          if (limit <= 0) return;
+          // No stock row at this branch = zero on hand — that IS low stock;
+          // the old load silently skipped these products entirely.
+          final qty = qtyById[pid] ?? 0;
+          if (qty > limit) return; // above threshold — fine
           rows.add({
             'id': pid,
             'name': p['name'], 'sku': p['sku'],
@@ -73,7 +94,7 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
             'uom': p['uoms']?['abbreviation'] ?? '',
             'qty': qty, 'limit': limit, 'short': (limit - qty),
           });
-        }
+        });
         rows.sort((a, b) => (b['short'] as double).compareTo(a['short'] as double));
       }
 

@@ -115,13 +115,13 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
     } catch (_) { }
   }
 
-  // Best-effort: snap the current camera frame and store it with the punch.
-  // Never blocks or fails the punch — wrapped in try/catch, fire-and-forget.
-  // Capture the current camera frame, upload it, and return the public URL.
-  // Returns null if disabled / no camera / fails. Called BEFORE the punch write
-  // so the URL is on the row when the email trigger fires. Guarded by a timeout
-  // at the call site so a slow upload never hangs the punch.
-  Future<String?> _captureAndUpload(String empCode, String inOrOut, String today) async {
+  // Punch photos are split into two phases so they never slow the punch:
+  //  1. _captureFrameBytes — grab the current camera frame IN MEMORY (local,
+  //     effectively instant) before the punch.
+  //  2. _attachPunchPhoto — AFTER the punch result is already on screen,
+  //     upload the frame and write its URL onto the attendance row in the
+  //     background. Best-effort: any failure is swallowed; the punch stands.
+  Uint8List? _captureFrameBytes() {
     if (!_captureEnabled || !_cameraOn || _video == null) return null;
     try {
       final vw = _video!.videoWidth;
@@ -130,14 +130,24 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
       final canvas = html.CanvasElement(width: vw, height: vh);
       canvas.context2D.drawImage(_video!, 0, 0);
       final dataUrl = canvas.toDataUrl('image/jpeg', 0.7);
-      final Uint8List bytes = base64Decode(dataUrl.split(',').last);
-      final orgId = _orgId; if (orgId == null) return null;
+      return base64Decode(dataUrl.split(',').last);
+    } catch (_) { return null; }
+  }
+
+  Future<void> _attachPunchPhoto(
+      Uint8List bytes, String attendanceId, String direction, String empCode) async {
+    try {
       final client = Supabase.instance.client;
-      final path = 'att/$today/${empCode}_${inOrOut}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final path =
+          'att/$today/${empCode}_${direction}_${DateTime.now().millisecondsSinceEpoch}.jpg';
       await client.storage.from('kiosk-punches').uploadBinary(path, bytes,
           fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'));
-      return client.storage.from('kiosk-punches').getPublicUrl(path);
-    } catch (_) { return null; }
+      final url = client.storage.from('kiosk-punches').getPublicUrl(path);
+      await client.from('hr_attendance').update({
+        direction == 'in' ? 'punch_in_photo' : 'punch_out_photo': url,
+      }).eq('id', attendanceId);
+    } catch (_) {/* photo is best-effort — never surface to the kiosk */}
   }
 
   // ── sound ──────────────────────────────────────────────────────────────────
@@ -279,133 +289,63 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
     } catch (_) { /* frame not ready / detect failed — ignore */ }
   }
 
-  // ── punch logic ──────────────────────────────────────────────────────────────
-  String _hhmm(DateTime d) => DateFormat('HH:mm').format(d);
-
-  double? _workHours(String? cin, String? cout) {
-    int? toMin(String? s) {
-      if (s == null || s.isEmpty) return null;
-      final p = s.split(':');
-      if (p.length != 2) return null;
-      final h = int.tryParse(p[0]), m = int.tryParse(p[1]);
-      if (h == null || m == null) return null;
-      return h * 60 + m;
-    }
-    final a = toMin(cin), b = toMin(cout);
-    if (a == null || b == null) return null;
-    var diff = b - a;
-    if (diff <= 0) diff += 1440;
-    return (diff / 60.0 * 100).roundToDouble() / 100;
-  }
-
+  // ── punch logic (in/out rules + work hours now live in the kiosk_punch RPC) ──
   Future<void> _process(String rawCode) async {
     _ensureAudio();
     if (_busy) return;
-    final orgId = _orgId;
-    if (orgId == null) { _show(_Result(_Outcome.error, 'Not authenticated')); return; }
     final code = rawCode.trim();
+    if (code.isEmpty) return;
+
+    // Local 60s debounce per code (instant feedback; the RPC also enforces one
+    // server-side across every kiosk device).
+    final now = DateTime.now();
+    final last = _lastPunch[code];
+    if (last != null && now.difference(last) < const Duration(seconds: 60)) {
+      _beep(ok: false);
+      _show(_Result(_Outcome.blocked, 'Please wait',
+          message: 'Scanned moments ago — try again in a minute.'));
+      return;
+    }
+
     setState(() => _busy = true);
     try {
       final client = Supabase.instance.client;
-      // RFID readers emit the numeric card UID; the printed QR / manual entry
-      // emit the employee_code. Match on card_uid first, then fall back to
-      // employee_code, so cards, QR badges and typed codes all work.
-      var emp = await client.from('hr_employees')
-          .select('id, full_name, employee_code, card_uid, branch_id, photo_url, is_voided')
-          .eq('org_id', orgId).eq('card_uid', code).maybeSingle();
-      emp ??= await client.from('hr_employees')
-          .select('id, full_name, employee_code, card_uid, branch_id, photo_url, is_voided')
-          .eq('org_id', orgId).ilike('employee_code', code).maybeSingle();
-      if (emp == null) {
-        _show(_Result(_Outcome.error, 'Card not recognized', message: 'No employee for code "$code"'));
-        return;
-      }
-      if (emp['is_voided'] == true) {
-        _show(_Result(_Outcome.blocked, 'Inactive employee',
-            name: emp['full_name'] as String?, code: emp['employee_code'] as String?, photoUrl: emp['photo_url'] as String?));
-        return;
-      }
-      final empId = emp['id'] as String;
-      final name = emp['full_name'] as String?;
-      final empCode = emp['employee_code'] as String?;
-      final photo = emp['photo_url'] as String?;
-      final branchId = emp['branch_id'] as String?;
-      final now = DateTime.now();
-      final today = DateFormat('yyyy-MM-dd').format(now);
-
-      final row = await client.from('hr_attendance')
-          .select('id, check_in, check_out')
-          .eq('org_id', orgId).eq('employee_id', empId).eq('att_date', today).maybeSingle();
-
-      final checkedIn = row != null && (row['check_in'] as String?)?.isNotEmpty == true;
-      final checkedOut = row != null && (row['check_out'] as String?)?.isNotEmpty == true;
-
-      // Already completed today -> blocked (admin must re-open).
-      if (checkedOut) {
-        _beep(ok: false);
-        _show(_Result(_Outcome.blocked, 'Already completed today',
-            name: name, code: empCode, photoUrl: photo,
-            message: 'Checked out at ${row['check_out']}. Ask an admin to re-open.'));
-        return;
-      }
-
-      // 60s debounce against double-scan.
-      final last = _lastPunch[empId];
-      if (last != null && now.difference(last) < const Duration(seconds: 60)) {
-        _beep(ok: false);
-        _show(_Result(_Outcome.blocked, checkedIn ? 'Already punched in' : 'Please wait',
-            name: name, code: empCode, photoUrl: photo,
-            message: 'Scanned moments ago — try again in a minute.'));
-        return;
-      }
-
-      if (checkedIn) {
-        // PUNCH OUT
-        final cin = row['check_in'] as String?;
-        final cout = _hhmm(now);
-        final id = row['id'] as String;
-        final photoUrl = await _captureAndUpload(empCode ?? code, 'out', today)
-            .timeout(const Duration(seconds: 4), onTimeout: () => null);
-        await client.from('hr_attendance').upsert({
-          'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': branchId, 'att_date': today,
-          'status': 'present', 'check_in': cin, 'check_out': cout,
-          'work_hours': _workHours(cin, cout), 'updated_at': now.toIso8601String(),
-          if (photoUrl != null) 'punch_out_photo': photoUrl,
-        }, onConflict: 'org_id,employee_id,att_date');
-        await client.from('hr_attendance_audit').insert({
-          'id': 'aud_${now.microsecondsSinceEpoch}_$empId', 'org_id': orgId, 'attendance_id': id,
-          'employee_id': empId, 'att_date': today, 'action': 'updated',
-          'changes': 'Kiosk check-out $cout', 'changed_by': null, 'changed_by_name': 'Kiosk',
-        });
-        _lastPunch[empId] = now;
-        _beep(ok: true);
-        _show(_Result(_Outcome.checkedOut, 'Checked Out',
-            name: name, code: empCode, photoUrl: photo, time: cout));
-      } else {
-        // PUNCH IN
-        final cin = _hhmm(now);
-        final id = row?['id'] as String? ?? 'att_${now.microsecondsSinceEpoch}_$empId';
-        final photoUrl = await _captureAndUpload(empCode ?? code, 'in', today)
-            .timeout(const Duration(seconds: 4), onTimeout: () => null);
-        await client.from('hr_attendance').upsert({
-          'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': branchId, 'att_date': today,
-          'status': 'present', 'check_in': cin, 'check_out': null,
-          'work_hours': null, 'updated_at': now.toIso8601String(),
-          if (photoUrl != null) 'punch_in_photo': photoUrl,
-        }, onConflict: 'org_id,employee_id,att_date');
-        await client.from('hr_attendance_audit').insert({
-          'id': 'aud_${now.microsecondsSinceEpoch}_$empId', 'org_id': orgId, 'attendance_id': id,
-          'employee_id': empId, 'att_date': today, 'action': 'created',
-          'changes': 'Kiosk check-in $cin', 'changed_by': null, 'changed_by_name': 'Kiosk',
-        });
-        _lastPunch[empId] = now;
-        _beep(ok: true);
-        _show(_Result(_Outcome.checkedIn, 'Checked In',
-            name: name, code: empCode, photoUrl: photo, time: cin));
+      // Snapshot the camera frame locally (instant) — uploaded AFTER the
+      // result shows, so the punch never waits on the network for a photo.
+      final frame = _captureFrameBytes();
+      // The whole punch runs in kiosk_punch (SECURITY DEFINER, anon-callable):
+      // it resolves the employee ACROSS ORGS from the card/code, applies the
+      // in/out/blocked rules, writes attendance + audit, and returns the
+      // display payload. This is what makes the kiosk a public, login-free
+      // URL that serves every org from one bookmark.
+      final res = await client.rpc('kiosk_punch', params: {'p_code': code});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final outcome = switch (m['outcome'] as String? ?? 'error') {
+        'checked_in' => _Outcome.checkedIn,
+        'checked_out' => _Outcome.checkedOut,
+        'blocked' => _Outcome.blocked,
+        _ => _Outcome.error,
+      };
+      final ok = outcome == _Outcome.checkedIn || outcome == _Outcome.checkedOut;
+      if (ok) _lastPunch[code] = now;
+      _beep(ok: ok);
+      _show(_Result(outcome, m['title'] as String? ?? 'Punch failed',
+          name: m['name'] as String?,
+          code: m['code'] as String?,
+          photoUrl: m['photo_url'] as String?,
+          time: m['time'] as String?,
+          message: m['message'] as String?));
+      // Background photo attach — result is already on screen.
+      final attId = m['attendance_id'] as String?;
+      final dir = m['direction'] as String?;
+      if (ok && frame != null && attId != null && dir != null) {
+        unawaited(_attachPunchPhoto(
+            frame, attId, dir, m['code'] as String? ?? code));
       }
     } catch (e) {
       _beep(ok: false);
-      _show(_Result(_Outcome.error, 'Punch failed', message: e.toString()));
+      _show(_Result(_Outcome.error, 'Punch failed',
+          message: e.toString().split('\n').first));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

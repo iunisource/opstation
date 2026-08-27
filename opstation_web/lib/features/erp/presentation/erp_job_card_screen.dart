@@ -1612,8 +1612,13 @@ $runSection
 
   void _printJobCard({bool withPrices = true}) {
     if (_current == null) { _snack('Open a saved job card to print'); return; }
-    // Printing the job card is restricted to users allowed to view costing.
-    if (!_canViewCost) { _snack('You do not have permission to print job cards'); return; }
+    // Only the PRICED copy is restricted to costing viewers. The shop-floor
+    // (internal, no-price) copy is open to anyone on this screen — gating it
+    // behind _canViewCost also locked out floor staff and Note & Print.
+    if (withPrices && !_canViewCost) {
+      _snack('You do not have permission to print the priced copy');
+      return;
+    }
     // Never emit a priced copy for a user who isn't allowed to see prices.
     final priced = withPrices && _canViewCost;
     try {
@@ -2005,7 +2010,8 @@ $runSection
               if (_current != null) IconButton(icon: const Icon(Icons.fact_check_outlined, size: 20), onPressed: _showQcHistory, tooltip: 'QC History', visualDensity: VisualDensity.compact),
               if (_current != null && _isAdminTier) IconButton(icon: const Icon(Icons.history, size: 20), onPressed: _openAuditTrail, tooltip: 'Audit Trail', visualDensity: VisualDensity.compact),
               if (_current != null && _canViewCost) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printJobCard(), tooltip: 'Print / PDF (with costs)', visualDensity: VisualDensity.compact),
-              if (_current != null && _canViewCost) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
+              // Shop-floor copy carries no prices — available to everyone on this screen.
+              if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
               if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
               if (_current != null && _status != 'completed' && _status != 'cancelled')
                 Padding(
