@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../intelligence/widgets/searchable_dropdown.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Customer Aging: outstanding receivables grouped by customer with 0-30 /
 /// 31-60 / 61-90 / 90+ day buckets. Sources unpaid sales_invoices.
@@ -439,7 +440,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
                 ? const Center(child: CircularProgressIndicator())
                 : rows.isEmpty
                     ? const Center(child: Text('No customers found.', style: TextStyle(color: AppTheme.textSecondary)))
-                    : Column(children: [
+                    : HScrollOnNarrow(minWidth: 920, child: Column(children: [
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                           decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
@@ -489,7 +490,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
                           ),
                           ),
                         ),
-                      ]),
+                      ])),
           ),
         ),
         if (rows.length == 1) ...[

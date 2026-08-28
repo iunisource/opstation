@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Supplier Aging: outstanding payables grouped by supplier with 0-30 /
 /// 31-60 / 61-90 / 91-120 / 120+ day buckets. Reads the GL Accounts-Payable
@@ -405,7 +406,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
                 ? const Center(child: CircularProgressIndicator())
                 : rows.isEmpty
                     ? const Center(child: Text('No suppliers found.', style: TextStyle(color: AppTheme.textSecondary)))
-                    : Column(children: [
+                    : HScrollOnNarrow(minWidth: 920, child: Column(children: [
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                           decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(12))),
@@ -455,7 +456,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
                           ),
                           ),
                         ),
-                      ]),
+                      ])),
           ),
         ),
         if (rows.length == 1) ...[

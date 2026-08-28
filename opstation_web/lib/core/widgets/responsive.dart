@@ -1,71 +1,43 @@
 import 'package:flutter/material.dart';
 
-/// Breakpoints for the ERP web app.
+/// Wraps wide table-style content so it stays full-width on desktop but keeps a
+/// readable [minWidth] and scrolls horizontally on narrow (phone) viewports,
+/// instead of squishing every column to a few pixels.
 ///
-/// These are not arbitrary: 600 is where a phone in portrait stops being able to
-/// hold two columns of content, and 1024 is where the sidebar plus a master-detail
-/// pane stop competing for width. Everything else follows from those two facts.
-class Breakpoints {
-  static const double mobile = 600;
-  static const double tablet = 1024;
-}
-
-enum ScreenSize { mobile, tablet, desktop }
-
-extension ResponsiveContext on BuildContext {
-  double get screenWidth => MediaQuery.sizeOf(this).width;
-
-  ScreenSize get screenSize {
-    final w = screenWidth;
-    if (w < Breakpoints.mobile) return ScreenSize.mobile;
-    if (w < Breakpoints.tablet) return ScreenSize.tablet;
-    return ScreenSize.desktop;
-  }
-
-  bool get isMobile => screenSize == ScreenSize.mobile;
-  bool get isTablet => screenSize == ScreenSize.tablet;
-  bool get isDesktop => screenSize == ScreenSize.desktop;
-
-  /// True when a side-by-side master-detail layout will not fit. Tablets are
-  /// included because the nav rail plus a list plus a detail pane leaves the
-  /// detail too narrow to be useful.
-  bool get isCompact => screenWidth < Breakpoints.tablet;
-
-  /// Page padding that does not waste a phone's limited width.
-  EdgeInsets get pagePadding => isMobile
-      ? const EdgeInsets.all(12)
-      : const EdgeInsets.all(28);
-
-  /// Horizontal padding for list rows and table cells.
-  double get rowPadding => isMobile ? 12 : 16;
-}
-
-/// Builds different widgets per screen size without repeating MediaQuery lookups.
-///
-/// [tablet] falls back to [desktop] when omitted, and [desktop] is required —
-/// so an existing desktop layout can be wrapped and a mobile variant added
-/// incrementally, rather than needing all three up front.
-class Adaptive extends StatelessWidget {
-  final WidgetBuilder mobile;
-  final WidgetBuilder? tablet;
-  final WidgetBuilder desktop;
-
-  const Adaptive({
+/// Use it around a table block (a header Row + the list of data Rows that share
+/// the same flex columns) so the header and rows scroll together and stay
+/// aligned. Above [breakpoint] the child is returned untouched, so existing
+/// desktop layouts are unaffected.
+class HScrollOnNarrow extends StatelessWidget {
+  const HScrollOnNarrow({
     super.key,
-    required this.mobile,
-    required this.desktop,
-    this.tablet,
+    required this.child,
+    this.minWidth = 760,
+    this.breakpoint = 700,
   });
+
+  final Widget child;
+  final double minWidth;
+  final double breakpoint;
 
   @override
   Widget build(BuildContext context) {
-    switch (context.screenSize) {
-      case ScreenSize.mobile:
-        return mobile(context);
-      case ScreenSize.tablet:
-        return (tablet ?? desktop)(context);
-      case ScreenSize.desktop:
-        return desktop(context);
-    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Enough room already — behave exactly as before.
+        if (constraints.maxWidth >= minWidth || constraints.maxWidth >= breakpoint) {
+          return child;
+        }
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(width: minWidth, child: child),
+        );
+      },
+    );
   }
 }
+
+/// True when the current view is phone-width. Handy for choosing a stacked
+/// card layout over a table.
+bool isNarrow(BuildContext context, {double breakpoint = 700}) =>
+    MediaQuery.of(context).size.width < breakpoint;

@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Dispatch Summary — what left the warehouse (Delivery Orders) over a period,
 /// summarised customer-wise and product-wise. Quantities only: DO lines carry
@@ -308,7 +309,7 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
   }
 
   Widget _customerTable(List<Map<String, dynamic>> rows) {
-    return ListView(padding: const EdgeInsets.all(16), children: [
+    return HScrollOnNarrow(minWidth: 640, child: ListView(padding: const EdgeInsets.all(16), children: [
       _tableHeader(const ['Customer', 'DOs', 'Products', 'Qty', 'FOC'], const [4, 1, 1, 2, 1]),
       ...rows.map((r) => _row([
             _cell('${r['name']}', flex: 4, sub: '${r['code']}'),
@@ -317,11 +318,11 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
             _cell(_qtyFmt.format(r['qty']), flex: 2, right: true, bold: true),
             _cell(_qtyFmt.format(r['foc']), flex: 1, right: true),
           ])),
-    ]);
+    ]));
   }
 
   Widget _productTable(List<Map<String, dynamic>> rows) {
-    return ListView(padding: const EdgeInsets.all(16), children: [
+    return HScrollOnNarrow(minWidth: 680, child: ListView(padding: const EdgeInsets.all(16), children: [
       _tableHeader(const ['Product', 'SKU', 'UOM', 'Qty', 'FOC', 'Cust.'], const [5, 2, 1, 2, 1, 1]),
       ...rows.map((r) => _row([
             _cell('${r['name']}', flex: 5),
@@ -331,7 +332,7 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
             _cell(_qtyFmt.format(r['foc']), flex: 1, right: true),
             _cell('${r['custs']}', flex: 1, right: true),
           ])),
-    ]);
+    ]));
   }
 
   Widget _tableHeader(List<String> labels, List<int> flexes) {
