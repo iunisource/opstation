@@ -58,3 +58,14 @@ class AppTheme {
     );
   }
 }
+
+/// Responsive helpers on BuildContext. Available anywhere app_theme.dart is
+/// imported. `isMobile` (< 700) drives the phone layouts; `isCompact` (< 500)
+/// is the tighter small-phone breakpoint; `pagePadding` is the standard page
+/// inset (smaller on phones).
+extension ResponsiveContext on BuildContext {
+  double get screenWidth => MediaQuery.of(this).size.width;
+  bool get isMobile => screenWidth < 700;
+  bool get isCompact => screenWidth < 500;
+  EdgeInsets get pagePadding => EdgeInsets.all(isMobile ? 12 : 24);
+}
