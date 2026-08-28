@@ -1504,6 +1504,16 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       } catch (_) { qrBlock = ''; }
     }
 
+    // 1D barcode of the job number — scannable by any handheld barcode reader to
+    // pull up the job. Shown for any saved job.
+    String barBlock = '';
+    if (_current != null && jobNo.isNotEmpty && jobNo != 'New Job') {
+      try {
+        final barSvg = bc.Barcode.code128().toSvg(jobNo, width: 200, height: 46, drawText: true, fontHeight: 12);
+        barBlock = '<div class="bar">$barSvg</div>';
+      } catch (_) { barBlock = ''; }
+    }
+
     final mat = StringBuffer();
     for (var i = 0; i < _materials.length; i++) {
       final m = _materials[i];
@@ -1579,6 +1589,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   .qr { text-align: center; }
   .qr svg { width: 96px; height: 96px; display: block; }
   .qrc { font-size: 8.5px; color: #666; margin-top: 2px; letter-spacing: .2px; }
+  .codes { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .bar { text-align: center; }
+  .bar svg { width: 180px; height: 44px; display: block; }
   @media print { .no-print { display: none !important; } }
 </style></head><body>
 <div class="toolbar no-print"><button class="btn" onclick="window.print()">Print / Save as PDF</button></div>
@@ -1586,7 +1599,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   <div><h1>Job Card</h1><div class="sub">$branch</div></div>
   <div style="display:flex;align-items:flex-start;gap:16px">
     <div style="text-align:right"><div style="font-size:16px;font-weight:800">${_esc(jobNo)}</div><div class="sub">$stLabel</div></div>
-    $qrBlock
+    <div class="codes">$qrBlock$barBlock</div>
   </div>
 </div>
 <div class="meta">
