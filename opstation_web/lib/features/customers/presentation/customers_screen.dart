@@ -119,6 +119,19 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         } catch (_) {}
       }
 
+      // Two-way sync: any category/group already sitting on a customer (e.g.
+      // set via a SQL import or the mobile app) is merged into the org master
+      // so it appears in the dropdowns and in Settings. Persist back when we
+      // discover values the master didn't have yet.
+      final custCats = <String>{for (final c in rows) if (((c['category'] as String?)?.trim() ?? '').isNotEmpty) (c['category'] as String).trim()};
+      final custGrps = <String>{for (final c in rows) if (((c['group_name'] as String?)?.trim() ?? '').isNotEmpty) (c['group_name'] as String).trim()};
+      final mergedCats = ({...cats, ...custCats}.toList())..sort();
+      final mergedGrps = ({...grps, ...custGrps}.toList())..sort();
+      if (mergedCats.length != cats.length) { await _persistList('org.categories', mergedCats); }
+      if (mergedGrps.length != grps.length) { await _persistList('org.groups', mergedGrps); }
+      cats = mergedCats;
+      grps = mergedGrps;
+
       final tgtRow = await client
           .from('app_config')
           .select('value')
@@ -794,6 +807,52 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     } catch (_) {/* alert is best-effort */}
   }
 
+  // Persist a category/group master list to app_config (org.categories / org.groups).
+  Future<void> _persistList(String key, List<String> vals) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('app_config').upsert(
+        {'key': key, 'value': jsonEncode(vals), 'org_id': orgId},
+        onConflict: 'key,org_id,branch_id',
+      );
+    } catch (_) {/* best-effort */}
+  }
+
+  // Add a new category/group from the customer screen and sync it to the master.
+  Future<void> _addToList(String key, String value) async {
+    final list = key == 'org.groups' ? _groups : _categories;
+    if (value.isEmpty || list.contains(value)) return;
+    setState(() { list.add(value); list.sort(); });
+    await _persistList(key, list);
+  }
+
+  Future<String?> _promptNewValue(BuildContext ctx, String title) async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(context: ctx, builder: (_) => AlertDialog(
+      title: Text(title),
+      content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'Name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim().isEmpty ? null : v.trim())),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim().isEmpty ? null : ctrl.text.trim()), child: const Text('Add')),
+      ],
+    ));
+  }
+
+  Widget _catGroupField({required String label, required String? value, required List<String> items, required ValueChanged<String?> onChanged, required VoidCallback onAdd}) {
+    return Row(children: [
+      Expanded(child: DropdownButtonFormField<String>(
+        value: value,
+        decoration: InputDecoration(labelText: label),
+        hint: Text('Select ${label.toLowerCase()}'),
+        items: items.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+        onChanged: onChanged,
+      )),
+      IconButton(icon: const Icon(Icons.add_circle_outline, color: AppTheme.primary), tooltip: 'New $label', onPressed: onAdd),
+    ]);
+  }
+
   void _showDialog(BuildContext context, Map<String, dynamic>? customer) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     final allBranches = orgId != null ? await Supabase.instance.client
@@ -827,18 +886,6 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     final ntnCtrl = TextEditingController(text: customer?['ntn_gst'] ?? '');
     String? category = customer?['category'] as String?;
        String? group = customer?['group_name'] as String?;
-       // Build dropdown lists that include any orphan values from the
-       // existing customer — otherwise opening then saving would silently
-       // wipe categories/groups set up via the mobile app (which uses a
-       // separate local store; see app_config sync gap).
-       final categoryItems = {
-         ..._categories,
-         if (category != null && category.isNotEmpty) category,
-       }.toList();
-       final groupItems = {
-         ..._groups,
-         if (group != null && group.isNotEmpty) group,
-       }.toList();
 
     showDialog(
       context: context,
@@ -872,27 +919,29 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   Expanded(child: TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'Phone'), keyboardType: TextInputType.phone)),
                 ]),
                 const SizedBox(height: 12),
-                // Category & Group dropdowns side-by-side
+                // Category & Group dropdowns side-by-side, each with inline "＋ new".
                 Row(children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: category,
-                      decoration: const InputDecoration(labelText: 'Category'),
-                      hint: const Text('Select category'),
-                      items: categoryItems.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                      onChanged: (v) => setS(() => category = v),
-                    ),
-                  ),
+                  Expanded(child: _catGroupField(
+                    label: 'Category',
+                    value: category,
+                    items: ({..._categories, if (category != null && category!.isNotEmpty) category!}.toList()),
+                    onChanged: (v) => setS(() => category = v),
+                    onAdd: () async {
+                      final nv = await _promptNewValue(context, 'New category');
+                      if (nv != null) { await _addToList('org.categories', nv); setS(() => category = nv); }
+                    },
+                  )),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: group,
-                      decoration: const InputDecoration(labelText: 'Group'),
-                      hint: const Text('Select group'),
-                      items: groupItems.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-                      onChanged: (v) => setS(() => group = v),
-                    ),
-                  ),
+                  Expanded(child: _catGroupField(
+                    label: 'Group',
+                    value: group,
+                    items: ({..._groups, if (group != null && group!.isNotEmpty) group!}.toList()),
+                    onChanged: (v) => setS(() => group = v),
+                    onAdd: () async {
+                      final nv = await _promptNewValue(context, 'New group');
+                      if (nv != null) { await _addToList('org.groups', nv); setS(() => group = nv); }
+                    },
+                  )),
                 ]),
                 const SizedBox(height: 16),
                 // Credit Limit
