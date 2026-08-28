@@ -671,6 +671,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         ..._appliedSchemes.map((r) {
           final name = r['scheme_name'] as String? ?? 'Scheme';
           final desc = ((r['meta'] as Map?)?['description'] as String?)?.trim() ?? '';
+          final ft = ((r['meta'] as Map?)?['free_text'] as String?)?.trim() ?? '';
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 3),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -679,6 +680,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               Expanded(child: RichText(text: TextSpan(style: const TextStyle(fontSize: 12.5, color: AppTheme.textPrimary), children: [
                 TextSpan(text: name, style: const TextStyle(fontWeight: FontWeight.w700)),
                 if (desc.isNotEmpty) TextSpan(text: '  —  $desc', style: const TextStyle(color: AppTheme.textSecondary)),
+                if (ft.isNotEmpty) TextSpan(text: '   ·   Free: $ft', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.w600)),
               ]))),
             ]),
           );
@@ -877,7 +879,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'p_org': orgId, 'p_branch': branchId, 'p_customer': custId, 'p_lines': lines,
       });
       final all = List<Map<String, dynamic>>.from((res as List?) ?? const []);
-      final foc = all.where((s) => s['type'] == 'foc').toList();
+      final foc = all.where((s) => s['type'] == 'foc' || s['type'] == 'combo').toList();
       Map<String, dynamic>? elig;
       if (custId != null && foc.any((s) => (s['block_aging_days'] != null) || s['block_over_limit'] == true)) {
         try {
@@ -893,15 +895,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         schemes: foc,
         eligibility: elig,
         user: ref.read(currentUserProvider),
-        note: 'Free goods are added as FOC lines on the order.',
+        note: 'Free goods are added as FOC lines on the order; a non-inventory reward is recorded on the voucher.',
         benefitLabel: (s) {
           final items = List<Map<String, dynamic>>.from(s['free_items'] as List? ?? const []);
-          final d = items.map((fi) {
+          final parts = items.map((fi) {
             final fp = fi['free_product_id'] as String?;
             final name = _products.firstWhere((p) => p['id'] == fp, orElse: () => const {})['name'] ?? 'product';
             return '${_plain4((fi['free_qty'] as num?)?.toDouble())} × $name';
-          }).join(', ');
-          return 'Free: $d';
+          }).toList();
+          final ft = (s['free_text'] as String?)?.trim() ?? '';
+          if (ft.isNotEmpty) parts.add('$ft (non-inventory)');
+          return 'Free: ${parts.join(', ')}';
         },
       );
       if (chosen == null || chosen.isEmpty) return;
@@ -951,7 +955,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           'org_id': orgId,
           'scheme_id': s['scheme_id'],
           'scheme_name': s['name'],
-          'scheme_type': 'foc',
+          'scheme_type': s['type'] ?? 'foc',
           'voucher_type': 'SO',
           'voucher_id': _detail['id'],
           'voucher_number': _detail['voucher_number'],
@@ -961,7 +965,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           'free_qty': totalFree,
           'applied_by': user?.id,
           'applied_by_name': user?.name,
-          'meta': {'free_items': items, 'description': s['description']},
+          'meta': {'free_items': items, 'description': s['description'], 'free_text': s['free_text']},
         });
         applied++;
       }
@@ -3235,9 +3239,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         'p_org': orgId, 'p_branch': branchId, 'p_customer': custId, 'p_lines': lines,
       });
       final all = List<Map<String, dynamic>>.from((res as List?) ?? const []);
-      final slab = all.where((s) => s['type'] == 'qty_slab').toList();
+      const siTypes = ['qty_slab', 'invoice_discount', 'promo_price'];
+      final sis = all.where((s) => siTypes.contains(s['type'])).toList();
       Map<String, dynamic>? elig;
-      if (custId != null && slab.any((s) => (s['block_aging_days'] != null) || s['block_over_limit'] == true)) {
+      if (custId != null && sis.any((s) => (s['block_aging_days'] != null) || s['block_over_limit'] == true)) {
         try {
           final e = await Supabase.instance.client.rpc('scheme_customer_eligibility', params: {'p_org': orgId, 'p_customer': custId});
           elig = e is Map ? Map<String, dynamic>.from(e) : null;
@@ -3245,84 +3250,124 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       }
       if (!mounted) return;
       setState(() => _schemeBusy = false);
-      if (slab.isEmpty) { _showSnack('No discount schemes currently apply to this invoice'); return; }
+      if (sis.isEmpty) { _showSnack('No invoice schemes currently apply to this invoice'); return; }
       final chosen = await showSchemeSelectionDialog(
         context: context,
-        schemes: slab,
+        schemes: sis,
         eligibility: elig,
         user: ref.read(currentUserProvider),
-        note: 'Each sets the line discount %. Review and Save after applying.',
+        note: 'Discounts and promo prices are applied to the invoice lines. Review and Save after applying.',
         benefitLabel: (s) {
-          final total = (s['discount_total'] as num?)?.toDouble() ?? 0;
-          final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
-          final d = items.map((di) {
-            final line = _items.firstWhere((it) => it['product_id'] == di['product_id'], orElse: () => const {});
-            final name = (line['products']?['name'] as String?) ?? 'product';
-            return '$name: ${_n4((di['discount_percent'] as num?))}%';
-          }).join(', ');
-          return '$d  ·  approx Rs ${_n4(total)} off';
+          final t = s['type'] as String?;
+          if (t == 'invoice_discount') {
+            final total = (s['discount_total'] as num?)?.toDouble() ?? 0;
+            final pct = (s['invoice_percent'] as num?)?.toDouble() ?? 0;
+            return 'Whole invoice: ${_n4(pct)}% off (approx Rs ${_n4(total)})';
+          } else if (t == 'promo_price') {
+            final items = List<Map<String, dynamic>>.from(s['promo_items'] as List? ?? const []);
+            final d = items.map((pi) {
+              final line = _items.firstWhere((it) => it['product_id'] == pi['product_id'], orElse: () => const {});
+              final name = (line['products']?['name'] as String?) ?? 'product';
+              return '$name @ Rs ${_n4((pi['promo_price'] as num?))}';
+            }).join(', ');
+            return 'Promo price: $d';
+          } else {
+            final total = (s['discount_total'] as num?)?.toDouble() ?? 0;
+            final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
+            final d = items.map((di) {
+              final line = _items.firstWhere((it) => it['product_id'] == di['product_id'], orElse: () => const {});
+              final name = (line['products']?['name'] as String?) ?? 'product';
+              return '$name: ${_n4((di['discount_percent'] as num?))}%';
+            }).join(', ');
+            return '$d  ·  approx Rs ${_n4(total)} off';
+          }
         },
       );
       if (chosen == null || chosen.isEmpty) return;
-      await _applySlabSchemes(chosen, custId, branchId);
+      await _applySiSchemes(chosen, custId, branchId);
     } catch (e) {
       if (mounted) setState(() => _schemeBusy = false);
       _showSnack(friendlyError('Could not check schemes', e));
     }
   }
 
-  Future<void> _applySlabSchemes(List<Map<String, dynamic>> schemes, String? custId, String? branchId) async {
+  Future<void> _applySiSchemes(List<Map<String, dynamic>> schemes, String? custId, String? branchId) async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _schemeBusy = true);
     final client = Supabase.instance.client;
     final user = ref.read(currentUserProvider);
-    int applied = 0;
+    final redemptions = <Map<String, dynamic>>[];
+    int idx = 0;
     try {
-      // Set the per-line discount % from each chosen scheme (highest wins if two
-      // schemes touch the same line).
       for (final s in schemes) {
-        final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
-        for (final di in items) {
-          final pid = di['product_id'] as String?;
-          final pct = (di['discount_percent'] as num?)?.toDouble() ?? 0;
-          final line = _items.firstWhere((it) => it['is_foc'] != true && it['product_id'] == pid, orElse: () => const {});
-          if (line.isEmpty) continue;
-          final id = line['id'] as String;
-          final cur = double.tryParse(_discountCtrl[id]?.text ?? '0') ?? 0;
-          if (pct > cur) {
-            _discountCtrl[id] ??= TextEditingController();
-            _discountCtrl[id]!.text = _plain4(pct);
+        final type = s['type'] as String?;
+        double benefitAmt = 0;
+        if (type == 'qty_slab') {
+          // Per-line discount % (highest wins if two schemes touch a line).
+          final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
+          for (final di in items) {
+            final line = _items.firstWhere((it) => it['is_foc'] != true && it['product_id'] == di['product_id'], orElse: () => const {});
+            if (line.isEmpty) continue;
+            final id = line['id'] as String;
+            final pct = (di['discount_percent'] as num?)?.toDouble() ?? 0;
+            final cur = double.tryParse(_discountCtrl[id]?.text ?? '0') ?? 0;
+            if (pct > cur) { _discountCtrl[id] ??= TextEditingController(); _discountCtrl[id]!.text = _plain4(pct); }
+          }
+          benefitAmt = (s['discount_total'] as num?)?.toDouble() ?? 0;
+        } else if (type == 'invoice_discount') {
+          // Spread the whole-invoice % across every priced line's discount.
+          final pct = (s['invoice_percent'] as num?)?.toDouble() ?? 0;
+          for (final it in _items.where((it) => it['is_foc'] != true)) {
+            final id = it['id'] as String;
+            final cur = double.tryParse(_discountCtrl[id]?.text ?? '0') ?? 0;
+            final next = (cur + pct).clamp(0.0, 100.0);
+            _discountCtrl[id] ??= TextEditingController(); _discountCtrl[id]!.text = _plain4(next);
+          }
+          benefitAmt = (s['discount_total'] as num?)?.toDouble() ?? 0;
+        } else if (type == 'promo_price') {
+          // Set the unit price of matching lines to the promo price.
+          final items = List<Map<String, dynamic>>.from(s['promo_items'] as List? ?? const []);
+          for (final pi in items) {
+            final line = _items.firstWhere((it) => it['is_foc'] != true && it['product_id'] == pi['product_id'], orElse: () => const {});
+            if (line.isEmpty) continue;
+            final id = line['id'] as String;
+            final promo = (pi['promo_price'] as num?)?.toDouble() ?? 0;
+            final oldPrice = _siPrice(line);
+            final qty = (line['qty_delivered'] as num?)?.toDouble() ?? 0;
+            if (promo < oldPrice) benefitAmt += (oldPrice - promo) * qty;
+            line['unit_price'] = promo; // so _siPrice returns it even when prices aren't editable
+            _priceCtrl[id] ??= TextEditingController(); _priceCtrl[id]!.text = _plain4(promo);
           }
         }
-      }
-      // Persist discounts + recompute totals (without locking).
-      final (subtotal, discountTotal) = await _writeItemDiscounts();
-      await client.from('sales_invoices').update({
-        'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
-      }).eq('id', _detail['id']);
-      // Log a redemption per scheme.
-      for (final s in schemes) {
-        await client.from('scheme_redemptions').insert({
-          'id': 'rdm_${DateTime.now().microsecondsSinceEpoch}_$applied',
+        redemptions.add({
+          'id': 'rdm_${DateTime.now().microsecondsSinceEpoch}_${idx++}',
           'org_id': orgId,
           'scheme_id': s['scheme_id'],
           'scheme_name': s['name'],
-          'scheme_type': 'qty_slab',
+          'scheme_type': type,
           'voucher_type': 'SI',
           'voucher_id': _detail['id'],
           'voucher_number': _detail['voucher_number'],
           'customer_id': custId,
           'branch_id': branchId,
-          'benefit_type': 'discount',
-          'discount_amount': (s['discount_total'] as num?)?.toDouble() ?? 0,
+          'benefit_type': type == 'promo_price' ? 'price' : 'discount',
+          'discount_amount': benefitAmt,
           'applied_by': user?.id,
           'applied_by_name': user?.name,
-          'meta': {'discount_items': s['discount_items'], 'description': s['description']},
+          'meta': {
+            'description': s['description'],
+            if (type == 'promo_price') 'promo_items': s['promo_items'] else 'discount_items': s['discount_items'],
+          },
         });
-        applied++;
       }
+      // Persist discounts + prices + recompute totals (without locking).
+      final (subtotal, discountTotal) = await _writeItemDiscounts();
+      await client.from('sales_invoices').update({
+        'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
+      }).eq('id', _detail['id']);
+      for (final r in redemptions) { await client.from('scheme_redemptions').insert(r); }
       await _loadDetail(_detail['id'] as String);
-      if (mounted) showSchemeSuccess(context, applied == 1 ? 'Scheme applied — review and Save' : '$applied schemes applied — review and Save');
+      if (mounted) showSchemeSuccess(context, redemptions.length == 1 ? 'Scheme applied — review and Save' : '${redemptions.length} schemes applied — review and Save');
     } catch (e) {
       _showSnack(friendlyError('Could not apply the scheme', e));
     } finally {
@@ -3341,6 +3386,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         ..._appliedSchemes.map((r) {
           final name = r['scheme_name'] as String? ?? 'Scheme';
           final desc = ((r['meta'] as Map?)?['description'] as String?)?.trim() ?? '';
+          final ft = ((r['meta'] as Map?)?['free_text'] as String?)?.trim() ?? '';
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 3),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -3349,6 +3395,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               Expanded(child: RichText(text: TextSpan(style: const TextStyle(fontSize: 12.5, color: AppTheme.textPrimary), children: [
                 TextSpan(text: name, style: const TextStyle(fontWeight: FontWeight.w700)),
                 if (desc.isNotEmpty) TextSpan(text: '  —  $desc', style: const TextStyle(color: AppTheme.textSecondary)),
+                if (ft.isNotEmpty) TextSpan(text: '   ·   Free: $ft', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.w600)),
               ]))),
             ]),
           );

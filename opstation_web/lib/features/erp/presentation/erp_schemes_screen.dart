@@ -46,7 +46,7 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
       final client = Supabase.instance.client;
       final results = await Future.wait([
         client.from('app_config').select('key,value').eq('org_id', orgId).inFilter('key', ['org.schemes_enabled', 'org.foc_enabled']),
-        client.from('schemes').select('*, scheme_slabs(*), scheme_products(product_id), scheme_customers(customer_id), scheme_branches(branch_id)').eq('org_id', orgId).order('priority').order('name'),
+        client.from('schemes').select('*, scheme_slabs(*), scheme_products(product_id), scheme_customers(customer_id), scheme_branches(branch_id), scheme_combo_items(product_id, min_qty), scheme_promo_prices(product_id, promo_price)').eq('org_id', orgId).order('priority').order('name'),
         client.from('products').select('id, name, sku, base_uom_id').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(10000),
         client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name'),
@@ -249,20 +249,40 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
     final nBranch = (s['scheme_branches'] as List? ?? const []).length;
     final validFrom = s['valid_from'] as String?;
     final validTo = s['valid_to'] as String?;
+    String pName(String? pid) => pid == null ? '' : (_products.firstWhere((p) => p['id'] == pid, orElse: () => const {})['name'] as String? ?? 'product');
     String benefit;
     if (type == 'foc') {
       final buy = _numText(s['foc_buy_qty']);
       final free = _numText(s['foc_free_qty']);
       final fp = s['foc_free_product_id'] as String?;
-      final fpName = fp == null ? 'same product' : (_products.firstWhere((p) => p['id'] == fp, orElse: () => const {})['name'] ?? 'reward product');
+      final fpName = fp == null ? 'same product' : pName(fp);
       benefit = 'Buy $buy → get $free free ($fpName)${(s['foc_repeat'] as bool? ?? true) ? ', repeating' : ''}';
-    } else {
+    } else if (type == 'qty_slab') {
       benefit = slabs.isEmpty
           ? 'No slabs defined'
           : (slabs..sort((a, b) => ((a['min_qty'] as num?) ?? 0).compareTo((b['min_qty'] as num?) ?? 0)))
               .map((sl) => '${_numText(sl['min_qty'])}${sl['max_qty'] == null ? '+' : '–${_numText(sl['max_qty'])}'} = ${_numText(sl['discount_value'])}${sl['discount_type'] == 'percent' ? '%' : '/unit'}')
               .join('   ·   ');
+    } else if (type == 'combo') {
+      final combo = List<Map<String, dynamic>>.from(s['scheme_combo_items'] as List? ?? const []);
+      final need = combo.map((c) => '${_numText(c['min_qty'])}× ${pName(c['product_id'] as String?)}').join(' + ');
+      final fp = s['foc_free_product_id'] as String?;
+      final rewardParts = <String>[
+        if (fp != null) '${_numText(s['foc_free_qty'])}× ${pName(fp)}',
+        if (((s['free_text_reward'] as String?)?.trim().isNotEmpty ?? false)) '${s['free_text_reward']} (non-inventory)',
+      ];
+      benefit = 'Buy $need → free ${rewardParts.join(' + ')}';
+    } else if (type == 'invoice_discount') {
+      final v = _numText(s['invoice_discount_value']);
+      final unit = s['invoice_discount_type'] == 'percent' ? '%' : ' Rs';
+      final min = (s['invoice_min_value'] as num?);
+      benefit = 'Invoice${min != null && min > 0 ? ' ≥ Rs ${_numText(min)}' : ''} → $v$unit off the whole bill';
+    } else { // promo_price
+      final promos = List<Map<String, dynamic>>.from(s['scheme_promo_prices'] as List? ?? const []);
+      benefit = promos.isEmpty ? 'No promo prices set'
+          : promos.map((p) => '${pName(p['product_id'] as String?)} @ Rs ${_numText(p['promo_price'])}').join('   ·   ');
     }
+    final pill = {'foc': ['FOC', Colors.teal], 'qty_slab': ['SLAB', Colors.indigo], 'combo': ['COMBO', Colors.deepPurple], 'invoice_discount': ['INVOICE', Colors.blue], 'promo_price': ['PROMO', Colors.orange]}[type] ?? ['FOC', Colors.teal];
     return Opacity(
       opacity: active ? 1 : 0.55,
       child: Container(
@@ -270,7 +290,7 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            _pill(type == 'foc' ? 'FOC' : 'SLAB', type == 'foc' ? Colors.teal : Colors.indigo),
+            _pill(pill[0] as String, pill[1] as Color),
             const SizedBox(width: 8),
             Expanded(child: Text(s['name'] as String? ?? '-', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
             _pill(active ? 'ACTIVE' : 'PAUSED', active ? AppTheme.success : AppTheme.textSecondary),
@@ -382,6 +402,18 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
   // slabs
   final List<_SlabRow> _slabs = [];
 
+  // combo
+  final List<_ComboRow> _comboItems = [];
+  final _freeTextCtrl = TextEditingController(); // combo non-inventory reward
+
+  // invoice_discount
+  final _invoiceMinCtrl = TextEditingController();
+  String _invoiceDiscType = 'percent';
+  final _invoiceDiscValueCtrl = TextEditingController();
+
+  // promo_price
+  final List<_PromoRow> _promoRows = [];
+
   bool _saving = false;
   late bool _focFlow; // local mirror of org.foc_enabled
 
@@ -429,8 +461,20 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
           value: _plain(sl['discount_value']),
         ));
       }
+      _freeTextCtrl.text = s['free_text_reward'] as String? ?? '';
+      _invoiceMinCtrl.text = _plain(s['invoice_min_value']);
+      _invoiceDiscType = s['invoice_discount_type'] as String? ?? 'percent';
+      _invoiceDiscValueCtrl.text = _plain(s['invoice_discount_value']);
+      for (final ci in (s['scheme_combo_items'] as List? ?? const [])) {
+        _comboItems.add(_ComboRow(productId: ci['product_id'] as String?, minQty: _plain(ci['min_qty'])));
+      }
+      for (final pp in (s['scheme_promo_prices'] as List? ?? const [])) {
+        _promoRows.add(_PromoRow(productId: pp['product_id'] as String?, price: _plain(pp['promo_price'])));
+      }
     }
     if (_slabs.isEmpty) _slabs.add(_SlabRow());
+    if (_comboItems.isEmpty) _comboItems.add(_ComboRow());
+    if (_promoRows.isEmpty) _promoRows.add(_PromoRow());
   }
 
   static String _plain(Object? v) {
@@ -443,7 +487,10 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
   void dispose() {
     _nameCtrl.dispose(); _descCtrl.dispose(); _priorityCtrl.dispose();
     _buyQtyCtrl.dispose(); _freeQtyCtrl.dispose(); _maxFreeCtrl.dispose();
+    _freeTextCtrl.dispose(); _invoiceMinCtrl.dispose(); _invoiceDiscValueCtrl.dispose();
     for (final s in _slabs) { s.dispose(); }
+    for (final c in _comboItems) { c.dispose(); }
+    for (final p in _promoRows) { p.dispose(); }
     super.dispose();
   }
 
@@ -507,12 +554,21 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
       final buy = double.tryParse(_buyQtyCtrl.text.trim()) ?? 0;
       final free = double.tryParse(_freeQtyCtrl.text.trim()) ?? 0;
       if (buy <= 0 || free <= 0) { _snack('FOC needs a buy quantity and a free quantity greater than 0'); return; }
-    } else {
+    } else if (_type == 'qty_slab') {
       final valid = _slabs.where((s) => s.isFilled).toList();
       if (valid.isEmpty) { _snack('Add at least one quantity slab'); return; }
       for (final s in valid) {
         if ((double.tryParse(s.value.text.trim()) ?? 0) <= 0) { _snack('Each slab needs a discount value greater than 0'); return; }
       }
+    } else if (_type == 'combo') {
+      if (_comboItems.where((c) => c.isFilled).isEmpty) { _snack('Add at least one required product for the combo'); return; }
+      final hasInv = _freeProductId != null && (double.tryParse(_freeQtyCtrl.text.trim()) ?? 0) > 0;
+      final hasText = _freeTextCtrl.text.trim().isNotEmpty;
+      if (!hasInv && !hasText) { _snack('Set a reward: a free inventory item (with qty) and/or a free-text reward'); return; }
+    } else if (_type == 'invoice_discount') {
+      if ((double.tryParse(_invoiceDiscValueCtrl.text.trim()) ?? 0) <= 0) { _snack('Enter a discount value greater than 0'); return; }
+    } else if (_type == 'promo_price') {
+      if (_promoRows.where((p) => p.isFilled).isEmpty) { _snack('Add at least one product with a promo price'); return; }
     }
     if (!_allProducts && _prodIds.isEmpty) { _snack('Pick at least one product, or switch to All products'); return; }
     if (!_allCustomers && _custIds.isEmpty) { _snack('Pick at least one customer, or switch to All customers'); return; }
@@ -520,10 +576,10 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
 
     // A Buy-X-Get-Y scheme puts free units in the FOC section — which is only
     // visible when the FOC products flow is on. Offer to enable it now.
-    if (_type == 'foc' && !_focFlow) {
+    if ((_type == 'foc' || (_type == 'combo' && _freeProductId != null)) && !_focFlow) {
       final choice = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
         title: const Text('Enable FOC section?'),
-        content: const Text('This is a Buy X get Y free scheme. Free units are added to the FOC section of the Sales Order, which is currently OFF for this org — the free goods would not appear there.\n\nEnable the FOC products flow so they show up?'),
+        content: const Text('This scheme adds a free inventory item to the FOC section of the Sales Order, which is currently OFF for this org — the free goods would not appear there.\n\nEnable the FOC products flow so they show up?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(ctx, 'skip'), child: const Text('Save without it')),
@@ -558,10 +614,14 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
         'all_customers': _allCustomers,
         'all_branches': _allBranches,
         'foc_buy_qty': _type == 'foc' ? double.tryParse(_buyQtyCtrl.text.trim()) : null,
-        'foc_free_qty': _type == 'foc' ? double.tryParse(_freeQtyCtrl.text.trim()) : null,
-        'foc_free_product_id': _type == 'foc' ? _freeProductId : null,
+        'foc_free_qty': (_type == 'foc' || _type == 'combo') ? double.tryParse(_freeQtyCtrl.text.trim()) : null,
+        'foc_free_product_id': (_type == 'foc' || _type == 'combo') ? _freeProductId : null,
         'foc_repeat': _focRepeat,
         'foc_max_free_qty': _type == 'foc' && _maxFreeCtrl.text.trim().isNotEmpty ? double.tryParse(_maxFreeCtrl.text.trim()) : null,
+        'free_text_reward': _type == 'combo' && _freeTextCtrl.text.trim().isNotEmpty ? _freeTextCtrl.text.trim() : null,
+        'invoice_min_value': _type == 'invoice_discount' && _invoiceMinCtrl.text.trim().isNotEmpty ? double.tryParse(_invoiceMinCtrl.text.trim()) : null,
+        'invoice_discount_type': _type == 'invoice_discount' ? _invoiceDiscType : null,
+        'invoice_discount_value': _type == 'invoice_discount' ? double.tryParse(_invoiceDiscValueCtrl.text.trim()) : null,
         'block_aging_days': _blockAgingDays == 0 ? null : _blockAgingDays,
         'block_over_limit': _blockOverLimit,
         'overridable': _overridable,
@@ -580,6 +640,8 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
       await client.from('scheme_products').delete().eq('scheme_id', id);
       await client.from('scheme_customers').delete().eq('scheme_id', id);
       await client.from('scheme_branches').delete().eq('scheme_id', id);
+      await client.from('scheme_combo_items').delete().eq('scheme_id', id);
+      await client.from('scheme_promo_prices').delete().eq('scheme_id', id);
 
       if (_type == 'qty_slab') {
         final rows = _slabs.where((s) => s.isFilled).map((s) => {
@@ -592,6 +654,20 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
               'discount_value': double.tryParse(s.value.text.trim()) ?? 0,
             }).toList();
         if (rows.isNotEmpty) await client.from('scheme_slabs').insert(rows);
+      }
+      if (_type == 'combo') {
+        final rows = _comboItems.where((c) => c.isFilled).map((c) => {
+              'org_id': widget.orgId, 'scheme_id': id, 'product_id': c.productId,
+              'min_qty': double.tryParse(c.min.text.trim()) ?? 1,
+            }).toList();
+        if (rows.isNotEmpty) await client.from('scheme_combo_items').insert(rows);
+      }
+      if (_type == 'promo_price') {
+        final rows = _promoRows.where((p) => p.isFilled).map((p) => {
+              'org_id': widget.orgId, 'scheme_id': id, 'product_id': p.productId,
+              'promo_price': double.tryParse(p.price.text.trim()) ?? 0,
+            }).toList();
+        if (rows.isNotEmpty) await client.from('scheme_promo_prices').insert(rows);
       }
       if (!_allProducts && _prodIds.isNotEmpty) {
         await client.from('scheme_products').insert(_prodIds.map((p) => {'org_id': widget.orgId, 'scheme_id': id, 'product_id': p}).toList());
@@ -648,13 +724,19 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
               // Type
               const Text('Scheme type', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
               const SizedBox(height: 6),
-              Row(children: [
+              Wrap(spacing: 8, runSpacing: 8, children: [
                 _typeOption('foc', 'Buy X get Y free', Icons.redeem_outlined),
-                const SizedBox(width: 10),
                 _typeOption('qty_slab', 'Quantity-slab discount', Icons.percent_outlined),
+                _typeOption('combo', 'Combo / bundle', Icons.category_outlined),
+                _typeOption('invoice_discount', 'Whole-invoice discount', Icons.receipt_long_outlined),
+                _typeOption('promo_price', 'Special promo price', Icons.sell_outlined),
               ]),
               const SizedBox(height: 16),
-              if (_type == 'foc') _focSection() else _slabSection(),
+              if (_type == 'foc') _focSection()
+              else if (_type == 'qty_slab') _slabSection()
+              else if (_type == 'combo') _comboSection()
+              else if (_type == 'invoice_discount') _invoiceDiscountSection()
+              else _promoPriceSection(),
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 8),
@@ -769,7 +851,7 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
 
   Widget _typeOption(String value, String label, IconData ic) {
     final active = _type == value;
-    return Expanded(child: GestureDetector(
+    return SizedBox(width: 210, child: GestureDetector(
       onTap: () => setState(() => _type = value),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -894,6 +976,109 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
     );
   }
 
+  Widget _comboSection() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.04), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.deepPurple.withOpacity(0.2))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Required products (all must be on the order, each at its min qty)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+        const SizedBox(height: 6),
+        ..._comboItems.asMap().entries.map((e) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(children: [
+            Expanded(flex: 5, child: DropdownButtonFormField<String>(
+              value: e.value.productId,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Product', isDense: true, border: OutlineInputBorder()),
+              items: widget.products.map((p) => DropdownMenuItem<String>(value: p['id'] as String, child: Text('${p['name']}', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))).toList(),
+              onChanged: (v) => setState(() => e.value.productId = v),
+            )),
+            const SizedBox(width: 8),
+            Expanded(flex: 2, child: TextField(controller: e.value.min, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Min qty', isDense: true, border: OutlineInputBorder()))),
+            IconButton(icon: const Icon(Icons.remove_circle_outline, size: 20, color: AppTheme.danger), onPressed: _comboItems.length == 1 ? null : () => setState(() => _comboItems.removeAt(e.key).dispose())),
+          ]),
+        )),
+        Align(alignment: Alignment.centerLeft, child: TextButton.icon(onPressed: () => setState(() => _comboItems.add(_ComboRow())), icon: const Icon(Icons.add, size: 18), label: const Text('Add product'))),
+        const Divider(height: 20),
+        const Text('Reward', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(flex: 3, child: DropdownButtonFormField<String?>(
+            value: _freeProductId,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Free inventory item (optional)', isDense: true, border: OutlineInputBorder()),
+            items: [
+              const DropdownMenuItem<String?>(value: null, child: Text('— none —', style: TextStyle(fontSize: 13))),
+              ...widget.products.map((p) => DropdownMenuItem<String?>(value: p['id'] as String, child: Text('${p['name']}', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))),
+            ],
+            onChanged: (v) => setState(() => _freeProductId = v),
+          )),
+          const SizedBox(width: 8),
+          Expanded(flex: 1, child: TextField(controller: _freeQtyCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Qty', isDense: true, border: OutlineInputBorder()))),
+        ]),
+        const SizedBox(height: 8),
+        TextField(controller: _freeTextCtrl, decoration: const InputDecoration(labelText: 'Or free non-inventory reward (free text)', hintText: 'e.g. Branded umbrella', isDense: true, border: OutlineInputBorder())),
+        const SizedBox(height: 6),
+        const Text('The inventory free item is added as an FOC line on the Sales Order. A non-inventory reward is recorded and shown on the voucher (it does not affect stock). Set one or both.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ]),
+    );
+  }
+
+  Widget _invoiceDiscountSection() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.blue.withOpacity(0.04), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.2))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(flex: 2, child: TextField(controller: _invoiceMinCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Invoice value at least (Rs)', helperText: 'blank/0 = any value', isDense: true, border: OutlineInputBorder()))),
+          const SizedBox(width: 10),
+          Expanded(flex: 2, child: TextField(controller: _invoiceDiscValueCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Discount', isDense: true, border: OutlineInputBorder()))),
+          const SizedBox(width: 6),
+          SizedBox(width: 90, child: DropdownButtonFormField<String>(
+            value: _invoiceDiscType,
+            isDense: true,
+            decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 14)),
+            items: const [
+              DropdownMenuItem(value: 'percent', child: Text('%', style: TextStyle(fontSize: 13))),
+              DropdownMenuItem(value: 'amount', child: Text('Rs', style: TextStyle(fontSize: 13))),
+            ],
+            onChanged: (v) => setState(() => _invoiceDiscType = v ?? 'percent'),
+          )),
+        ]),
+        const SizedBox(height: 6),
+        const Text('When the invoice subtotal reaches the threshold, this % or flat amount comes off the whole bill (spread across the lines). Suggested on the Sales Invoice.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ]),
+    );
+  }
+
+  Widget _promoPriceSection() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.orange.withOpacity(0.04), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.withOpacity(0.2))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Promo unit prices', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+        const SizedBox(height: 6),
+        ..._promoRows.asMap().entries.map((e) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(children: [
+            Expanded(flex: 5, child: DropdownButtonFormField<String>(
+              value: e.value.productId,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Product', isDense: true, border: OutlineInputBorder()),
+              items: widget.products.map((p) => DropdownMenuItem<String>(value: p['id'] as String, child: Text('${p['name']}', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))).toList(),
+              onChanged: (v) => setState(() => e.value.productId = v),
+            )),
+            const SizedBox(width: 8),
+            Expanded(flex: 2, child: TextField(controller: e.value.price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Promo price', isDense: true, border: OutlineInputBorder()))),
+            IconButton(icon: const Icon(Icons.remove_circle_outline, size: 20, color: AppTheme.danger), onPressed: _promoRows.length == 1 ? null : () => setState(() => _promoRows.removeAt(e.key).dispose())),
+          ]),
+        )),
+        Align(alignment: Alignment.centerLeft, child: TextButton.icon(onPressed: () => setState(() => _promoRows.add(_PromoRow())), icon: const Icon(Icons.add, size: 18), label: const Text('Add product'))),
+        const Text('On the Sales Invoice, applying this sets the unit price of these products to the promo price (only when it is lower than the current price).', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ]),
+    );
+  }
+
   Widget _dateField(String label, DateTime? value, VoidCallback onPick, VoidCallback onClear) {
     return InkWell(
       onTap: onPick,
@@ -935,4 +1120,22 @@ class _SlabRow {
   String type;
   bool get isFilled => min.text.trim().isNotEmpty && value.text.trim().isNotEmpty;
   void dispose() { min.dispose(); max.dispose(); value.dispose(); }
+}
+
+class _ComboRow {
+  _ComboRow({this.productId, String? minQty})
+      : min = TextEditingController(text: (minQty == null || minQty.isEmpty) ? '1' : minQty);
+  String? productId;
+  final TextEditingController min;
+  bool get isFilled => productId != null && productId!.isNotEmpty;
+  void dispose() { min.dispose(); }
+}
+
+class _PromoRow {
+  _PromoRow({this.productId, String? price})
+      : price = TextEditingController(text: price ?? '');
+  String? productId;
+  final TextEditingController price;
+  bool get isFilled => productId != null && productId!.isNotEmpty && price.text.trim().isNotEmpty;
+  void dispose() { price.dispose(); }
 }
