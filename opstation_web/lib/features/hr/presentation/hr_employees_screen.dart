@@ -253,6 +253,25 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
+      // Guard: a card number must be unique across ALL companies, because the
+      // kiosk resolves a card org-agnostically. Block a duplicate before saving.
+      final card = _cardUid.text.trim();
+      if (card.isNotEmpty) {
+        final chk = await client.rpc('hr_card_in_use', params: {
+          'p_card': card, 'p_org': orgId, 'p_exclude': _current?['id'],
+        });
+        final m = chk is Map ? chk : null;
+        if (m != null && m['in_use'] == true) {
+          final sameOrg = m['same_org'] == true;
+          final who = (m['employee_name'] as String?) ?? 'another employee';
+          final org = (m['org_name'] as String?) ?? 'another company';
+          _snack(sameOrg
+              ? 'This card is already assigned to $who in your company. Use a different card.'
+              : 'This card is already used by another organization ($org). Card numbers must be unique — use a different card.');
+          if (mounted) setState(() => _saving = false);
+          return;
+        }
+      }
       String code = _code.text.trim();
       String id;
       if (_current == null) {
