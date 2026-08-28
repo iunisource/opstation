@@ -284,12 +284,29 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
     return null;
   }
 
+  // The 1D barcode on the job card encodes the job NUMBER (e.g. JOB-2026-0042),
+  // not the floor token. Resolve it to the job's floor token so the barcode
+  // works at the kiosk just like the QR.
+  Future<String?> _tokenFromJobNumber(String code) async {
+    if (code.isEmpty) return null;
+    try {
+      final orgId = ref.read(currentUserProvider)?.orgId;
+      var q = Supabase.instance.client.from('job_cards').select('floor_token').ilike('job_number', code);
+      if (orgId != null) q = q.eq('org_id', orgId);
+      final r = await q.limit(1).maybeSingle();
+      final t = r?['floor_token'] as String?;
+      return (t != null && t.isNotEmpty) ? t : null;
+    } catch (_) { return null; }
+  }
+
   Future<void> _process(String rawCode) async {
     _ensureAudio();
     if (_busy) return;
-    final token = _tokenFrom(rawCode.trim());
+    final raw = rawCode.trim();
+    var token = _tokenFrom(raw);
+    token ??= await _tokenFromJobNumber(raw);
     if (token == null) {
-      _show(_KioskResult(_Outcome.error, 'Not a job code', sub: 'Hold the job card QR steady in the frame.'));
+      _show(_KioskResult(_Outcome.error, 'Not a job code', sub: 'Hold the job card QR or barcode steady in the frame.'));
       return;
     }
     setState(() => _busy = true);
@@ -383,7 +400,7 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
             )),
             const SizedBox(height: 8),
             if (_cameraSupported)
-              const Text('Hold the QR steady inside the box, 15–25 cm from the camera — or use a USB scanner.',
+              const Text('Hold the QR or barcode steady inside the box, 15–25 cm from the camera — or use a USB scanner.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white54, fontSize: 12)),
             const SizedBox(height: 12),
