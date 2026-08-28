@@ -9,6 +9,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 import '../../intelligence/widgets/searchable_dropdown.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpStockValueReportScreen extends ConsumerStatefulWidget {
   const ErpStockValueReportScreen({super.key});
@@ -372,7 +373,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         const SizedBox(height: 16),
         Expanded(child: _loading
             ? const Center(child: CircularProgressIndicator())
-            : Container(
+            : HScrollOnNarrow(minWidth: 780, child: Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
                 child: Column(children: [
                   Container(
@@ -423,7 +424,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
                           },
                         )),
                 ]),
-              )),
+              ))),
       ]),
     );
   }

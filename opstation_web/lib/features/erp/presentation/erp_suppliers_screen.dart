@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpSuppliersScreen extends ConsumerStatefulWidget {
   const ErpSuppliersScreen({super.key, this.focusId});
@@ -984,7 +985,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
             const Center(child: CircularProgressIndicator())
           else
             Expanded(
-              child: Container(
+              child: HScrollOnNarrow(minWidth: 910, child: Container(
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
@@ -1086,7 +1087,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                             }),
                   ),
                 ]),
-              ),
+              )),
             ),
         ],
       ),

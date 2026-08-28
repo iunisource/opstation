@@ -9,6 +9,7 @@ import 'package:excel/excel.dart' as xls;
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Production Material Planner (BOM explosion / raw-material MRP).
 ///
@@ -403,18 +404,21 @@ class _ErpProductionPlanScreenState extends ConsumerState<ErpProductionPlanScree
           textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary)));
     }
     final showBranch = _branchId == null;
-    return SingleChildScrollView(
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppTheme.border),
+    return HScrollOnNarrow(
+      minWidth: 1100,
+      child: SingleChildScrollView(
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white, borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppTheme.border),
+          ),
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _tableHeader(showBranch),
+            const Divider(height: 1),
+            ...rows.map((r) => _row(r, showBranch)),
+          ]),
         ),
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _tableHeader(showBranch),
-          const Divider(height: 1),
-          ...rows.map((r) => _row(r, showBranch)),
-        ]),
       ),
     );
   }

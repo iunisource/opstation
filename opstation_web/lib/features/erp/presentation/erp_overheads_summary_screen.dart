@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/skeleton_loader.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpOverheadsSummaryScreen extends ConsumerStatefulWidget {
   const ErpOverheadsSummaryScreen({super.key});
@@ -193,7 +194,7 @@ class _ErpOverheadsSummaryScreenState extends ConsumerState<ErpOverheadsSummaryS
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
                 child: const TableSkeleton(),
               )
-            : Container(
+            : HScrollOnNarrow(minWidth: 780, child: Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
                 child: Column(children: [
                   Container(
@@ -243,7 +244,7 @@ class _ErpOverheadsSummaryScreenState extends ConsumerState<ErpOverheadsSummaryS
                       ]),
                     ),
                 ]),
-              )),
+              ))),
       ]),
     );
   }

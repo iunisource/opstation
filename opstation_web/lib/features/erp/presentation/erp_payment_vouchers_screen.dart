@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpPaymentVouchersScreen extends ConsumerStatefulWidget {
   const ErpPaymentVouchersScreen({super.key});
@@ -191,7 +192,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
         if (_loading) const Center(child: CircularProgressIndicator())
         else if (branch == null) const Center(child: Text('No branch selected.', style: TextStyle(color: AppTheme.textSecondary)))
         else Expanded(
-          child: Container(
+          child: HScrollOnNarrow(minWidth: 780, child: Container(
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
             child: Column(children: [
               Container(
@@ -234,7 +235,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
                         }),
               ),
             ]),
-          ),
+          )),
         ),
       ]),
     );

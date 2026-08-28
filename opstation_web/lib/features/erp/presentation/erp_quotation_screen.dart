@@ -11,6 +11,7 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/widgets/responsive.dart';
 
 // ============================================================================
 // QUOTATION VOUCHER  (Sales module)
@@ -921,6 +922,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           ),
         ]),
         const SizedBox(height: 12),
+        Expanded(child: HScrollOnNarrow(minWidth: 910, child: Column(children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: const BoxDecoration(color: Color(0xFFF8F9FA)),
@@ -970,6 +972,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                 );
               },
             )),
+        ])))
       ]),
     );
   }

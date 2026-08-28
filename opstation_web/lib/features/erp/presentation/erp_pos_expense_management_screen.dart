@@ -8,6 +8,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpPosExpenseManagementScreen extends ConsumerStatefulWidget {
   const ErpPosExpenseManagementScreen({super.key});
@@ -197,6 +198,7 @@ ${print ? '<script>window.print()</script>' : ''}
       ])),
       const Divider(height: 1),
       // ── Table header ─────────────────────────────────────────────────────
+      Expanded(child: HScrollOnNarrow(minWidth: 1040, child: Column(children: [
       Container(color: const Color(0xFFF8F9FA), padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
         child: Row(children: [
           SizedBox(width: 40, child: Checkbox(value: _selectAll, onChanged: _toggleAll, tristate: true)),
@@ -254,6 +256,7 @@ ${print ? '<script>window.print()</script>' : ''}
                     Expanded(flex: 1, child: Text('Rs. ${money(amt)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700))),
                   ])));
             })),
+    ])))
     ]));
   }
 }

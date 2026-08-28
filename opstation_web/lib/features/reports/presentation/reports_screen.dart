@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../pdf/report_pdf_builder.dart';
+import '../../../core/widgets/responsive.dart';
 import 'package:printing/printing.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
@@ -224,7 +225,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         const SizedBox(height: 16),
         if (_loading) const Center(child: CircularProgressIndicator())
         else Expanded(
-          child: Container(
+          child: HScrollOnNarrow(minWidth: 1040, child: Container(
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
             child: Column(children: [
               Container(
@@ -316,7 +317,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                   ),
               ),
             ]),
-          ),
+          )),
         ),
       ]),
     );

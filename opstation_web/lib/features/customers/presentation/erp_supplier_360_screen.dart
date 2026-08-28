@@ -8,6 +8,7 @@ import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Supplier Profile (Supplier 360) — the purchase-side mirror of Customer 360.
 ///  • Overview   : contact card, outstanding payable, purchase summary
@@ -638,7 +639,9 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
           ),
         ),
         const SizedBox(height: 16),
-        Expanded(child: Container(
+        Expanded(child: HScrollOnNarrow(
+          minWidth: 650,
+          child: Container(
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
           child: Column(children: [
             // header
@@ -687,7 +690,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                     },
                   )),
           ]),
-        )),
+        ))),
       ]),
     );
   }

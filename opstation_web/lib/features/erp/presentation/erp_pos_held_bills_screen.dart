@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpPosHeldBillsScreen extends ConsumerStatefulWidget {
   const ErpPosHeldBillsScreen({super.key});
@@ -120,6 +121,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
         )),
       const Divider(height: 1),
       // Table header
+      Expanded(child: HScrollOnNarrow(minWidth: 910, child: Column(children: [
       Container(color: const Color(0xFFF8F9FA), padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
         child: Row(children: const [
           Expanded(flex: 2, child: Text('Date & Time', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
@@ -186,6 +188,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
                     ])),
                   ]));
               })),
+    ])))
     ]));
   }
 }

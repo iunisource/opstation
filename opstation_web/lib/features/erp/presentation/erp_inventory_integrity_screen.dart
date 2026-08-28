@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Inventory Integrity Check — two different questions, deliberately separate.
 ///
@@ -871,7 +872,9 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
             ]),
           ),
           const SizedBox(height: 14),
-          Container(
+          HScrollOnNarrow(
+            minWidth: 910,
+            child: Container(
             decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
@@ -916,7 +919,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                 );
               }),
             ]),
-          ),
+          )),
         ],
         const SizedBox(height: 24),
       ]),
@@ -952,7 +955,9 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                   Text('No integrity issues found. Inventory is clean.', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 ]))
             else
-              Container(
+              HScrollOnNarrow(
+                minWidth: 910,
+                child: Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
                 child: Column(children: [
                   Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -995,7 +1000,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                     ]),
                   )),
                 ]),
-              ),
+              )),
             const SizedBox(height: 24),
           ]));
   }

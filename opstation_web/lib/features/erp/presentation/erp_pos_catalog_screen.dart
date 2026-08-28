@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpPosCatalogScreen extends ConsumerStatefulWidget {
   const ErpPosCatalogScreen({super.key});
@@ -430,7 +431,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
         if (_loading) const Center(child: CircularProgressIndicator())
         else if (branch == null)
           const Center(child: Text('No branch selected.', style: TextStyle(color: AppTheme.textSecondary)))
-        else Expanded(child: Container(
+        else Expanded(child: HScrollOnNarrow(minWidth: 910, child: Container(
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
           child: Column(children: [
             Container(
@@ -523,7 +524,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
                       }),
             ),
           ]),
-        )),
+        ))),
       ]),
     );
   }

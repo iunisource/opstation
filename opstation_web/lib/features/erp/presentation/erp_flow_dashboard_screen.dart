@@ -9,6 +9,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/voucher_remarks_panel.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Statuses that mean the order is finished and owes nothing further.
 const _terminalStatuses = {
@@ -502,41 +503,48 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
         ),
       ]),
       const SizedBox(height: 12),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(children: [
-          const Expanded(flex: 3, child: Text('Voucher', style: _hStyle)),
-          const Expanded(flex: 2, child: Text('Date', style: _hStyle)),
-          Expanded(flex: 4, child: Text(_isSupplier ? 'Supplier' : 'Customer', style: _hStyle)),
-          if (widget.purchase && _selected == 'po') ...const [
-            Expanded(flex: 2, child: Text('Est. Pickup', style: _hStyle)),
-            Expanded(flex: 2, child: Text('Comments', style: _hStyle, textAlign: TextAlign.center)),
-          ],
-          if (hasAmount)
-            const Expanded(flex: 2, child: Text('Amount', style: _hStyle, textAlign: TextAlign.right)),
-          const Expanded(flex: 2, child: Text('Age', style: _hStyle, textAlign: TextAlign.right)),
-          const SizedBox(width: 40),
-        ]),
-      ),
-      const Divider(height: 1),
       Expanded(
-        child: rows.isEmpty
-            ? Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.check_circle_outline, size: 32, color: Colors.teal),
-                  const SizedBox(height: 8),
-                  Text(
-                      isDrafts
-                          ? 'No drafts.'
-                          : 'Nothing ${st.label.toLowerCase()}.',
-                      style: const TextStyle(color: AppTheme.textSecondary)),
-                ]),
-              )
-            : ListView.separated(
-                itemCount: rows.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (_, i) => _docRow(rows[i], st, hasAmount),
-              ),
+        child: HScrollOnNarrow(
+          minWidth: 820,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(children: [
+                const Expanded(flex: 3, child: Text('Voucher', style: _hStyle)),
+                const Expanded(flex: 2, child: Text('Date', style: _hStyle)),
+                Expanded(flex: 4, child: Text(_isSupplier ? 'Supplier' : 'Customer', style: _hStyle)),
+                if (widget.purchase && _selected == 'po') ...const [
+                  Expanded(flex: 2, child: Text('Est. Pickup', style: _hStyle)),
+                  Expanded(flex: 2, child: Text('Comments', style: _hStyle, textAlign: TextAlign.center)),
+                ],
+                if (hasAmount)
+                  const Expanded(flex: 2, child: Text('Amount', style: _hStyle, textAlign: TextAlign.right)),
+                const Expanded(flex: 2, child: Text('Age', style: _hStyle, textAlign: TextAlign.right)),
+                const SizedBox(width: 40),
+              ]),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: rows.isEmpty
+                  ? Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.check_circle_outline, size: 32, color: Colors.teal),
+                        const SizedBox(height: 8),
+                        Text(
+                            isDrafts
+                                ? 'No drafts.'
+                                : 'Nothing ${st.label.toLowerCase()}.',
+                            style: const TextStyle(color: AppTheme.textSecondary)),
+                      ]),
+                    )
+                  : ListView.separated(
+                      itemCount: rows.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) => _docRow(rows[i], st, hasAmount),
+                    ),
+            ),
+          ]),
+        ),
       ),
     ]);
   }

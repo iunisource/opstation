@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpStockAgingReportScreen extends ConsumerStatefulWidget {
   const ErpStockAgingReportScreen({super.key});
@@ -260,7 +261,7 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
         const SizedBox(height: 16),
         Expanded(child: _loading
             ? const Center(child: CircularProgressIndicator())
-            : Container(
+            : HScrollOnNarrow(minWidth: 1040, child: Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
                 child: Column(children: [
                   Container(
@@ -301,7 +302,7 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
                           },
                         )),
                 ]),
-              )),
+              ))),
       ]),
     );
   }

@@ -9,6 +9,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 
 import 'customer_history_screen.dart';
@@ -384,7 +385,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: AppTheme.border),
                 ),
-                child: Column(
+                child: HScrollOnNarrow(minWidth: 1000, child: Column(
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -522,7 +523,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                       ),
                     ),
                   ],
-                ),
+                )),
               ),
             ),
         ],

@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 /// Promoter ledger — reads the Commission Payable control account (2150) filtered
 /// by the promoter's party_id. Credits = commission earned (PCJ accruals);
@@ -333,12 +334,15 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
             : _rows.isEmpty
                 ? const Center(
                     child: Text('No commission activity yet', style: TextStyle(color: AppTheme.textSecondary)))
-                : SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                    child: Column(children: [
-                      _headerRow(),
-                      ..._rows.map(_dataRow),
-                    ]),
+                : HScrollOnNarrow(
+                    minWidth: 780,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                      child: Column(children: [
+                        _headerRow(),
+                        ..._rows.map(_dataRow),
+                      ]),
+                    ),
                   ),
       ),
     ]);

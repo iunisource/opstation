@@ -6,6 +6,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
 
 class ErpPosExpenseHistoryScreen extends ConsumerStatefulWidget {
   const ErpPosExpenseHistoryScreen({super.key});
@@ -115,6 +116,7 @@ class _ErpPosExpenseHistoryScreenState extends ConsumerState<ErpPosExpenseHistor
           const SizedBox(width: 12),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _load, tooltip: 'Refresh'),
         ])),
+        Expanded(child: HScrollOnNarrow(minWidth: 780, child: Column(children: [
         Container(margin: const EdgeInsets.symmetric(horizontal: 20), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(color: Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(8)), border: Border.all(color: AppTheme.border)),
           child: const Row(children: [
@@ -148,6 +150,7 @@ class _ErpPosExpenseHistoryScreenState extends ConsumerState<ErpPosExpenseHistor
                     Expanded(flex: 1, child: Text('Rs. ${money(amt)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.red.shade700))),
                   ]));
                 }))),
+        ])))
       ])),
     ]));
   }

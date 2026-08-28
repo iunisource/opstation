@@ -6,6 +6,7 @@ import '../../auth/auth_controller.dart';
 import 'salesperson_history_screen.dart';
 import 'driver_history_screen.dart';
 import 'team_member_360_screen.dart';
+import '../../../core/widgets/responsive.dart';
 
 class TeamScreen extends ConsumerStatefulWidget {
   const TeamScreen({super.key});
@@ -150,7 +151,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
             const Center(child: CircularProgressIndicator())
           else
             Expanded(
-              child: Container(
+              child: HScrollOnNarrow(minWidth: 900, child: Container(
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
@@ -263,7 +264,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                     ),
                   ],
                 ),
-              ),
+              )),
             ),
         ],
       ),
