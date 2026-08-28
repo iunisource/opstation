@@ -26,6 +26,7 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _customers = [];
   List<Map<String, dynamic>> _branches = [];
+  List<Map<String, dynamic>> _users = [];
   String _search = '';
   String _typeFilter = 'all'; // all | foc | qty_slab
 
@@ -49,6 +50,7 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
         client.from('products').select('id, name, sku, base_uom_id').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(10000),
         client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name'),
+        client.from('users').select('id, name, email').eq('org_id', orgId).order('name'),
       ]);
       if (!mounted) return;
       final cfg = {for (final r in results[0] as List) r['key'] as String: (r['value'] as String? ?? '')};
@@ -59,6 +61,7 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
         _products = List<Map<String, dynamic>>.from(results[2] as List);
         _customers = List<Map<String, dynamic>>.from(results[3] as List);
         _branches = List<Map<String, dynamic>>.from(results[4] as List);
+        _users = List<Map<String, dynamic>>.from(results[5] as List);
         _loading = false;
       });
     } catch (e) {
@@ -89,6 +92,7 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
         products: _products,
         customers: _customers,
         branches: _branches,
+        users: _users,
         createdBy: ref.read(currentUserProvider)?.id,
         focFlowEnabled: _focEnabled,
         onEnableFocFlow: _enableFocFlow,
@@ -286,6 +290,10 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
             _tag(Icons.apartment_outlined, nBranch == 0 ? 'All branches' : '$nBranch branch(es)'),
             if (validFrom != null || validTo != null)
               _tag(Icons.event_outlined, '${validFrom ?? '…'} → ${validTo ?? '…'}'),
+            if (((s['block_aging_days'] as num?)?.toInt() ?? 0) > 0)
+              _tag(Icons.hourglass_bottom_outlined, 'Block >${(s['block_aging_days'] as num).toInt()}d dues'),
+            if (s['block_over_limit'] == true)
+              _tag(Icons.account_balance_wallet_outlined, 'Block over-limit'),
           ]),
           const Divider(height: 20),
           Row(children: [
@@ -328,6 +336,7 @@ class _SchemeFormDialog extends StatefulWidget {
     required this.products,
     required this.customers,
     required this.branches,
+    required this.users,
     required this.createdBy,
     required this.focFlowEnabled,
     required this.onEnableFocFlow,
@@ -337,6 +346,7 @@ class _SchemeFormDialog extends StatefulWidget {
   final List<Map<String, dynamic>> products;
   final List<Map<String, dynamic>> customers;
   final List<Map<String, dynamic>> branches;
+  final List<Map<String, dynamic>> users;
   final String? createdBy;
   final bool focFlowEnabled;
   final Future<bool> Function() onEnableFocFlow;
@@ -375,6 +385,12 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
   bool _saving = false;
   late bool _focFlow; // local mirror of org.foc_enabled
 
+  // Eligibility + override (per scheme)
+  int _blockAgingDays = 0; // 0 = no aging check; else 30/60/90/120
+  bool _blockOverLimit = false;
+  bool _overridable = true;
+  final Set<String> _overrideUserIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -399,6 +415,12 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
       _freeProductId = s['foc_free_product_id'] as String?;
       _focRepeat = s['foc_repeat'] as bool? ?? true;
       _maxFreeCtrl.text = _plain(s['foc_max_free_qty']);
+      _blockAgingDays = (s['block_aging_days'] as num?)?.toInt() ?? 0;
+      _blockOverLimit = s['block_over_limit'] as bool? ?? false;
+      _overridable = s['overridable'] as bool? ?? true;
+      for (final id in ((s['override_user_ids'] as String?) ?? '').split(',').map((x) => x.trim()).where((x) => x.isNotEmpty)) {
+        _overrideUserIds.add(id);
+      }
       for (final sl in (s['scheme_slabs'] as List? ?? const [])) {
         _slabs.add(_SlabRow(
           min: _plain(sl['min_qty']),
@@ -540,6 +562,10 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
         'foc_free_product_id': _type == 'foc' ? _freeProductId : null,
         'foc_repeat': _focRepeat,
         'foc_max_free_qty': _type == 'foc' && _maxFreeCtrl.text.trim().isNotEmpty ? double.tryParse(_maxFreeCtrl.text.trim()) : null,
+        'block_aging_days': _blockAgingDays == 0 ? null : _blockAgingDays,
+        'block_over_limit': _blockOverLimit,
+        'overridable': _overridable,
+        'override_user_ids': _overrideUserIds.isEmpty ? null : _overrideUserIds.join(','),
         'updated_at': now,
         if (!isEdit) 'created_by': widget.createdBy,
       };
@@ -667,6 +693,57 @@ class _SchemeFormDialogState extends State<_SchemeFormDialog> {
                 onAll: (v) => setState(() => _allBranches = v),
                 onPick: () => _pickMulti(title: 'Branches', items: widget.branches, selected: _branchIds, label: (b) => b['name'] as String? ?? '-'),
                 hint: 'restrict to specific branches if needed',
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 8),
+              const Text('Customer eligibility (optional)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: DropdownButtonFormField<int>(
+                  value: _blockAgingDays,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Block if customer has dues older than', isDense: true, border: OutlineInputBorder()),
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('No aging check', style: TextStyle(fontSize: 13))),
+                    DropdownMenuItem(value: 30, child: Text('30 days', style: TextStyle(fontSize: 13))),
+                    DropdownMenuItem(value: 60, child: Text('60 days', style: TextStyle(fontSize: 13))),
+                    DropdownMenuItem(value: 90, child: Text('90 days', style: TextStyle(fontSize: 13))),
+                    DropdownMenuItem(value: 120, child: Text('120 days', style: TextStyle(fontSize: 13))),
+                  ],
+                  onChanged: (v) => setState(() => _blockAgingDays = v ?? 0),
+                )),
+              ]),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _blockOverLimit,
+                onChanged: (v) => setState(() => _blockOverLimit = v ?? false),
+                title: const Text('Block if customer is over their credit limit', style: TextStyle(fontSize: 13)),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _overridable,
+                onChanged: (v) => setState(() => _overridable = v),
+                title: const Text('Allow override when not eligible', style: TextStyle(fontSize: 13)),
+                subtitle: const Text('If off, an ineligible customer is hard-blocked for everyone.', style: TextStyle(fontSize: 11)),
+              ),
+              if (_overridable) Padding(
+                padding: const EdgeInsets.only(left: 4, top: 4),
+                child: Row(children: [
+                  const Expanded(child: Text('Who can override (admins always can):', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                  ChoiceChip(
+                    label: Text(_overrideUserIds.isEmpty ? 'Admins only' : '${_overrideUserIds.length} + admins', style: const TextStyle(fontSize: 12)),
+                    selected: _overrideUserIds.isNotEmpty,
+                    onSelected: (_) => _pickMulti(title: 'Users who may override', items: widget.users, selected: _overrideUserIds, label: (u) => '${u['name'] ?? u['email'] ?? '-'}${u['email'] != null ? '  ·  ${u['email']}' : ''}'),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(onPressed: () => _pickMulti(title: 'Users who may override', items: widget.users, selected: _overrideUserIds, label: (u) => '${u['name'] ?? u['email'] ?? '-'}${u['email'] != null ? '  ·  ${u['email']}' : ''}'), child: const Text('Choose', style: TextStyle(fontSize: 12))),
+                ]),
               ),
             ]),
           )),

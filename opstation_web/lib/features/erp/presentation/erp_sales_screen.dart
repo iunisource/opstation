@@ -96,6 +96,141 @@ String _plain4(num? v) {
   return s;
 }
 
+// ── Scheme eligibility + selection helpers (shared by SO and SI) ──────────
+// Reasons a scheme is blocked for this customer's standing (empty = eligible).
+// `status` is the jsonb from scheme_customer_eligibility.
+List<String> schemeBlockReasons(Map<String, dynamic> scheme, Map<String, dynamic>? status) {
+  if (status == null || status['unknown'] == true) return const [];
+  final reasons = <String>[];
+  final agingDays = (scheme['block_aging_days'] as num?)?.toInt();
+  if (agingDays != null && agingDays > 0 && status['over_$agingDays'] == true) {
+    reasons.add('Customer has unpaid dues older than $agingDays days');
+  }
+  if (scheme['block_over_limit'] == true) {
+    final out = (status['outstanding'] as num?)?.toDouble() ?? 0;
+    final lim = (status['credit_limit'] as num?)?.toDouble() ?? 0;
+    if (lim > 0 && out > lim) {
+      reasons.add('Customer is over credit limit (outstanding ${_n4(out)} > limit ${_n4(lim)})');
+    }
+  }
+  return reasons;
+}
+
+bool canOverrideScheme(Map<String, dynamic> scheme, WebUser? user) {
+  if (scheme['overridable'] != true) return false;
+  final r = user?.role;
+  if (r == WebUserRole.masterAdmin || r == WebUserRole.admin || r == WebUserRole.superAdmin) return true;
+  final ids = ((scheme['override_user_ids'] as String?) ?? '')
+      .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+  return user?.id != null && ids.contains(user!.id);
+}
+
+void showSchemeSuccess(BuildContext context, String msg) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Row(children: [
+      const Icon(Icons.check_circle, color: Colors.white, size: 20),
+      const SizedBox(width: 10),
+      Expanded(child: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600))),
+    ]),
+    backgroundColor: AppTheme.success,
+    behavior: SnackBarBehavior.floating,
+    duration: const Duration(seconds: 3),
+  ));
+}
+
+/// Generic scheme picker: search box, per-scheme description + benefit summary,
+/// and eligibility gating (hard-blocked schemes can't be selected; overridable
+/// ones can, with a visible override note). Returns the chosen schemes, or null
+/// if cancelled.
+Future<List<Map<String, dynamic>>?> showSchemeSelectionDialog({
+  required BuildContext context,
+  required List<Map<String, dynamic>> schemes,
+  required Map<String, dynamic>? eligibility,
+  required WebUser? user,
+  required String Function(Map<String, dynamic>) benefitLabel,
+  required String note,
+}) async {
+  final selected = <String, bool>{};
+  for (final s in schemes) {
+    final id = s['scheme_id'] as String;
+    final blocked = schemeBlockReasons(s, eligibility).isNotEmpty;
+    selected[id] = !blocked; // eligible ones pre-checked; blocked start off
+  }
+  String query = '';
+  final chosen = await showDialog<List<Map<String, dynamic>>>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+      final list = schemes.where((s) {
+        if (query.trim().isEmpty) return true;
+        final q = query.toLowerCase();
+        return '${s['name'] ?? ''} ${s['description'] ?? ''}'.toLowerCase().contains(q);
+      }).toList();
+      return AlertDialog(
+        title: const Row(children: [Icon(Icons.local_offer_outlined, color: AppTheme.primary), SizedBox(width: 8), Text('Schemes')]),
+        content: SizedBox(width: 480, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Align(alignment: Alignment.centerLeft, child: Text(note, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          const SizedBox(height: 8),
+          TextField(
+            decoration: const InputDecoration(hintText: 'Search schemes...', prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder()),
+            onChanged: (v) => setLocal(() => query = v),
+          ),
+          const SizedBox(height: 8),
+          Flexible(child: list.isEmpty
+              ? const Padding(padding: EdgeInsets.all(16), child: Text('No schemes match.', style: TextStyle(color: AppTheme.textSecondary)))
+              : ListView(shrinkWrap: true, children: list.map((s) {
+                  final id = s['scheme_id'] as String;
+                  final reasons = schemeBlockReasons(s, eligibility);
+                  final blocked = reasons.isNotEmpty;
+                  final canOverride = blocked && canOverrideScheme(s, user);
+                  final hardBlocked = blocked && !canOverride;
+                  final desc = (s['description'] as String?)?.trim() ?? '';
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: blocked ? Colors.orange.withOpacity(0.4) : AppTheme.border),
+                      color: hardBlocked ? Colors.grey.withOpacity(0.05) : Colors.white,
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      CheckboxListTile(
+                        value: selected[id] ?? false,
+                        onChanged: hardBlocked ? null : (v) => setLocal(() => selected[id] = v ?? false),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        dense: true,
+                        title: Text(s['name'] as String? ?? 'Scheme', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          if (desc.isNotEmpty) Text(desc, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                          Text(benefitLabel(s), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                        ]),
+                      ),
+                      if (blocked) Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 12, 8),
+                        child: Row(children: [
+                          Icon(hardBlocked ? Icons.block : Icons.warning_amber_rounded, size: 15, color: hardBlocked ? AppTheme.danger : Colors.orange),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text(
+                            (hardBlocked ? 'Not eligible: ' : 'Override: ') + reasons.join('; '),
+                            style: TextStyle(fontSize: 11.5, color: hardBlocked ? AppTheme.danger : Colors.deepOrange, fontWeight: FontWeight.w500),
+                          )),
+                        ]),
+                      ),
+                    ]),
+                  );
+                }).toList())),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Not now')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, schemes.where((s) => selected[s['scheme_id']] == true).toList()),
+            child: const Text('Apply selected'),
+          ),
+        ],
+      );
+    }),
+  );
+  return chosen;
+}
+
 class ErpSalesScreen extends ConsumerStatefulWidget {
   const ErpSalesScreen({super.key, this.focusId});
   final String? focusId;
@@ -132,6 +267,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   bool _focEnabled = false;
   bool _schemesEnabled = false; // org.schemes_enabled — FOC schemes on the SO
   bool _schemeBusy = false;
+  List<Map<String, dynamic>> _appliedSchemes = []; // scheme_redemptions on this SO
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
   bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
@@ -254,6 +390,13 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         hasDo = active.isNotEmpty;
         if (active.isNotEmpty) linkedDoId = active.first['id'] as String?;
       } catch (_) {}
+      List<Map<String, dynamic>> appliedSchemes = [];
+      try {
+        final rr = await client.from('scheme_redemptions')
+            .select('scheme_name, benefit_type, meta')
+            .eq('voucher_id', id).eq('voucher_type', 'SO').order('applied_at', ascending: true);
+        appliedSchemes = List<Map<String, dynamic>>.from(rr as List);
+      } catch (_) {}
       setState(() {
         _detail = Map<String,dynamic>.from(order);
         _items = List<Map<String,dynamic>>.from(items);
@@ -262,6 +405,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         _doRefs = doRefs;
         _linkedDoId = linkedDoId;
         _datesEditable = datesEd;
+        _appliedSchemes = appliedSchemes;
         _detailLoading = false;
       });
     } catch (_) { setState(() => _detailLoading = false); }
@@ -516,6 +660,33 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     if (!more) return; // dismissed → loop ends
   }
 
+  // Shows which schemes have been applied to this order (name + description).
+  Widget _appliedSchemesBanner() {
+    return Container(
+      decoration: BoxDecoration(color: Colors.teal.withOpacity(0.05), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.teal.withOpacity(0.3))),
+      padding: const EdgeInsets.all(12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [Icon(Icons.local_offer_outlined, size: 16, color: Colors.teal), SizedBox(width: 6), Text('Schemes applied', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.teal))]),
+        const SizedBox(height: 6),
+        ..._appliedSchemes.map((r) {
+          final name = r['scheme_name'] as String? ?? 'Scheme';
+          final desc = ((r['meta'] as Map?)?['description'] as String?)?.trim() ?? '';
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.check_circle, size: 14, color: Colors.teal),
+              const SizedBox(width: 6),
+              Expanded(child: RichText(text: TextSpan(style: const TextStyle(fontSize: 12.5, color: AppTheme.textPrimary), children: [
+                TextSpan(text: name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                if (desc.isNotEmpty) TextSpan(text: '  —  $desc', style: const TextStyle(color: AppTheme.textSecondary)),
+              ]))),
+            ]),
+          );
+        }),
+      ]),
+    );
+  }
+
   // Free-of-Cost items section: same shape as the paid items table, but lines
   // carry no price (zero invoice value) and are consumed at cost downstream.
   Widget _buildFocSection() {
@@ -699,60 +870,46 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           'qty': (it['quantity'] as num?)?.toDouble() ?? 0,
           'unit_price': 0,
         }).toList();
-    if (lines.isEmpty) { _showSnack('Add some order lines first'); return; }
     setState(() => _schemeBusy = true);
     try {
-      final res = await Supabase.instance.client.rpc('scheme_suggest', params: {
+      final client = Supabase.instance.client;
+      final res = await client.rpc('scheme_suggest', params: {
         'p_org': orgId, 'p_branch': branchId, 'p_customer': custId, 'p_lines': lines,
       });
       final all = List<Map<String, dynamic>>.from((res as List?) ?? const []);
       final foc = all.where((s) => s['type'] == 'foc').toList();
+      Map<String, dynamic>? elig;
+      if (custId != null && foc.any((s) => (s['block_aging_days'] != null) || s['block_over_limit'] == true)) {
+        try {
+          final e = await client.rpc('scheme_customer_eligibility', params: {'p_org': orgId, 'p_customer': custId});
+          elig = e is Map ? Map<String, dynamic>.from(e) : null;
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() => _schemeBusy = false);
-      if (foc.isEmpty) { _showSnack('No schemes apply to this order right now'); return; }
-      await _showSchemeSuggestions(foc, custId, branchId);
+      if (foc.isEmpty) { _showSnack('No schemes currently apply to this order'); return; }
+      final chosen = await showSchemeSelectionDialog(
+        context: context,
+        schemes: foc,
+        eligibility: elig,
+        user: ref.read(currentUserProvider),
+        note: 'Free goods are added as FOC lines on the order.',
+        benefitLabel: (s) {
+          final items = List<Map<String, dynamic>>.from(s['free_items'] as List? ?? const []);
+          final d = items.map((fi) {
+            final fp = fi['free_product_id'] as String?;
+            final name = _products.firstWhere((p) => p['id'] == fp, orElse: () => const {})['name'] ?? 'product';
+            return '${_plain4((fi['free_qty'] as num?)?.toDouble())} × $name';
+          }).join(', ');
+          return 'Free: $d';
+        },
+      );
+      if (chosen == null || chosen.isEmpty) return;
+      await _applyFocSchemes(chosen, custId, branchId);
     } catch (e) {
       if (mounted) setState(() => _schemeBusy = false);
       _showSnack(friendlyError('Could not check schemes', e));
     }
-  }
-
-  Future<void> _showSchemeSuggestions(List<Map<String, dynamic>> foc, String? custId, String? branchId) async {
-    final selected = {for (final s in foc) s['scheme_id'] as String: true};
-    final apply = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
-      return AlertDialog(
-        title: const Row(children: [Icon(Icons.local_offer_outlined, color: AppTheme.primary), SizedBox(width: 8), Text('Schemes available')]),
-        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Align(alignment: Alignment.centerLeft, child: Text('Confirm which schemes to apply. Free goods are added as FOC lines.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-          const SizedBox(height: 8),
-          ...foc.map((s) {
-            final id = s['scheme_id'] as String;
-            final items = List<Map<String, dynamic>>.from(s['free_items'] as List? ?? const []);
-            final desc = items.map((fi) {
-              final fp = fi['free_product_id'] as String?;
-              final name = _products.firstWhere((p) => p['id'] == fp, orElse: () => const {})['name'] ?? 'product';
-              return '${_plain4((fi['free_qty'] as num?)?.toDouble())} × $name';
-            }).join(', ');
-            return CheckboxListTile(
-              value: selected[id] ?? false,
-              onChanged: (v) => setLocal(() => selected[id] = v ?? false),
-              title: Text(s['name'] as String? ?? 'Scheme', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              subtitle: Text('Free: $desc', style: const TextStyle(fontSize: 12)),
-              dense: true,
-              controlAffinity: ListTileControlAffinity.leading,
-            );
-          }),
-        ])),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apply selected')),
-        ],
-      );
-    }));
-    if (apply != true) return;
-    final chosen = foc.where((s) => selected[s['scheme_id']] == true).toList();
-    if (chosen.isEmpty) return;
-    await _applyFocSchemes(chosen, custId, branchId);
   }
 
   Future<void> _applyFocSchemes(List<Map<String, dynamic>> schemes, String? custId, String? branchId) async {
@@ -804,12 +961,12 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           'free_qty': totalFree,
           'applied_by': user?.id,
           'applied_by_name': user?.name,
-          'meta': {'free_items': items},
+          'meta': {'free_items': items, 'description': s['description']},
         });
         applied++;
       }
-      if (mounted) { _showSnack('Applied $applied scheme(s)'); }
       await _loadDetail(_detail['id'] as String);
+      if (mounted) showSchemeSuccess(context, applied == 1 ? 'Scheme applied — free goods added' : '$applied schemes applied');
     } catch (e) {
       _showSnack(friendlyError('Could not apply the scheme', e));
     } finally {
@@ -1030,7 +1187,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           _StatusChip(status: status.replaceAll('_', ' '), color: _statusColor(status)),
           if (isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
           const Spacer(),
-          if (_schemesEnabled && _canEditLines && _items.any((it) => it['is_foc'] != true)) ...[
+          if (_schemesEnabled && _canEditLines) ...[
             OutlinedButton.icon(
               onPressed: _schemeBusy ? null : _checkSchemes,
               icon: _schemeBusy
@@ -1261,6 +1418,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               ]),
             ),
 
+            if (_appliedSchemes.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _appliedSchemesBanner(),
+            ],
             if (_focEnabled || _items.any((it) => it['is_foc'] == true)) ...[
               const SizedBox(height: 16),
               _buildFocSection(),
@@ -2672,6 +2833,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _priceEditable = false; // org.si_price_editable
   bool _schemesEnabled = false; // org.schemes_enabled — slab-discount schemes on the SI
   bool _schemeBusy = false;
+  List<Map<String, dynamic>> _appliedSchemes = []; // scheme_redemptions on this SI
   final TextEditingController _remarksCtrl = TextEditingController();
 
   @override
@@ -2763,12 +2925,20 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           if (r['key'] == 'org.schemes_enabled') schemesOn = (r['value'] as String?) == 'true';
         }
       } catch (_) {}
+      List<Map<String, dynamic>> appliedSchemes = [];
+      try {
+        final rr = await client.from('scheme_redemptions')
+            .select('scheme_name, benefit_type, meta')
+            .eq('voucher_id', id).eq('voucher_type', 'SI').order('applied_at', ascending: true);
+        appliedSchemes = List<Map<String, dynamic>>.from(rr as List);
+      } catch (_) {}
       setState(() {
         _reviewFlow = reviewFlow;
         _superviseFlow = superviseFlow;
         _canSupervise = canSup;
         _priceEditable = priceEditable;
         _schemesEnabled = schemesOn;
+        _appliedSchemes = appliedSchemes;
         _detail = Map<String,dynamic>.from(inv);
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
@@ -3066,54 +3236,39 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       });
       final all = List<Map<String, dynamic>>.from((res as List?) ?? const []);
       final slab = all.where((s) => s['type'] == 'qty_slab').toList();
+      Map<String, dynamic>? elig;
+      if (custId != null && slab.any((s) => (s['block_aging_days'] != null) || s['block_over_limit'] == true)) {
+        try {
+          final e = await Supabase.instance.client.rpc('scheme_customer_eligibility', params: {'p_org': orgId, 'p_customer': custId});
+          elig = e is Map ? Map<String, dynamic>.from(e) : null;
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() => _schemeBusy = false);
-      if (slab.isEmpty) { _showSnack('No discount schemes apply to this invoice right now'); return; }
-      await _showSlabSuggestions(slab, custId, branchId);
+      if (slab.isEmpty) { _showSnack('No discount schemes currently apply to this invoice'); return; }
+      final chosen = await showSchemeSelectionDialog(
+        context: context,
+        schemes: slab,
+        eligibility: elig,
+        user: ref.read(currentUserProvider),
+        note: 'Each sets the line discount %. Review and Save after applying.',
+        benefitLabel: (s) {
+          final total = (s['discount_total'] as num?)?.toDouble() ?? 0;
+          final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
+          final d = items.map((di) {
+            final line = _items.firstWhere((it) => it['product_id'] == di['product_id'], orElse: () => const {});
+            final name = (line['products']?['name'] as String?) ?? 'product';
+            return '$name: ${_n4((di['discount_percent'] as num?))}%';
+          }).join(', ');
+          return '$d  ·  approx Rs ${_n4(total)} off';
+        },
+      );
+      if (chosen == null || chosen.isEmpty) return;
+      await _applySlabSchemes(chosen, custId, branchId);
     } catch (e) {
       if (mounted) setState(() => _schemeBusy = false);
       _showSnack(friendlyError('Could not check schemes', e));
     }
-  }
-
-  Future<void> _showSlabSuggestions(List<Map<String, dynamic>> slab, String? custId, String? branchId) async {
-    final selected = {for (final s in slab) s['scheme_id'] as String: true};
-    final apply = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
-      return AlertDialog(
-        title: const Row(children: [Icon(Icons.local_offer_outlined, color: AppTheme.primary), SizedBox(width: 8), Text('Discount schemes available')]),
-        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Align(alignment: Alignment.centerLeft, child: Text('Confirm which discount schemes to apply. Each sets the line discount %.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-          const SizedBox(height: 8),
-          ...slab.map((s) {
-            final id = s['scheme_id'] as String;
-            final total = (s['discount_total'] as num?)?.toDouble() ?? 0;
-            final items = List<Map<String, dynamic>>.from(s['discount_items'] as List? ?? const []);
-            final desc = items.map((di) {
-              final line = _items.firstWhere((it) => it['product_id'] == di['product_id'], orElse: () => const {});
-              final name = (line['products']?['name'] as String?) ?? 'product';
-              return '$name: ${_n4((di['discount_percent'] as num?))}%';
-            }).join(', ');
-            return CheckboxListTile(
-              value: selected[id] ?? false,
-              onChanged: (v) => setLocal(() => selected[id] = v ?? false),
-              title: Text(s['name'] as String? ?? 'Scheme', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              subtitle: Text('$desc\nApprox. Rs ${_n4(total)} off', style: const TextStyle(fontSize: 12)),
-              isThreeLine: true,
-              dense: true,
-              controlAffinity: ListTileControlAffinity.leading,
-            );
-          }),
-        ])),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apply selected')),
-        ],
-      );
-    }));
-    if (apply != true) return;
-    final chosen = slab.where((s) => selected[s['scheme_id']] == true).toList();
-    if (chosen.isEmpty) return;
-    await _applySlabSchemes(chosen, custId, branchId);
   }
 
   Future<void> _applySlabSchemes(List<Map<String, dynamic>> schemes, String? custId, String? branchId) async {
@@ -3162,17 +3317,44 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           'discount_amount': (s['discount_total'] as num?)?.toDouble() ?? 0,
           'applied_by': user?.id,
           'applied_by_name': user?.name,
-          'meta': {'discount_items': s['discount_items']},
+          'meta': {'discount_items': s['discount_items'], 'description': s['description']},
         });
         applied++;
       }
-      if (mounted) _showSnack('Applied $applied scheme(s) — review and Save');
       await _loadDetail(_detail['id'] as String);
+      if (mounted) showSchemeSuccess(context, applied == 1 ? 'Scheme applied — review and Save' : '$applied schemes applied — review and Save');
     } catch (e) {
       _showSnack(friendlyError('Could not apply the scheme', e));
     } finally {
       if (mounted) setState(() => _schemeBusy = false);
     }
+  }
+
+  // Shows which schemes have been applied to this invoice (name + description).
+  Widget _appliedSchemesBanner() {
+    return Container(
+      decoration: BoxDecoration(color: Colors.teal.withOpacity(0.05), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.teal.withOpacity(0.3))),
+      padding: const EdgeInsets.all(12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [Icon(Icons.local_offer_outlined, size: 16, color: Colors.teal), SizedBox(width: 6), Text('Schemes applied', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.teal))]),
+        const SizedBox(height: 6),
+        ..._appliedSchemes.map((r) {
+          final name = r['scheme_name'] as String? ?? 'Scheme';
+          final desc = ((r['meta'] as Map?)?['description'] as String?)?.trim() ?? '';
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.check_circle, size: 14, color: Colors.teal),
+              const SizedBox(width: 6),
+              Expanded(child: RichText(text: TextSpan(style: const TextStyle(fontSize: 12.5, color: AppTheme.textPrimary), children: [
+                TextSpan(text: name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                if (desc.isNotEmpty) TextSpan(text: '  —  $desc', style: const TextStyle(color: AppTheme.textSecondary)),
+              ]))),
+            ]),
+          );
+        }),
+      ]),
+    );
   }
 
   Future<(double, double)> _writeItemDiscounts() async {
@@ -3507,7 +3689,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           const SizedBox(width: 12),
           if (_isLocked) const _LockedBadge(),
           const Spacer(),
-          if (_schemesEnabled && !_isLocked && !(_detail['is_voided'] as bool? ?? false) && _items.any((it) => it['is_foc'] != true)) ...[
+          if (_schemesEnabled && !_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
             OutlinedButton.icon(
               onPressed: _schemeBusy ? null : _checkSchemes,
               icon: _schemeBusy
@@ -3747,6 +3929,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               ]),
             ),
 
+            if (_appliedSchemes.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _appliedSchemesBanner(),
+            ],
             const SizedBox(height: 16),
             _VoucherInfoStrip(
               salesperson: _meta.salespersonName,
