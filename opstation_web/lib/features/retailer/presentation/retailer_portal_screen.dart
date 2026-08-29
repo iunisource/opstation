@@ -886,11 +886,30 @@ class _ComplaintsTab extends ConsumerStatefulWidget {
 class _ComplaintsTabState extends ConsumerState<_ComplaintsTab> {
   bool _loading = true;
   List<Map<String, dynamic>> _items = [];
+  RealtimeChannel? _channel;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // Live status changes (resolve / in progress on the web admin) — RLS scopes
+    // the stream to this retailer's own complaints.
+    _channel = Supabase.instance.client
+        .channel('retailer_complaints_portal')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'crm_complaints',
+          callback: (_) => _load(),
+        )
+        .subscribe();
+  }
+
+  @override
+  void dispose() {
+    final ch = _channel;
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -1011,59 +1030,8 @@ class _ComplaintsTabState extends ConsumerState<_ComplaintsTab> {
                     padding: const EdgeInsets.all(16),
                     itemCount: _items.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) {
-                      final c = _items[i];
-                      final status = c['status'] as String? ?? 'open';
-                      return Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppTheme.border),
-                        ),
-                        child: ListTile(
-                          title: Text(c['subject'] as String? ?? '',
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w700)),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if ((c['description'] as String?)?.isNotEmpty ==
-                                  true)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 2),
-                                  child: Text(c['description'] as String),
-                                ),
-                              const SizedBox(height: 4),
-                              Text(
-                                c['created_at'] != null
-                                    ? _df.format(DateTime.parse(
-                                            '${c['created_at']}')
-                                        .toLocal())
-                                    : '',
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    color: AppTheme.textSecondary),
-                              ),
-                            ],
-                          ),
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _statusColor(status).withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              status.replaceAll('_', ' '),
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: _statusColor(status)),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
+                    itemBuilder: (_, i) =>
+                        _ComplaintCardWeb(complaint: _items[i]),
                   ),
                 ),
     );
@@ -2015,6 +1983,217 @@ class _ProfileDialogState extends State<_ProfileDialog> {
         TextButton(
             onPressed: () => Navigator.pop(context), child: const Text('Close')),
       ],
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Collapsible complaint card with its history trail (web)
+// ════════════════════════════════════════════════════════════════════
+class _ComplaintCardWeb extends StatefulWidget {
+  final Map<String, dynamic> complaint;
+  const _ComplaintCardWeb({required this.complaint});
+  @override
+  State<_ComplaintCardWeb> createState() => _ComplaintCardWebState();
+}
+
+class _ComplaintCardWebState extends State<_ComplaintCardWeb> {
+  bool _expanded = false;
+  bool _loading = false;
+  List<Map<String, dynamic>> _events = [];
+
+  Color _statusColor(String s) {
+    switch (s.toLowerCase()) {
+      case 'resolved':
+      case 'closed':
+        return Colors.green;
+      case 'in_progress':
+        return Colors.orange;
+      default:
+        return AppTheme.primary;
+    }
+  }
+
+  String _statusLabel(String s) {
+    switch (s.toLowerCase()) {
+      case 'in_progress':
+        return 'In progress';
+      case 'resolved':
+        return 'Resolved';
+      case 'closed':
+        return 'Closed';
+      default:
+        return 'Open';
+    }
+  }
+
+  Future<void> _toggle() async {
+    setState(() => _expanded = !_expanded);
+    if (_expanded && _events.isEmpty) {
+      setState(() => _loading = true);
+      try {
+        final res = await Supabase.instance.client.rpc(
+            'retailer_complaint_thread',
+            params: {'p_complaint_id': widget.complaint['id']});
+        final m = res is Map ? Map<String, dynamic>.from(res) : {};
+        final ev = (m['events'] as List?) ?? [];
+        if (mounted) {
+          setState(() {
+            _events = [for (final e in ev) Map<String, dynamic>.from(e as Map)];
+            _loading = false;
+          });
+        }
+      } catch (_) {
+        if (mounted) setState(() => _loading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.complaint;
+    final status = '${c['status'] ?? 'open'}';
+    final sc = _statusColor(status);
+    final desc = '${c['description'] ?? ''}'.trim();
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _toggle,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${c['subject'] ?? ''}',
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    if (c['created_at'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                            _df.format(
+                                DateTime.parse('${c['created_at']}').toLocal()),
+                            style: const TextStyle(
+                                fontSize: 11, color: AppTheme.textSecondary)),
+                      ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: sc.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(_statusLabel(status),
+                    style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w700, color: sc)),
+              ),
+              const SizedBox(width: 6),
+              Icon(_expanded ? Icons.expand_less : Icons.expand_more,
+                  color: AppTheme.textSecondary),
+            ]),
+          ),
+        ),
+        if (_expanded) ...[
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (desc.isNotEmpty) ...[
+                  Text(desc,
+                      style: const TextStyle(fontSize: 13, height: 1.35)),
+                  const SizedBox(height: 12),
+                ],
+                const Text('HISTORY',
+                    style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.4,
+                        color: AppTheme.textSecondary)),
+                const SizedBox(height: 8),
+                if (_loading)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                else
+                  for (var i = 0; i < _events.length; i++)
+                    _eventRow(_events[i], i == _events.length - 1),
+              ],
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _eventRow(Map<String, dynamic> e, bool last) {
+    final status = '${e['status'] ?? ''}';
+    final sc = _statusColor(status);
+    final actor = '${e['actor'] ?? ''}'.trim();
+    final note = '${e['note'] ?? ''}'.trim();
+    final at = e['at'];
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Column(children: [
+          Container(
+              width: 10,
+              height: 10,
+              margin: const EdgeInsets.only(top: 3),
+              decoration: BoxDecoration(color: sc, shape: BoxShape.circle)),
+          if (!last)
+            Expanded(
+                child: Container(
+                    width: 2,
+                    color: AppTheme.border,
+                    margin: const EdgeInsets.symmetric(vertical: 2))),
+        ]),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: last ? 0 : 12),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_statusLabel(status),
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: sc)),
+                  Text(
+                    [
+                      if (at != null)
+                        _df.format(DateTime.parse('$at').toLocal()),
+                      if (actor.isNotEmpty) actor,
+                    ].join('  •  '),
+                    style: const TextStyle(
+                        fontSize: 11, color: AppTheme.textSecondary),
+                  ),
+                  if (note.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text('Remark: $note',
+                          style:
+                              const TextStyle(fontSize: 12.5, height: 1.3)),
+                    ),
+                ]),
+          ),
+        ),
+      ]),
     );
   }
 }
