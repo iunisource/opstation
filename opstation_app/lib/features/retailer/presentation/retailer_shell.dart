@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/services/tts_service.dart';
 import '../retailer_auth_controller.dart';
 import 'retailer_complaints_screen.dart';
 import 'retailer_files_screen.dart';
@@ -66,8 +67,33 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
       if (m.data['type'] == 'retailer_order_status') {
         ref.invalidate(retailerOrdersProvider);
         ref.invalidate(retailerAgingProvider);
+        if (m.data['status'] == 'approved') _speakApproved();
       }
     });
+    // Opened from the notification (app was backgrounded/terminated) — speak the
+    // approval now, since TTS can't run while the app is minimized.
+    FirebaseMessaging.instance.getInitialMessage().then((m) {
+      if (m?.data['type'] == 'retailer_order_status' &&
+          m?.data['status'] == 'approved') {
+        _speakApproved();
+      }
+    });
+    FirebaseMessaging.onMessageOpenedApp.listen((m) {
+      if (m.data['type'] == 'retailer_order_status' &&
+          m.data['status'] == 'approved') {
+        _speakApproved();
+      }
+    });
+  }
+
+  // Locale-aware spoken confirmation. Read outside a build, so it takes the
+  // locale from the provider rather than an InheritedWidget.
+  void _speakApproved() {
+    final urdu =
+        ref.read(retailerLocaleProvider).valueOrNull == RetailerLocale.ur;
+    ref.read(ttsProvider).speak(
+        urdu ? 'آپ کا آرڈر منظور ہو گیا ہے' : 'Your order has been approved',
+        lang: urdu ? 'ur-PK' : 'en-US');
   }
 
   @override
@@ -95,9 +121,14 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
             column: 'customer_id',
             value: customerId,
           ),
-          callback: (_) {
+          callback: (payload) {
             ref.invalidate(retailerOrdersProvider);
             ref.invalidate(retailerAgingProvider);
+            final newStatus = payload.newRecord['status'];
+            final oldStatus = payload.oldRecord['status'];
+            if (newStatus == 'approved' && oldStatus != 'approved') {
+              _speakApproved();
+            }
           },
         )
         .subscribe();

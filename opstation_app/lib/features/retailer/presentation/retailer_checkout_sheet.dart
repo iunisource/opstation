@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
+import '../../../core/services/tts_service.dart';
 import 'retailer_browse_screen.dart';
 import 'retailer_cart.dart';
 import 'retailer_home_screen.dart';
@@ -187,6 +188,8 @@ class _RetailerCheckoutSheetState extends ConsumerState<RetailerCheckoutSheet> {
       ref.read(cartProvider.notifier).clear();
       ref.invalidate(retailerOrdersProvider);
       ref.invalidate(retailerAgingProvider);
+      // Spoken confirmation (foreground, so this always plays).
+      ref.read(ttsProvider).speak(t.voiceOrderPlaced, lang: t.ttsLang);
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (_) {

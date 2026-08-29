@@ -235,6 +235,13 @@ class T {
   String get free => _s('Free', 'مفت');
   String get discount => _s('Discount', 'رعایت');
   String get specialPrice => _s('Special price', 'خصوصی قیمت');
+
+  // ── Spoken confirmations ──────────────────────────────────────────────
+  String get voiceOrderPlaced =>
+      _s('Your order has been placed', 'آپ کا آرڈر موصول ہو گیا ہے');
+  String get voiceOrderApproved =>
+      _s('Your order has been approved', 'آپ کا آرڈر منظور ہو گیا ہے');
+  String get ttsLang => isUrdu ? 'ur-PK' : 'en-US';
   String get qualified => _s('In your cart', 'آپ کی ٹوکری میں');
   String _qtyStr(num n) {
     final d = n.toDouble();

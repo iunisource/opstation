@@ -44,8 +44,8 @@ dependencies:
   crypto: ^3.0.3
 
   # Slice 7 — PDF generation + preview + share
-  pdf: ^3.11.0
-  printing: ^5.13.0
+  pdf: ^3.13.0
+  printing: ^5.15.0
 
   # Slice 8 — OSRM road distances + Nominatim reverse geocoding
   http: ^1.2.0
@@ -56,6 +56,7 @@ dependencies:
   firebase_messaging: ^16.2.0
   sentry_flutter: ^9.0.0
   flutter_local_notifications: ^17.2.4
+  flutter_tts: ^4.2.5
 
 dev_dependencies:
   flutter_test:
