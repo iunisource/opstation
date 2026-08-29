@@ -10,7 +10,7 @@ import '../../../core/i18n/retailer_i18n.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/tts_service.dart';
 import '../retailer_auth_controller.dart';
-import 'retailer_complaints_screen.dart';
+import 'retailer_complaints_screen.dart' show RetailerComplaintsScreen, retailerComplaintsProvider;
 import 'retailer_files_screen.dart';
 import 'retailer_home_screen.dart';
 import 'retailer_ledger_screen.dart';
@@ -55,6 +55,7 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
   String? _orgName;
   StreamSubscription<RemoteMessage>? _msgSub;
   RealtimeChannel? _ordersChannel;
+  RealtimeChannel? _complaintsChannel;
 
   @override
   void initState() {
@@ -64,10 +65,13 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
     // When an order-status push lands while the app is open, refresh the lists
     // so the new status shows without a manual pull-to-refresh.
     _msgSub = FirebaseMessaging.onMessage.listen((m) {
-      if (m.data['type'] == 'retailer_order_status') {
+      final type = m.data['type'];
+      if (type == 'retailer_order_status') {
         ref.invalidate(retailerOrdersProvider);
         ref.invalidate(retailerAgingProvider);
         if (m.data['status'] == 'approved') _speakApproved();
+      } else if (type == 'retailer_complaint_status') {
+        ref.invalidate(retailerComplaintsProvider);
       }
     });
     // Opened from the notification (app was backgrounded/terminated) — speak the
@@ -101,6 +105,8 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
     _msgSub?.cancel();
     final ch = _ordersChannel;
     if (ch != null) Supabase.instance.client.removeChannel(ch);
+    final cc = _complaintsChannel;
+    if (cc != null) Supabase.instance.client.removeChannel(cc);
     super.dispose();
   }
 
@@ -130,6 +136,22 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
               _speakApproved();
             }
           },
+        )
+        .subscribe();
+
+    // Live complaint status changes (resolve / in progress on the web).
+    _complaintsChannel = Supabase.instance.client
+        .channel('crm_complaints_self_$customerId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'crm_complaints',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'customer_id',
+            value: customerId,
+          ),
+          callback: (_) => ref.invalidate(retailerComplaintsProvider),
         )
         .subscribe();
   }

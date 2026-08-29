@@ -178,6 +178,22 @@ class T {
   String get noComplaints => _s('No complaints raised.', 'کوئی شکایت درج نہیں۔');
   String get resolved => _s('Resolved', 'حل ہو گیا');
   String get open_ => _s('Open', 'زیر التوا');
+  String get inProgress => _s('In progress', 'زیر عمل');
+  String get closed => _s('Closed', 'بند');
+  String get complaintHistory => _s('History', 'تاریخچہ');
+  String get remark => _s('Remark', 'ریمارک');
+  String statusLabel(String s) {
+    switch (s.toLowerCase()) {
+      case 'in_progress':
+        return inProgress;
+      case 'resolved':
+        return resolved;
+      case 'closed':
+        return closed;
+      default:
+        return open_;
+    }
+  }
 
   // ── Files / Updates ───────────────────────────────────────────────────
   String get noFiles => _s('No files shared with you yet.', 'ابھی کوئی فائل شیئر نہیں کی گئی۔');

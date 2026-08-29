@@ -138,7 +138,6 @@ class _RetailerComplaintsScreenState
   Widget build(BuildContext context) {
     final t = T.of(context);
     final async = ref.watch(retailerComplaintsProvider);
-    final df = DateFormat('d MMM yyyy');
 
     return Scaffold(
       body: RefreshIndicator(
@@ -164,49 +163,10 @@ class _RetailerComplaintsScreenState
               ]);
             }
             return ListView.separated(
-              padding: const EdgeInsets.fromLTRB(0, 8, 0, 90),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 90),
               itemCount: rows.length,
-              separatorBuilder: (_, __) => const Divider(height: 1, indent: 16),
-              itemBuilder: (_, i) {
-                final c = rows[i];
-                final status = '${c['status'] ?? ''}'.toLowerCase();
-                final done = status == 'resolved' || status == 'closed';
-                final created = c['created_at'];
-                return ListTile(
-                  leading: Icon(
-                    done ? Icons.check_circle : Icons.schedule,
-                    color: done ? Colors.teal : AppColors.primary,
-                    size: 22,
-                  ),
-                  title: Text('${c['subject'] ?? ''}',
-                      style: const TextStyle(
-                          fontSize: 14.5, fontWeight: FontWeight.w700)),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if ('${c['description'] ?? ''}'.trim().isNotEmpty)
-                        Text('${c['description']}',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12.5)),
-                      if (created != null)
-                        Text(df.format(DateTime.parse('$created').toLocal()),
-                            style: TextStyle(
-                                fontSize: 11,
-                                color: AppColors.textSecondaryLight)),
-                    ],
-                  ),
-                  isThreeLine:
-                      '${c['description'] ?? ''}'.trim().isNotEmpty,
-                  trailing: Text(
-                    done ? t.resolved : t.open_,
-                    style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        color: done ? Colors.teal : AppColors.primary),
-                  ),
-                );
-              },
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, i) => _ComplaintCard(complaint: rows[i]),
             );
           },
         ),
@@ -216,6 +176,209 @@ class _RetailerComplaintsScreenState
         icon: const Icon(Icons.add),
         label: Text(t.newComplaint),
       ),
+    );
+  }
+}
+
+/// A collapsible complaint card. Collapsed: subject + status. Expanded: the full
+/// description and the history trail (opened -> in progress -> resolved), each
+/// with who did it, when, and any remark.
+class _ComplaintCard extends ConsumerStatefulWidget {
+  final Map<String, dynamic> complaint;
+  const _ComplaintCard({required this.complaint});
+  @override
+  ConsumerState<_ComplaintCard> createState() => _ComplaintCardState();
+}
+
+class _ComplaintCardState extends ConsumerState<_ComplaintCard> {
+  bool _expanded = false;
+  bool _loading = false;
+  List<Map<String, dynamic>> _events = [];
+
+  final _df = DateFormat('d MMM yyyy, h:mm a');
+
+  Color _statusColor(String s) {
+    switch (s.toLowerCase()) {
+      case 'resolved':
+      case 'closed':
+        return Colors.teal;
+      case 'in_progress':
+        return Colors.orange.shade700;
+      default:
+        return AppColors.primary;
+    }
+  }
+
+  Future<void> _toggle() async {
+    setState(() => _expanded = !_expanded);
+    if (_expanded && _events.isEmpty) {
+      setState(() => _loading = true);
+      try {
+        final res = await Supabase.instance.client.rpc(
+            'retailer_complaint_thread',
+            params: {'p_complaint_id': widget.complaint['id']});
+        final m = res is Map ? Map<String, dynamic>.from(res) : {};
+        final ev = (m['events'] as List?) ?? [];
+        if (mounted) {
+          setState(() {
+            _events = [for (final e in ev) Map<String, dynamic>.from(e as Map)];
+            _loading = false;
+          });
+        }
+      } catch (_) {
+        if (mounted) setState(() => _loading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = T.of(context);
+    final c = widget.complaint;
+    final status = '${c['status'] ?? 'open'}';
+    final sc = _statusColor(status);
+    final created = c['created_at'];
+    final desc = '${c['description'] ?? ''}'.trim();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Column(children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _toggle,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+            child: Row(children: [
+              Icon(
+                  status.toLowerCase() == 'resolved' ||
+                          status.toLowerCase() == 'closed'
+                      ? Icons.check_circle
+                      : Icons.schedule,
+                  color: sc,
+                  size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${c['subject'] ?? ''}',
+                        style: const TextStyle(
+                            fontSize: 14.5, fontWeight: FontWeight.w700)),
+                    if (created != null)
+                      Text(
+                          DateFormat('d MMM yyyy')
+                              .format(DateTime.parse('$created').toLocal()),
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textSecondaryLight)),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: sc.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(t.statusLabel(status),
+                    style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w700, color: sc)),
+              ),
+              Icon(_expanded ? Icons.expand_less : Icons.expand_more,
+                  color: AppColors.textSecondaryLight),
+            ]),
+          ),
+        ),
+        if (_expanded) ...[
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (desc.isNotEmpty) ...[
+                  Text(desc, style: const TextStyle(fontSize: 13, height: 1.35)),
+                  const SizedBox(height: 12),
+                ],
+                Text(t.complaintHistory.toUpperCase(),
+                    style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.4,
+                        color: AppColors.textSecondaryLight)),
+                const SizedBox(height: 8),
+                if (_loading)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                else
+                  for (var i = 0; i < _events.length; i++)
+                    _eventRow(t, _events[i], i == _events.length - 1),
+              ],
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _eventRow(T t, Map<String, dynamic> e, bool last) {
+    final status = '${e['status'] ?? ''}';
+    final sc = _statusColor(status);
+    final actor = '${e['actor'] ?? ''}'.trim();
+    final note = '${e['note'] ?? ''}'.trim();
+    final at = e['at'];
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Column(children: [
+          Container(
+              width: 10,
+              height: 10,
+              margin: const EdgeInsets.only(top: 3),
+              decoration: BoxDecoration(color: sc, shape: BoxShape.circle)),
+          if (!last)
+            Expanded(
+                child: Container(
+                    width: 2,
+                    color: AppColors.borderLight,
+                    margin: const EdgeInsets.symmetric(vertical: 2))),
+        ]),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: last ? 0 : 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(t.statusLabel(status),
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700, color: sc)),
+              Text(
+                [
+                  if (at != null)
+                    _df.format(DateTime.parse('$at').toLocal()),
+                  if (actor.isNotEmpty) actor,
+                ].join('  •  '),
+                style: TextStyle(
+                    fontSize: 11, color: AppColors.textSecondaryLight),
+              ),
+              if (note.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text('${t.remark}: $note',
+                      style: const TextStyle(fontSize: 12.5, height: 1.3)),
+                ),
+            ]),
+          ),
+        ),
+      ]),
     );
   }
 }
