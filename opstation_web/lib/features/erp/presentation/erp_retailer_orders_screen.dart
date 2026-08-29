@@ -779,6 +779,63 @@ class _ErpRetailerOrdersScreenState
             _statusChip('${o['status']}'),
           ]),
         ),
+        if (o['applied_schemes'] is List &&
+            (o['applied_schemes'] as List).isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(
+                color: AppTheme.success.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.success.withOpacity(0.4)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: const [
+                    Icon(Icons.card_giftcard,
+                        size: 15, color: AppTheme.success),
+                    SizedBox(width: 6),
+                    Text('Offers the retailer qualified for',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.success)),
+                  ]),
+                  const SizedBox(height: 2),
+                  for (final s in (o['applied_schemes'] as List))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 5),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${(s as Map)['name'] ?? ''}',
+                              style: const TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700)),
+                          if ('${s['summary'] ?? ''}'.trim().isNotEmpty)
+                            Text('${s['summary']}',
+                                style: const TextStyle(
+                                    fontSize: 11.5,
+                                    color: AppTheme.textSecondary)),
+                        ],
+                      ),
+                    ),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text(
+                        'Apply these on the Sales Order after approving.',
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            fontStyle: FontStyle.italic,
+                            color: AppTheme.textSecondary)),
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (pending && _branches.length > 1)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
