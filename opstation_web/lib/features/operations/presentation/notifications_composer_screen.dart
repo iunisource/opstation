@@ -37,6 +37,22 @@ class _NotificationsComposerScreenState
   final _df = DateFormat('d MMM y, h:mm a');
   DateTime? _from;
   DateTime? _to;
+  // 'all' | 'manual' (Push — sent by a person) | 'system' (auto-generated).
+  String _origin = 'all';
+
+  /// A notification's origin. Manual = composed and pushed by someone here;
+  /// system = raised automatically by a trigger (order submitted, needs review,
+  /// etc.). Falls back to a heuristic for rows created before the column existed.
+  String _originOf(Map n) {
+    final o = (n['origin'] as String?)?.trim();
+    if (o != null && o.isNotEmpty) return o;
+    final body = '${n['body'] ?? ''}'.toLowerCase();
+    final aud = '${n['audience'] ?? ''}';
+    if (aud == 'roles' && body.contains('review/approval')) return 'system';
+    return 'manual';
+  }
+
+  String _originLabel(Map n) => _originOf(n) == 'system' ? 'System' : 'Push';
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
@@ -271,6 +287,7 @@ class _NotificationsComposerScreenState
                     'image_url': imageUrl,
                     'link_url': link.isEmpty ? null : link,
                     'created_by': client.auth.currentUser?.id,
+                    'origin': 'manual',
                   })
                   .select('id')
                   .single();
@@ -460,8 +477,9 @@ class _NotificationsComposerScreenState
   }
 
   List<Map<String, dynamic>> get _filteredRecent {
-    if (_from == null && _to == null) return _recent;
     return _recent.where((n) {
+      if (_origin != 'all' && _originOf(n) != _origin) return false;
+      if (_from == null && _to == null) return true;
       final ts = DateTime.tryParse('${n['created_at']}');
       if (ts == null) return false;
       final d = ts.toLocal();
@@ -592,6 +610,31 @@ class _NotificationsComposerScreenState
               'Push a message to any group of app users; it is also saved in their notification drawer.',
               style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
           const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<String>(
+                showSelectedIcon: false,
+                style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                segments: const [
+                  ButtonSegment(value: 'all', label: Text('All')),
+                  ButtonSegment(
+                      value: 'manual',
+                      label: Text('Push'),
+                      icon: Icon(Icons.campaign_outlined, size: 16)),
+                  ButtonSegment(
+                      value: 'system',
+                      label: Text('System'),
+                      icon: Icon(Icons.bolt_outlined, size: 16)),
+                ],
+                selected: {_origin},
+                onSelectionChanged: (s) => setState(() => _origin = s.first),
+              ),
+            ),
+          ),
           Row(children: [
             _dateChip('From', _from, () => _pickRange(true)),
             const SizedBox(width: 8),
@@ -629,6 +672,10 @@ class _NotificationsComposerScreenState
                               (n['image_url'] as String?)?.isNotEmpty == true;
                           final hasLink =
                               (n['link_url'] as String?)?.isNotEmpty == true;
+                          final isSystem = _originOf(n) == 'system';
+                          final accent = isSystem
+                              ? AppTheme.textSecondary
+                              : AppTheme.primary;
                           return Container(
                             decoration: BoxDecoration(
                               color: Colors.white,
@@ -638,9 +685,12 @@ class _NotificationsComposerScreenState
                             child: ListTile(
                               onTap: () => _openDetail(n),
                               leading: CircleAvatar(
-                                backgroundColor: AppTheme.primary.withOpacity(0.1),
-                                child: const Icon(Icons.campaign_outlined,
-                                    color: AppTheme.primary),
+                                backgroundColor: accent.withOpacity(0.1),
+                                child: Icon(
+                                    isSystem
+                                        ? Icons.bolt_outlined
+                                        : Icons.campaign_outlined,
+                                    color: accent),
                               ),
                               title: Text(n['title'] as String? ?? '',
                                   style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -653,6 +703,7 @@ class _NotificationsComposerScreenState
                                   const SizedBox(height: 2),
                                   Text(
                                     [
+                                      _originLabel(n),
                                       _audienceLabel(n),
                                       if (n['created_at'] != null)
                                         _df.format(
