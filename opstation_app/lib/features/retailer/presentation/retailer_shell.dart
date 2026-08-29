@@ -134,8 +134,9 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
   void _ensureFcm(String userId) {
     if (_fcmRegistered) return;
     _fcmRegistered = true;
-    // Fire-and-forget; failure just means no push (bell/in-app still work).
-    ref.read(notificationServiceProvider).initialize(userId).catchError((_) {});
+    // Retailer-specific: saves the token via a SECURITY DEFINER RPC because a
+    // retailer can't UPDATE the users table directly (RLS). Fire-and-forget.
+    ref.read(notificationServiceProvider).registerRetailerToken();
   }
 
   @override

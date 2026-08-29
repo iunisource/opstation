@@ -166,6 +166,45 @@ class NotificationService {
     } catch (_) {}
   }
 
+  /// Retailer push registration. Retailers are public.users rows but have no
+  /// RLS grant to UPDATE users, so the staff `initialize()` path (which writes
+  /// the token with a direct table update) silently saves nothing for them.
+  /// This saves the token through a SECURITY DEFINER RPC instead.
+  Future<void> registerRetailerToken() async {
+    try {
+      if (!_localInitialized) {
+        await _local.initialize(
+          const InitializationSettings(
+            android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          ),
+        );
+        _localInitialized = true;
+      }
+
+      final settings = await _messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      if (settings.authorizationStatus == AuthorizationStatus.denied) return;
+
+      final token = await _messaging.getToken();
+      if (token != null) {
+        await _supabase
+            .rpc('retailer_save_fcm_token', params: {'p_token': token});
+      }
+
+      _messaging.onTokenRefresh.listen((t) async {
+        try {
+          await _supabase
+              .rpc('retailer_save_fcm_token', params: {'p_token': t});
+        } catch (_) {}
+      });
+
+      FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
+    } catch (_) {}
+  }
+
   /// Send notification to a specific user via Supabase Edge Function.
   Future<void> sendToUser({
     required String targetUserId,
