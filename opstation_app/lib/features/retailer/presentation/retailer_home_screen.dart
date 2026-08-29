@@ -29,6 +29,7 @@ class RetailerHomeScreen extends ConsumerStatefulWidget {
 
 class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen> {
   bool _showAging = false;
+  bool _loadingOffers = false;
 
   double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
@@ -296,10 +297,187 @@ class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen> {
                   ),
                 ),
               ),
+
+              // ── Browse offers (no cart needed) ─────────────────────────
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 50,
+                child: OutlinedButton.icon(
+                  icon: _loadingOffers
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.local_offer_outlined, size: 19),
+                  label: Text(t.availableOffers,
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: BorderSide(
+                        color: AppColors.primary.withValues(alpha: 0.45)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: _loadingOffers ? null : () => _showOffers(t),
+                ),
+              ),
             ],
           );
         },
       ),
+    );
+  }
+
+  Future<void> _showOffers(T t) async {
+    setState(() => _loadingOffers = true);
+    List<Map<String, dynamic>> offers = [];
+    try {
+      final res =
+          await Supabase.instance.client.rpc('retailer_active_offers');
+      if (res is List) {
+        offers = [for (final o in res) Map<String, dynamic>.from(o as Map)];
+      }
+    } catch (_) {
+      // RPC not deployed / engine off — treat as no offers.
+    }
+    if (!mounted) return;
+    setState(() => _loadingOffers = false);
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => RetailerLocaleScope(
+        child: Builder(builder: (_) => _HomeOffersSheet(offers: offers)),
+      ),
+    );
+  }
+}
+
+/// All currently-active offers for the org — browsed from home, cart-free.
+class _HomeOffersSheet extends StatelessWidget {
+  final List<Map<String, dynamic>> offers;
+  const _HomeOffersSheet({required this.offers});
+
+  IconData _icon(String? type) {
+    switch (type) {
+      case 'foc':
+      case 'combo':
+        return Icons.card_giftcard_outlined;
+      case 'promo_price':
+        return Icons.sell_outlined;
+      default:
+        return Icons.percent_outlined;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = T.of(context);
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.55,
+      maxChildSize: 0.92,
+      builder: (_, scroll) => Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
+          child: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(t.availableOffers,
+                style:
+                    const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: offers.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(28),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.local_offer_outlined,
+                          size: 40, color: AppColors.textSecondaryLight),
+                      const SizedBox(height: 12),
+                      Text(t.noOffers,
+                          textAlign: TextAlign.center,
+                          style:
+                              TextStyle(color: AppColors.textSecondaryLight)),
+                    ]),
+                  ),
+                )
+              : ListView(
+                  controller: scroll,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  children: [
+                    for (final s in offers)
+                      Container(
+                        margin: const EdgeInsets.symmetric(vertical: 5),
+                        padding: const EdgeInsets.all(13),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.borderLight),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: AppColors.primary.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(_icon(s['type'] as String?),
+                                  color: AppColors.primary, size: 20),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text((s['name'] as String?) ?? '',
+                                      style: const TextStyle(
+                                          fontSize: 14.5,
+                                          fontWeight: FontWeight.w800)),
+                                  if (((s['benefit'] as String?) ?? '')
+                                      .trim()
+                                      .isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text((s['benefit'] as String).trim(),
+                                        style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.primary)),
+                                  ],
+                                  if (((s['description'] as String?) ?? '')
+                                      .trim()
+                                      .isNotEmpty) ...[
+                                    const SizedBox(height: 3),
+                                    Text((s['description'] as String).trim(),
+                                        style: TextStyle(
+                                            fontSize: 12.5,
+                                            height: 1.3,
+                                            color:
+                                                AppColors.textSecondaryLight)),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                    Text(t.offersNote,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            color: AppColors.textSecondaryLight)),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+        ),
+      ]),
     );
   }
 }

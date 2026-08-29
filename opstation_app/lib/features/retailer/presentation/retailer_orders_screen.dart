@@ -69,6 +69,9 @@ class RetailerOrdersScreen extends ConsumerWidget {
               final at = o['submitted_at'];
 
               return ListTile(
+                onTap: o['id'] == null
+                    ? null
+                    : () => _openOrder(context, o, t),
                 leading: _statusIcon(status),
                 title: Text(
                   vno ?? '${lines} ${lines == 1 ? t.item : t.items}',
@@ -117,6 +120,160 @@ class RetailerOrdersScreen extends ConsumerWidget {
       default:
         return const Icon(Icons.schedule, color: Colors.orange, size: 22);
     }
+  }
+
+  Future<void> _openOrder(BuildContext context, Map<String, dynamic> o, T t) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => RetailerLocaleScope(
+        child: Builder(
+          builder: (_) => _OrderDetailSheet(orderId: o['id'].toString(), header: o),
+        ),
+      ),
+    );
+  }
+}
+
+/// What an order actually contained — fetched on open via retailer_order_detail.
+class _OrderDetailSheet extends StatefulWidget {
+  final String orderId;
+  final Map<String, dynamic> header;
+  const _OrderDetailSheet({required this.orderId, required this.header});
+
+  @override
+  State<_OrderDetailSheet> createState() => _OrderDetailSheetState();
+}
+
+class _OrderDetailSheetState extends State<_OrderDetailSheet> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _items = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('retailer_order_detail', params: {'p_order_id': widget.orderId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final items = (m['items'] as List?) ?? [];
+      if (!mounted) return;
+      setState(() {
+        _items = [for (final i in items) Map<String, dynamic>.from(i as Map)];
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = T.of(context);
+    final df = DateFormat('d MMM yyyy');
+    final vno = widget.header['voucher_number'] as String?;
+    final status = '${widget.header['status'] ?? ''}';
+    final total = _d(widget.header['total']);
+    final at = widget.header['submitted_at'];
+
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.6,
+      maxChildSize: 0.92,
+      builder: (_, scroll) => Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
+          child: Row(children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(vno ?? t.orderSummary,
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 2),
+                  Text(
+                    [
+                      if (at != null) df.format(DateTime.parse('$at').toLocal()),
+                      status.isNotEmpty
+                          ? (status[0].toUpperCase() + status.substring(1))
+                          : '',
+                    ].where((s) => s.isNotEmpty).join('  •  '),
+                    style: TextStyle(fontSize: 12.5, color: AppColors.textSecondaryLight),
+                  ),
+                ],
+              ),
+            ),
+            Text(rs(total),
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _items.isEmpty
+                  ? Center(
+                      child: Text(t.noProducts,
+                          style: TextStyle(color: AppColors.textSecondaryLight)))
+                  : ListView(
+                      controller: scroll,
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6, top: 2),
+                          child: Text(t.orderContents.toUpperCase(),
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.4,
+                                  color: AppColors.textSecondaryLight)),
+                        ),
+                        for (final i in _items)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Row(children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text((i['product'] as String?) ?? '-',
+                                        style: const TextStyle(
+                                            fontSize: 14, fontWeight: FontWeight.w600)),
+                                    Text(
+                                      [
+                                        '${_d(i['qty']).toStringAsFixed(_d(i['qty']) % 1 == 0 ? 0 : 2)}'
+                                            '${(i['uom'] as String?)?.isNotEmpty == true ? ' ${i['uom']}' : ''} × ${rs(_d(i['unit_price']))}',
+                                        if ((i['sku'] as String?)?.isNotEmpty == true)
+                                          i['sku'] as String,
+                                      ].join('  •  '),
+                                      style: TextStyle(
+                                          fontSize: 12, color: AppColors.textSecondaryLight),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(rs(_d(i['line_total'])),
+                                  style: const TextStyle(
+                                      fontSize: 14, fontWeight: FontWeight.w700)),
+                            ]),
+                          ),
+                        const SizedBox(height: 8),
+                        Text(t.priceNote,
+                            style: TextStyle(
+                                fontSize: 11.5, color: AppColors.textSecondaryLight)),
+                      ],
+                    ),
+        ),
+      ]),
+    );
   }
 }
 

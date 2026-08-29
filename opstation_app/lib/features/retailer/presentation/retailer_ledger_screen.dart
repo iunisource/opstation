@@ -179,6 +179,7 @@ class _RetailerLedgerScreenState extends ConsumerState<RetailerLedgerScreen> {
         'debit': 0.0,
         'credit': total,
         'type': 'Sale Return',
+        'return_id': sr['id'],
       });
     }
 
@@ -231,13 +232,19 @@ class _RetailerLedgerScreenState extends ConsumerState<RetailerLedgerScreen> {
     return d == null ? '-' : DateFormat('d MMM yyyy').format(d.toLocal());
   }
 
-  Future<void> _openInvoice(Map<String, dynamic> e) async {
-    final id = e['invoice_id'];
+  // Both Sales Invoice and Sale Return open the same style of PDF; only the
+  // source RPC and the title differ. Their detail RPCs return the same shape
+  // ({invoice, lines, org_name}).
+  Future<void> _openDoc(Map<String, dynamic> e) async {
+    final isReturn = e['type'] == 'Sale Return';
+    final id = isReturn ? e['return_id'] : e['invoice_id'];
     if (id == null) return;
     setState(() => _openingId = id.toString());
     try {
-      final res = await Supabase.instance.client
-          .rpc('retailer_invoice_detail', params: {'p_invoice_id': id});
+      final res = await Supabase.instance.client.rpc(
+        isReturn ? 'retailer_return_detail' : 'retailer_invoice_detail',
+        params: isReturn ? {'p_return_id': id} : {'p_invoice_id': id},
+      );
       final m = Map<String, dynamic>.from(res as Map);
       final header = Map<String, dynamic>.from(m['invoice'] as Map);
       final lines = (m['lines'] as List?) ?? [];
@@ -269,6 +276,7 @@ class _RetailerLedgerScreenState extends ConsumerState<RetailerLedgerScreen> {
         subtotal: (header['subtotal'] as num?)?.toDouble(),
         discountTotal: (header['discount_total'] as num?)?.toDouble(),
         grandTotal: (header['grand_total'] as num?)?.toDouble(),
+        typeLabel: isReturn ? 'Sales Return' : 'Sales Invoice',
       );
     } catch (_) {
       _snack(T.of(context).couldNotOpen);
@@ -308,14 +316,15 @@ class _RetailerLedgerScreenState extends ConsumerState<RetailerLedgerScreen> {
               final e = _entries[i];
               final debit = e['debit'] as double;
               final credit = e['credit'] as double;
-              final canOpen = e['type'] == 'Sales Invoice' && e['invoice_id'] != null;
-              final opening = _openingId != null && _openingId == e['invoice_id']?.toString();
+              final docId = e['type'] == 'Sale Return' ? e['return_id'] : e['invoice_id'];
+              final canOpen = (e['type'] == 'Sales Invoice' || e['type'] == 'Sale Return') && docId != null;
+              final opening = _openingId != null && _openingId == docId?.toString();
               return Material(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(10),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(10),
-                  onTap: canOpen && !opening ? () => _openInvoice(e) : null,
+                  onTap: canOpen && !opening ? () => _openDoc(e) : null,
                   child: Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(10),

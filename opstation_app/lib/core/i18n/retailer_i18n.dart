@@ -207,6 +207,11 @@ class T {
   String get quantity => _s('Quantity', 'مقدار');
   String get done => _s('Done', 'مکمل');
 
+  // ── Order detail ──────────────────────────────────────────────────────
+  String get orderSummary => _s('Order summary', 'آرڈر کی تفصیل');
+  String get orderContents => _s('Items in this order', 'اس آرڈر کی اشیاء');
+  String get unitPrice => _s('Unit price', 'فی یونٹ قیمت');
+
   // ── Ledger ────────────────────────────────────────────────────────────
   String get ledger => _s('Ledger', 'کھاتہ');
   String get ledgerUnavailable =>

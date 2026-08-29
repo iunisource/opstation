@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -47,11 +50,28 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
   // shown only when true.
   bool _ledgerEnabled = false;
   bool _fcmRegistered = false;
+  String? _orgName;
+  StreamSubscription<RemoteMessage>? _msgSub;
 
   @override
   void initState() {
     super.initState();
     _loadLedgerFlag();
+    _loadOrgName();
+    // When an order-status push lands while the app is open, refresh the lists
+    // so the new status shows without a manual pull-to-refresh.
+    _msgSub = FirebaseMessaging.onMessage.listen((m) {
+      if (m.data['type'] == 'retailer_order_status') {
+        ref.invalidate(retailerOrdersProvider);
+        ref.invalidate(retailerAgingProvider);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _msgSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadLedgerFlag() async {
@@ -60,6 +80,21 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
       if (mounted) setState(() => _ledgerEnabled = res == true);
     } catch (_) {
       // RPC not deployed / not permitted — keep the tab hidden.
+    }
+  }
+
+  // Supplier org name for the header (the company the shop buys from), so the
+  // top bar isn't just the shop's own name repeated under it.
+  Future<void> _loadOrgName() async {
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_my_org');
+      final m = res is Map ? Map<String, dynamic>.from(res) : null;
+      final name = (m?['name'] as String?)?.trim();
+      if (mounted && name != null && name.isNotEmpty) {
+        setState(() => _orgName = name);
+      }
+    } catch (_) {
+      // RPC not deployed yet — fall back to the shop name in the header.
     }
   }
 
@@ -120,7 +155,7 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
           appBar: AppBar(
             titleSpacing: 16,
             title: Text(
-              index == 0 ? (me?.name ?? t.home) : titles[index],
+              index == 0 ? (_orgName ?? me?.name ?? t.home) : titles[index],
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
@@ -179,7 +214,13 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: index,
-            onDestinationSelected: (i) => setState(() => _index = i),
+            onDestinationSelected: (i) {
+              // Re-pull orders whenever the Orders tab is opened, so an
+              // approve/reject done elsewhere is reflected without a manual
+              // refresh.
+              if (i == 1) ref.invalidate(retailerOrdersProvider);
+              setState(() => _index = i);
+            },
             destinations: destinations,
           ),
         );
