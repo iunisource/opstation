@@ -10,6 +10,7 @@ import '../../auth/retailer_auth_controller.dart';
 import '../../erp/services/voucher_pdf.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
+import 'retailer_web_order_flow.dart';
 
 /// Badge counters shared between the tabs (which load the data) and the shell
 /// (which paints the badges). Set by the tabs on load / mutation.
@@ -33,8 +34,10 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
   // Whether this retailer may see their account ledger (admin toggle). Loaded
   // once on open; the Ledger tab is appended only when true.
   bool _ledgerEnabled = false;
+  String? _orgName; // supplier org this shop buys from
 
   static const _baseTabs = [
+    (icon: Icons.home_outlined, label: 'Home'),
     (icon: Icons.notifications_outlined, label: 'Updates'),
     (icon: Icons.folder_outlined, label: 'Files'),
     (icon: Icons.receipt_long_outlined, label: 'Invoices'),
@@ -53,6 +56,28 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptPassword());
     _loadLedgerFlag();
+    _loadOrgName();
+  }
+
+  Future<void> _loadOrgName() async {
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_my_org');
+      final m = res is Map ? Map<String, dynamic>.from(res) : null;
+      final n = (m?['name'] as String?)?.trim();
+      if (mounted && n != null && n.isNotEmpty) setState(() => _orgName = n);
+    } catch (_) {}
+  }
+
+  Future<void> _showProfile() async {
+    await showDialog(
+        context: context, builder: (_) => const _ProfileDialog());
+  }
+
+  Future<void> _openOrderFlow() async {
+    final ok = await showRetailerOrderFlow(context);
+    if (ok == true && mounted) {
+      _snack(context, 'Order placed. Our team will confirm it shortly.');
+    }
   }
 
   Future<void> _loadLedgerFlag() async {
@@ -212,15 +237,30 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                       Text(name,
                           style: const TextStyle(
                               fontWeight: FontWeight.w800, fontSize: 16)),
-                      const Text('Retailer Portal',
-                          style: TextStyle(
+                      Text(_orgName == null ? 'Retailer Portal' : 'Supplier: $_orgName',
+                          style: const TextStyle(
                               fontSize: 11, color: AppTheme.textSecondary)),
                     ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                    ),
+                    icon: const Icon(Icons.add_shopping_cart, size: 18),
+                    label: const Text('Place Order'),
+                    onPressed: _openOrderFlow,
                   ),
                 ),
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.account_circle_outlined),
                   onSelected: (v) {
+                    if (v == 'profile') _showProfile();
                     if (v == 'password') _showChangePassword();
                     if (v == 'signout') {
                       ref
@@ -229,6 +269,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                     }
                   },
                   itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'profile', child: Text('Profile')),
                     PopupMenuItem(
                         value: 'password', child: Text('Change password')),
                     PopupMenuItem(value: 'signout', child: Text('Sign out')),
@@ -249,9 +290,9 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                         icon: _tabs[i].icon,
                         label: _tabs[i].label,
                         selected: _tab == i,
-                        badge: i == 0
+                        badge: _tabs[i].label == 'Updates'
                             ? ref.watch(_unreadUpdatesProvider)
-                            : i == 3
+                            : _tabs[i].label == 'Complaints'
                                 ? ref.watch(_openComplaintsProvider)
                                 : 0,
                         onTap: () => setState(() => _tab = i),
@@ -265,6 +306,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
               child: IndexedStack(
                 index: _tab.clamp(0, _tabs.length - 1),
                 children: [
+                  _HomeTab(onPlaceOrder: _openOrderFlow),
                   const _NotificationsTab(),
                   const _FilesTab(),
                   const _OrdersTab(),
@@ -1214,8 +1256,60 @@ class _LedgerTab extends ConsumerStatefulWidget {
 class _LedgerTabState extends ConsumerState<_LedgerTab> {
   bool _loading = true;
   bool _allowed = true;
+  String? _openingKey;
   List<Map<String, dynamic>> _entries = [];
   double _debit = 0, _credit = 0, _balance = 0;
+
+  /// Open the PDF for a Sales Invoice or Sale Return ledger row — same renderer
+  /// and detail RPCs the Invoices tab uses.
+  Future<void> _openDoc(Map<String, dynamic> e) async {
+    final isReturn = e['type'] == 'Sale Return';
+    final id = isReturn ? e['return_id'] : e['invoice_id'];
+    if (id == null) return;
+    setState(() => _openingKey = id.toString());
+    try {
+      final res = await Supabase.instance.client.rpc(
+        isReturn ? 'retailer_return_detail' : 'retailer_invoice_detail',
+        params: isReturn ? {'p_return_id': id} : {'p_invoice_id': id},
+      );
+      final m = Map<String, dynamic>.from(res as Map);
+      final header = Map<String, dynamic>.from(m['invoice'] as Map);
+      final lines = (m['lines'] as List?) ?? [];
+      final orgName = m['org_name'] as String? ?? 'Opstation';
+      final vlines = lines.map((x) {
+        final l = Map<String, dynamic>.from(x as Map);
+        return VoucherLine(
+          product: l['product'] as String? ?? '-',
+          sku: l['sku'] as String?,
+          uom: l['uom'] as String?,
+          qty: (l['qty'] as num?)?.toDouble() ?? 0,
+          unitPrice: (l['unit_price'] as num?)?.toDouble(),
+          discountPct: (l['discount'] as num?)?.toDouble(),
+          lineTotal: (l['line_total'] as num?)?.toDouble(),
+        );
+      }).toList();
+      final dateStr = header['voucher_date'] != null
+          ? DateFormat('d MMM yyyy')
+              .format(DateTime.parse('${header['voucher_date']}'))
+          : null;
+      await VoucherPdf.printVoucher(
+        voucherNumber: header['voucher_number'] as String? ??
+            (e['voucher']?.toString() ?? '-'),
+        voucherTypeLabel: isReturn ? 'Sales Return' : 'Sales Invoice',
+        orgName: orgName,
+        date: dateStr,
+        customerOrSupplier: ref.read(currentRetailerProvider)?.name,
+        lines: vlines,
+        subtotal: (header['subtotal'] as num?)?.toDouble(),
+        discountTotal: (header['discount_total'] as num?)?.toDouble(),
+        grandTotal: (header['grand_total'] as num?)?.toDouble(),
+      );
+    } catch (_) {
+      if (mounted) _snack(context, 'Could not open the document');
+    } finally {
+      if (mounted) setState(() => _openingKey = null);
+    }
+  }
 
   @override
   void initState() {
@@ -1292,6 +1386,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
         'voucher': (si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '').toString(),
         'description': (si['remarks'] as String?)?.trim() ?? '',
         'debit': total, 'credit': 0.0, 'type': 'Sales Invoice',
+        'invoice_id': si['id'],
       });
     }
 
@@ -1342,6 +1437,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
         'voucher': (sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? sr['return_no'] ?? '').toString(),
         'description': (sr['remarks'] as String?)?.trim() ?? '',
         'debit': 0.0, 'credit': total, 'type': 'Sale Return',
+        'return_id': sr['id'],
       });
     }
 
@@ -1430,47 +1526,87 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
               final e = _entries[i];
               final debit = e['debit'] as double;
               final credit = e['credit'] as double;
-              return Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
+              final docId =
+                  e['type'] == 'Sale Return' ? e['return_id'] : e['invoice_id'];
+              final canOpen = (e['type'] == 'Sales Invoice' ||
+                      e['type'] == 'Sale Return') &&
+                  docId != null;
+              final opening =
+                  _openingKey != null && _openingKey == docId?.toString();
+              return Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                child: InkWell(
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppTheme.border),
-                ),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                child: Row(children: [
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(
-                        [
-                          if ((e['voucher'] as String).isNotEmpty) e['voucher'],
-                          e['type'],
-                        ].join('  •  '),
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  onTap: canOpen && !opening ? () => _openDoc(e) : null,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppTheme.border),
+                    ),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: Row(children: [
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(children: [
+                                Flexible(
+                                  child: Text(
+                                    [
+                                      if ((e['voucher'] as String).isNotEmpty)
+                                        e['voucher'],
+                                      e['type'],
+                                    ].join('  •  '),
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13),
+                                  ),
+                                ),
+                                if (canOpen) ...[
+                                  const SizedBox(width: 6),
+                                  opening
+                                      ? const SizedBox(
+                                          width: 12,
+                                          height: 12,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2))
+                                      : const Icon(Icons.picture_as_pdf_outlined,
+                                          size: 15, color: AppTheme.primary),
+                                ],
+                              ]),
+                              const SizedBox(height: 2),
+                              Text(
+                                [
+                                  _fmtDate(e['date'] as String),
+                                  if ((e['description'] as String).isNotEmpty)
+                                    e['description'],
+                                ].join('  •  '),
+                                style: const TextStyle(
+                                    fontSize: 11, color: AppTheme.textSecondary),
+                              ),
+                            ]),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        [
-                          _fmtDate(e['date'] as String),
-                          if ((e['description'] as String).isNotEmpty) e['description'],
-                        ].join('  •  '),
-                        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
-                      ),
+                      const SizedBox(width: 10),
+                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Text(
+                          debit > 0 ? 'Dr ${money(debit)}' : 'Cr ${money(credit)}',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: debit > 0
+                                  ? AppTheme.primary
+                                  : AppTheme.success),
+                        ),
+                        const SizedBox(height: 2),
+                        Text('Bal ${money(e['balance'] as double)}',
+                            style: const TextStyle(
+                                fontSize: 11, color: AppTheme.textSecondary)),
+                      ]),
                     ]),
                   ),
-                  const SizedBox(width: 10),
-                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    Text(
-                      debit > 0 ? 'Dr ${money(debit)}' : 'Cr ${money(credit)}',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                          color: debit > 0 ? AppTheme.primary : AppTheme.success),
-                    ),
-                    const SizedBox(height: 2),
-                    Text('Bal ${money(e['balance'] as double)}',
-                        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                  ]),
-                ]),
+                ),
               );
             },
           ),
@@ -1539,5 +1675,346 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.window.open(url, '_blank');
     Future.delayed(const Duration(seconds: 5), () => html.Url.revokeObjectUrl(url));
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Home — balance, limit, aging + Place Order (mirrors the mobile home)
+// ════════════════════════════════════════════════════════════════════
+class _HomeTab extends ConsumerStatefulWidget {
+  final VoidCallback onPlaceOrder;
+  const _HomeTab({required this.onPlaceOrder});
+  @override
+  ConsumerState<_HomeTab> createState() => _HomeTabState();
+}
+
+class _HomeTabState extends ConsumerState<_HomeTab> {
+  bool _loading = true;
+  bool _showAging = false;
+  Map<String, dynamic>? _a;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_my_aging');
+      if (!mounted) return;
+      setState(() {
+        _a = res is Map ? Map<String, dynamic>.from(res) : null;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
+
+  Color _agingColor(int b) {
+    switch (b) {
+      case 0:
+        return Colors.teal;
+      case 1:
+        return Colors.amber.shade700;
+      case 2:
+        return Colors.orange.shade700;
+      case 3:
+        return Colors.deepOrange;
+      default:
+        return AppTheme.danger;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final total = _d(_a?['total']);
+    final limit = _d(_a?['credit_limit']);
+    final overLimit = limit > 0 && total > limit;
+    final usage = limit > 0 ? (total / limit).clamp(0.0, 1.0) : 0.0;
+    final buckets = <(String, double, int)>[
+      ('0–30 days', _d(_a?['cur']), 0),
+      ('31–60 days', _d(_a?['b1']), 1),
+      ('61–90 days', _d(_a?['b2']), 2),
+      ('91–120 days', _d(_a?['b3']), 3),
+      ('Over 120 days', _d(_a?['b4']), 4),
+    ];
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              // Outstanding balance
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: overLimit
+                      ? AppTheme.danger.withOpacity(0.06)
+                      : AppTheme.primary.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: overLimit
+                          ? AppTheme.danger.withOpacity(0.35)
+                          : Colors.transparent),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      const Text('Outstanding balance',
+                          style: TextStyle(
+                              fontSize: 13, color: AppTheme.textSecondary)),
+                      if (overLimit) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppTheme.danger,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                            Icon(Icons.error_outline, size: 12, color: Colors.white),
+                            SizedBox(width: 3),
+                            Text('Over Limit',
+                                style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white)),
+                          ]),
+                        ),
+                      ],
+                    ]),
+                    const SizedBox(height: 4),
+                    Text('Rs ${money(total)}',
+                        style: TextStyle(
+                            fontSize: 32,
+                            fontWeight: FontWeight.w800,
+                            color: total <= 0
+                                ? Colors.teal
+                                : overLimit
+                                    ? AppTheme.danger
+                                    : AppTheme.primary)),
+                    if (limit > 0) ...[
+                      const SizedBox(height: 14),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: LinearProgressIndicator(
+                          value: usage,
+                          minHeight: 7,
+                          backgroundColor: Colors.black12,
+                          color: overLimit ? AppTheme.danger : AppTheme.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text('Credit limit: Rs ${money(limit)}',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppTheme.textSecondary)),
+                    ],
+                    if (total > 0) ...[
+                      const SizedBox(height: 4),
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact),
+                        icon: Icon(
+                            _showAging ? Icons.expand_less : Icons.expand_more,
+                            size: 18),
+                        label: Text(_showAging ? 'Hide aging' : 'Show aging'),
+                        onPressed: () => setState(() => _showAging = !_showAging),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              if (_showAging && total > 0) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.black12),
+                  ),
+                  child: Column(children: [
+                    for (final b in buckets)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        child: Row(children: [
+                          Container(
+                              height: 9,
+                              width: 9,
+                              decoration: BoxDecoration(
+                                  color: _agingColor(b.$3),
+                                  shape: BoxShape.circle)),
+                          const SizedBox(width: 10),
+                          Expanded(
+                              child: Text(b.$1,
+                                  style: const TextStyle(fontSize: 13.5))),
+                          Text('Rs ${money(b.$2)}',
+                              style: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: b.$2 > 0
+                                      ? FontWeight.w700
+                                      : FontWeight.w400,
+                                  color: b.$2 > 0
+                                      ? _agingColor(b.$3)
+                                      : AppTheme.textSecondary)),
+                        ]),
+                      ),
+                  ]),
+                ),
+              ],
+
+              if (overLimit) ...[
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.14),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.withOpacity(0.5)),
+                  ),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Icon(Icons.warning_amber_rounded,
+                        color: Colors.amber.shade900, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                          'Your account is over its credit limit. New orders may not be approved until payment is received.',
+                          style: const TextStyle(fontSize: 12.5, height: 1.35)),
+                    ),
+                  ]),
+                ),
+              ],
+
+              const SizedBox(height: 24),
+              SizedBox(
+                height: 54,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                  icon: const Icon(Icons.add_shopping_cart),
+                  label: const Text('Place Order',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  onPressed: widget.onPlaceOrder,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Profile dialog — the shop's own details
+// ════════════════════════════════════════════════════════════════════
+class _ProfileDialog extends StatefulWidget {
+  const _ProfileDialog();
+  @override
+  State<_ProfileDialog> createState() => _ProfileDialogState();
+}
+
+class _ProfileDialogState extends State<_ProfileDialog> {
+  bool _loading = true;
+  Map<String, dynamic> _p = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_profile_card');
+      if (res is Map && mounted) {
+        setState(() {
+          _p = Map<String, dynamic>.from(res);
+          _loading = false;
+        });
+        return;
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  String _limit() {
+    final v = double.tryParse('${_p['credit_limit'] ?? ''}');
+    if (v == null || v <= 0) return '—';
+    return 'Rs ${money(v)}';
+  }
+
+  String _v(String key) {
+    final s = (_p[key] as String?)?.trim();
+    return (s == null || s.isEmpty) ? '—' : s;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = <(IconData, String, String)>[
+      (Icons.storefront_outlined, 'Business name', _v('business_name')),
+      (Icons.tag, 'Code', _v('code')),
+      (Icons.person_outline, 'Contact person', _v('contact_person')),
+      (Icons.phone_outlined, 'Phone', _v('phone')),
+      (Icons.location_on_outlined, 'Address', _v('address')),
+      (Icons.credit_card, 'Credit limit', _limit()),
+      (Icons.badge_outlined, 'Salesperson', _v('salesperson')),
+    ];
+    return AlertDialog(
+      title: const Text('Profile'),
+      content: SizedBox(
+        width: 380,
+        child: _loading
+            ? const SizedBox(
+                height: 120, child: Center(child: CircularProgressIndicator()))
+            : Column(mainAxisSize: MainAxisSize.min, children: [
+                for (final r in rows)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Icon(r.$1, size: 18, color: AppTheme.primary),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(r.$2.toUpperCase(),
+                                style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.4,
+                                    color: AppTheme.textSecondary)),
+                            const SizedBox(height: 2),
+                            Text(r.$3,
+                                style: const TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                    ]),
+                  ),
+              ]),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context), child: const Text('Close')),
+      ],
+    );
   }
 }
