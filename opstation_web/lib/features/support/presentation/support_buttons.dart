@@ -43,24 +43,11 @@ class _State extends ConsumerState<SupportButtons> {
     if (ref.watch(supportButtonsHiddenProvider)) return const SizedBox.shrink();
     if (GoRouterState.of(context).matchedLocation != '/dashboard') return const SizedBox.shrink();
 
-    final mobile = MediaQuery.of(context).size.width < 600;
-
-    if (!mobile) {
-      return Positioned(
-        right: 20, bottom: 20,
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
-          _hideChip(),
-          const SizedBox(height: 8),
-          _callbackPill(),
-          const SizedBox(height: 10),
-          _downloadPill(),
-        ]),
-      );
-    }
-
-    // Mobile: round FAB that expands.
+    // Same on web and mobile: a round FAB that expands to reveal the two
+    // support actions, so the dashboard stays clean until it's needed.
+    final pad = MediaQuery.of(context).size.width < 600 ? 16.0 : 20.0;
     return Positioned(
-      right: 16, bottom: 16,
+      right: pad, bottom: pad,
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
         if (_expanded) ...[
           _hideChip(),
