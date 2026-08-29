@@ -224,6 +224,7 @@ class T {
 
   // ── Schemes / Offers ──────────────────────────────────────────────────
   String get offers => _s('Offers', 'آفرز');
+  String get offersOnOrder => _s('Offers on this order', 'اس آرڈر پر آفرز');
   String get availableOffers => _s('Available offers', 'دستیاب آفرز');
   String get checkingOffers => _s('Checking offers…', 'آفرز دیکھی جا رہی ہیں…');
   String get noOffers =>

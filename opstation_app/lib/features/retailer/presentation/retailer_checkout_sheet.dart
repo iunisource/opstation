@@ -33,6 +33,96 @@ class RetailerCheckoutSheet extends ConsumerStatefulWidget {
 class _RetailerCheckoutSheetState extends ConsumerState<RetailerCheckoutSheet> {
   bool _saving = false;
   bool _loadingSchemes = false;
+  List<Map<String, dynamic>> _cartOffers = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCartOffers();
+  }
+
+  /// The offers this exact cart qualifies for — shown inline on the review so
+  /// the shopkeeper sees the FOC/discount they're getting, not just a button.
+  Future<void> _loadCartOffers() async {
+    final cart = ref.read(cartProvider);
+    if (cart.isEmpty) return;
+    try {
+      final items = [
+        for (final l in cart.values)
+          {'product_id': l.productId, 'qty': l.qty, 'unit_price': l.price},
+      ];
+      final res = await Supabase.instance.client
+          .rpc('retailer_suggest_schemes', params: {'p_items': items});
+      if (res is List && mounted) {
+        setState(() =>
+            _cartOffers = [for (final s in res) Map<String, dynamic>.from(s as Map)]);
+      }
+    } catch (_) {
+      // No offers / engine off — leave the banner hidden.
+    }
+  }
+
+  String _cartOfferBenefit(T t, Map<String, dynamic> s) {
+    double d(dynamic v) => (v as num?)?.toDouble() ?? 0;
+    switch (s['type'] as String?) {
+      case 'foc':
+        final ft = (s['free_text'] as String?)?.trim() ?? '';
+        final fq = d(s['free_total']);
+        return ft.isNotEmpty
+            ? '${t.free}: ${fq.toStringAsFixed(0)} • $ft'
+            : '${t.free}: ${fq.toStringAsFixed(0)}';
+      case 'combo':
+        final ft = (s['free_text'] as String?)?.trim() ?? '';
+        return ft.isNotEmpty ? '${t.free}: $ft' : t.free;
+      case 'qty_slab':
+        return '${t.discount}: ${rs(d(s['discount_total']))}';
+      case 'invoice_discount':
+        final p = d(s['invoice_percent']);
+        return '${t.discount}: ${p.toStringAsFixed(p % 1 == 0 ? 0 : 1)}%';
+      case 'promo_price':
+        return t.specialPrice;
+      default:
+        return '';
+    }
+  }
+
+  Widget _offersBanner(T t) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.success.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.success.withValues(alpha: 0.4)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.card_giftcard, size: 16, color: AppColors.successDark),
+            const SizedBox(width: 6),
+            Text(t.offersOnOrder,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.successDark)),
+          ]),
+          for (final s in _cartOffers)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text((s['name'] as String?) ?? '',
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700)),
+                  Text(_cartOfferBenefit(t, s),
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.successDark)),
+                ],
+              ),
+            ),
+        ]),
+      );
 
   /// All active offers for the org (same list the web shows), each measured
   /// against the current cart so the shopkeeper sees how close they are — e.g.
@@ -189,6 +279,7 @@ class _RetailerCheckoutSheetState extends ConsumerState<RetailerCheckoutSheet> {
                             ]),
                           ),
                         const Divider(height: 22),
+                        if (_cartOffers.isNotEmpty) _offersBanner(t),
                         if (overLimit)
                           Container(
                             margin: const EdgeInsets.only(bottom: 12),

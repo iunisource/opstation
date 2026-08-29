@@ -149,6 +149,7 @@ class _OrderDetailSheet extends StatefulWidget {
 class _OrderDetailSheetState extends State<_OrderDetailSheet> {
   bool _loading = true;
   List<Map<String, dynamic>> _items = [];
+  List<Map<String, dynamic>> _schemes = [];
 
   @override
   void initState() {
@@ -162,9 +163,11 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
           .rpc('retailer_order_detail', params: {'p_order_id': widget.orderId});
       final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       final items = (m['items'] as List?) ?? [];
+      final schemes = (m['applied_schemes'] as List?) ?? [];
       if (!mounted) return;
       setState(() {
         _items = [for (final i in items) Map<String, dynamic>.from(i as Map)];
+        _schemes = [for (final s in schemes) Map<String, dynamic>.from(s as Map)];
         _loading = false;
       });
     } catch (_) {
@@ -173,6 +176,45 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
   }
 
   double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
+
+  Widget _schemesBanner(T t) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.success.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.success.withValues(alpha: 0.4)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.card_giftcard, size: 16, color: AppColors.successDark),
+            const SizedBox(width: 6),
+            Text(t.offersOnOrder,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.successDark)),
+          ]),
+          for (final s in _schemes)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text((s['name'] as String?) ?? '',
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700)),
+                  if (((s['summary'] as String?) ?? '').trim().isNotEmpty)
+                    Text((s['summary'] as String).trim(),
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.successDark)),
+                ],
+              ),
+            ),
+        ]),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -218,23 +260,29 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
-              : _items.isEmpty
-                  ? Center(
-                      child: Text(t.noProducts,
-                          style: TextStyle(color: AppColors.textSecondaryLight)))
-                  : ListView(
+              : ListView(
                       controller: scroll,
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 6, top: 2),
-                          child: Text(t.orderContents.toUpperCase(),
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.4,
-                                  color: AppColors.textSecondaryLight)),
-                        ),
+                        if (_schemes.isNotEmpty) _schemesBanner(t),
+                        if (_items.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 30),
+                            child: Center(
+                                child: Text(t.noProducts,
+                                    style: TextStyle(
+                                        color: AppColors.textSecondaryLight))),
+                          ),
+                        if (_items.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 6, top: 2),
+                            child: Text(t.orderContents.toUpperCase(),
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.4,
+                                    color: AppColors.textSecondaryLight)),
+                          ),
                         for (final i in _items)
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 8),

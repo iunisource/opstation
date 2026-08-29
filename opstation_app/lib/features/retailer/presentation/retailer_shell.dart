@@ -50,8 +50,10 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
   // shown only when true.
   bool _ledgerEnabled = false;
   bool _fcmRegistered = false;
+  bool _realtimeSet = false;
   String? _orgName;
   StreamSubscription<RemoteMessage>? _msgSub;
+  RealtimeChannel? _ordersChannel;
 
   @override
   void initState() {
@@ -71,7 +73,34 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
   @override
   void dispose() {
     _msgSub?.cancel();
+    final ch = _ordersChannel;
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
     super.dispose();
+  }
+
+  // Live updates for this retailer's own orders — approve/reject on the web
+  // reflects here immediately, independent of push delivery. Relies on the
+  // retailer_orders_self_read RLS policy (SQL 199).
+  void _ensureRealtime(String customerId) {
+    if (_realtimeSet) return;
+    _realtimeSet = true;
+    _ordersChannel = Supabase.instance.client
+        .channel('retailer_orders_self_$customerId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'retailer_orders',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'customer_id',
+            value: customerId,
+          ),
+          callback: (_) {
+            ref.invalidate(retailerOrdersProvider);
+            ref.invalidate(retailerAgingProvider);
+          },
+        )
+        .subscribe();
   }
 
   Future<void> _loadLedgerFlag() async {
@@ -113,7 +142,10 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
   Widget build(BuildContext context) {
     final me = ref.watch(retailerAuthControllerProvider).valueOrNull;
     final unread = ref.watch(retailerUnreadProvider).valueOrNull ?? 0;
-    if (me != null) _ensureFcm(me.userId);
+    if (me != null) {
+      _ensureFcm(me.userId);
+      _ensureRealtime(me.customerId);
+    }
 
     return RetailerLocaleScope(
       child: Builder(builder: (context) {
