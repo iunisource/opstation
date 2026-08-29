@@ -410,61 +410,85 @@ class _HomeOffersSheet extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   children: [
                     for (final s in offers)
-                      Container(
-                        margin: const EdgeInsets.symmetric(vertical: 5),
-                        padding: const EdgeInsets.all(13),
-                        decoration: BoxDecoration(
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 5),
+                        child: Material(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.borderLight),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: 38,
-                              height: 38,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () {
+                              final nav = Navigator.of(context);
+                              final name =
+                                  (s['trigger_product_name'] as String?)?.trim();
+                              nav.pop();
+                              nav.push(MaterialPageRoute(
+                                  builder: (_) => RetailerBrowseScreen(
+                                      initialSearch:
+                                          (name?.isNotEmpty ?? false) ? name : null)));
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(13),
                               decoration: BoxDecoration(
-                                color: AppColors.primary.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: AppColors.borderLight),
                               ),
-                              child: Icon(_icon(s['type'] as String?),
-                                  color: AppColors.primary, size: 20),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
+                              child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text((s['name'] as String?) ?? '',
-                                      style: const TextStyle(
-                                          fontSize: 14.5,
-                                          fontWeight: FontWeight.w800)),
-                                  if (((s['benefit'] as String?) ?? '')
-                                      .trim()
-                                      .isNotEmpty) ...[
-                                    const SizedBox(height: 4),
-                                    Text((s['benefit'] as String).trim(),
-                                        style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w700,
-                                            color: AppColors.primary)),
-                                  ],
-                                  if (((s['description'] as String?) ?? '')
-                                      .trim()
-                                      .isNotEmpty) ...[
-                                    const SizedBox(height: 3),
-                                    Text((s['description'] as String).trim(),
-                                        style: TextStyle(
-                                            fontSize: 12.5,
-                                            height: 1.3,
-                                            color:
-                                                AppColors.textSecondaryLight)),
-                                  ],
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color:
+                                          AppColors.primary.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Icon(_icon(s['type'] as String?),
+                                        color: AppColors.primary, size: 20),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text((s['name'] as String?) ?? '',
+                                            style: const TextStyle(
+                                                fontSize: 14.5,
+                                                fontWeight: FontWeight.w800)),
+                                        if (((s['benefit'] as String?) ?? '')
+                                            .trim()
+                                            .isNotEmpty) ...[
+                                          const SizedBox(height: 4),
+                                          Text((s['benefit'] as String).trim(),
+                                              style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: AppColors.primary)),
+                                        ],
+                                        if (((s['description'] as String?) ?? '')
+                                            .trim()
+                                            .isNotEmpty) ...[
+                                          const SizedBox(height: 3),
+                                          Text((s['description'] as String).trim(),
+                                              style: TextStyle(
+                                                  fontSize: 12.5,
+                                                  height: 1.3,
+                                                  color: AppColors
+                                                      .textSecondaryLight)),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Icon(Icons.chevron_right,
+                                      size: 20,
+                                      color: AppColors.textSecondaryLight),
                                 ],
                               ),
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     const SizedBox(height: 10),

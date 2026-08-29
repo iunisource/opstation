@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
+import 'retailer_browse_screen.dart';
 import 'retailer_cart.dart';
 import 'retailer_home_screen.dart';
 import 'retailer_orders_screen.dart';
@@ -33,38 +34,52 @@ class _RetailerCheckoutSheetState extends ConsumerState<RetailerCheckoutSheet> {
   bool _saving = false;
   bool _loadingSchemes = false;
 
-  /// Same offers the web shows — resolved server-side by retailer_suggest_schemes
-  /// (a scoped wrapper over the shared scheme_suggest engine) so the rules never
-  /// drift between web and app. Purely informational here: the order is a
-  /// request, and staff apply the actual benefit when they process it.
+  /// All active offers for the org (same list the web shows), each measured
+  /// against the current cart so the shopkeeper sees how close they are — e.g.
+  /// "add 4 more of X to unlock" — instead of only seeing an offer once it has
+  /// already been met. Tapping one jumps to that product in the catalogue.
   Future<void> _showSchemes(T t) async {
-    final cart = ref.read(cartProvider);
-    if (cart.isEmpty || _loadingSchemes) return;
+    if (_loadingSchemes) return;
     setState(() => _loadingSchemes = true);
-    List<Map<String, dynamic>> schemes = [];
+    List<Map<String, dynamic>> offers = [];
     try {
-      final items = [
-        for (final l in cart.values)
-          {'product_id': l.productId, 'qty': l.qty, 'unit_price': l.price},
-      ];
-      final res = await Supabase.instance.client
-          .rpc('retailer_suggest_schemes', params: {'p_items': items});
+      final res =
+          await Supabase.instance.client.rpc('retailer_active_offers');
       if (res is List) {
-        schemes = [for (final s in res) Map<String, dynamic>.from(s as Map)];
+        offers = [for (final s in res) Map<String, dynamic>.from(s as Map)];
       }
     } catch (_) {
       // Engine off / not deployed — treat as "no offers".
     }
     if (!mounted) return;
     setState(() => _loadingSchemes = false);
+    final cart = ref.read(cartProvider);
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (_) => RetailerLocaleScope(
-        child: Builder(builder: (context) => _SchemesSheet(schemes: schemes)),
+        child: Builder(
+          builder: (_) => _SchemesSheet(
+            offers: offers,
+            cart: cart,
+            onJump: _jumpToOffer,
+          ),
+        ),
       ),
     );
+  }
+
+  /// Close the offers sheet + the checkout sheet and land on the offer's
+  /// product in the (already-open) browse screen so the shopkeeper can top up
+  /// to the qualifying quantity.
+  void _jumpToOffer(String? productName) {
+    final nav = Navigator.of(context);
+    if (productName != null && productName.trim().isNotEmpty) {
+      ref.read(browseSearchProvider.notifier).state = productName.trim();
+    }
+    nav.pop(); // offers sheet
+    nav.pop(false); // checkout sheet -> reveals browse
   }
 
   Future<void> _submit(T t) async {
@@ -276,33 +291,15 @@ class _RetailerCheckoutSheetState extends ConsumerState<RetailerCheckoutSheet> {
   }
 }
 
-/// Read-only list of the offers currently available for the cart.
+/// Active offers measured against the current cart: each shows its benefit and
+/// how close the cart is (qualified, or "add N more of X"). Tapping jumps to
+/// the product so the shopkeeper can top up.
 class _SchemesSheet extends StatelessWidget {
-  final List<Map<String, dynamic>> schemes;
-  const _SchemesSheet({required this.schemes});
-
-  String _benefit(T t, Map<String, dynamic> s) {
-    final type = s['type'] as String?;
-    double d(dynamic v) => (v as num?)?.toDouble() ?? 0;
-    switch (type) {
-      case 'foc':
-        return '${t.free}: ${d(s['free_total']).toStringAsFixed(0)}';
-      case 'combo':
-        final ft = (s['free_text'] as String?)?.trim() ?? '';
-        if (ft.isNotEmpty) return '${t.free}: $ft';
-        final fq = d(s['free_total']);
-        return fq > 0 ? '${t.free}: ${fq.toStringAsFixed(0)}' : t.free;
-      case 'qty_slab':
-        return '${t.discount}: ${rs(d(s['discount_total']))}';
-      case 'invoice_discount':
-        final pct = d(s['invoice_percent']);
-        return '${t.discount}: ${pct.toStringAsFixed(pct % 1 == 0 ? 0 : 1)}% (${rs(d(s['discount_total']))})';
-      case 'promo_price':
-        return t.specialPrice;
-      default:
-        return '';
-    }
-  }
+  final List<Map<String, dynamic>> offers;
+  final Map<String, CartLine> cart;
+  final void Function(String? productName) onJump;
+  const _SchemesSheet(
+      {required this.offers, required this.cart, required this.onJump});
 
   IconData _icon(String? type) {
     switch (type) {
@@ -314,6 +311,22 @@ class _SchemesSheet extends StatelessWidget {
       default:
         return Icons.percent_outlined;
     }
+  }
+
+  // (statusText, qualified). qualified drives the green vs amber pill.
+  (String, bool) _status(T t, Map<String, dynamic> s) {
+    final tqty = (s['trigger_qty'] as num?)?.toDouble();
+    final tpid = s['trigger_product_id'] as String?;
+    final pname = (s['trigger_product_name'] as String?)?.trim() ?? '';
+    if (tqty == null || tqty <= 0) return ('', false);
+    if (tpid != null) {
+      final have = cart[tpid]?.qty ?? 0;
+      if (have >= tqty) return (t.qualified, true);
+      return (t.addMore(tqty - have, pname), false);
+    }
+    final any = cart.values.any((l) => l.qty >= tqty);
+    if (any) return (t.qualified, true);
+    return (t.addAny(tqty), false);
   }
 
   @override
@@ -334,7 +347,7 @@ class _SchemesSheet extends StatelessWidget {
         ),
         const Divider(height: 1),
         Expanded(
-          child: schemes.isEmpty
+          child: offers.isEmpty
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(28),
@@ -352,69 +365,121 @@ class _SchemesSheet extends StatelessWidget {
                   controller: scroll,
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   children: [
-                    for (final s in schemes)
-                      Container(
-                        margin: const EdgeInsets.symmetric(vertical: 5),
-                        padding: const EdgeInsets.all(13),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.borderLight),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: AppColors.primary.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Icon(_icon(s['type'] as String?),
-                                  color: AppColors.primary, size: 20),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text((s['name'] as String?) ?? '',
-                                      style: const TextStyle(
-                                          fontSize: 14.5,
-                                          fontWeight: FontWeight.w800)),
-                                  if (((s['description'] as String?) ?? '')
-                                      .trim()
-                                      .isNotEmpty) ...[
-                                    const SizedBox(height: 3),
-                                    Text((s['description'] as String).trim(),
-                                        style: TextStyle(
-                                            fontSize: 12.5,
-                                            height: 1.3,
-                                            color:
-                                                AppColors.textSecondaryLight)),
-                                  ],
-                                  const SizedBox(height: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 9, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.success
-                                          .withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(20),
+                    for (final s in offers)
+                      Builder(builder: (_) {
+                        final st = _status(t, s);
+                        final statusText = st.$1;
+                        final ok = st.$2;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 5),
+                          child: Material(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () =>
+                                  onJump(s['trigger_product_name'] as String?),
+                              child: Container(
+                                padding: const EdgeInsets.all(13),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border:
+                                      Border.all(color: AppColors.borderLight),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      width: 38,
+                                      height: 38,
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primary
+                                            .withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Icon(_icon(s['type'] as String?),
+                                          color: AppColors.primary, size: 20),
                                     ),
-                                    child: Text(_benefit(t, s),
-                                        style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: AppColors.successDark)),
-                                  ),
-                                ],
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text((s['name'] as String?) ?? '',
+                                              style: const TextStyle(
+                                                  fontSize: 14.5,
+                                                  fontWeight: FontWeight.w800)),
+                                          if (((s['benefit'] as String?) ?? '')
+                                              .trim()
+                                              .isNotEmpty) ...[
+                                            const SizedBox(height: 3),
+                                            Text((s['benefit'] as String).trim(),
+                                                style: TextStyle(
+                                                    fontSize: 12.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: AppColors.primary)),
+                                          ],
+                                          if (statusText.isNotEmpty) ...[
+                                            const SizedBox(height: 6),
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 9,
+                                                      vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: (ok
+                                                        ? AppColors.success
+                                                        : AppColors.warning)
+                                                    .withValues(alpha: 0.14),
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(
+                                                      ok
+                                                          ? Icons
+                                                              .check_circle_outline
+                                                          : Icons
+                                                              .add_shopping_cart,
+                                                      size: 13,
+                                                      color: ok
+                                                          ? AppColors.successDark
+                                                          : AppColors
+                                                              .warningDark),
+                                                  const SizedBox(width: 5),
+                                                  Flexible(
+                                                    child: Text(statusText,
+                                                        style: TextStyle(
+                                                            fontSize: 12,
+                                                            fontWeight:
+                                                                FontWeight.w700,
+                                                            color: ok
+                                                                ? AppColors
+                                                                    .successDark
+                                                                : AppColors
+                                                                    .warningDark)),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Icon(Icons.chevron_right,
+                                        size: 20,
+                                        color: AppColors.textSecondaryLight),
+                                  ],
+                                ),
                               ),
                             ),
-                          ],
-                        ),
-                      ),
+                          ),
+                        );
+                      }),
                     const SizedBox(height: 10),
                     Text(t.offersNote,
                         textAlign: TextAlign.center,

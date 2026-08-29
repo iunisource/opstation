@@ -234,6 +234,16 @@ class T {
   String get free => _s('Free', 'مفت');
   String get discount => _s('Discount', 'رعایت');
   String get specialPrice => _s('Special price', 'خصوصی قیمت');
+  String get qualified => _s('In your cart', 'آپ کی ٹوکری میں');
+  String _qtyStr(num n) {
+    final d = n.toDouble();
+    return d % 1 == 0 ? d.toStringAsFixed(0) : d.toStringAsFixed(2);
+  }
+
+  String addMore(num n, String product) => _s(
+      'Add ${_qtyStr(n)} more of $product', '$product مزید ${_qtyStr(n)} شامل کریں');
+  String addAny(num n) => _s('Add ${_qtyStr(n)}+ of any item to unlock',
+      'کوئی بھی چیز ${_qtyStr(n)}+ شامل کریں تاکہ آفر کھلے');
 }
 
 /// Small EN/اردو toggle. Placed on the login screens deliberately: a shopkeeper

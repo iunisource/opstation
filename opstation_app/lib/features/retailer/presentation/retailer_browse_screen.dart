@@ -37,12 +37,20 @@ final retailerCatalogMetaProvider =
   return {'show_images': false, 'brands': {}};
 });
 
+/// Lets an "offer" tap on another screen jump the browse view straight to the
+/// relevant product. Carries a product name; browse consumes it, filters to it,
+/// then clears it back to null.
+final browseSearchProvider = StateProvider<String?>((_) => null);
+
 /// Brand-first browse. A retailer tagged to several brands thinks in brands
 /// ("what Paklite LED do I need?"), not in one flat 340-item list — so pick the
 /// brand, then the products within it. With a single brand we skip the picker
 /// entirely rather than make them tap through a list of one.
 class RetailerBrowseScreen extends ConsumerStatefulWidget {
-  const RetailerBrowseScreen({super.key});
+  /// When set, browse opens across all brands with the search pre-filled — used
+  /// to land the shopkeeper on the product an offer applies to.
+  final String? initialSearch;
+  const RetailerBrowseScreen({super.key, this.initialSearch});
 
   @override
   ConsumerState<RetailerBrowseScreen> createState() =>
@@ -55,9 +63,28 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
   String? _brand; // null = brand list; '' = all brands
 
   @override
+  void initState() {
+    super.initState();
+    final s = widget.initialSearch?.trim();
+    if (s != null && s.isNotEmpty) {
+      _brand = ''; // all brands, so the search spans the whole catalogue
+      _q = s;
+      _searchCtrl.text = s;
+    }
+  }
+
+  @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _applyJump(String name) {
+    setState(() {
+      _brand = '';
+      _q = name;
+      _searchCtrl.text = name;
+    });
   }
 
   /// Tap the number to type an exact quantity — a shopkeeper ordering 60 units
@@ -106,6 +133,13 @@ class _RetailerBrowseScreenState extends ConsumerState<RetailerBrowseScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // An offer tapped in the checkout sheet jumps us to its product in place.
+    ref.listen<String?>(browseSearchProvider, (_, next) {
+      if (next != null && next.trim().isNotEmpty) {
+        _applyJump(next.trim());
+        ref.read(browseSearchProvider.notifier).state = null;
+      }
+    });
     final async = ref.watch(retailerProductsProvider);
     final meta = ref.watch(retailerCatalogMetaProvider).valueOrNull;
     final showImages = meta?['show_images'] == true;
