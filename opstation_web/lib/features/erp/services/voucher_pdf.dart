@@ -490,7 +490,7 @@ class VoucherPdf {
     doc.addPage(pw.MultiPage(
       pageTheme: pw.PageTheme(
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+        margin: const pw.EdgeInsets.fromLTRB(24, 18, 24, 18),
         buildBackground: (watermark == null || watermark.isEmpty)
             ? null
             : (ctx) => pw.FullPage(
@@ -548,7 +548,7 @@ class VoucherPdf {
       build: (ctx) => [
         // ── Header band ────────────────────────────────────────────────
         pw.Container(
-          padding: const pw.EdgeInsets.all(16),
+          padding: const pw.EdgeInsets.all(11),
           decoration: pw.BoxDecoration(color: _bg, borderRadius: pw.BorderRadius.circular(8)),
           child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
             if (logoImage != null) ...[
@@ -582,11 +582,11 @@ class VoucherPdf {
           ]),
         ),
 
-        pw.SizedBox(height: 14),
+        pw.SizedBox(height: 9),
 
         // ── Meta grid ──────────────────────────────────────────────────
         pw.Container(
-          padding: const pw.EdgeInsets.all(12),
+          padding: const pw.EdgeInsets.all(9),
           decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
           child: pw.Row(children: [
             if (date != null) _metaCell('Date', date),
@@ -602,9 +602,9 @@ class VoucherPdf {
 
         // ── Related references (SO # in DO, SO+DO in SI) ────────────────
         if (relatedRefs != null && relatedRefs.isNotEmpty) ...[
-          pw.SizedBox(height: 8),
+          pw.SizedBox(height: 6),
           pw.Container(
-            padding: const pw.EdgeInsets.all(10),
+            padding: const pw.EdgeInsets.all(8),
             decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
             child: pw.Row(children: [
               for (final e in relatedRefs.entries) _metaCell(e.key, e.value),
@@ -614,9 +614,9 @@ class VoucherPdf {
 
         // ── Customer details (address / contact / phone) ────────────────
         if (customerAddress != null || customerContact != null || customerPhone != null) ...[
-          pw.SizedBox(height: 8),
+          pw.SizedBox(height: 6),
           pw.Container(
-            padding: const pw.EdgeInsets.all(10),
+            padding: const pw.EdgeInsets.all(8),
             decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
               pw.Text(isPurchase ? 'SUPPLIER DETAILS' : 'BILL TO',
@@ -642,9 +642,9 @@ class VoucherPdf {
         ],
 
         if (remarks != null && remarks.isNotEmpty) ...[
-          pw.SizedBox(height: 8),
+          pw.SizedBox(height: 6),
           pw.Container(
-            padding: const pw.EdgeInsets.all(10),
+            padding: const pw.EdgeInsets.all(8),
             decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
               pw.Text('REMARKS', style: pw.TextStyle(fontSize: 8, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 0.8)),
@@ -654,7 +654,7 @@ class VoucherPdf {
           ),
         ],
 
-        pw.SizedBox(height: 14),
+        pw.SizedBox(height: 9),
 
         // ── Line items ─────────────────────────────────────────────────
         _itemsTable(lines, hasMoney),
@@ -688,7 +688,7 @@ class VoucherPdf {
             alignment: pw.Alignment.centerRight,
             child: pw.Container(
               width: 220,
-              padding: const pw.EdgeInsets.all(10),
+              padding: const pw.EdgeInsets.all(8),
               decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
               child: pw.Column(children: [
                 if (subtotal != null) _totalRow('Subtotal', _n4(subtotal)),
@@ -704,7 +704,7 @@ class VoucherPdf {
         ],
 
         // ── Signature blocks ───────────────────────────────────────────
-        pw.SizedBox(height: 36),
+        pw.SizedBox(height: 14),
         pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
           _signatureBlock('Prepared By', preparedBy, sub: createdAt),
           _signatureBlock(checkedByLabel ?? 'Checked By', checkedByName, sub: checkedByAt, signature: checkedSigImg, stamp: checkedStampImg),
@@ -713,10 +713,10 @@ class VoucherPdf {
 
         // ── Terms & Conditions / Additional Information ────────────────
         if (residualFooter != null && residualFooter.isNotEmpty) ...[
-          pw.SizedBox(height: 18),
+          pw.SizedBox(height: 10),
           pw.Container(
             width: double.infinity,
-            padding: const pw.EdgeInsets.all(12),
+            padding: const pw.EdgeInsets.all(9),
             decoration: pw.BoxDecoration(
               color: _bg,
               border: pw.Border.all(color: _border),
@@ -757,7 +757,7 @@ class VoucherPdf {
           // Signature + stamp sit just above the sign-off line. The fixed height
           // keeps all three columns' lines aligned, signed or not.
           pw.Container(
-            height: 34,
+            height: 28,
             alignment: pw.Alignment.center,
             child: (signature == null && stamp == null)
                 ? pw.SizedBox()
