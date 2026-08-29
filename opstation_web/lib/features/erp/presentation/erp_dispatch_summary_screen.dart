@@ -93,6 +93,9 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
           'is_foc': r['is_foc'] == true,
           'product_id': r['product_id'] as String?,
           'do_id': r['delivery_order_id'] as String?,
+          'voucher_number': doh['voucher_number'] as String? ?? '',
+          'date': doh['voucher_date'] as String? ?? '',
+          'branch_id': doh['branch_id'] as String?,
           'customer_id': doh['customer_id'] as String?,
           'customer_name': (doh['customers'] as Map?)?['shop_name'] as String? ?? 'Walk-in',
           'customer_code': (doh['customers'] as Map?)?['code'] as String? ?? '',
@@ -152,6 +155,30 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
     return _applySearch(rows, (r) => '${r['name']} ${r['sku']}');
   }
 
+  String _branchName(String? id) => id == null ? '' : (_branches.firstWhere((b) => b['id'] == id, orElse: () => const {})['name'] as String? ?? '');
+
+  // Line-level dispatch register: one row per dispatched DO line.
+  List<Map<String, dynamic>> get _registerRows {
+    final rows = _lines.map((r) {
+      final pm = _productMap[r['product_id']] ?? const {};
+      return {
+        'voucher_number': r['voucher_number'] ?? '',
+        'date': r['date'] ?? '',
+        'party': r['customer_name'] ?? '',
+        'product': pm['name'] ?? '(unknown)',
+        'sku': pm['sku'] ?? '',
+        'qty': r['qty'] as double,
+        'foc': r['is_foc'] == true,
+        'branch': _branchName(r['branch_id'] as String?),
+      };
+    }).toList()
+      ..sort((a, b) {
+        final d = (b['date'] as String).compareTo(a['date'] as String);
+        return d != 0 ? d : (a['voucher_number'] as String).compareTo(b['voucher_number'] as String);
+      });
+    return _applySearch(rows, (r) => '${r['voucher_number']} ${r['party']} ${r['product']} ${r['sku']}');
+  }
+
   List<Map<String, dynamic>> _applySearch(List<Map<String, dynamic>> rows, String Function(Map<String, dynamic>) text) {
     if (_search.trim().isEmpty) return rows;
     final q = _search.toLowerCase();
@@ -169,35 +196,45 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
   // PDF --------------------------------------------------------------------
   Future<void> _pdf() async {
     final productMode = _view == 'product';
-    final rows = productMode ? _productRows : _customerRows;
+    final registerMode = _view == 'register';
+    final rows = registerMode ? _registerRows : (productMode ? _productRows : _customerRows);
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     final branchName = _branch == 'all' ? 'All branches' : (_branches.firstWhere((b) => b['id'] == _branch, orElse: () => {'name': _branch})['name'] as String);
     final doc = pw.Document();
+    String fmtDate(String d) { final dt = DateTime.tryParse(d); return dt != null ? DateFormat('dd/MM/yyyy').format(dt) : d; }
 
-    final headers = productMode
-        ? ['#', 'Product', 'SKU', 'UOM', 'Qty', 'FOC', 'Customers']
-        : ['#', 'Customer', 'Code', 'DOs', 'Products', 'Qty', 'FOC'];
+    final headers = registerMode
+        ? ['#', 'DO No', 'Date', 'Party', 'Product', 'SKU', 'Qty', 'Branch']
+        : productMode
+            ? ['#', 'Product', 'SKU', 'UOM', 'Qty', 'FOC', 'Customers']
+            : ['#', 'Customer', 'Code', 'DOs', 'Products', 'Qty', 'FOC'];
     final data = <List<String>>[];
     for (var i = 0; i < rows.length; i++) {
       final r = rows[i];
-      if (productMode) {
+      if (registerMode) {
+        data.add(['${i + 1}', '${r['voucher_number']}', fmtDate('${r['date']}'), '${r['party']}', '${r['product']}${r['foc'] == true ? ' (FOC)' : ''}', '${r['sku']}', _qtyFmt.format(r['qty']), '${r['branch']}']);
+      } else if (productMode) {
         data.add(['${i + 1}', '${r['name']}', '${r['sku']}', '${r['uom']}', _qtyFmt.format(r['qty']), _qtyFmt.format(r['foc']), '${r['custs']}']);
       } else {
         data.add(['${i + 1}', '${r['name']}', '${r['code']}', '${r['dos']}', '${r['prods']}', _qtyFmt.format(r['qty']), _qtyFmt.format(r['foc'])]);
       }
     }
     final totalQty = rows.fold<double>(0, (s, r) => s + (r['qty'] as double));
-    final totalFoc = rows.fold<double>(0, (s, r) => s + (r['foc'] as double));
-    final totalRow = productMode
-        ? ['', 'Total', '', '', _qtyFmt.format(totalQty), _qtyFmt.format(totalFoc), '']
-        : ['', 'Total', '', '', '', _qtyFmt.format(totalQty), _qtyFmt.format(totalFoc)];
+    final totalFoc = registerMode
+        ? rows.fold<double>(0, (s, r) => s + ((r['foc'] == true) ? (r['qty'] as double) : 0))
+        : rows.fold<double>(0, (s, r) => s + (r['foc'] as double));
+    final totalRow = registerMode
+        ? ['', 'Total', '', '', '', '', _qtyFmt.format(totalQty), '']
+        : productMode
+            ? ['', 'Total', '', '', _qtyFmt.format(totalQty), _qtyFmt.format(totalFoc), '']
+            : ['', 'Total', '', '', '', _qtyFmt.format(totalQty), _qtyFmt.format(totalFoc)];
 
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(28),
       build: (ctx) => [
         if (org.isNotEmpty) pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
-        pw.Text('Dispatch Summary - ${productMode ? 'Product-wise' : 'Customer-wise'}', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+        pw.Text('Dispatch Summary - ${registerMode ? 'Register' : (productMode ? 'Product-wise' : 'Customer-wise')}', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
         pw.Text('${DateFormat('d MMM y').format(_from)} to ${DateFormat('d MMM y').format(_to)}     |     $branchName     |     Based on Delivery Orders (dispatched qty)', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
@@ -207,9 +244,11 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
           headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
           cellStyle: const pw.TextStyle(fontSize: 9),
           headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-          cellAlignments: productMode
-              ? {0: pw.Alignment.centerLeft, 4: pw.Alignment.centerRight, 5: pw.Alignment.centerRight, 6: pw.Alignment.centerRight}
-              : {0: pw.Alignment.centerLeft, 3: pw.Alignment.centerRight, 4: pw.Alignment.centerRight, 5: pw.Alignment.centerRight, 6: pw.Alignment.centerRight},
+          cellAlignments: registerMode
+              ? {0: pw.Alignment.centerLeft, 6: pw.Alignment.centerRight}
+              : productMode
+                  ? {0: pw.Alignment.centerLeft, 4: pw.Alignment.centerRight, 5: pw.Alignment.centerRight, 6: pw.Alignment.centerRight}
+                  : {0: pw.Alignment.centerLeft, 3: pw.Alignment.centerRight, 4: pw.Alignment.centerRight, 5: pw.Alignment.centerRight, 6: pw.Alignment.centerRight},
           rowDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
         ),
         pw.SizedBox(height: 8),
@@ -222,9 +261,12 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
   @override
   Widget build(BuildContext context) {
     final productMode = _view == 'product';
-    final rows = productMode ? _productRows : _customerRows;
+    final registerMode = _view == 'register';
+    final rows = registerMode ? _registerRows : (productMode ? _productRows : _customerRows);
     final totalQty = rows.fold<double>(0, (s, r) => s + (r['qty'] as double));
-    final totalFoc = rows.fold<double>(0, (s, r) => s + (r['foc'] as double));
+    final totalFoc = registerMode
+        ? rows.fold<double>(0, (s, r) => s + ((r['foc'] == true) ? (r['qty'] as double) : 0))
+        : rows.fold<double>(0, (s, r) => s + (r['foc'] as double));
 
     return Container(
       color: AppTheme.background,
@@ -250,6 +292,7 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   _viewTab('customer', 'Customer-wise', Icons.store_outlined),
                   _viewTab('product', 'Product-wise', Icons.inventory_2_outlined),
+                  _viewTab('register', 'Register (lines)', Icons.list_alt_outlined),
                 ]),
               ),
               // Branch
@@ -264,7 +307,7 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
                 onChanged: (v) { setState(() => _branch = v ?? 'all'); _load(); },
               )),
               SizedBox(width: 220, child: TextField(
-                decoration: InputDecoration(hintText: productMode ? 'Search product...' : 'Search customer...', prefixIcon: const Icon(Icons.search, size: 18), isDense: true, border: const OutlineInputBorder()),
+                decoration: InputDecoration(hintText: registerMode ? 'Search DO / party / product...' : (productMode ? 'Search product...' : 'Search customer...'), prefixIcon: const Icon(Icons.search, size: 18), isDense: true, border: const OutlineInputBorder()),
                 onChanged: (v) => setState(() => _search = v),
               )),
             ]),
@@ -277,7 +320,7 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
             color: AppTheme.primary.withOpacity(0.05),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Text(
-              '${rows.length} ${productMode ? 'product(s)' : 'customer(s)'}   ·   Total dispatched ${_qtyFmt.format(totalQty)} units   ·   FOC ${_qtyFmt.format(totalFoc)}',
+              '${rows.length} ${registerMode ? 'line(s)' : (productMode ? 'product(s)' : 'customer(s)')}   ·   Total dispatched ${_qtyFmt.format(totalQty)} units   ·   FOC ${_qtyFmt.format(totalFoc)}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary),
             ),
           ),
@@ -286,7 +329,7 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
               ? const Center(child: BrandSpinner())
               : rows.isEmpty
                   ? const Center(child: Text('No dispatches in this period.', style: TextStyle(color: AppTheme.textSecondary)))
-                  : productMode ? _productTable(rows) : _customerTable(rows),
+                  : registerMode ? _registerTable(rows) : (productMode ? _productTable(rows) : _customerTable(rows)),
         ),
       ]),
     );
@@ -331,6 +374,25 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
             _cell(_qtyFmt.format(r['qty']), flex: 2, right: true, bold: true),
             _cell(_qtyFmt.format(r['foc']), flex: 1, right: true),
             _cell('${r['custs']}', flex: 1, right: true),
+          ])),
+    ]));
+  }
+
+  Widget _registerTable(List<Map<String, dynamic>> rows) {
+    String fmtDate(String d) {
+      final dt = DateTime.tryParse(d);
+      return dt != null ? DateFormat('dd/MM/yyyy').format(dt) : d;
+    }
+    return HScrollOnNarrow(minWidth: 900, child: ListView(padding: const EdgeInsets.all(16), children: [
+      _tableHeader(const ['DO No', 'Date', 'Party', 'Product', 'SKU', 'Qty', 'Branch'], const [2, 2, 4, 5, 2, 2, 2]),
+      ...rows.map((r) => _row([
+            _cell('${r['voucher_number']}', flex: 2, bold: true),
+            _cell(fmtDate('${r['date']}'), flex: 2),
+            _cell('${r['party']}', flex: 4),
+            _cell('${r['product']}${r['foc'] == true ? '  (FOC)' : ''}', flex: 5),
+            _cell('${r['sku']}', flex: 2),
+            _cell(_qtyFmt.format(r['qty']), flex: 2, right: true, bold: true),
+            _cell('${r['branch']}', flex: 2),
           ])),
     ]));
   }
