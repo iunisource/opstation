@@ -4,10 +4,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
+import '../../../core/services/notification_service.dart';
 import '../retailer_auth_controller.dart';
 import 'retailer_complaints_screen.dart';
 import 'retailer_files_screen.dart';
 import 'retailer_home_screen.dart';
+import 'retailer_ledger_screen.dart';
 import 'retailer_notifications_sheet.dart';
 import 'retailer_orders_screen.dart';
 
@@ -40,20 +42,85 @@ class RetailerShell extends ConsumerStatefulWidget {
 class _RetailerShellState extends ConsumerState<RetailerShell> {
   int _index = 0;
 
+  // Whether this retailer may see their account ledger (admin toggle, per
+  // customers.retailer_ledger_visible). Loaded once on open; the Ledger tab is
+  // shown only when true.
+  bool _ledgerEnabled = false;
+  bool _fcmRegistered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLedgerFlag();
+  }
+
+  Future<void> _loadLedgerFlag() async {
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_ledger_enabled');
+      if (mounted) setState(() => _ledgerEnabled = res == true);
+    } catch (_) {
+      // RPC not deployed / not permitted — keep the tab hidden.
+    }
+  }
+
+  // Register this retailer's FCM token so order-status pushes (fired by the
+  // DB trigger) actually reach the phone. Retailer auth is separate from staff
+  // auth, which is where staff/driver tokens get registered — so retailers must
+  // register here or the server would have no token to push to.
+  void _ensureFcm(String userId) {
+    if (_fcmRegistered) return;
+    _fcmRegistered = true;
+    // Fire-and-forget; failure just means no push (bell/in-app still work).
+    ref.read(notificationServiceProvider).initialize(userId).catchError((_) {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(retailerAuthControllerProvider).valueOrNull;
     final unread = ref.watch(retailerUnreadProvider).valueOrNull ?? 0;
+    if (me != null) _ensureFcm(me.userId);
 
     return RetailerLocaleScope(
       child: Builder(builder: (context) {
         final t = T.of(context);
-        final titles = [t.home, t.orders, t.complaints, t.files];
+
+        final pages = <Widget>[
+          const RetailerHomeScreen(),
+          const RetailerOrdersScreen(),
+          const RetailerComplaintsScreen(),
+          const RetailerFilesScreen(),
+          if (_ledgerEnabled) const RetailerLedgerScreen(),
+        ];
+        final destinations = <NavigationDestination>[
+          NavigationDestination(
+              icon: const Icon(Icons.home_outlined),
+              selectedIcon: const Icon(Icons.home),
+              label: t.home),
+          NavigationDestination(
+              icon: const Icon(Icons.receipt_long_outlined),
+              selectedIcon: const Icon(Icons.receipt_long),
+              label: t.orders),
+          NavigationDestination(
+              icon: const Icon(Icons.report_problem_outlined),
+              selectedIcon: const Icon(Icons.report_problem),
+              label: t.complaints),
+          NavigationDestination(
+              icon: const Icon(Icons.folder_shared_outlined),
+              selectedIcon: const Icon(Icons.folder_shared),
+              label: t.files),
+          if (_ledgerEnabled)
+            NavigationDestination(
+                icon: const Icon(Icons.account_balance_wallet_outlined),
+                selectedIcon: const Icon(Icons.account_balance_wallet),
+                label: t.ledger),
+        ];
+        final titles = [t.home, t.orders, t.complaints, t.files, t.ledger];
+        final index = _index.clamp(0, pages.length - 1);
         return Scaffold(
           appBar: AppBar(
             titleSpacing: 16,
             title: Text(
-              _index == 0 ? (me?.name ?? t.home) : titles[_index],
+              index == 0 ? (me?.name ?? t.home) : titles[index],
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
@@ -107,35 +174,13 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
             ],
           ),
           body: IndexedStack(
-            index: _index,
-            children: const [
-              RetailerHomeScreen(),
-              RetailerOrdersScreen(),
-              RetailerComplaintsScreen(),
-              RetailerFilesScreen(),
-            ],
+            index: index,
+            children: pages,
           ),
           bottomNavigationBar: NavigationBar(
-            selectedIndex: _index,
+            selectedIndex: index,
             onDestinationSelected: (i) => setState(() => _index = i),
-            destinations: [
-              NavigationDestination(
-                  icon: const Icon(Icons.home_outlined),
-                  selectedIcon: const Icon(Icons.home),
-                  label: t.home),
-              NavigationDestination(
-                  icon: const Icon(Icons.receipt_long_outlined),
-                  selectedIcon: const Icon(Icons.receipt_long),
-                  label: t.orders),
-              NavigationDestination(
-                  icon: const Icon(Icons.report_problem_outlined),
-                  selectedIcon: const Icon(Icons.report_problem),
-                  label: t.complaints),
-              NavigationDestination(
-                  icon: const Icon(Icons.folder_shared_outlined),
-                  selectedIcon: const Icon(Icons.folder_shared),
-                  label: t.files),
-            ],
+            destinations: destinations,
           ),
         );
       }),

@@ -206,6 +206,29 @@ class T {
   String get products => _s('products', 'پروڈکٹس');
   String get quantity => _s('Quantity', 'مقدار');
   String get done => _s('Done', 'مکمل');
+
+  // ── Ledger ────────────────────────────────────────────────────────────
+  String get ledger => _s('Ledger', 'کھاتہ');
+  String get ledgerUnavailable =>
+      _s('Ledger is not available for your account.', 'آپ کے اکاؤنٹ کے لیے کھاتہ دستیاب نہیں۔');
+  String get ledgerEmpty => _s('No ledger entries yet.', 'ابھی کوئی اندراج نہیں۔');
+  String get totalDebit => _s('Total Debit', 'کل ڈیبٹ');
+  String get totalCredit => _s('Total Credit', 'کل کریڈٹ');
+  String get balance => _s('Balance', 'بقایا');
+  String get balanceShort => _s('Bal', 'بقایا');
+
+  // ── Schemes / Offers ──────────────────────────────────────────────────
+  String get offers => _s('Offers', 'آفرز');
+  String get availableOffers => _s('Available offers', 'دستیاب آفرز');
+  String get checkingOffers => _s('Checking offers…', 'آفرز دیکھی جا رہی ہیں…');
+  String get noOffers =>
+      _s('No offers available for your current cart.', 'آپ کی موجودہ ٹوکری کے لیے کوئی آفر نہیں۔');
+  String get offersNote => _s(
+      'Offers are confirmed by our team when your order is processed.',
+      'آفرز کی تصدیق آرڈر پروسیس ہونے پر ہماری ٹیم کرے گی۔');
+  String get free => _s('Free', 'مفت');
+  String get discount => _s('Discount', 'رعایت');
+  String get specialPrice => _s('Special price', 'خصوصی قیمت');
 }
 
 /// Small EN/اردو toggle. Placed on the login screens deliberately: a shopkeeper
