@@ -89,11 +89,14 @@ final crmOverdueCountProvider = FutureProvider<int>((ref) async {
     final now = DateTime.now();
     final today =
         '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    // Unattended = open OR in_progress (an in-progress complaint is still
+    // pending). Matches the Follow-ups screen's Overdue tile, which counts both;
+    // counting only 'open' left in-progress complaints off the nav badge.
     final res = await client
         .from('customer_activities')
         .select('id')
         .eq('org_id', user.orgId!)
-        .eq('status', 'open')
+        .inFilter('status', ['open', 'in_progress'])
         .not('due_date', 'is', null)
         .lt('due_date', today);
     return (res as List).length;
