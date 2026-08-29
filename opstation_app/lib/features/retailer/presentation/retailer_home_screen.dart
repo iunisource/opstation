@@ -20,6 +20,16 @@ final retailerAgingProvider =
   return Map<String, dynamic>.from(res as Map);
 });
 
+/// Admin-controlled information/instructions card (org.retailer_info_*).
+final retailerInfoProvider =
+    FutureProvider.autoDispose<Map<String, dynamic>?>((ref) async {
+  try {
+    final res = await Supabase.instance.client.rpc('retailer_info');
+    if (res is Map) return Map<String, dynamic>.from(res);
+  } catch (_) {}
+  return null;
+});
+
 class RetailerHomeScreen extends ConsumerStatefulWidget {
   const RetailerHomeScreen({super.key});
 
@@ -27,9 +37,25 @@ class RetailerHomeScreen extends ConsumerStatefulWidget {
   ConsumerState<RetailerHomeScreen> createState() => _RetailerHomeScreenState();
 }
 
-class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen> {
+class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen>
+    with SingleTickerProviderStateMixin {
   bool _showAging = false;
   bool _loadingOffers = false;
+  late final AnimationController _throb;
+
+  @override
+  void initState() {
+    super.initState();
+    _throb = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1150))
+      ..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _throb.dispose();
+    super.dispose();
+  }
 
   double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
@@ -129,10 +155,33 @@ class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(t.outstanding,
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.textSecondaryLight)),
+                    Row(children: [
+                      Text(t.outstanding,
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.textSecondaryLight)),
+                      if (overLimit) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppColors.danger,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                            Icon(Icons.error_outline,
+                                size: 12, color: Colors.white),
+                            SizedBox(width: 3),
+                            Text('Over Limit',
+                                style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white)),
+                          ]),
+                        ),
+                      ],
+                    ]),
                     const SizedBox(height: 4),
                     Text(
                       total <= 0 ? rs(0) : rs(total),
@@ -279,21 +328,44 @@ class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen> {
 
               const SizedBox(height: 26),
 
-              // ── Primary action ─────────────────────────────────────────
-              SizedBox(
-                height: 56,
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.add_shopping_cart),
-                  label: Text(t.placeOrder,
-                      style: const TextStyle(
-                          fontSize: 16.5, fontWeight: FontWeight.w700)),
-                  style: ElevatedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14)),
-                  ),
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (_) => const RetailerBrowseScreen()),
+              // ── Primary action (gently throbbing to draw the eye) ──────
+              AnimatedBuilder(
+                animation: _throb,
+                builder: (_, child) {
+                  final e = Curves.easeInOut.transform(_throb.value);
+                  return Transform.scale(
+                    scale: 1 + 0.018 * e,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary
+                                .withValues(alpha: 0.20 + 0.28 * e),
+                            blurRadius: 10 + 14 * e,
+                            spreadRadius: 1 + 1.5 * e,
+                          ),
+                        ],
+                      ),
+                      child: child,
+                    ),
+                  );
+                },
+                child: SizedBox(
+                  height: 56,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add_shopping_cart),
+                    label: Text(t.placeOrder,
+                        style: const TextStyle(
+                            fontSize: 16.5, fontWeight: FontWeight.w700)),
+                    style: ElevatedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                          builder: (_) => const RetailerBrowseScreen()),
+                    ),
                   ),
                 ),
               ),
@@ -322,12 +394,66 @@ class _RetailerHomeScreenState extends ConsumerState<RetailerHomeScreen> {
                   onPressed: _loadingOffers ? null : () => _showOffers(t),
                 ),
               ),
+
+              // ── Information / instructions (admin-controlled) ──────────
+              Builder(builder: (_) {
+                final info = ref.watch(retailerInfoProvider).valueOrNull;
+                if (info == null || info['enabled'] != true) {
+                  return const SizedBox.shrink();
+                }
+                final body = (info['body'] as String?)?.trim() ?? '';
+                if (body.isEmpty) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 24),
+                  child: _infoCard(
+                      (info['title'] as String?)?.trim().isNotEmpty == true
+                          ? info['title'] as String
+                          : 'Information',
+                      body),
+                );
+              }),
             ],
           );
         },
       ),
     );
   }
+
+  Widget _infoCard(String title, String body) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+        decoration: BoxDecoration(
+          color: AppColors.info.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.info.withValues(alpha: 0.22)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              width: 30,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.info.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(Icons.info_outline, size: 18, color: AppColors.info),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(title,
+                  style: const TextStyle(
+                      fontSize: 14.5, fontWeight: FontWeight.w800)),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          Text(body,
+              style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: AppColors.textPrimaryLight.withValues(alpha: 0.85))),
+        ]),
+      );
 
   Future<void> _showOffers(T t) async {
     setState(() => _loadingOffers = true);

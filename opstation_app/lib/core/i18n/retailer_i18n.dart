@@ -123,6 +123,14 @@ class T {
   // ── Common ────────────────────────────────────────────────────────────
   String get cancel => _s('Cancel', 'منسوخ');
   String get logout => _s('Log out', 'لاگ آؤٹ');
+  String get profile => _s('Profile', 'پروفائل');
+  String get businessName => _s('Business name', 'کاروبار کا نام');
+  String get contactPerson => _s('Contact person', 'رابطہ فرد');
+  String get address => _s('Address', 'پتہ');
+  String get creditLimit2 => _s('Credit limit', 'کریڈٹ کی حد');
+  String get salesperson => _s('Salesperson', 'سیلز پرسن');
+  String get phone => _s('Phone', 'فون');
+  String get notProvided => _s('—', '—');
   String get somethingWentWrong =>
       _s('Something went wrong. Please try again.', 'کچھ غلط ہو گیا۔ دوبارہ کوشش کریں۔');
   String get retry => _s('Try again', 'دوبارہ کوشش کریں');

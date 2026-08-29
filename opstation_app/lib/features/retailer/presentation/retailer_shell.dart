@@ -170,6 +170,17 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
     ref.read(notificationServiceProvider).registerRetailerToken();
   }
 
+  Future<void> _showProfile(BuildContext context, T t) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => RetailerLocaleScope(
+        child: Builder(builder: (_) => const _RetailerProfileSheet()),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(retailerAuthControllerProvider).valueOrNull;
@@ -247,9 +258,19 @@ class _RetailerShellState extends ConsumerState<RetailerShell> {
                 onSelected: (v) {
                   if (v == 'logout') {
                     ref.read(retailerAuthControllerProvider.notifier).signOut();
+                  } else if (v == 'profile') {
+                    _showProfile(context, t);
                   }
                 },
                 itemBuilder: (_) => [
+                  PopupMenuItem(
+                      value: 'profile',
+                      child: Row(children: [
+                        const Icon(Icons.badge_outlined, size: 18),
+                        const SizedBox(width: 10),
+                        Text(t.profile),
+                      ])),
+                  const PopupMenuDivider(),
                   PopupMenuItem(
                     enabled: false,
                     child: SizedBox(
@@ -318,5 +339,127 @@ Color agingColor(int bucket) {
       return Colors.deepOrange;
     default:
       return AppColors.danger;
+  }
+}
+
+/// The shop's own account details (retailer_profile_card).
+class _RetailerProfileSheet extends StatefulWidget {
+  const _RetailerProfileSheet();
+  @override
+  State<_RetailerProfileSheet> createState() => _RetailerProfileSheetState();
+}
+
+class _RetailerProfileSheetState extends State<_RetailerProfileSheet> {
+  bool _loading = true;
+  Map<String, dynamic> _p = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await Supabase.instance.client.rpc('retailer_profile_card');
+      if (res is Map && mounted) {
+        setState(() {
+          _p = Map<String, dynamic>.from(res);
+          _loading = false;
+        });
+        return;
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  String _limit(T t) {
+    final v = double.tryParse('${_p['credit_limit'] ?? ''}');
+    if (v == null || v <= 0) return t.notProvided;
+    return rs(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = T.of(context);
+    final rows = <(IconData, String, String)>[
+      (Icons.storefront_outlined, t.businessName,
+          '${_p['business_name'] ?? t.notProvided}'),
+      (Icons.tag, '#', '${_p['code'] ?? t.notProvided}'),
+      (Icons.person_outline, t.contactPerson,
+          '${(_p['contact_person'] as String?)?.trim().isNotEmpty == true ? _p['contact_person'] : t.notProvided}'),
+      (Icons.phone_outlined, t.phone,
+          '${(_p['phone'] as String?)?.trim().isNotEmpty == true ? _p['phone'] : t.notProvided}'),
+      (Icons.location_on_outlined, t.address,
+          '${(_p['address'] as String?)?.trim().isNotEmpty == true ? _p['address'] : t.notProvided}'),
+      (Icons.credit_card, t.creditLimit2, _limit(t)),
+      (Icons.badge_outlined, t.salesperson,
+          '${(_p['salesperson'] as String?)?.trim().isNotEmpty == true ? _p['salesperson'] : t.notProvided}'),
+    ];
+
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.6,
+      maxChildSize: 0.92,
+      builder: (_, scroll) => Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
+          child: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(t.profile,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : ListView(
+                  controller: scroll,
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+                  children: [
+                    for (final r in rows)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 34,
+                              height: 34,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: AppColors.primary.withValues(alpha: 0.09),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(r.$1, size: 18, color: AppColors.primary),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(r.$2.toUpperCase(),
+                                      style: TextStyle(
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: 0.4,
+                                          color: AppColors.textSecondaryLight)),
+                                  const SizedBox(height: 2),
+                                  Text(r.$3,
+                                      style: const TextStyle(
+                                          fontSize: 14.5,
+                                          fontWeight: FontWeight.w600)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+      ]),
+    );
   }
 }
