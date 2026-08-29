@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../../core/sync/sync_controller.dart';
@@ -38,6 +39,7 @@ class _OrderCreatePage extends ConsumerStatefulWidget {
 class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
   Map<String, dynamic>? _customer; // {id, shop_name, code}
   final List<Map<String, dynamic>> _lines = [];
+  bool _offersLoading = false;
   final _notesCtrl = TextEditingController();
   bool _submitting = false;
 
@@ -196,6 +198,46 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
     if (v != null && v > 0) setState(() => line['qty'] = v);
   }
 
+  /// Suggests the offers this cart qualifies for — same scheme_suggest engine
+  /// the web Sales Order and the retailer app use, so a salesperson can upsell
+  /// to the threshold. Informational: staff apply the benefit on the SO.
+  Future<void> _showOffers() async {
+    final orgId = _orgId;
+    final cust = _customer;
+    if (orgId == null || cust == null || _lines.isEmpty || _offersLoading) return;
+    setState(() => _offersLoading = true);
+    List<Map<String, dynamic>> offers = [];
+    try {
+      final items = [
+        for (final l in _lines)
+          {
+            'product_id': l['product_id'],
+            'qty': (l['qty'] as num).toDouble(),
+            'unit_price': (l['price'] as num).toDouble(),
+          },
+      ];
+      final res = await Supabase.instance.client.rpc('scheme_suggest', params: {
+        'p_org': orgId,
+        'p_branch': null,
+        'p_customer': cust['id'],
+        'p_lines': items,
+      });
+      if (res is List) {
+        offers = [for (final s in res) Map<String, dynamic>.from(s as Map)];
+      }
+    } catch (_) {
+      // Engine off / not eligible — treat as no offers.
+    }
+    if (!mounted) return;
+    setState(() => _offersLoading = false);
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _SalesOffersSheet(offers: offers),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -262,6 +304,24 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(controller: _notesCtrl, decoration: const InputDecoration(hintText: 'Notes (optional)', isDense: true), maxLines: 1),
             const SizedBox(height: 10),
+            if (_customer != null && _lines.isNotEmpty) ...[
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: _offersLoading
+                      ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.local_offer_outlined, size: 18),
+                  label: const Text('Available offers'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: BorderSide(color: AppColors.primary.withValues(alpha: 0.4)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: _offersLoading ? null : _showOffers,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
             Row(children: [
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('${_lines.length} item${_lines.length == 1 ? '' : 's'}', style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
@@ -355,6 +415,156 @@ class _SearchSheetState extends State<_SearchSheet> {
                   );
                 })),
       ])),
+    );
+  }
+}
+
+/// Read-only list of offers the current order qualifies for (scheme_suggest).
+class _SalesOffersSheet extends StatelessWidget {
+  final List<Map<String, dynamic>> offers;
+  const _SalesOffersSheet({required this.offers});
+
+  IconData _icon(String? type) {
+    switch (type) {
+      case 'foc':
+      case 'combo':
+        return Icons.card_giftcard_outlined;
+      case 'promo_price':
+        return Icons.sell_outlined;
+      default:
+        return Icons.percent_outlined;
+    }
+  }
+
+  String _benefit(Map<String, dynamic> s) {
+    double d(dynamic v) => (v as num?)?.toDouble() ?? 0;
+    switch (s['type'] as String?) {
+      case 'foc':
+        final ft = (s['free_text'] as String?)?.trim() ?? '';
+        final fq = d(s['free_total']);
+        return ft.isNotEmpty
+            ? 'Get ${fq.toStringAsFixed(0)} free • $ft'
+            : 'Get ${fq.toStringAsFixed(0)} free';
+      case 'combo':
+        final ft = (s['free_text'] as String?)?.trim() ?? '';
+        return ft.isNotEmpty ? 'Combo: $ft' : 'Combo offer';
+      case 'qty_slab':
+        return 'Discount Rs. ${d(s['discount_total']).toStringAsFixed(2)}';
+      case 'invoice_discount':
+        final p = d(s['invoice_percent']);
+        return '${p.toStringAsFixed(p % 1 == 0 ? 0 : 1)}% off invoice';
+      case 'promo_price':
+        return 'Special promo price';
+      default:
+        return '';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.5,
+      maxChildSize: 0.9,
+      builder: (_, scroll) => Column(children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 2, 20, 10),
+          child: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text('Available offers',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: offers.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(28),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.local_offer_outlined,
+                          size: 40, color: AppColors.textSecondaryLight),
+                      const SizedBox(height: 12),
+                      Text('No offers for this order yet.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: AppColors.textSecondaryLight)),
+                    ]),
+                  ),
+                )
+              : ListView(
+                  controller: scroll,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  children: [
+                    for (final s in offers)
+                      Container(
+                        margin: const EdgeInsets.symmetric(vertical: 5),
+                        padding: const EdgeInsets.all(13),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.borderLight),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: AppColors.primary.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(_icon(s['type'] as String?),
+                                  color: AppColors.primary, size: 20),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text((s['name'] as String?) ?? '',
+                                      style: const TextStyle(
+                                          fontSize: 14.5,
+                                          fontWeight: FontWeight.w800)),
+                                  if (((s['description'] as String?) ?? '')
+                                      .trim()
+                                      .isNotEmpty) ...[
+                                    const SizedBox(height: 3),
+                                    Text((s['description'] as String).trim(),
+                                        style: TextStyle(
+                                            fontSize: 12.5,
+                                            height: 1.3,
+                                            color: AppColors.textSecondaryLight)),
+                                  ],
+                                  const SizedBox(height: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 9, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.success.withValues(alpha: 0.14),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Text(_benefit(s),
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.successDark)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                    Text('Offers are applied by our team when the order is processed.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 11.5, color: AppColors.textSecondaryLight)),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+        ),
+      ]),
     );
   }
 }
