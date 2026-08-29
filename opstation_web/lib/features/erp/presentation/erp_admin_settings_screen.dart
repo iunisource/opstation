@@ -70,6 +70,14 @@ class _AdminToggle {
 
 const List<_AdminToggle> _toggles = [
   _AdminToggle(
+    'org.retailer_info_enabled',
+    'Retailer app: Information section',
+    'Shows an information / instructions card on the retailer app home screen — '
+        'use it for notices like ordering cutoff times, holidays, or a contact number.',
+    text: _TextSetting('org.retailer_info_text', 'Information text',
+        hint: 'e.g. Orders placed after 5 PM are dispatched the next day.'),
+  ),
+  _AdminToggle(
     'org.credit_limit_alert',
     'Credit limit alert on Delivery Order',
     'When a Delivery Order is created for a customer whose outstanding balance '
@@ -494,6 +502,7 @@ class _ToggleGroup {
 
 const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Sales & Customers', Icons.storefront_outlined, [
+    'org.retailer_info_enabled',
     'org.credit_limit_alert',
     'org.aging_alert',
     'org.si_price_editable',
