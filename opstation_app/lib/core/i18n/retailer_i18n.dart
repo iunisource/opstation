@@ -90,6 +90,7 @@ class T {
   String get retailer => _s('Retailer', 'دکاندار');
   String get retailerSub => _s('Place orders for your shop', 'اپنی دکان کے لیے آرڈر دیں');
   String get notYou => _s('Not you? Change', 'آپ نہیں؟ تبدیل کریں');
+  String get back => _s('Back', 'واپس');
 
   // ── Retailer login ────────────────────────────────────────────────────
   String get retailerSignIn => _s('Retailer Sign In', 'دکاندار سائن اِن');

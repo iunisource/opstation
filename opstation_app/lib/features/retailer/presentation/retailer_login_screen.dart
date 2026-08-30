@@ -76,11 +76,23 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Align(
-                        alignment: Alignment.centerRight,
-                        child: LanguageToggle(),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          TextButton.icon(
+                            onPressed: loading
+                                ? null
+                                : () async {
+                                    await setLastLoginRole(null);
+                                    if (context.mounted) context.go('/');
+                                  },
+                            icon: const Icon(Icons.arrow_back, size: 18),
+                            label: Text(t.back),
+                          ),
+                          const LanguageToggle(),
+                        ],
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 20),
                       // Center() so the square is not stretched to full width by
                       // the parent Column's CrossAxisAlignment.stretch — which is
                       // what turned the logo into a wide slab.

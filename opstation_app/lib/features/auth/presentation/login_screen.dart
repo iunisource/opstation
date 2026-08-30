@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/database/app_database_provider.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../retailer/presentation/role_picker_screen.dart' show setLastLoginRole;
 import '../models/user_role.dart';
 import '../providers/auth_controller.dart';
 
@@ -103,7 +105,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const SizedBox(height: 32),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: loading
+                            ? null
+                            : () async {
+                                await setLastLoginRole(null);
+                                if (context.mounted) context.go('/');
+                              },
+                        icon: const Icon(Icons.arrow_back, size: 18),
+                        label: const Text('Back'),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     const _Logo(),
                     const SizedBox(height: 24),
                     Text(
