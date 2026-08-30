@@ -17,6 +17,7 @@ import '../../../shared/widgets/status_badge.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../orders/presentation/order_create_modal.dart';
+import 'dialogs/adhoc_collection_dialog.dart';
 import '../../reports/presentation/export_pdf_sheet.dart';
 import '../data/salesperson_repository.dart';
 import 'salesperson_drawer.dart';
@@ -233,6 +234,88 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
     context.push('/salesperson/route');
   }
 
+  /// The FAB opens a small chooser rather than jumping straight to a new order,
+  /// so the rep can also record an ad-hoc cash receipt — a payment from a
+  /// customer who isn't on the active route (or when no route is running).
+  void _showCreateMenu(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Theme.of(context).cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.borderLight,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryLight,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.shopping_cart_outlined,
+                      color: AppColors.primary),
+                ),
+                title: const Text('New order',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Take an order for a customer'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  OrderCreateModal.show(context);
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.successLight,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.receipt_long_outlined,
+                      color: AppColors.successDark),
+                ),
+                title: const Text('New CR (cash receipt)',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle:
+                    const Text('Record a payment — any customer, no route needed'),
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  final ok = await AdHocCollectionDialog.show(context);
+                  if (ok == true && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Cash receipt recorded'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authControllerProvider).valueOrNull;
@@ -253,9 +336,9 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
       appBarTitle: 'Home',
       drawer: const SalespersonDrawer(),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => OrderCreateModal.show(context),
+        onPressed: () => _showCreateMenu(context),
         icon: const Icon(Icons.add),
-        label: const Text('Order'),
+        label: const Text('New'),
       ),
       body: tripAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),

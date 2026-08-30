@@ -344,6 +344,60 @@ class TripController extends AsyncNotifier<TripState> {
     return visit;
   }
 
+  /// Record an ad-hoc cash receipt for ANY customer — used when a customer from
+  /// an inactive route (or no route at all) pays. It reuses the normal visit
+  /// path (so the SMS fires and it flows into the trip summary) but skips
+  /// location entirely. If no trip is active, a standalone "Off-route
+  /// collections" trip is started so the payment still gets its own summary.
+  Future<Visit> recordAdHocCollection({
+    required Customer customer,
+    required int amount,
+    String? receiptNumber,
+    String? notes,
+  }) async {
+    final s = state.valueOrNull;
+    if (s == null) throw StateError('Trip state not ready.');
+    if (s.active == null) {
+      await _startOffRouteTrip();
+    }
+    return markVisit(
+      customer: customer,
+      capturedLat: null,
+      capturedLng: null,
+      accuracyMeters: null,
+      amount: amount,
+      receiptNumber: receiptNumber,
+      notes: notes,
+    );
+  }
+
+  /// A route-less container for off-route collections, so an ad-hoc receipt
+  /// still produces a trip summary. Recurring kind (never "exhausts" like a
+  /// one-time route). No GPS, no admin route-start ping.
+  Future<void> _startOffRouteTrip() async {
+    final s = state.valueOrNull;
+    if (s == null) throw StateError('Trip state not ready.');
+    if (s.hasActiveTrip) return;
+    final today = TripState.today();
+    final user = ref.read(authControllerProvider).valueOrNull;
+    final trip = Trip(
+      id: _newId('trip'),
+      routeId: 'offroute',
+      routeName: 'Off-route collections',
+      routeKind: RouteKind.recurring,
+      stopSnapshot: const <Customer>[],
+      startedAt: DateTime.now(),
+      startLat: null,
+      startLng: null,
+      userId: user?.id ?? '',
+      userName: user?.name ?? '',
+      userRole: user?.role.label ?? '',
+    );
+    await _repo.createTrip(trip);
+    await _repo.setDayStamp(today);
+    state = AsyncData(s.copyWith(active: trip, dayStamp: today));
+  }
+
   Future<Visit> skipVisit({
     required Customer customer,
     required String reason,

@@ -35,6 +35,18 @@ class SalespersonRepository {
 
   // ---- Customers --------------------------------------------------------
 
+  /// Search all customers (not only route stops) by shop name or code, for the
+  /// ad-hoc collection picker. Returns full Customer rows (with phone).
+  Future<List<Customer>> searchCustomers(String q, {int limit = 30}) async {
+    final ql = q.trim();
+    final sel = _db.select(_db.customers)..limit(limit);
+    if (ql.isNotEmpty) {
+      sel.where((c) => c.shopName.like('%$ql%') | c.code.like('%$ql%'));
+    }
+    final rows = await sel.get();
+    return rows.map(_customerFromRow).toList();
+  }
+
   Future<Customer?> customerById(String id) async {
     final row = await (_db.select(_db.customers)..where((c) => c.id.equals(id)))
         .getSingleOrNull();
