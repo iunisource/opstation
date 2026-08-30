@@ -23,6 +23,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   bool _loading = true;
   String? _error;
   List<_OrderVM> _orders = [];
+  RealtimeChannel? _channel;
 
   late DateTime _from;
   late DateTime _to;
@@ -36,6 +37,37 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
     _from = DateTime(now.year, now.month, 1); // start of current month
     _to = DateTime(now.year, now.month, now.day);
     _load();
+    _subscribe();
+  }
+
+  // Live updates: a newly-synced order appears, and an approve/reject on the web
+  // updates its status here — without a manual refresh.
+  void _subscribe() {
+    final userId = ref.read(authControllerProvider).valueOrNull?.id;
+    if (userId == null) return;
+    _channel = Supabase.instance.client
+        .channel('field_orders_mine_$userId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'field_orders',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'salesperson_id',
+            value: userId,
+          ),
+          callback: (_) {
+            if (mounted) _load();
+          },
+        )
+        .subscribe();
+  }
+
+  @override
+  void dispose() {
+    final ch = _channel;
+    if (ch != null) Supabase.instance.client.removeChannel(ch);
+    super.dispose();
   }
 
   Future<void> _load() async {
