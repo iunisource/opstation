@@ -345,10 +345,19 @@ class TripController extends AsyncNotifier<TripState> {
   }
 
   /// Record an ad-hoc cash receipt for ANY customer — used when a customer from
-  /// an inactive route (or no route at all) pays. It reuses the normal visit
-  /// path (so the SMS fires and it flows into the trip summary) but skips
-  /// location entirely. If no trip is active, a standalone "Off-route
-  /// collections" trip is started so the payment still gets its own summary.
+  /// an inactive route (or no route at all) pays. Location is skipped entirely
+  /// (no GPS gate) and the SMS still fires.
+  ///
+  /// Routing of the payment:
+  ///   - If a planned route is ACTIVE, the receipt joins that route's summary
+  ///     (via the normal [markVisit] path). It does not become a planned stop,
+  ///     so it never distorts that route's coverage / visit score — it simply
+  ///     appears as an additional collection on the report.
+  ///   - If NO route is active, the receipt is recorded into a standalone,
+  ///     already-completed "Off-route collections" summary. That summary never
+  ///     occupies the active-trip slot (so a real route can still be started)
+  ///     and needs no closing. Multiple ad-hoc receipts in the same day
+  ///     aggregate into the one off-route summary.
   Future<Visit> recordAdHocCollection({
     required Customer customer,
     required int amount,
@@ -357,45 +366,130 @@ class TripController extends AsyncNotifier<TripState> {
   }) async {
     final s = state.valueOrNull;
     if (s == null) throw StateError('Trip state not ready.');
-    if (s.active == null) {
-      await _startOffRouteTrip();
+
+    if (s.active != null) {
+      // A route is running → attach to it (no location).
+      return markVisit(
+        customer: customer,
+        capturedLat: null,
+        capturedLng: null,
+        accuracyMeters: null,
+        amount: amount,
+        receiptNumber: receiptNumber,
+        notes: notes,
+      );
     }
-    return markVisit(
+
+    return _recordStandaloneOffRoute(
       customer: customer,
-      capturedLat: null,
-      capturedLng: null,
-      accuracyMeters: null,
       amount: amount,
       receiptNumber: receiptNumber,
       notes: notes,
     );
   }
 
-  /// A route-less container for off-route collections, so an ad-hoc receipt
-  /// still produces a trip summary. Recurring kind (never "exhausts" like a
-  /// one-time route). No GPS, no admin route-start ping.
-  Future<void> _startOffRouteTrip() async {
+  /// Record an off-route receipt when no route is active, into a self-contained
+  /// "Off-route collections" summary that is created ALREADY completed (so it
+  /// never blocks starting a real route and never needs closing). Subsequent
+  /// off-route receipts the same day append to the same summary.
+  Future<Visit> _recordStandaloneOffRoute({
+    required Customer customer,
+    required int amount,
+    String? receiptNumber,
+    String? notes,
+  }) async {
     final s = state.valueOrNull;
     if (s == null) throw StateError('Trip state not ready.');
-    if (s.hasActiveTrip) return;
+    if (amount > 0 && (receiptNumber == null || receiptNumber.trim().isEmpty)) {
+      throw ArgumentError('Receipt number is required when amount > 0.');
+    }
+
     final today = TripState.today();
     final user = ref.read(authControllerProvider).valueOrNull;
-    final trip = Trip(
-      id: _newId('trip'),
-      routeId: 'offroute',
-      routeName: 'Off-route collections',
-      routeKind: RouteKind.recurring,
-      stopSnapshot: const <Customer>[],
-      startedAt: DateTime.now(),
-      startLat: null,
-      startLng: null,
-      userId: user?.id ?? '',
-      userName: user?.name ?? '',
-      userRole: user?.role.label ?? '',
+    final now = DateTime.now();
+
+    // Reuse today's off-route summary if one exists; otherwise create it as an
+    // already-closed trip.
+    final existing =
+        s.completedToday.where((t) => t.routeId == 'offroute').toList();
+    final bool isNew = existing.isEmpty;
+    Trip trip = isNew
+        ? Trip(
+            id: _newId('trip'),
+            routeId: 'offroute',
+            routeName: 'Off-route collections',
+            routeKind: RouteKind.recurring,
+            stopSnapshot: const <Customer>[],
+            startedAt: now,
+            endedAt: now,
+            closeReason: TripCloseReason.userEnded,
+            startLat: null,
+            startLng: null,
+            userId: user?.id ?? '',
+            userName: user?.name ?? '',
+            userRole: user?.role.label ?? '',
+          )
+        : existing.first;
+
+    if (isNew) {
+      await _repo.createTrip(trip);
+      await _repo.setDayStamp(today);
+    }
+
+    final visit = Visit(
+      id: _newId('visit'),
+      customerId: customer.id,
+      status: VisitStatus.noLocation,
+      timestamp: now,
+      capturedLat: null,
+      capturedLng: null,
+      accuracyMeters: null,
+      distanceMeters: null,
+      amount: amount,
+      receiptNumber: receiptNumber,
+      notes: notes,
+      photoPaths: const [],
+      userId: trip.userId,
+      userName: trip.userName,
+      userRole: trip.userRole,
     );
-    await _repo.createTrip(trip);
-    await _repo.setDayStamp(today);
-    state = AsyncData(s.copyWith(active: trip, dayStamp: today));
+
+    _repo.setCurrentTripContext(trip.id);
+    await _repo.insertVisit(visit);
+
+    // Persist the appended visit and keep endedAt fresh so the summary sorts
+    // as the most recent completed trip.
+    final updated = trip.copyWith(
+      visits: [...trip.visits, visit],
+      endedAt: now,
+    );
+    await _repo.updateTrip(updated);
+
+    // SMS at the real creation point (mirrors markVisit).
+    if (amount > 0) {
+      SmsService.note(
+          'adhoc CR: firing SMS for ${customer.id} ${customer.phone} (amount=$amount)');
+      Future.microtask(() async {
+        try {
+          await ref.read(smsServiceProvider).sendVisitSms(
+                customerPhone: customer.phone,
+                customerName: customer.shopName,
+                amount: amount,
+                receiptNo: receiptNumber ?? '',
+                salespersonName: trip.userName,
+              );
+        } catch (e) {
+          SmsService.note('adhoc CR: SMS threw — $e');
+        }
+      });
+    }
+
+    ref.read(syncControllerProvider.notifier).noteNewPendingVisit();
+
+    final others =
+        s.completedToday.where((t) => t.routeId != 'offroute').toList();
+    state = AsyncData(s.copyWith(completedToday: [...others, updated]));
+    return visit;
   }
 
   Future<Visit> skipVisit({

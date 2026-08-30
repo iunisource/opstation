@@ -898,7 +898,9 @@ class _CompletedTripCard extends StatelessWidget {
                             fontSize: 15, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 2),
                     Text(
-                      'Completed · ${trip.visitedCount}/${trip.totalStops} visited · Rs ${trip.totalCollected}',
+                      trip.stopSnapshot.isEmpty
+                          ? 'Off-route collections · ${trip.visits.length} receipt${trip.visits.length == 1 ? '' : 's'} · Rs ${trip.totalCollected}'
+                          : 'Completed · ${trip.visitedCount}/${trip.totalStops} visited · Rs ${trip.totalCollected}',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Theme.of(context)
                                 .textTheme

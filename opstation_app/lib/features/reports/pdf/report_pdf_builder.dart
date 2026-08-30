@@ -470,11 +470,18 @@ class ReportPdfBuilder {
         ? 0.0
         : (verifiedCount / trip.totalStops) * 100;
 
+    // An off-route collections summary has no planned stops, so "customers" is
+    // the distinct set actually collected from and a completion % is meaningless.
+    final offRoute = trip.stopSnapshot.isEmpty;
+    final distinctCustomers = latestByCust.length;
+
     return pw.Row(
       children: [
-        _summaryCell('${trip.totalStops}', 'CUSTOMERS'),
+        _summaryCell(
+            offRoute ? '$distinctCustomers' : '${trip.totalStops}', 'CUSTOMERS'),
         _summaryCell('$verifiedCount', 'VERIFIED'),
-        _summaryCell('${completion.toStringAsFixed(1)}%', 'COMPLETION'),
+        _summaryCell(
+            offRoute ? '—' : '${completion.toStringAsFixed(1)}%', 'COMPLETION'),
         _summaryCell('Rs. ${_fmtNum(totalCollected)}', 'COLLECTED'),
       ],
     );
@@ -576,6 +583,60 @@ class ReportPdfBuilder {
           '${i + 1}',
           c.code,
           c.shopName,
+          _statusTagWithDistance(v.status, v),
+          '${v.amount}',
+          (v.receiptNumber ?? '').isEmpty ? '-' : v.receiptNumber!,
+          DateFormat('hh:mm a').format(v.timestamp),
+          _notesFor(v.status, v),
+        ]);
+      }
+    }
+
+    // Off-route / ad-hoc collections: visits whose customer was NOT a planned
+    // stop on this route (e.g. a payment recorded via "New CR"). The loop above
+    // only walks planned stops, and the sequenced table lists only GPS-verified
+    // visits — an ad-hoc receipt has no GPS — so without this they printed
+    // nowhere, leaving a blank report despite money collected. Customer name /
+    // code come from ctx.extraCustomers (resolved from the local table).
+    final snapshotIds = trip.stopSnapshot.map((c) => c.id).toSet();
+    final offRouteIds = <String>[];
+    for (final v in trip.visits) {
+      if (!snapshotIds.contains(v.customerId) &&
+          !offRouteIds.contains(v.customerId)) {
+        offRouteIds.add(v.customerId);
+      }
+    }
+    var seq = trip.stopSnapshot.length;
+    for (final cid in offRouteIds) {
+      final ref = ctx.extraCustomers[cid];
+      final code = ref?.code ?? '-';
+      final name = ref?.name ?? '(off-route customer)';
+      final custVisits = [
+        for (final v in trip.visits)
+          if (v.customerId == cid) v,
+      ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      final collections = _dedupCollections(custVisits);
+      seq++;
+      if (collections.isEmpty) {
+        final rep = custVisits.isEmpty ? null : custVisits.last;
+        final status = rep?.status ?? VisitStatus.pending;
+        rows.add([
+          '$seq',
+          code,
+          name,
+          _statusTagWithDistance(status, rep),
+          status == VisitStatus.pending ? '-' : '0',
+          '-',
+          rep == null ? '-' : DateFormat('hh:mm a').format(rep.timestamp),
+          _notesFor(status, rep),
+        ]);
+        continue;
+      }
+      for (final v in collections) {
+        rows.add([
+          '$seq',
+          code,
+          name,
           _statusTagWithDistance(v.status, v),
           '${v.amount}',
           (v.receiptNumber ?? '').isEmpty ? '-' : v.receiptNumber!,
