@@ -2001,7 +2001,16 @@ $runSection
         // supervisor actually reaches for — was being clipped off the edge. So on
         // mobile the icons keep one row and the two real buttons get a full-width
         // row of their own beneath, as proper tap targets.
-        Container(
+        LayoutBuilder(builder: (lCtx, lCons) {
+        // Switch to the stacked layout on the actual PANE width, not just the
+        // screen width. With the nav sidebar + job list open on a wide screen
+        // the detail pane is narrow, and cramming the title + counts + every
+        // action button into one Row squeezed the (Expanded) title to zero
+        // width — which is what made "JOB-2026-0032" wrap one character per line
+        // vertically. Below this width the two real buttons drop to their own
+        // full-width row instead.
+        final compact = context.isMobile || lCons.maxWidth < 860;
+        return Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -2009,7 +2018,7 @@ $runSection
               if (!context.isMobile) ...[
                 IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
                 const SizedBox(width: 8),
-                Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+                Expanded(child: Text(_current?['job_number'] as String? ?? 'New Job Card', maxLines: 1, softWrap: false, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
               ],
               if (onFloor) const Padding(padding: EdgeInsets.only(right: 10), child: RunningDot(size: 9, withLabel: true)),
               if (!onFloor && floorFinished && _status != 'completed' && _status != 'cancelled')
@@ -2041,8 +2050,9 @@ $runSection
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), visualDensity: VisualDensity.compact),
                           onPressed: _busy ? null : () => _toggleFloor(true)),
                 ),
-              // Desktop keeps Save + Produce inline.
-              if (!context.isMobile) ...[
+              // Wide pane keeps Save + Produce inline; a narrow pane drops them
+              // to the full-width row below.
+              if (!compact) ...[
                 const SizedBox(width: 8),
                 if (_editable) OutlinedButton.icon(
                   icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
@@ -2061,8 +2071,8 @@ $runSection
                 ],
               ],
             ]),
-            // Mobile: the real buttons get their own full-width row.
-            if (context.isMobile && (_editable || (_current != null && _remainingQty > 0 && _status != 'cancelled'))) ...[
+            // Narrow pane: the real buttons get their own full-width row.
+            if (compact && (_editable || (_current != null && _remainingQty > 0 && _status != 'cancelled'))) ...[
               const SizedBox(height: 8),
               Row(children: [
                 if (_editable)
@@ -2093,7 +2103,7 @@ $runSection
                 ],
               ]),
             ],
-          ])),
+          ])); }),
         Expanded(child: _loadingProducts
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(padding: EdgeInsets.all(context.isMobile ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
