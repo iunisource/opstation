@@ -141,6 +141,17 @@ const List<_AdminToggle> _toggles = [
         'trail and shown on the printed PO.',
   ),
   _AdminToggle(
+    'org.po_notify_new',
+    'Notify when a new Purchase Order is saved (pending approval)',
+    'When ON, saving a new Purchase Order that is pending approval sends a push '
+        'notification to the selected users (on their devices) and an email to '
+        'the addresses below — so you are alerted even when you are away from a '
+        'device. Fires once per PO, when it is first created.',
+    users: _UsersField('org.po_notify_users', 'Users to notify (push)'),
+    text: _TextSetting('org.po_notify_emails', 'Email recipients',
+        hint: 'comma-separated email addresses'),
+  ),
+  _AdminToggle(
     'org.po_show_stock_consumption',
     'Show stock & 3-month consumption on Purchase Order',
     'On the Purchase Order screen, show each line item\'s current on-hand stock '
@@ -522,6 +533,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Purchase & GRN', Icons.shopping_cart_outlined, [
     'org.po_approval_required',
+    'org.po_notify_new',
     'org.po_show_stock_consumption',
     'org.po_fg_stock',
     'org.pi_updates_cost_price',
