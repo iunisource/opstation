@@ -2066,6 +2066,75 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     finally { if (mounted) setState(() => _doSuperviseBusy = false); }
   }
 
+  // ── Bulk supervision: mark every pending (unsupervised, non-voided) DO in the
+  // current view as supervised in one action. Same non-blocking review mark.
+  Future<void> _bulkSuperviseDo() async {
+    if (!_canSupervise) { _showSnack('You are not allowed to supervise'); return; }
+    if (_doSuperviseBusy) return;
+    final ids = _orders
+        .where((o) => o['supervised_at'] == null && o['is_voided'] != true)
+        .map((o) => o['id'] as String).toList();
+    if (ids.isEmpty) { _showSnack('Nothing pending to supervise'); return; }
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Supervise all pending?'),
+      content: Text('Mark all ${ids.length} pending delivery order(s) as supervised? '
+          'This is a review mark only — it does not affect delivery or invoicing.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: Text('Supervise ${ids.length}')),
+      ],
+    ));
+    if (ok != true) return;
+    setState(() => _doSuperviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      // Chunk the id list so a large batch stays within request limits.
+      for (var i = 0; i < ids.length; i += 100) {
+        final chunk = ids.sublist(i, i + 100 > ids.length ? ids.length : i + 100);
+        await Supabase.instance.client.from('delivery_orders').update({
+          'supervised_by': userId, 'supervised_at': now,
+          'supervised_by_name': userName,
+          'supervised_signature_url': sigUrl,
+          'supervised_stamp_url': stampUrl,
+          'updated_at': now,
+        }).inFilter('id', chunk);
+        try {
+          await Supabase.instance.client.from('voucher_audit_log').insert([
+            for (final id in chunk)
+              {
+                'org_id': _orgId, 'voucher_type': 'DO', 'voucher_id': id,
+                'action': 'supervised',
+                'details': 'Bulk supervised by ${userName ?? userId ?? 'admin'}',
+                'performed_by': userId,
+              }
+          ]);
+        } catch (_) { /* audit is best-effort */ }
+      }
+      if (mounted) setState(() {
+        final idset = ids.toSet();
+        for (final o in _orders) {
+          if (idset.contains(o['id'])) {
+            o['supervised_at'] = now; o['supervised_by'] = userId; o['supervised_by_name'] = userName;
+          }
+        }
+        if (_detail.isNotEmpty && idset.contains(_detail['id'])) {
+          _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
+          _detail['supervised_by_name'] = userName;
+          _detail['supervised_signature_url'] = sigUrl;
+          _detail['supervised_stamp_url'] = stampUrl;
+        }
+      });
+      ref.invalidate(doSupervisePendingProvider);
+      _showSnack('Supervised ${ids.length} delivery order(s)');
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    finally { if (mounted) setState(() => _doSuperviseBusy = false); }
+  }
+
   Future<void> _clearDoSupervision() async {
     if (!_canSupervise) return;
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
@@ -2427,6 +2496,17 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                       _doSupChip('no', 'Pending', count: _doSupPendingCount),
                     ]),
                   ),
+                  if (_doSupPendingCount > 0) ...[
+                    const SizedBox(height: 8),
+                    SizedBox(width: double.infinity, child: OutlinedButton.icon(
+                      onPressed: _doSuperviseBusy ? null : _bulkSuperviseDo,
+                      icon: _doSuperviseBusy
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.done_all, size: 16),
+                      label: Text('Supervise all pending ($_doSupPendingCount)',
+                          style: const TextStyle(fontSize: 12)),
+                    )),
+                  ],
                 ],
               ]),
             ),
@@ -3083,6 +3163,73 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
 
+  // ── Bulk supervision: mark every pending (unsupervised, non-voided) invoice
+  // in the current view as supervised in one action.
+  Future<void> _bulkSupervise() async {
+    if (!_canSupervise) { _showSnack('You are not allowed to supervise'); return; }
+    if (_superviseBusy) return;
+    final ids = _invoices
+        .where((i) => i['supervised_at'] == null && i['is_voided'] != true)
+        .map((i) => i['id'] as String).toList();
+    if (ids.isEmpty) { _showSnack('Nothing pending to supervise'); return; }
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Supervise all pending?'),
+      content: Text('Mark all ${ids.length} pending sales invoice(s) as supervised? '
+          'This is a review mark only — it does not affect posting or the ledger.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: Text('Supervise ${ids.length}')),
+      ],
+    ));
+    if (ok != true) return;
+    setState(() => _superviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      for (var i = 0; i < ids.length; i += 100) {
+        final chunk = ids.sublist(i, i + 100 > ids.length ? ids.length : i + 100);
+        await Supabase.instance.client.from('sales_invoices').update({
+          'supervised_by': userId, 'supervised_at': now,
+          'supervised_by_name': userName,
+          'supervised_signature_url': sigUrl,
+          'supervised_stamp_url': stampUrl,
+        }).inFilter('id', chunk);
+        try {
+          await Supabase.instance.client.from('voucher_audit_log').insert([
+            for (final id in chunk)
+              {
+                'org_id': _orgId, 'voucher_type': 'SI', 'voucher_id': id,
+                'action': 'supervised',
+                'details': 'Bulk supervised by ${userName ?? userId ?? 'admin'}',
+                'performed_by': userId,
+              }
+          ]);
+        } catch (_) { /* audit is best-effort */ }
+      }
+      if (mounted) setState(() {
+        final idset = ids.toSet();
+        for (final inv in _invoices) {
+          if (idset.contains(inv['id'])) {
+            inv['supervised_at'] = now; inv['supervised_by'] = userId; inv['supervised_by_name'] = userName;
+          }
+        }
+        if (_detail.isNotEmpty && idset.contains(_detail['id'])) {
+          _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
+          _detail['supervised_by_name'] = userName;
+          _detail['supervised_signature_url'] = sigUrl;
+          _detail['supervised_stamp_url'] = stampUrl;
+        }
+      });
+      ref.invalidate(siSupervisePendingProvider);
+      _showSnack('Supervised ${ids.length} sales invoice(s)');
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    finally { if (mounted) setState(() => _superviseBusy = false); }
+  }
+
   Future<void> _clearSupervision() async {
     if (!_canSupervise) return;
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
@@ -3663,6 +3810,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                       _siSupChip('no', 'Pending', count: _siSupPendingCount),
                     ])),
                   ]),
+                  if (_siSupPendingCount > 0) ...[
+                    const SizedBox(height: 8),
+                    SizedBox(width: double.infinity, child: OutlinedButton.icon(
+                      onPressed: _superviseBusy ? null : _bulkSupervise,
+                      icon: _superviseBusy
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.done_all, size: 16),
+                      label: Text('Supervise all pending ($_siSupPendingCount)',
+                          style: const TextStyle(fontSize: 12)),
+                    )),
+                  ],
                 ],
               ]),
             ),
