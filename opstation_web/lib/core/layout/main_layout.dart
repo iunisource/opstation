@@ -1108,6 +1108,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _menuItem(context, 'Audit Trail', Icons.history_toggle_off_outlined, '/erp/audit-log', location),
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
         _menuItem(context, 'Admin Settings', Icons.admin_panel_settings_outlined, '/erp/admin-settings', location),
+      if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
+        _menuItem(context, 'AI Connector', Icons.smart_toy_outlined, '/erp/ai-connector', location),
     ];
 
     // Legacy combined list (still used for isNotEmpty guards)
@@ -1174,7 +1176,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           badge: assetsDue + facilityDue,
         ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-        ['/erp/onboarding', '/erp/branches', '/erp/files', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/audit-log'],
+        ['/erp/onboarding', '/erp/branches', '/erp/files', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/ai-connector', '/erp/audit-log'],
         [
           _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
           if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),

@@ -112,6 +112,7 @@ import '../../features/erp/presentation/erp_purchase_variance_screen.dart';
 import '../../features/erp/presentation/erp_product_classifications_screen.dart';
 import '../../features/erp/presentation/erp_users_screen.dart';
 import '../../features/erp/presentation/erp_admin_settings_screen.dart';
+import '../../features/erp/presentation/erp_mcp_connector_screen.dart';
 import '../../features/erp/presentation/erp_pdc_voucher_screen.dart';
 import '../../features/erp/presentation/erp_home_screen.dart';
 import '../../features/erp/presentation/erp_opening_stock_screen.dart';
@@ -246,6 +247,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             final permScopedReportBuilder = loc == '/intelligence/report-builder';
             if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
+            if (loc == '/erp/ai-connector') return false; // admin-tier only
             // Always-available to every ERP user regardless of grants: their
             // landing home, the onboarding guide, and the no-access page (so a
             // denied route redirects here without looping).
@@ -379,6 +381,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => const ErpProductClassificationsScreen()),
           GoRoute(path: '/erp/users', builder: (_, __) => const ErpUsersScreen()),
           GoRoute(path: '/erp/admin-settings', builder: (_, __) => const ErpAdminSettingsScreen()),
+          GoRoute(path: '/erp/ai-connector', builder: (_, __) => const ErpMcpConnectorScreen()),
           GoRoute(path: '/erp/audit-log', builder: (_, __) => const ErpAuditLogScreen()),
           GoRoute(path: '/erp/super-summary', builder: (_, __) => const ErpSuperSummaryScreen()),
           GoRoute(path: '/erp/onboarding', builder: (_, __) => const ErpOnboardingScreen()),
