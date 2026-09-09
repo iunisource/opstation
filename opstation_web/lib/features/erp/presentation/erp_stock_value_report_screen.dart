@@ -22,6 +22,10 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
   List<Map<String, dynamic>> _rows = [];      // valued stock rows for the selection
   List<Map<String, dynamic>> _branches = [];
   List<Map<String, dynamic>> _activeBranches = []; // branches covered by last load, ordered
+  // Stock parked at processor / off-site (is_virtual) locations, kept out of the
+  // main operational total and reported as its own "Stock with Processors" line.
+  double _processorValue = 0;
+  List<Map<String, dynamic>> _processorBreakdown = []; // {name, value} per processor
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   // Branch multi-select: empty set = ALL branches; else any 1..N branches.
   Set<String> _selBranches = {};
@@ -52,9 +56,11 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
       // branches they have access to (same scoping as Customer Balance Report).
       List<Map<String, dynamic>> branchList;
       if (_isAdmin) {
-        final branches = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
+        // Operational (non-virtual) branches only — processors report separately.
+        final branches = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).eq('is_virtual', false).order('name');
         branchList = List<Map<String, dynamic>>.from(branches);
       } else {
+        // userBranchesProvider already excludes virtual (processor) branches.
         branchList = List<Map<String, dynamic>>.from(
             ref.read(userBranchesProvider).valueOrNull ?? []);
       }
@@ -133,7 +139,45 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         rows.sort((a, b) => (b['value'] as double).compareTo(a['value'] as double));
       }
 
+      // Supplementary: value of stock parked at processor (is_virtual) locations,
+      // reported as its own line rather than mixed into the operational total.
+      double procTotal = 0;
+      final List<Map<String, dynamic>> procRows = [];
+      if (_isAdmin) {
+        try {
+          final procBranches = await client.from('branches')
+              .select('id, name').eq('org_id', orgId).eq('is_active', true).eq('is_virtual', true).order('name');
+          for (final pb in procBranches as List) {
+            final pbId = pb['id'] as String;
+            final Map<String, double> costMap = {};
+            try {
+              final costs = await client.rpc('rpc_stock_unit_costs', params: {'p_org': orgId, 'p_branch': pbId});
+              for (final c in costs as List) {
+                final pid = c['product_id'] as String?;
+                if (pid != null) costMap[pid] = (c['unit_cost'] as num?)?.toDouble() ?? 0;
+              }
+            } catch (_) { /* fall back to product cost below */ }
+            final stock = await client.from('inventory_stock')
+                .select('product_id, quantity').eq('org_id', orgId).eq('branch_id', pbId);
+            double bTotal = 0;
+            for (final s in stock as List) {
+              final pid = s['product_id'] as String?;
+              if (pid == null) continue;
+              final q = (s['quantity'] as num?)?.toDouble() ?? 0;
+              if (q.abs() < 1e-9) continue;
+              bTotal += q * (costMap[pid] ?? 0);
+            }
+            if (bTotal.abs() > 1e-9) {
+              procRows.add({'name': pb['name'] as String? ?? '-', 'value': bTotal});
+              procTotal += bTotal;
+            }
+          }
+        } catch (_) { /* processors optional — ignore if unavailable */ }
+      }
+
       setState(() {
+        _processorValue = procTotal;
+        _processorBreakdown = procRows;
         _branches = branchList;
         _taxonomies = grouped;
         _rows = rows;
@@ -307,6 +351,9 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         '<tfoot><tr><td colspan="${leadCols + 1}" style="text-align:right">Total</td>'
         '<td style="text-align:right">${_money(_totalValue)}</td></tr></tfoot>'
         '</table>'
+        '${_processorValue.abs() > 1e-9 ? '<div class="muted" style="margin-top:12px"><b>Stock with Processors (off-site):</b> Rs. ${_money(_processorValue)}'
+            '${_processorBreakdown.isNotEmpty ? ' &middot; ' + _processorBreakdown.map((r) => esc(r['name']) + ': Rs. ' + _money(r['value'] as double)).join(' &middot; ') : ''}'
+            '</div>' : ''}'
         '<script>window.onload=function(){window.print();}</script>'
         '</body></html>';
 
@@ -369,6 +416,16 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
         const SizedBox(height: 12),
         Row(children: [
           _summaryCard('Stock Value (cost)', 'Rs. ${_money(_totalValue)}', AppTheme.primary),
+          if (_processorValue.abs() > 1e-9) ...[
+            const SizedBox(width: 12),
+            Tooltip(
+              message: _processorBreakdown
+                  .map((r) => '${r['name']}:  Rs. ${_money(r['value'] as double)}')
+                  .join('\n'),
+              child: _summaryCard('Stock with Processors',
+                  'Rs. ${_money(_processorValue)}', Colors.purple),
+            ),
+          ],
         ]),
         const SizedBox(height: 16),
         Expanded(child: _loading

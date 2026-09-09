@@ -67,13 +67,23 @@ final userBranchesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
           .select('branches(*)')
           .eq('user_id', user.id);
       return (res as List)
-          .where((r) => r['branches'] != null)
+          .where((r) =>
+              r['branches'] != null &&
+              // Processor / off-site (virtual) locations are not operational
+              // branches — never offer them as a place to sell/dispatch from.
+              !((r['branches'] as Map)['is_virtual'] as bool? ?? false))
           .map((r) => Map<String, dynamic>.from(r['branches'] as Map))
           .toList();
     } else {
       final orgId = user.orgId!;
       return List<Map<String, dynamic>>.from(
-          await client.from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name'));
+          await client
+              .from('branches')
+              .select()
+              .eq('org_id', orgId)
+              .eq('is_active', true)
+              .eq('is_virtual', false)
+              .order('name'));
     }
   } catch (_) {
     return [];
