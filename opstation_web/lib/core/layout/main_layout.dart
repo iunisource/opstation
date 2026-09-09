@@ -844,9 +844,11 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
     // behind the Manufacturing module, not stock-transfers' Inventory module).
     final mod = kRouteToModule[route];
     if (mod != null && !modules.contains(mod)) return false;
-    // The processor tracker is a read-only view over stock transfers — it has no
-    // permission item of its own, so it inherits Stock Transfers' visibility.
-    if (route == '/erp/processor-tracker') route = '/erp/stock-transfers';
+    // The processor tracker + job-work screens have no permission item of their
+    // own, so they inherit Stock Transfers' visibility.
+    if (route == '/erp/processor-tracker' || route == '/erp/processor-jobwork') {
+      route = '/erp/stock-transfers';
+    }
     final r = user?.role;
     final isAdminTier2 = r == WebUserRole.admin ||
         r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
@@ -900,6 +902,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/opening-stock')) _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
       if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location, badge: transferPending),
       if (show('/erp/processor-tracker')) _menuItem(context, 'Out for Processing', Icons.factory_outlined, '/erp/processor-tracker', location, badge: processorOverduePending),
+      if (show('/erp/processor-jobwork')) _menuItem(context, 'Processor Job-work', Icons.precision_manufacturing_outlined, '/erp/processor-jobwork', location),
       if (show('/erp/stock-adjustment')) _menuItem(context, 'Stock Adjustment', Icons.tune_outlined, '/erp/stock-adjustment', location),
     ];
     final invReports = <Widget>[

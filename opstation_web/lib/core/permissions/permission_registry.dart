@@ -200,6 +200,7 @@ final Map<String, String> kRouteToModule = {
   // tracker is therefore gated behind the Manufacturing ('production') module,
   // even though it reads stock-transfer data.
   '/erp/processor-tracker': 'production',
+  '/erp/processor-jobwork': 'production',
 };
 
 /// Every valid permission key (used to discard stale legacy keys).

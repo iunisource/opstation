@@ -14,6 +14,7 @@ class ErpBranchesScreen extends ConsumerStatefulWidget {
 
 class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
   List<Map<String, dynamic>> _branches = [];
+  List<Map<String, dynamic>> _suppliers = []; // for the processor supplier picker
   bool _loading = true;
 
   @override
@@ -26,13 +27,22 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
     try {
-      final res = await Supabase.instance.client
+      final client = Supabase.instance.client;
+      final res = await client
           .from('branches')
           .select()
           .eq('org_id', orgId)
           .order('name');
+      // Suppliers power the "fee payable to" picker on processor locations.
+      List<Map<String, dynamic>> sup = [];
+      try {
+        final s = await client.from('suppliers')
+            .select('id, name').eq('org_id', orgId).order('name');
+        sup = List<Map<String, dynamic>>.from(s);
+      } catch (_) { /* suppliers optional */ }
       setState(() {
         _branches = List<Map<String, dynamic>>.from(res);
+        _suppliers = sup;
         _loading = false;
       });
     } catch (_) {
@@ -64,6 +74,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
     final nameCtrl = TextEditingController(text: branch?['name'] ?? '');
     final locationCtrl = TextEditingController(text: branch?['location'] ?? '');
     bool isVirtual = branch?['is_virtual'] as bool? ?? false;
+    String? supplierId = branch?['supplier_id'] as String?;
     // Processor / off-site locations are a Manufacturing-module feature. Without
     // that module the option is hidden (existing processor branches still work).
     final mfgOn =
@@ -102,6 +113,28 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                     'Stock sent here (e.g. for coating/processing) is tracked but not sold or dispatched from. Shows as "Stock with Processors".',
                     style: TextStyle(fontSize: 11)),
               ),
+              // The supplier a processor's conversion fee is billed to — used to
+              // pre-fill the payable party on a Job-work receipt. Only relevant
+              // once this location is marked a processor.
+              if (isVirtual) ...[
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: _suppliers.any((s) => s['id'] == supplierId) ? supplierId : null,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                      labelText: 'Processor supplier (fee billed to)',
+                      isDense: true, border: OutlineInputBorder(),
+                      helperText: 'Pre-fills the payable on Job-work receipts',
+                      helperMaxLines: 2),
+                  hint: const Text('Select supplier (optional)'),
+                  items: [
+                    const DropdownMenuItem<String>(value: null, child: Text('— none —')),
+                    for (final s in _suppliers)
+                      DropdownMenuItem(value: s['id'] as String, child: Text('${s['name']}')),
+                  ],
+                  onChanged: (v) => setLocal(() => supplierId = v),
+                ),
+              ],
             ],
           ]),
         ),
@@ -125,6 +158,8 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                     : locationCtrl.text.trim(),
                 'is_active': true,
                 'is_virtual': isVirtual,
+                // Supplier link only applies to a processor location.
+                'supplier_id': isVirtual ? supplierId : null,
               };
               try {
                 if (branch == null) {
