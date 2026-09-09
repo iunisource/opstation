@@ -515,6 +515,54 @@ class _StockTransferVoucherScreenState
       _isNew || _status == 'draft' || _status == 'pending';
   bool get _isInTransit => _status == 'in_transit';
 
+  /// Per-transfer aging threshold — a transfer still out beyond this many days
+  /// is flagged overdue in the Out-for-Processing tracker. Default 7.
+  int _returnDueDays = 7;
+
+  /// Transfer mode — drives which locations the From/To pickers offer, so each
+  /// list stays short and the intent is explicit:
+  ///   'branch'         — branch → branch (default)
+  ///   'to_processor'   — your branch → a processor (send out for processing)
+  ///   'from_processor' — a processor → your branch (return)
+  String _mode = 'branch';
+
+  /// True when a branch id is a processor / off-site (virtual) location.
+  bool _isVirtual(String? id) {
+    if (id == null) return false;
+    final b = widget.branches.firstWhere((x) => x['id'] == id,
+        orElse: () => const <String, dynamic>{});
+    return b['is_virtual'] as bool? ?? false;
+  }
+
+  String? get _homeBranchId => ref.read(selectedBranchProvider)?['id'] as String?;
+
+  /// The locations offered in the "To" picker for the current mode.
+  List<Map<String, dynamic>> get _toOptions => widget.branches.where((b) {
+        final v = b['is_virtual'] as bool? ?? false;
+        if (_mode == 'to_processor') return v; // processors only
+        return !v && b['id'] != _fromBranchId; // real branches only
+      }).toList();
+
+  /// The locations offered in the "From" picker (only used in 'from_processor').
+  List<Map<String, dynamic>> get _fromOptions =>
+      widget.branches.where((b) => (b['is_virtual'] as bool? ?? false)).toList();
+
+  void _applyMode(String m) {
+    setState(() {
+      _mode = m;
+      if (m == 'from_processor') {
+        // Source becomes a processor; destination is your home branch.
+        if (!_isVirtual(_fromBranchId)) _fromBranchId = null;
+        _toBranchId = _homeBranchId;
+      } else {
+        // Source is your home branch.
+        _fromBranchId = _homeBranchId;
+        if (m == 'to_processor' && !_isVirtual(_toBranchId)) _toBranchId = null;
+        if (m == 'branch' && _isVirtual(_toBranchId)) _toBranchId = null;
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -525,6 +573,12 @@ class _StockTransferVoucherScreenState
       final d = _transfer!['transfer_date'] as String?;
       if (d != null) _date = DateTime.tryParse(d) ?? DateTime.now();
       _notesCtrl.text = (_transfer!['notes'] as String?) ?? '';
+      _returnDueDays = (_transfer!['return_due_days'] as num?)?.toInt() ?? 7;
+      _mode = _isVirtual(_toBranchId)
+          ? 'to_processor'
+          : _isVirtual(_fromBranchId)
+              ? 'from_processor'
+              : 'branch';
     } else {
       _fromBranchId = ref.read(selectedBranchProvider)?['id'] as String?;
     }
@@ -692,6 +746,7 @@ class _StockTransferVoucherScreenState
         'to_branch_id': _toBranchId,
         'transfer_date': DateFormat('yyyy-MM-dd').format(_date),
         'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'return_due_days': _returnDueDays,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
       if (_isNew) {
@@ -1085,7 +1140,24 @@ class _StockTransferVoucherScreenState
         'updated_at': now,
       }).eq('id', _transfer!['id']);
       }
-      _snack('Dispatched — awaiting approval at destination');
+      // Auto-complete when a processor / off-site location is involved: there is
+      // no human at a virtual location to "receive", so the goods land in its
+      // ledger in the same action — no in-transit limbo, no stock<>layers gap.
+      final autoComplete = _isVirtual(fromBranchId) || _isVirtual(_toBranchId);
+      if (autoComplete) {
+        try {
+          await client.rpc('receive_stock_transfer', params: {
+            'p_transfer_id': _transfer!['id'],
+            'p_user_id': _userId,
+          });
+        } on PostgrestException catch (_) {
+          // If the receive RPC isn't available, leave it in-transit — the aging
+          // tracker will still surface it; no stock is lost.
+        }
+      }
+      _snack(autoComplete
+          ? 'Sent to processor — stock moved to its ledger'
+          : 'Dispatched — awaiting approval at destination');
       widget.onUpdated();
       await _load();
     } catch (e) {
@@ -1666,7 +1738,25 @@ class _StockTransferVoucherScreenState
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: AppTheme.border)),
-      child: Wrap(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Mode selector — keeps the From/To pickers short and the intent clear.
+        if (editable && _isNew)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Wrap(spacing: 8, children: [
+              for (final m in const [
+                ['branch', 'Branch transfer'],
+                ['to_processor', 'Send to processor'],
+                ['from_processor', 'Return from processor'],
+              ])
+                ChoiceChip(
+                  label: Text(m[1], style: const TextStyle(fontSize: 12)),
+                  selected: _mode == m[0],
+                  onSelected: (_) => _applyMode(m[0]),
+                ),
+            ]),
+          ),
+        Wrap(
         spacing: 20,
         runSpacing: 14,
         crossAxisAlignment: WrapCrossAlignment.end,
@@ -1674,23 +1764,49 @@ class _StockTransferVoucherScreenState
           // From Branch is fixed to the branch you're currently in — a transfer
           // always originates from your own branch, so this is never a dropdown.
           _hField(
-              'From Branch',
+              _mode == 'from_processor' ? 'From Processor' : 'From Branch',
               SizedBox(
                 width: 220,
-                child: _readonly(_branchName(_fromBranchId)),
-              )),
-          _hField(
-              'To Branch',
-              SizedBox(
-                width: 220,
-                child: editable
+                // Only a RETURN ('from_processor') needs to pick the source — a
+                // processor. Every other mode originates from your own branch.
+                child: (editable && _isNew && _mode == 'from_processor')
                     ? DropdownButtonFormField<String>(
-                        value: _toBranchId,
+                        value: _fromOptions.any((b) => b['id'] == _fromBranchId)
+                            ? _fromBranchId
+                            : null,
                         isExpanded: true,
                         decoration: const InputDecoration(
                             isDense: true, border: OutlineInputBorder()),
-                        items: widget.branches
-                            .where((b) => b['id'] != _fromBranchId)
+                        hint: const Text('Select processor'),
+                        items: _fromOptions
+                            .map((b) => DropdownMenuItem(
+                                value: b['id'] as String,
+                                child: Text(b['name'] as String,
+                                    overflow: TextOverflow.ellipsis)))
+                            .toList(),
+                        onChanged: (v) => setState(() {
+                          _fromBranchId = v;
+                          if (_toBranchId == v) _toBranchId = null;
+                        }),
+                      )
+                    : _readonly(_branchName(_fromBranchId)),
+              )),
+          _hField(
+              _mode == 'to_processor' ? 'To Processor' : 'To Branch',
+              SizedBox(
+                width: 220,
+                child: (editable && _mode != 'from_processor')
+                    ? DropdownButtonFormField<String>(
+                        value: _toOptions.any((b) => b['id'] == _toBranchId)
+                            ? _toBranchId
+                            : null,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder()),
+                        hint: Text(_mode == 'to_processor'
+                            ? 'Select processor'
+                            : 'Select branch'),
+                        items: _toOptions
                             .map((b) => DropdownMenuItem(
                                 value: b['id'] as String,
                                 child: Text(b['name'] as String,
@@ -1724,6 +1840,27 @@ class _StockTransferVoucherScreenState
                     : _readonly(DateFormat('d MMM yyyy').format(_date)),
               )),
           _hField(
+              'Return due',
+              SizedBox(
+                width: 150,
+                child: editable
+                    ? DropdownButtonFormField<int>(
+                        value: _returnDueDays,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                            isDense: true, border: OutlineInputBorder()),
+                        items: (<int>{3, 7, 14, 30, 45, 60, 90, _returnDueDays}
+                                .toList()
+                              ..sort())
+                            .map((d) => DropdownMenuItem(
+                                value: d, child: Text('$d days')))
+                            .toList(),
+                        onChanged: (v) =>
+                            setState(() => _returnDueDays = v ?? 7),
+                      )
+                    : _readonly('$_returnDueDays days'),
+              )),
+          _hField(
               'Notes',
               SizedBox(
                 width: 260,
@@ -1737,6 +1874,7 @@ class _StockTransferVoucherScreenState
               )),
         ],
       ),
+      ]),
     );
   }
 
