@@ -24,8 +24,20 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
   bool _busy = false;
   List<Map<String, dynamic>> _tokens = [];
 
+  // Freshly-created key is shown INLINE (not in a second dialog — nested dialogs
+  // on the web canvas were blanking the app). Cleared when dismissed.
+  String? _newUrl;
+  String? _newName;
+  final TextEditingController _newUrlCtrl = TextEditingController();
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
+
+  @override
+  void dispose() {
+    _newUrlCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -92,52 +104,18 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
       if (raw == null || raw.isEmpty) {
         _snack('Key created, but the token could not be read back. It is listed below — revoke it and create a new one.');
       } else {
-        _showTokenDialog(name.isEmpty ? 'Connector key' : name, '$_base$raw');
+        // Show the URL inline at the top of the page (no second dialog).
+        setState(() {
+          _newName = name.isEmpty ? 'Connector key' : name;
+          _newUrl = '$_base$raw';
+          _newUrlCtrl.text = _newUrl!;
+        });
       }
     } catch (e) {
       _snack(friendlyError('Could not create the key', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  void _showTokenDialog(String name, String url) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: const Text('Your connector URL'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 10),
-            // A read-only text field is a robust, copyable URL box (SelectableText
-            // could throw a layout assertion with a long unbreakable string).
-            TextField(
-              controller: TextEditingController(text: url),
-              readOnly: true,
-              minLines: 1,
-              maxLines: 3,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
-              decoration: const InputDecoration(
-                isDense: true, border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.all(10)),
-            ),
-            const SizedBox(height: 10),
-            const Text('⚠ Copy this now — for security the full URL is shown only once. '
-                'You can always create a new key or revoke this one.',
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          ]),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
-          FilledButton.icon(
-            onPressed: () { Clipboard.setData(ClipboardData(text: url)); _snack('Connector URL copied'); },
-            icon: const Icon(Icons.copy, size: 16), label: const Text('Copy URL')),
-        ],
-      ),
-    );
   }
 
   Future<void> _revoke(Map<String, dynamic> t) async {
@@ -177,12 +155,67 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
             style: TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 20),
         Expanded(child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (_newUrl != null) ...[
+            _newKeyBanner(),
+            const SizedBox(height: 20),
+          ],
           _keysCard(),
           const SizedBox(height: 20),
           _howToCard(),
           const SizedBox(height: 20),
           _safetyCard(),
         ]))),
+      ]),
+    );
+  }
+
+  // Inline result of "New connector key" — shown on the page (no dialog).
+  Widget _newKeyBanner() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.success.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.success.withOpacity(0.4)),
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.check_circle_outline, size: 18, color: AppTheme.success),
+          const SizedBox(width: 8),
+          Text('Connector key created — ${_newName ?? ''}',
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const Spacer(),
+          IconButton(
+            tooltip: 'Dismiss',
+            icon: const Icon(Icons.close, size: 18),
+            onPressed: () => setState(() { _newUrl = null; _newName = null; _newUrlCtrl.clear(); }),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        const Text('Paste this URL into ChatGPT or Claude as a custom connector. '
+            'For security it is shown only once — copy it now.',
+            style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: TextField(
+            controller: _newUrlCtrl,
+            readOnly: true,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
+            decoration: const InputDecoration(
+              isDense: true, border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.all(10)),
+          )),
+          const SizedBox(width: 10),
+          FilledButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: _newUrl ?? ''));
+              _snack('Connector URL copied');
+            },
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('Copy'),
+          ),
+        ]),
       ]),
     );
   }
