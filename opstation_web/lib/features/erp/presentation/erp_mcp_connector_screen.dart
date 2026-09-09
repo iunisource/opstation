@@ -77,10 +77,23 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
     try {
       final res = await Supabase.instance.client.rpc('mcp_create_token',
           params: {'p_org': _orgId, 'p_name': name, 'p_user': _userId});
-      final row = (res as List).first as Map<String, dynamic>;
-      final raw = row['raw_token'] as String;
+      // The RPC returns a table row; accept either a list-of-rows or a single
+      // map, and read the raw token defensively so a shape surprise can never
+      // crash the screen.
+      Map<String, dynamic>? row;
+      if (res is List && res.isNotEmpty && res.first is Map) {
+        row = Map<String, dynamic>.from(res.first as Map);
+      } else if (res is Map) {
+        row = Map<String, dynamic>.from(res as Map);
+      }
+      final raw = row?['raw_token']?.toString();
       await _load();
-      if (mounted) _showTokenDialog(name.isEmpty ? 'Connector key' : name, '$_base$raw');
+      if (!mounted) return;
+      if (raw == null || raw.isEmpty) {
+        _snack('Key created, but the token could not be read back. It is listed below — revoke it and create a new one.');
+      } else {
+        _showTokenDialog(name.isEmpty ? 'Connector key' : name, '$_base$raw');
+      }
     } catch (e) {
       _snack(friendlyError('Could not create the key', e));
     } finally {
@@ -196,8 +209,10 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
 
   Widget _tokenRow(Map<String, dynamic> t) {
     final revoked = t['revoked'] == true;
-    final created = t['created_at'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse('${t['created_at']}').toLocal()) : '';
-    final used = t['last_used_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse('${t['last_used_at']}').toLocal()) : 'never used';
+    final createdDt = DateTime.tryParse('${t['created_at']}');
+    final usedDt = DateTime.tryParse('${t['last_used_at']}');
+    final created = createdDt != null ? DateFormat('d MMM yyyy').format(createdDt.toLocal()) : '';
+    final used = usedDt != null ? DateFormat('d MMM yyyy HH:mm').format(usedDt.toLocal()) : 'never used';
     return Opacity(
       opacity: revoked ? 0.5 : 1,
       child: Padding(
