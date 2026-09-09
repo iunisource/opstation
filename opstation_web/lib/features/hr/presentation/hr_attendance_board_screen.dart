@@ -20,7 +20,7 @@ class HrAttendanceBoardScreen extends ConsumerStatefulWidget {
   ConsumerState<HrAttendanceBoardScreen> createState() => _HrAttendanceBoardScreenState();
 }
 
-enum _St { present, leave, notArrived, absent, off }
+enum _St { present, left, leave, notArrived, absent, off }
 
 class _Emp {
   final String id, name, code, deptName;
@@ -128,11 +128,16 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
     if (rec == null) return _St.notArrived;
     final st = (rec['status'] as String? ?? '').toLowerCase();
     final cin = rec['check_in'] as String?;
+    final cout = rec['check_out'] as String?;
     final hasIn = cin != null && cin.isNotEmpty;
+    final hasOut = cout != null && cout.isNotEmpty;
     if (st == 'absent') return _St.absent;
     if (st == 'leave') return _St.leave;
     if (st == 'half_day') return _St.leave;
     if (st == 'holiday' || st == 'rest_day') return _St.off;
+    // This is a live "who's here now" board: once someone has checked out they
+    // have left for the day, so they are no longer "present" (on site).
+    if (st == 'present' && hasIn && hasOut) return _St.left;
     if (st == 'present' && hasIn) return _St.present;
     return _St.notArrived;
   }
@@ -140,6 +145,7 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
   // palette
   Color _color(_St s) => switch (s) {
     _St.present => const Color(0xFF2E9E5B),
+    _St.left => const Color(0xFF5B7F9E),
     _St.leave => const Color(0xFFD9822B),
     _St.notArrived => const Color(0xFF8A93A3),
     _St.absent => const Color(0xFFD64545),
@@ -147,6 +153,7 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
   };
   String _label(_St s) => switch (s) {
     _St.present => 'Present',
+    _St.left => 'Left',
     _St.leave => 'Leave / Half',
     _St.notArrived => 'Not arrived',
     _St.absent => 'Absent',
@@ -233,7 +240,8 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
     ));
     final total = _emps.length;
     return Row(children: [
-      tile('Present', _count(_St.present), const Color(0xFF2E9E5B)),
+      tile('On site', _count(_St.present), const Color(0xFF2E9E5B)),
+      tile('Left', _count(_St.left), const Color(0xFF5B7F9E)),
       tile('Not arrived', _count(_St.notArrived), const Color(0xFF8A93A3)),
       tile('Leave / Half', _count(_St.leave), const Color(0xFFD9822B)),
       tile('Absent', _count(_St.absent), const Color(0xFFD64545)),
@@ -261,7 +269,7 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
             child: Row(children: [
               Text(dept, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
               const SizedBox(width: 8),
-              Text('${groups[dept]!.where((e) => e.state == _St.present).length}/${groups[dept]!.length} present',
+              Text('${groups[dept]!.where((e) => e.state == _St.present).length}/${groups[dept]!.length} on site',
                   style: const TextStyle(color: Colors.white38, fontSize: 12)),
             ])),
           Wrap(spacing: 12, runSpacing: 12, children: [
@@ -309,7 +317,11 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(color: c.withOpacity(0.22), borderRadius: BorderRadius.circular(6)),
           child: Text(
-            e.state == _St.present && e.checkIn != null ? 'In ${_to12(e.checkIn!)}' : _label(e.state),
+            e.state == _St.present && e.checkIn != null
+                ? 'In ${_to12(e.checkIn!)}'
+                : e.state == _St.left && e.checkOut != null
+                    ? 'Out ${_to12(e.checkOut!)}'
+                    : _label(e.state),
             style: TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
         ),
       ]),
