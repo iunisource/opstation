@@ -239,7 +239,20 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
       final client = Supabase.instance.client;
-      final po = await client.from('purchase_orders').select('*,suppliers(*),branches(name)').eq('id', id).single();
+      final po = await client.from('purchase_orders').select('*,suppliers(*),branches(name)').eq('id', id).maybeSingle();
+      // A deep link (e.g. the PO-arrival email) can point at a PO that isn't
+      // visible in the current session — most often because it belongs to a
+      // different organization than the one you're signed into. Handle that
+      // gracefully instead of surfacing a raw database error.
+      if (po == null) {
+        if (mounted) {
+          _showSnack('That purchase order isn\'t available under this login — it '
+              'belongs to a different organization. Sign in to the organization '
+              'that owns it, then open the link again.');
+          setState(() { _detailLoading = false; _selectedId = null; });
+        }
+        return;
+      }
       final items = await client.from('purchase_order_items').select('*,products(name,sku),uoms(abbreviation)').eq('purchase_order_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: po['created_by'] as String?);
       final cfg = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
