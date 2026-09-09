@@ -57,6 +57,31 @@ class _State extends ConsumerState<HrAttendanceScreen> {
 
   int? _min(String? hhmm) { if (hhmm == null || hhmm.isEmpty) return null; final p = hhmm.split(':'); if (p.length != 2) return null; final h = int.tryParse(p[0]), m = int.tryParse(p[1]); if (h == null || m == null) return null; return h * 60 + m; }
   double? _hours(String? cin, String? cout) { final a = _min(cin), b = _min(cout); if (a == null || b == null) return null; var diff = b - a; if (diff <= 0) diff += 1440; return (diff / 60.0 * 100).roundToDouble() / 100; }
+
+  // Org-wide weekly rest day: 0 = Sunday … 6 = Saturday (from app_config).
+  int? _orgRestDay;
+  // Dart weekday is Mon=1..Sun=7; %7 maps to Sun=0, Mon=1 … Sat=6.
+  bool _isRestWeekday(DateTime d) => _orgRestDay != null && (d.weekday % 7) == _orgRestDay;
+  // Half-day threshold for a shift (worked hours at/below => half day). Falls
+  // back to half the shift's standard hours when not explicitly set.
+  double _halfDayHrs(Map? shift) {
+    final h = (shift?['half_day_hours'] as num?)?.toDouble();
+    if (h != null && h > 0) return h;
+    return ((shift?['work_hours'] as num?)?.toDouble() ?? 0) / 2;
+  }
+  // Effective status for reporting: applies the rest-day calendar and the
+  // worked-hours half-day rule on top of the stored status. Rest-day work
+  // (a check-in on the rest weekday) still counts as a worked day.
+  String _effStatus(Map? rec, DateTime d, Map? shift) {
+    final raw = rec?['status'] as String?;
+    if (raw == 'absent' || raw == 'leave' || raw == 'holiday' || raw == 'rest_day') return raw!;
+    final wh = _hours(rec?['check_in'] as String?, rec?['check_out'] as String?);
+    final worked = wh != null && wh > 0;
+    if (_isRestWeekday(d) && !worked) return 'rest_day';
+    if (raw == null) return _isRestWeekday(d) ? 'rest_day' : '';
+    if (raw == 'present' && worked && wh! <= _halfDayHrs(shift)) return 'half_day';
+    return raw;
+  }
   Map<String, dynamic>? _shiftFor(String? shiftId) => shiftId != null ? _shiftById[shiftId] : null;
 
   Future<void> _init() async {
@@ -72,6 +97,10 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       _deptName = {for (final d in (dp as List)) d['id'] as String: d['name'] as String};
       final sh = await client.from('hr_shifts').select().eq('org_id', orgId);
       _shiftById = {for (final s in (sh as List)) s['id'] as String: Map<String, dynamic>.from(s)};
+      try {
+        final c = await client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.weekly_rest_day').maybeSingle();
+        _orgRestDay = int.tryParse('${c?['value'] ?? ''}');
+      } catch (_) {}
       final emps = await client.from('hr_employees')
           .select('id, full_name, employee_code, branch_id, department_id, shift_id, status')
           .eq('org_id', orgId).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false).order('full_name');
@@ -98,7 +127,10 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       final row = _Row(
         empId: e['id'] as String, label: e['full_name'] as String? ?? '', code: e['employee_code'] as String? ?? '',
         branchId: e['branch_id'] as String?, deptName: _deptName[e['department_id']] ?? '', shiftId: e['shift_id'] as String?,
-        recordId: rec?['id'] as String?, status: rec?['status'] as String? ?? 'present',
+        recordId: rec?['id'] as String?,
+        // No record on the org rest weekday defaults to Rest day (no hours);
+        // if they actually punched in, a record exists and is kept as-is.
+        status: rec?['status'] as String? ?? (_isRestWeekday(_date) ? 'rest_day' : 'present'),
         checkIn: rec?['check_in'] as String?, checkOut: rec?['check_out'] as String?,
       );
       row.remarks.text = rec?['remarks'] as String? ?? '';
@@ -438,8 +470,6 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       final client = Supabase.instance.client;
       final attRows = List<Map<String, dynamic>>.from(
         await client.from('hr_attendance').select().eq('org_id', orgId).gte('att_date', _fmt(from)).lte('att_date', _fmt(to)).order('att_date'));
-      final aud = List<Map<String, dynamic>>.from(
-        await client.from('hr_attendance_audit').select().eq('org_id', orgId).gte('att_date', _fmt(from)).lte('att_date', _fmt(to)).order('changed_at', ascending: false).limit(300));
 
       // index attendance: empId -> dateStr -> record
       final byEmpDate = <String, Map<String, Map<String, dynamic>>>{};
@@ -458,9 +488,10 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       String varText(int? actual, int? ref) { if (actual == null || ref == null) return '-'; final d = actual - ref; if (d == 0) return 'on time'; return d > 0 ? '+${d}m' : '${d}m'; }
       String trimNum(double v) { final r = (v * 100).roundToDouble() / 100; return r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toString(); }
 
+      final dsDate = days.isEmpty ? from : days.first;
       String body;
       if (single) {
-        final ds = _fmt(days.isEmpty ? from : days.first);
+        final ds = _fmt(dsDate);
         String rows = '';
         for (final e in emps) {
           final rec = byEmpDate[e['id']]?[ds];
@@ -469,8 +500,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           final stdHrs = (shift?['work_hours'] as num?)?.toDouble();
           final cin = rec?['check_in'] as String?, cout = rec?['check_out'] as String?;
           final wh = _hours(cin, cout);
+          final effSt = _effStatus(rec, dsDate, shift);
           rows += '<tr><td class="emp">${esc(e['full_name'] as String?)}<span class="code">${esc(e['employee_code'] as String?)}</span></td>'
-              '<td>${rec?['status'] ?? '-'}</td><td>${cin ?? '-'}</td><td>${cout ?? '-'}</td>'
+              '<td>${effSt.isEmpty ? '-' : effSt}</td><td>${cin ?? '-'}</td><td>${cout ?? '-'}</td>'
               '<td class="r">${wh?.toStringAsFixed(2) ?? '-'}</td><td class="r">${stdHrs?.toStringAsFixed(2) ?? '-'}</td>'
               '<td class="c">${varText(_min(cin), sStart)}</td><td class="c">${varText(_min(cout), sEnd)}</td>'
               '<td>${esc(rec?['remarks'] as String?)}</td></tr>';
@@ -489,7 +521,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           String cells = '';
           for (final d in days) {
             final rec = byEmpDate[e['id']]?[_fmt(d)];
-            final st = rec?['status'] as String?;
+            final st = _effStatus(rec, d, shift);
             cells += '<td class="day">${code(st)}</td>';
             if (st == 'present' || st == 'half_day') {
               final wh = _hours(rec?['check_in'] as String?, rec?['check_out'] as String?);
@@ -507,14 +539,8 @@ class _State extends ConsumerState<HrAttendanceScreen> {
             '<div class="legend">P = Present &nbsp; A = Absent &nbsp; L = Leave &nbsp; &frac12; = Half day &nbsp; H = Holiday &nbsp; R = Rest day &nbsp;&nbsp;|&nbsp;&nbsp; Hrs var = worked hours minus expected shift hours (+ surplus / - short)</div>';
       }
 
-      String auditRows = '';
-      for (final a in aud) {
-        auditRows += '<tr><td>${a['att_date'] ?? ''}</td><td>${esc(_empName[a['employee_id']] ?? a['employee_id'] as String?)}</td>'
-            '<td>${a['action'] ?? ''}</td><td>${esc(a['changes'] as String?)}</td><td>${esc(a['changed_by_name'] as String?)}</td>'
-            '<td>${a['changed_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(a['changed_at'] as String).toLocal()) : ''}</td></tr>';
-      }
-      final auditHtml = auditRows.isEmpty ? '' : '<h2>Edit trail</h2><table class="trail"><thead><tr><th>Date</th><th>Employee</th><th>Action</th><th>Change</th><th>By</th><th>When</th></tr></thead><tbody>$auditRows</tbody></table>';
-
+      // Edit trail is intentionally NOT included in the exported/printed
+      // register — it is available on screen only.
       final branchLabel = esc(eff != null ? (_branchName[eff] ?? '') : 'All branches');
       final headerDate = single ? DateFormat('EEE, d MMM yyyy').format(days.isEmpty ? from : days.first)
           : '${DateFormat('d MMM').format(from)} &ndash; ${DateFormat('d MMM yyyy').format(to)}';
@@ -541,7 +567,6 @@ table.trail{font-size:10px;margin-top:6px}
 <h1>Attendance Register</h1>
 <div class="meta">$headerDate &nbsp;|&nbsp; $branchLabel &nbsp;|&nbsp; Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}</div>
 $body
-$auditHtml
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
       final blob = html.Blob([htmlContent], 'text/html;charset=utf-8');

@@ -64,6 +64,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   String? _photoUrl;
   bool _photoUploading = false;
   List<Map<String, dynamic>> _shifts = [];
+  int? _orgRestDay; // org-wide weekly rest day: 0=Sunday … 6=Saturday
   Map<String, String> _shiftName = {};
   List<Map<String, dynamic>> _docs = [];
   bool _docUploading = false;
@@ -134,7 +135,22 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   Future<void> _loadShifts() async {
     final orgId = _orgId; if (orgId == null) return;
     final rows = await Supabase.instance.client.from('hr_shifts').select().eq('org_id', orgId).order('name');
-    if (mounted) setState(() { _shifts = List<Map<String, dynamic>>.from(rows); _shiftName = {for (final s in _shifts) s['id'] as String: s['name'] as String}; });
+    int? rest;
+    try {
+      final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.weekly_rest_day').maybeSingle();
+      rest = int.tryParse('${c?['value'] ?? ''}');
+    } catch (_) {}
+    if (mounted) setState(() { _shifts = List<Map<String, dynamic>>.from(rows); _shiftName = {for (final s in _shifts) s['id'] as String: s['name'] as String}; _orgRestDay = rest; });
+  }
+
+  Future<void> _saveOrgRestDay(int? day) async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('app_config').upsert({
+        'org_id': orgId, 'key': 'org.weekly_rest_day', 'value': day?.toString() ?? '',
+      }, onConflict: 'key,org_id,branch_id');
+      if (mounted) setState(() => _orgRestDay = day);
+    } catch (e) { _snack('Could not save rest day: $e'); }
   }
 
   List<Map<String, dynamic>> get _activeDepts => _departments.where((d) => d['is_active'] != false).toList();
@@ -1079,7 +1095,9 @@ $docsHtml
     await showDialog(context: context, builder: (ctx) {
       final nameCtrl = TextEditingController();
       final graceCtrl = TextEditingController(text: '0');
+      final halfCtrl = TextEditingController();
       String? editId; String? sStart; String? sEnd;
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       return StatefulBuilder(builder: (ctx, setLocal) {
         Future<void> refresh() async { await _loadShifts(); setLocal(() {}); }
         double? calc() { final a = _min(sStart), b = _min(sEnd); if (a == null || b == null) return null; var d = b - a; if (d <= 0) d += 1440; return (d / 60 * 100).round() / 100; }
@@ -1090,31 +1108,58 @@ $docsHtml
         Future<void> saveShift() async {
           final orgId = _orgId; if (orgId == null) return;
           if (nameCtrl.text.trim().isEmpty) { _snack('Shift name required'); return; }
-          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'is_active': true};
+          final half = double.tryParse(halfCtrl.text.trim());
+          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'half_day_hours': (half != null && half > 0) ? half : null, 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'is_active': true};
           try {
             if (editId == null) { payload['id'] = 'shift_' + DateTime.now().millisecondsSinceEpoch.toString(); await Supabase.instance.client.from('hr_shifts').insert(payload); }
             else { await Supabase.instance.client.from('hr_shifts').update(payload).eq('id', editId!); }
-            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; sStart = null; sEnd = null; editId = null; });
+            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); sStart = null; sEnd = null; editId = null; });
             await refresh();
           } catch (e) { _snack('Save failed: $e'); }
         }
         return AlertDialog(
           title: Text(editId == null ? 'Shifts' : 'Edit shift'),
           content: SizedBox(width: 470, child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // Org-wide weekly rest day (auto-marked in the attendance register).
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE0E0E0))),
+              child: Row(children: [
+                const Icon(Icons.event_busy_outlined, size: 16, color: AppTheme.textSecondary),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('Weekly rest day (whole company)', style: TextStyle(fontSize: 12))),
+                DropdownButton<int?>(
+                  value: _orgRestDay,
+                  underline: const SizedBox.shrink(),
+                  hint: const Text('None', style: TextStyle(fontSize: 12)),
+                  items: [
+                    const DropdownMenuItem<int?>(value: null, child: Text('None', style: TextStyle(fontSize: 12))),
+                    for (var i = 0; i < 7; i++) DropdownMenuItem<int?>(value: i, child: Text(dayNames[i], style: const TextStyle(fontSize: 12))),
+                  ],
+                  onChanged: !_canWrite ? null : (v) async { await _saveOrgRestDay(v); setLocal(() {}); },
+                ),
+              ]),
+            ),
+            const SizedBox(height: 10),
             TextField(controller: nameCtrl, decoration: const InputDecoration(hintText: 'Shift name (e.g. Morning 9-5)', isDense: true, border: OutlineInputBorder())),
             const SizedBox(height: 8),
             Row(children: [
               Expanded(child: OutlinedButton(onPressed: () => pick(true), child: Text(sStart ?? 'Start time', style: const TextStyle(fontSize: 12)))),
               const SizedBox(width: 8),
               Expanded(child: OutlinedButton(onPressed: () => pick(false), child: Text(sEnd ?? 'End time', style: const TextStyle(fontSize: 12)))),
-              const SizedBox(width: 8),
-              SizedBox(width: 96, child: TextField(controller: graceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Grace min', isDense: true, border: OutlineInputBorder()))),
             ]),
-            const SizedBox(height: 6),
-            Align(alignment: Alignment.centerLeft, child: Text('Standard hours: ${calc()?.toString() ?? '\u2014'}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
             const SizedBox(height: 8),
             Row(children: [
-              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
+              SizedBox(width: 120, child: TextField(controller: graceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Grace min', isDense: true, border: OutlineInputBorder()))),
+              const SizedBox(width: 8),
+              Expanded(child: TextField(controller: halfCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: 'Half-day hours', hintText: 'auto ${calc() != null ? (calc()! / 2).toStringAsFixed(2) : '\u2014'}', isDense: true, border: const OutlineInputBorder()))),
+            ]),
+            const SizedBox(height: 6),
+            Align(alignment: Alignment.centerLeft, child: Text('Standard hours: ${calc()?.toString() ?? '\u2014'}  \u00b7  worked \u2264 half-day hours counts as \u00bd day', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+            const SizedBox(height: 8),
+            Row(children: [
+              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
               const Spacer(),
               ElevatedButton(onPressed: saveShift, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: Text(editId == null ? 'Add shift' : 'Update')),
             ]),
@@ -1125,9 +1170,9 @@ $docsHtml
                   final s = _shifts[i]; final active = s['is_active'] != false;
                   return ListTile(dense: true,
                     title: Text(s['name'] as String? ?? '', style: TextStyle(fontSize: 13, decoration: active ? null : TextDecoration.lineThrough)),
-                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m', style: const TextStyle(fontSize: 11)),
+                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  \u00bd @ ${s['half_day_hours'] ?? ((s['work_hours'] as num?) != null ? ((s['work_hours'] as num) / 2).toStringAsFixed(2) : '\u2014')}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m', style: const TextStyle(fontSize: 11)),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); })),
+                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); halfCtrl.text = s['half_day_hours']?.toString() ?? ''; })),
                       Switch(value: active, onChanged: (v) async { try { await Supabase.instance.client.from('hr_shifts').update({'is_active': v}).eq('id', s['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); } }),
                     ]));
                 })),
