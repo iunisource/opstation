@@ -107,24 +107,29 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         title: const Text('Your connector URL'),
-        content: SizedBox(width: 520, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-            child: SelectableText(url, style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5)),
-          ),
-          const SizedBox(height: 10),
-          Row(children: [
-            const Icon(Icons.warning_amber_rounded, size: 16, color: AppTheme.danger),
-            const SizedBox(width: 6),
-            const Expanded(child: Text('Copy this now — for security the full URL is shown only once. '
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            // A read-only text field is a robust, copyable URL box (SelectableText
+            // could throw a layout assertion with a long unbreakable string).
+            TextField(
+              controller: TextEditingController(text: url),
+              readOnly: true,
+              minLines: 1,
+              maxLines: 3,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
+              decoration: const InputDecoration(
+                isDense: true, border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.all(10)),
+            ),
+            const SizedBox(height: 10),
+            const Text('⚠ Copy this now — for security the full URL is shown only once. '
                 'You can always create a new key or revoke this one.',
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ]),
-        ])),
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
           FilledButton.icon(
