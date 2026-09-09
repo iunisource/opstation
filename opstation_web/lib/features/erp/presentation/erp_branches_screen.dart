@@ -62,22 +62,39 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
   void _showDialog(BuildContext context, Map<String, dynamic>? branch) {
     final nameCtrl = TextEditingController(text: branch?['name'] ?? '');
     final locationCtrl = TextEditingController(text: branch?['location'] ?? '');
+    bool isVirtual = branch?['is_virtual'] as bool? ?? false;
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(branch == null ? 'Add Branch' : 'Edit Branch'),
+      builder: (_) => StatefulBuilder(builder: (context, setLocal) => AlertDialog(
+        title: Text(branch == null ? 'Add Location' : 'Edit Location'),
         content: SizedBox(
           width: 400,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
                 controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Branch Name *')),
+                decoration: const InputDecoration(labelText: 'Location Name *')),
             const SizedBox(height: 12),
             TextField(
                 controller: locationCtrl,
                 decoration: const InputDecoration(labelText: 'Location / Address'),
                 maxLines: 2),
+            const SizedBox(height: 8),
+            // A processor / off-site location holds stock we send out for
+            // processing. It carries its own stock + cost ledger like any
+            // branch, but is kept out of POS / sales / dispatch pickers and
+            // shown separately as "Stock with Processors" in reports.
+            CheckboxListTile(
+              value: isVirtual,
+              onChanged: (v) => setLocal(() => isVirtual = v ?? false),
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Processor / off-site location',
+                  style: TextStyle(fontSize: 14)),
+              subtitle: const Text(
+                  'Stock sent here (e.g. for coating/processing) is tracked but not sold or dispatched from. Shows as "Stock with Processors".',
+                  style: TextStyle(fontSize: 11)),
+            ),
           ]),
         ),
         actions: [
@@ -99,6 +116,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                     ? null
                     : locationCtrl.text.trim(),
                 'is_active': true,
+                'is_virtual': isVirtual,
               };
               try {
                 if (branch == null) {
@@ -125,7 +143,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
             child: Text(branch == null ? 'Add' : 'Save'),
           ),
         ],
-      ),
+      )),
     );
   }
 
@@ -192,9 +210,27 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                               child: Row(children: [
                                 Expanded(
                                     flex: 3,
-                                    child: Text(w['name'] as String? ?? '',
-                                        style: const TextStyle(
-                                            fontWeight: FontWeight.w600))),
+                                    child: Row(children: [
+                                      Flexible(
+                                          child: Text(w['name'] as String? ?? '',
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w600))),
+                                      if (w['is_virtual'] as bool? ?? false) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 6, vertical: 1),
+                                            decoration: BoxDecoration(
+                                                color: Colors.purple.withOpacity(0.12),
+                                                borderRadius: BorderRadius.circular(4)),
+                                            child: const Text('Processor',
+                                                style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: Colors.purple))),
+                                      ],
+                                    ])),
                                 Expanded(
                                     flex: 4,
                                     child: Text(
