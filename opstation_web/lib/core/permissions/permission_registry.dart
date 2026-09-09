@@ -195,6 +195,11 @@ final Map<String, String> kRouteToModule = {
   for (final m in kPermissionRegistry)
     for (final it in m.items)
       if (it.module != null) it.route: it.module!,
+  // Processor / off-site locations are a manufacturing-only feature (send stock
+  // out for coating/printing and receive it back). The "Out for Processing"
+  // tracker is therefore gated behind the Manufacturing ('production') module,
+  // even though it reads stock-transfer data.
+  '/erp/processor-tracker': 'production',
 };
 
 /// Every valid permission key (used to discard stale legacy keys).

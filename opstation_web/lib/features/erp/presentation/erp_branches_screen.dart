@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 
@@ -63,6 +64,11 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
     final nameCtrl = TextEditingController(text: branch?['name'] ?? '');
     final locationCtrl = TextEditingController(text: branch?['location'] ?? '');
     bool isVirtual = branch?['is_virtual'] as bool? ?? false;
+    // Processor / off-site locations are a Manufacturing-module feature. Without
+    // that module the option is hidden (existing processor branches still work).
+    final mfgOn =
+        ref.read(orgModulesProvider).valueOrNull?.contains('production') ?? false;
+    final showProcessor = mfgOn || isVirtual;
 
     showDialog(
       context: context,
@@ -79,22 +85,24 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                 controller: locationCtrl,
                 decoration: const InputDecoration(labelText: 'Location / Address'),
                 maxLines: 2),
-            const SizedBox(height: 8),
             // A processor / off-site location holds stock we send out for
             // processing. It carries its own stock + cost ledger like any
             // branch, but is kept out of POS / sales / dispatch pickers and
             // shown separately as "Stock with Processors" in reports.
-            CheckboxListTile(
-              value: isVirtual,
-              onChanged: (v) => setLocal(() => isVirtual = v ?? false),
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              title: const Text('Processor / off-site location',
-                  style: TextStyle(fontSize: 14)),
-              subtitle: const Text(
-                  'Stock sent here (e.g. for coating/processing) is tracked but not sold or dispatched from. Shows as "Stock with Processors".',
-                  style: TextStyle(fontSize: 11)),
-            ),
+            if (showProcessor) ...[
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: isVirtual,
+                onChanged: (v) => setLocal(() => isVirtual = v ?? false),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Processor / off-site location',
+                    style: TextStyle(fontSize: 14)),
+                subtitle: const Text(
+                    'Stock sent here (e.g. for coating/processing) is tracked but not sold or dispatched from. Shows as "Stock with Processors".',
+                    style: TextStyle(fontSize: 11)),
+              ),
+            ],
           ]),
         ),
         actions: [

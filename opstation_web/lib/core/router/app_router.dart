@@ -116,6 +116,7 @@ import '../../features/erp/presentation/erp_pdc_voucher_screen.dart';
 import '../../features/erp/presentation/erp_home_screen.dart';
 import '../../features/erp/presentation/erp_opening_stock_screen.dart';
 import '../../features/erp/presentation/erp_stock_transfers_screen.dart';
+import '../../features/erp/presentation/erp_processor_tracker_screen.dart';
 import '../../features/erp/presentation/erp_payment_vouchers_screen.dart';
 import '../../features/erp/presentation/erp_receipt_vouchers_screen.dart';
 import '../../features/erp/presentation/erp_supplier_ledger_screen.dart';
@@ -251,7 +252,11 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc == '/erp/home' ||
                 loc == '/erp/onboarding') return true;
             if (access == null) return true;
-            final it = kRouteToPerm[loc];
+            // The processor tracker is a read-only view over stock transfers and
+            // has no permission item of its own — it inherits Stock Transfers'.
+            final permLoc =
+                loc == '/erp/processor-tracker' ? '/erp/stock-transfers' : loc;
+            final it = kRouteToPerm[permLoc];
             // Unregistered ERP-area route => no access. Was `return true`, the
             // fail-open leak that let one grant expose whole unrelated menus.
             if (it == null) return false;
@@ -260,12 +265,18 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // refresh) falls back to any-branch reachability.
             final branchId =
                 ref.read(selectedBranchProvider)?['id'] as String?;
-            return access.canAccessRouteAt(loc, branchId);
+            return access.canAccessRouteAt(permLoc, branchId);
           }
           // admin / masterAdmin — everything except super admin's /orgs
           return loc != '/orgs';
         }
         if (onLogin) return home();
+        // Processor tracker is a Manufacturing-module feature — hold it behind
+        // that module for every role (admins included), matching the menu gate.
+        if (loc == '/erp/processor-tracker') {
+          final mods = ref.read(orgModulesProvider).valueOrNull ?? const <String>{};
+          if (!mods.contains('production')) return home();
+        }
         if (!allowed()) return home();
       }
       return null;
@@ -373,6 +384,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/no-access', builder: (_, __) => const _NoAccessScreen()),
           GoRoute(path: '/erp/opening-stock', builder: (_, __) => const ErpOpeningStockScreen()),
           GoRoute(path: '/erp/stock-transfers', builder: (_, state) => ErpStockTransfersScreen(focusId: state.uri.queryParameters['focus'])),
+          GoRoute(path: '/erp/processor-tracker', builder: (_, __) => const ErpProcessorTrackerScreen()),
           GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => const ErpStockAdjustmentScreen()),
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => const ErpPaymentVoucherScreen()),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => const ErpReceiptVouchersScreen()),

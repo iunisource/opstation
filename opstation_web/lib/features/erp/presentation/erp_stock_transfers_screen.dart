@@ -1740,7 +1740,10 @@ class _StockTransferVoucherScreenState
           border: Border.all(color: AppTheme.border)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Mode selector — keeps the From/To pickers short and the intent clear.
-        if (editable && _isNew)
+        // The processor modes are a Manufacturing-module feature; without that
+        // module only plain branch transfers exist, so the selector is hidden.
+        if (editable && _isNew &&
+            (ref.watch(orgModulesProvider).valueOrNull?.contains('production') ?? false))
           Padding(
             padding: const EdgeInsets.only(bottom: 14),
             child: Wrap(spacing: 8, children: [
@@ -1839,7 +1842,11 @@ class _StockTransferVoucherScreenState
                       )
                     : _readonly(DateFormat('d MMM yyyy').format(_date)),
               )),
-          _hField(
+          // "Return due" is only meaningful when sending stock OUT to a
+          // processor — it drives the overdue/aging tracker. A plain branch
+          // transfer or a return from a processor has no return deadline.
+          if (_mode == 'to_processor')
+            _hField(
               'Return due',
               SizedBox(
                 width: 150,

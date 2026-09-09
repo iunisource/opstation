@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
 import '../widgets/company_logo_settings.dart';
@@ -206,6 +207,18 @@ const List<_AdminToggle> _toggles = [
         'stock-transfer acceptance buzzer and banner — the pendency count still '
         'shows on their Inventory menu, but the loud alert is left to the branch '
         'users who accept transfers.',
+  ),
+  _AdminToggle(
+    'org.processor_overdue_reminder',
+    'Reminders for stock overdue at processors',
+    'When ON, a daily digest of stock still sitting at processor / off-site '
+        'locations past its return-due date is sent as a push to the selected '
+        'users and an email to the addresses below — so nothing is forgotten at '
+        'a coater/printer. Runs once a day while anything is overdue; returning '
+        'the stock clears it automatically. Leave both blank to send to no one.',
+    users: _UsersField('org.processor_overdue_users', 'Users to notify (push)'),
+    text: _TextSetting('org.processor_overdue_emails', 'Email recipients',
+        hint: 'comma-separated email addresses'),
   ),
 
   _AdminToggle(
@@ -551,6 +564,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Inventory & Products', Icons.inventory_2_outlined, [
     'org.transfer_alert_skip_admin',
+    'org.processor_overdue_reminder',
     'org.consignment_enabled',
     'org.hide_main_groups_by_branch',
     'org.product_supervise_flow',
@@ -1321,8 +1335,15 @@ class _ErpAdminSettingsScreenState
     final searching = q.isNotEmpty;
     final out = <Widget>[];
 
+    // Module-gated toggles: the processor-overdue reminder only exists where the
+    // Manufacturing module is on (it belongs to the processor-locations feature).
+    final mfgOn =
+        ref.watch(orgModulesProvider).valueOrNull?.contains('production') ?? false;
+    bool hidden(_AdminToggle t) =>
+        !mfgOn && t.key == 'org.processor_overdue_reminder';
+
     bool matches(_AdminToggle t) =>
-        matchesQuery('${t.title} ${t.subtitle}', q);
+        !hidden(t) && matchesQuery('${t.title} ${t.subtitle}', q);
 
     void section(String title, IconData icon, List<_AdminToggle> allItems) {
       final items = allItems.where(matches).toList();

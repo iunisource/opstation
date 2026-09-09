@@ -489,6 +489,26 @@ final transferPendingCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of stock transfers sent to a processor / off-site location whose stock
+// is still out past its return-due date. Drives the "Out for Processing"
+// pendency badge. Scoped to the sending (home) branch for branch users; org-wide
+// for admins.
+final processorOverdueCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final branchIds = await ref.watch(userBranchIdsProvider.future);
+  try {
+    final res = await Supabase.instance.client.rpc('rpc_processor_overdue_count',
+        params: {
+          'p_org': user.orgId,
+          'p_branch_ids': branchIds?.toList(), // null = org-wide (admins)
+        });
+    return (res as num?)?.toInt() ?? 0;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // Count of products flagged by the Inventory Integrity check (missing cost,
 // stock<>layers, negative or zero-cost layers). Drives the badge on the
 // Inventory -> Inventory Integrity menu item so anyone with access can see at a
@@ -820,8 +840,13 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
   final branchId = ref.watch(selectedBranchProvider)?['id'] as String?;
   return (String route) {
     if (route == '/erp/onboarding') return true; // onboarding guide: visible to all
+    // Module gate first, on the ORIGINAL route (so the processor tracker is held
+    // behind the Manufacturing module, not stock-transfers' Inventory module).
     final mod = kRouteToModule[route];
     if (mod != null && !modules.contains(mod)) return false;
+    // The processor tracker is a read-only view over stock transfers — it has no
+    // permission item of its own, so it inherits Stock Transfers' visibility.
+    if (route == '/erp/processor-tracker') route = '/erp/stock-transfers';
     final r = user?.role;
     final isAdminTier2 = r == WebUserRole.admin ||
         r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
@@ -854,6 +879,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final piSupervisePending = ref.watch(piSupervisePendingProvider).valueOrNull ?? 0;
   final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
   final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
+  final processorOverduePending = ref.watch(processorOverdueCountProvider).valueOrNull ?? 0;
   final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
@@ -873,6 +899,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final invMovements = <Widget>[
       if (show('/erp/opening-stock')) _menuItem(context, 'Opening Stock', Icons.open_in_new_outlined, '/erp/opening-stock', location),
       if (show('/erp/stock-transfers')) _menuItem(context, 'Stock Transfers', Icons.swap_horiz_outlined, '/erp/stock-transfers', location, badge: transferPending),
+      if (show('/erp/processor-tracker')) _menuItem(context, 'Out for Processing', Icons.factory_outlined, '/erp/processor-tracker', location, badge: processorOverduePending),
       if (show('/erp/stock-adjustment')) _menuItem(context, 'Stock Adjustment', Icons.tune_outlined, '/erp/stock-adjustment', location),
     ];
     final invReports = <Widget>[
