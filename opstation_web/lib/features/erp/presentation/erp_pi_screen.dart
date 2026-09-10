@@ -257,6 +257,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       for (final item in grnItems) {
         final pid = item['product_id'] as String;
         final qty = (item['qty_received'] as num?)?.toDouble() ?? 0;
+        if (qty <= 0) continue; // don't carry zero-received GRN lines into the invoice
         final cost = costMap[pid] ?? 0;
         final lt = qty * cost; // no discount at creation
         seedSubtotal += lt;

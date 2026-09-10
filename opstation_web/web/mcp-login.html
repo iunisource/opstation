@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Opstation</title>
+<style>
+  :root{color-scheme:light dark}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:#0b1220;color:#e7ecf3;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .card{width:100%;max-width:360px;padding:32px 28px;background:#131c2e;border:1px solid #22304a;
+    border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.4);box-sizing:border-box}
+  .logo{width:44px;height:44px;border-radius:12px;background:#2563eb;color:#fff;display:flex;
+    align-items:center;justify-content:center;font-weight:800;font-size:20px;margin:0 auto 14px}
+  h1{font-size:18px;text-align:center;margin:0 0 4px}
+  p.sub{text-align:center;color:#8a97ab;margin:0 0 22px;font-size:13px}
+  label{display:block;font-size:12px;color:#9fb0c7;margin:14px 0 6px}
+  input[type=email],input[type=password]{width:100%;box-sizing:border-box;padding:11px 12px;
+    background:#0d1524;border:1px solid #2b3a57;border-radius:9px;color:#e7ecf3;font-size:14px}
+  input:focus{outline:none;border-color:#2563eb}
+  button{width:100%;margin-top:22px;padding:12px;background:#2563eb;color:#fff;border:0;
+    border-radius:9px;font-size:15px;font-weight:600;cursor:pointer}
+  button:hover{background:#1d4ed8}
+  .err{margin-top:14px;padding:10px 12px;background:#3b1620;border:1px solid #7f2a3a;
+    border-radius:9px;color:#f7b9c4;font-size:13px}
+  .foot{margin-top:18px;text-align:center;color:#67748c;font-size:11px}
+  .bad{max-width:360px;text-align:center;color:#f7b9c4}
+</style>
+</head>
+<body>
+<form id="f" class="card" method="post" autocomplete="on" style="display:none">
+  <div class="logo">O</div>
+  <h1>Connect to Opstation</h1>
+  <p class="sub">Sign in &mdash; your account decides which company the assistant can read.</p>
+  <div id="err" class="err" style="display:none"></div>
+  <label for="email">Email</label>
+  <input id="email" type="email" name="email" required autofocus>
+  <label for="password">Password</label>
+  <input id="password" type="password" name="password" required>
+  <input type="hidden" name="client_id">
+  <input type="hidden" name="redirect_uri">
+  <input type="hidden" name="code_challenge">
+  <input type="hidden" name="code_challenge_method">
+  <input type="hidden" name="state">
+  <input type="hidden" name="scope">
+  <button type="submit">Sign in &amp; allow read access</button>
+  <div class="foot">Read-only &middot; Opstation ERP connector</div>
+</form>
+<div id="nogo" class="bad" style="display:none">This sign-in link is missing required information. Please start the connection again from your assistant.</div>
+<script>
+  // The connector's edge function redirects here with the OAuth parameters in the
+  // query string; the form posts them, plus the entered credentials, straight back
+  // to the function's /authorize endpoint. Credentials are never stored on this page.
+  var AUTHORIZE = "https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/erp-mcp/authorize";
+  var qs = new URLSearchParams(location.search);
+  var form = document.getElementById("f");
+  var keys = ["client_id","redirect_uri","code_challenge","code_challenge_method","state","scope"];
+  // Values set as DOM properties (not HTML), so no injection is possible.
+  function setHidden(name, val){ var el = form.querySelector('input[name="'+name+'"]'); if(el) el.value = val || ""; }
+
+  if (!qs.get("client_id") || !qs.get("redirect_uri") || !qs.get("code_challenge")) {
+    document.getElementById("nogo").style.display = "block";
+  } else {
+    form.action = AUTHORIZE;
+    keys.forEach(function(k){ setHidden(k, qs.get(k)); });
+    var e = qs.get("error");
+    if (e) { var box = document.getElementById("err"); box.textContent = e; box.style.display = "block"; }
+    form.style.display = "block";
+  }
+</script>
+</body>
+</html>

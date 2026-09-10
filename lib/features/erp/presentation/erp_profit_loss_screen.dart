@@ -1,0 +1,517 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'package:flutter/material.dart';
+import 'dart:html' as html;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/reports/branch_scope.dart';
+import 'package:intl/intl.dart';
+import '../../../core/format/money.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
+import '../../auth/auth_controller.dart';
+
+class ErpProfitLossScreen extends ConsumerStatefulWidget {
+  const ErpProfitLossScreen({super.key});
+  @override
+  ConsumerState<ErpProfitLossScreen> createState() => _ErpProfitLossScreenState();
+}
+
+class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
+  DateTime _from = DateTime(DateTime.now().year, 1, 1);
+  DateTime _to   = DateTime.now();
+  bool _loading  = false;
+  List<Map<String, dynamic>> _rows = [];
+  // level-4 detail grouped by level-3 parent code
+  Map<String, List<Map<String, dynamic>>> _children = {};
+  final Set<String> _expanded = {};
+  // On-demand transaction drill-down for leaf accounts (no level-4 children):
+  // code -> the vouchers behind that line, via rpc_profit_loss_txns.
+  final Map<String, List<Map<String, dynamic>>> _txn = {};
+  final Set<String> _txnLoading = {};
+
+  @override void initState() { super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyFiscalDefaultThenLoad()); }
+
+  /// Default the date range to the org's CURRENT fiscal year (per
+  /// app_config org.fiscal_year_start_month) instead of the calendar year, so
+  /// the P&L total lines up with what the Balance Sheet now books into
+  /// "Current Year Profit/Loss". Falls back to the Jan-1→today default on any
+  /// error or if no start month is configured.
+  Future<void> _applyFiscalDefaultThenLoad() async {
+    try {
+      final orgId = ref.read(currentUserProvider)?.orgId ??
+          (ref.read(selectedBranchProvider)?['org_id'] as String?);
+      if (orgId != null) {
+        final row = await Supabase.instance.client
+            .from('app_config')
+            .select('value')
+            .eq('org_id', orgId)
+            .eq('key', 'org.fiscal_year_start_month')
+            .maybeSingle();
+        final m = int.tryParse((row?['value'] as String?)?.trim() ?? '');
+        if (m != null && m >= 1 && m <= 12) {
+          final now = DateTime.now();
+          final startYear = now.month >= m ? now.year : now.year - 1;
+          _from = DateTime(startYear, m, 1);
+          _to = now;
+        }
+      }
+    } catch (_) { /* keep the calendar-year default */ }
+    if (mounted) _load();
+  }
+
+  Future<void> _refreshWithSweep() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId != null) {
+      // Post any pending POS COGS immediately (same work the cron does) so the
+      // P&L reflects up-to-the-second cost, instead of waiting for the sweep.
+      try {
+        await Supabase.instance.client.rpc('sweep_pos_cogs', params: {'p_org': orgId});
+      } catch (_) { /* sweep is best-effort; fall through to load */ }
+    }
+    await _load();
+  }
+
+  /// Defaults TRUE: an owner opening the P&L wants the whole business first.
+  /// Previously it silently scoped to whatever branch was selected in the
+  /// sidebar, which is very easy to misread as company-wide numbers.
+  bool _allBranches = true;
+
+  Future<void> _load() async {
+    String? orgId = ref.read(currentUserProvider)?.orgId;
+    orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
+    if (orgId == null) { WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _load(); }); return; }
+    setState(() => _loading = true);
+    try {
+      final branch = ref.read(selectedBranchProvider);
+      // Previously this passed the sidebar branch unconditionally, so an owner
+      // could never see a consolidated P&L — the company's numbers were silently
+      // whichever branch happened to be selected. Now it defaults to all.
+      final scope = await ref.read(branchScopeProvider.future);
+      final params = {
+        'p_org_id': orgId,
+        'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
+        'p_date_to':   DateFormat('yyyy-MM-dd').format(_to),
+        'p_branch_ids': scope.resolve(allSelected: _allBranches, selected: branch),
+      };
+      final client = Supabase.instance.client;
+      final res = await client.rpc('rpc_profit_loss', params: params);
+      final rawList = res as List;
+      debugPrint('=== P&L RPC rows: ${rawList.length}');
+      if (rawList.isNotEmpty) {
+        final first = rawList.first as Map<String, dynamic>;
+        debugPrint('=== first row: $first');
+        final netVal = first['net'];
+        debugPrint('=== net type: ${netVal.runtimeType} value: $netVal');
+      }
+
+      // The RPC returns net = credit - debit for every account. Expenses are
+      // debit-normal, so that yields negative COGS/expense nets and, because the
+      // profit formulas below subtract those totals, overstates profit. Normalise
+      // expenses to a natural-positive convention (debit - credit) here, once, so
+      // every downstream consumer (totals, rows, print) is correct. Contra-expenses
+      // (e.g. Purchase Returns) then correctly read negative, as a deduction.
+      final rows = List<Map<String, dynamic>>.from(rawList);
+      for (final r in rows) {
+        if (r['account_type'] == 'expense') r['net'] = -_n(r['net']);
+      }
+      final expenseParents = <String>{
+        for (final r in rows) if (r['account_type'] == 'expense') (r['code'] ?? '') as String
+      };
+
+      // Detail is additive: a missing/failed RPC just yields the flat view.
+      List detail = [];
+      try { detail = await client.rpc('rpc_profit_loss_detail', params: params) as List; } catch (_) {}
+      final children = <String, List<Map<String, dynamic>>>{};
+      for (final d in List<Map<String, dynamic>>.from(detail)) {
+        final dd = Map<String, dynamic>.from(d);
+        final pc = (dd['parent_code'] ?? '') as String;
+        if (expenseParents.contains(pc)) dd['net'] = -_n(dd['net']);
+        (children[pc] ??= []).add(dd);
+      }
+
+      setState(() {
+        _rows = rows;
+        _children = children;
+        _expanded.clear();
+        _txn.clear();
+        _txnLoading.clear();
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() => _loading = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  double _sum(List<Map<String, dynamic>> rows) =>
+      rows.fold(0.0, (s, r) => s + _n(r['net']));
+
+  // Fetch the vouchers behind a leaf account's total, using the SAME period +
+  // branch scope the report was built with (so the drill reconciles to the line).
+  Future<void> _fetchTxns(String code) async {
+    if (_txn.containsKey(code) || _txnLoading.contains(code)) return;
+    setState(() => _txnLoading.add(code));
+    try {
+      String? orgId = ref.read(currentUserProvider)?.orgId;
+      orgId ??= ref.read(selectedBranchProvider)?['org_id'] as String?;
+      final scope = await ref.read(branchScopeProvider.future);
+      final branch = ref.read(selectedBranchProvider);
+      final res = await Supabase.instance.client.rpc('rpc_profit_loss_txns', params: {
+        'p_org_id': orgId,
+        'p_date_from': DateFormat('yyyy-MM-dd').format(_from),
+        'p_date_to': DateFormat('yyyy-MM-dd').format(_to),
+        'p_branch_ids': scope.resolve(allSelected: _allBranches, selected: branch),
+        'p_code': code,
+      });
+      final list = List<Map<String, dynamic>>.from(res as List);
+      if (mounted) setState(() { _txn[code] = list; _txnLoading.remove(code); });
+    } catch (e) {
+      if (mounted) setState(() { _txn[code] = []; _txnLoading.remove(code); });
+    }
+  }
+
+
+  void _print() {
+    final fmt = const MoneyFmt();
+    final revenue = _rows.where((r) => r['account_type'] == 'revenue').toList();
+    final cogs    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] == 'Cost of Goods Sold').toList();
+    final opex    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] != 'Cost of Goods Sold').toList();
+    final totalRevenue = _sum(revenue);
+    final totalCogs = _sum(cogs);
+    final grossProfit = totalRevenue - totalCogs;
+    final totalOpex = _sum(opex);
+    final netIncome = grossProfit - totalOpex;
+    final branch = ref.read(selectedBranchProvider);
+    final branchName = (branch?['name'] as String?) ?? 'All Branches';
+    final period = DateFormat('d MMM yyyy').format(_from) + ' to ' + DateFormat('d MMM yyyy').format(_to);
+
+    String fmtNet(double v) => v < 0 ? '(' + fmt.format(v.abs()) + ')' : fmt.format(v);
+    String secRows(List<Map<String, dynamic>> rows) {
+      final b = StringBuffer();
+      for (final r in rows) {
+        b.write('<tr><td>' + (r['code'] ?? '').toString() + '</td><td>' + (r['name'] ?? '').toString() + '</td><td class="num">' + fmtNet(_n(r['net'])) + '</td></tr>');
+      }
+      return b.toString();
+    }
+    String section(String title, List<Map<String, dynamic>> rows, double total) {
+      if (rows.isEmpty) return '';
+      return '<tr class="hd"><td colspan="3">' + title + '</td></tr>' + secRows(rows) +
+        '<tr class="sub"><td colspan="2">Total ' + title + '</td><td class="num">' + fmt.format(total) + '</td></tr>';
+    }
+
+    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Profit and Loss</title><style>@page{margin:0}'
+      'body{font-family:Arial,sans-serif;padding:18px;color:#000;font-size:11px}h1{font-size:20px;margin:0 0 2px}'
+      '.info{font-size:11px;margin:1px 0;color:#444}table{width:100%;border-collapse:collapse;margin-top:14px}'
+      'td{padding:4px 8px;border-bottom:1px solid #eee;font-size:10.5px}.num{text-align:right;white-space:nowrap}'
+      '.hd td{font-weight:800;background:#f0f4ff;border-top:1px solid #ccc}.sub td{font-weight:700;border-top:1px solid #999}'
+      '.gp td{font-weight:800;background:#eef}.net td{font-weight:800;font-size:13px;background:#f5f5f5;border-top:2px solid #000}'
+      '@page{margin:0}</style></head><body>'
+      '<div class="no-print" style="margin-bottom:12px"><button onclick="window.print()">Print</button></div>'
+      '<h1>Profit and Loss</h1>'
+      '<div class="info"><b>Period:</b> ' + period + '</div>'
+      '<div class="info"><b>Branch:</b> ' + branchName + '</div>'
+      '<table><tbody>'
+      + section('REVENUE', revenue, totalRevenue)
+      + section('COST OF GOODS SOLD', cogs, totalCogs)
+      + '<tr class="gp"><td colspan="2">GROSS PROFIT</td><td class="num">' + fmt.format(grossProfit) + '</td></tr>'
+      + section('OPERATING EXPENSES', opex, totalOpex)
+      + '<tr class="net"><td colspan="2">' + (netIncome >= 0 ? 'NET INCOME' : 'NET LOSS') + '</td><td class="num">' + fmt.format(netIncome.abs()) + '</td></tr>'
+      + '</tbody></table></body></html>';
+    final blob = html.Blob([doc], 'text/html;charset=utf-8');
+    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+  }
+
+  static double _n(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
+  @override
+  Widget build(BuildContext context) {
+    ref.listen(selectedBranchProvider, (_, __) => _load());
+    final branch = ref.watch(selectedBranchProvider);
+    final scope = ref.watch(branchScopeProvider).valueOrNull ??
+        const BranchScope(restricted: false, allowed: []);
+    final fmt = const MoneyFmt();
+
+    final revenue = _rows.where((r) => r['account_type'] == 'revenue').toList();
+    final cogs    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] == 'Cost of Goods Sold').toList();
+    final opex    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] != 'Cost of Goods Sold').toList();
+
+    final totalRevenue = _sum(revenue);
+    final totalCogs    = _sum(cogs);
+    final grossProfit  = totalRevenue - totalCogs;
+    final totalOpex    = _sum(opex);
+    final netIncome    = grossProfit - totalOpex;
+
+    return Container(
+      color: AppTheme.background, padding: const EdgeInsets.all(32),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        LayoutBuilder(builder: (_, cc) {
+          final narrow = cc.maxWidth < 640;
+          final titleBlock = const Text('Profit & Loss', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800));
+          final actions = Wrap(spacing: 8, runSpacing: 8, children: [
+            IconButton(onPressed: (_loading || _rows.isEmpty) ? null : _print, icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF'),
+            IconButton(onPressed: _refreshWithSweep, icon: const Icon(Icons.refresh), tooltip: 'Refresh (posts pending POS cost)'),
+          ]);
+          if (narrow) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const SizedBox(height: 10), actions]);
+          }
+          return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [titleBlock, const Spacer(), actions]);
+        }),
+        const SizedBox(height: 4),
+        Text(scope.label(allSelected: _allBranches, selected: branch), style: const TextStyle(color: AppTheme.textSecondary)),
+        const SizedBox(height: 16),
+        Row(children: [
+          _datePicker('From', _from, (d) { setState(() => _from = d); _load(); }, maxDate: _to),
+          const SizedBox(width: 12),
+          _datePicker('To', _to, (d) { setState(() => _to = d); _load(); }, minDate: _from),
+          const SizedBox(width: 12),
+          _quickRangeButton('This Month', _setThisMonth),
+          const SizedBox(width: 8),
+          _quickRangeButton('This Quarter', _setThisQuarter),
+          const SizedBox(width: 12),
+          // "All" means different things to different people: org-wide for an
+          // admin, but only the user's OWN branches for an erpUser — which is why
+          // BranchScope resolves it rather than passing null blindly. A user with
+          // exactly one branch gets no toggle; there is nothing to consolidate.
+          if (scope.canToggleAll) OutlinedButton.icon(
+            icon: Icon(_allBranches ? Icons.account_tree : Icons.store, size: 16),
+            label: Text(_allBranches
+                ? (scope.restricted ? 'All My Branches' : 'All Branches')
+                : 'This Branch'),
+            onPressed: () { setState(() => _allBranches = !_allBranches); _load(); },
+          ),
+        ]),
+        if (!_loading && _rows.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Row(children: [
+            _card('Revenue', fmt.format(totalRevenue), AppTheme.success),
+            const SizedBox(width: 12),
+            _card('COGS', fmt.format(totalCogs), AppTheme.warning),
+            const SizedBox(width: 12),
+            _card('Gross Profit', fmt.format(grossProfit), AppTheme.primary),
+            const SizedBox(width: 12),
+            _card('Operating Expenses', fmt.format(totalOpex), Colors.orange),
+            const SizedBox(width: 12),
+            _card(netIncome >= 0 ? 'Net Income' : 'Net Loss', fmt.format(netIncome.abs()),
+                netIncome >= 0 ? AppTheme.success : AppTheme.danger),
+          ]),
+        ],
+        const SizedBox(height: 16),
+        Expanded(child: Container(
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+          child: _loading ? const Center(child: CircularProgressIndicator())
+            : _rows.isEmpty ? const Center(child: Text('No data for period.', style: TextStyle(color: AppTheme.textSecondary)))
+            : ListView(padding: const EdgeInsets.all(24), children: [
+                _section(fmt, 'REVENUE', revenue, totalRevenue, AppTheme.success),
+                _section(fmt, 'COST OF GOODS SOLD', cogs, totalCogs, AppTheme.warning),
+                _subtotal(fmt, 'GROSS PROFIT', grossProfit, AppTheme.primary),
+                const SizedBox(height: 8),
+                _section(fmt, 'OPERATING EXPENSES', opex, totalOpex, Colors.orange),
+                const Divider(thickness: 2),
+                const SizedBox(height: 8),
+                _bigLine(fmt, netIncome >= 0 ? 'NET INCOME' : 'NET LOSS', netIncome,
+                    netIncome >= 0 ? AppTheme.success : AppTheme.danger),
+              ]),
+        )),
+      ]),
+    );
+  }
+
+  // Quick presets: set From/To to the first and last calendar day of the
+  // running month / quarter (using the app clock), then reload.
+  void _setThisMonth() {
+    final now = DateTime.now();
+    setState(() {
+      _from = DateTime(now.year, now.month, 1);
+      _to   = DateTime(now.year, now.month + 1, 0); // day 0 of next month = last day of this month
+    });
+    _load();
+  }
+
+  void _setThisQuarter() {
+    final now = DateTime.now();
+    final qStartMonth = ((now.month - 1) ~/ 3) * 3 + 1; // 1, 4, 7 or 10
+    setState(() {
+      _from = DateTime(now.year, qStartMonth, 1);
+      _to   = DateTime(now.year, qStartMonth + 3, 0);   // last day of the quarter
+    });
+    _load();
+  }
+
+  Widget _quickRangeButton(String label, VoidCallback onTap) => OutlinedButton(
+    onPressed: onTap,
+    child: Text(label),
+  );
+
+  Widget _datePicker(String label, DateTime date, void Function(DateTime) onPick, {DateTime? minDate, DateTime? maxDate}) =>
+    OutlinedButton.icon(
+      icon: const Icon(Icons.calendar_today, size: 16),
+      label: Text('$label: ${DateFormat('d MMM yyyy').format(date)}'),
+      onPressed: () async {
+        final d = await showDatePicker(context: context, initialDate: date,
+          firstDate: minDate ?? DateTime(2020), lastDate: maxDate ?? DateTime(2100));
+        if (d != null) onPick(d);
+      },
+    );
+
+  Widget _section(MoneyFmt fmt, String title, List<Map<String, dynamic>> rows, double total, Color color) {
+    if (rows.isEmpty) return const SizedBox.shrink();
+    final rowWidgets = <Widget>[];
+    for (final r in rows) {
+      final code = (r['code'] ?? '') as String;
+      final kids = _children[code] ?? const [];
+      rowWidgets.add(_plRow(fmt, r, kids.isNotEmpty, code));
+      if (_expanded.contains(code)) {
+        if (kids.isNotEmpty) {
+          for (final k in kids) rowWidgets.add(_plChildRow(fmt, k));
+        } else {
+          // Leaf account → show the transactions behind the total.
+          final acctType = (r['account_type'] ?? '') as String;
+          if (_txnLoading.contains(code)) {
+            rowWidgets.add(_plTxnInfo('Loading…'));
+          } else {
+            final tx = _txn[code] ?? const [];
+            if (tx.isEmpty) {
+              rowWidgets.add(_plTxnInfo('No transactions in this period.'));
+            } else {
+              for (final t in tx) rowWidgets.add(_plTxnRow(fmt, t, acctType));
+            }
+          }
+        }
+      }
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(padding: const EdgeInsets.only(top: 8, bottom: 4),
+        child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: color))),
+      ...rowWidgets,
+      const Divider(),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(children: [
+          Expanded(child: Text('Total $title', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
+          Text(fmt.format(total), style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: color)),
+        ])),
+      const SizedBox(height: 8),
+    ]);
+  }
+
+  Widget _plRow(MoneyFmt fmt, Map r, bool hasChildren, String code) {
+    final expanded = _expanded.contains(code);
+    // Every account is expandable: parents reveal their sub-accounts, leaf
+    // accounts reveal the vouchers behind the total.
+    final inner = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
+      child: Row(children: [
+        SizedBox(width: 18, child: Icon(
+          expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+          size: 16, color: AppTheme.textSecondary)),
+        SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 12))),
+        Text(_fmtNet(fmt, _n(r['net'])),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: _n(r['net']) < 0 ? AppTheme.danger : null)),
+      ]),
+    );
+    return InkWell(
+      onTap: () {
+        final nowExpanded = !expanded;
+        setState(() {
+          if (expanded) { _expanded.remove(code); } else { _expanded.add(code); }
+        });
+        // Leaf account being opened → load its vouchers on demand.
+        if (nowExpanded && !hasChildren) _fetchTxns(code);
+      },
+      child: inner,
+    );
+  }
+
+  // A single voucher line under an expanded leaf account. Sign matches the
+  // parent's convention (revenue: credit-debit; expense: debit-credit) so the
+  // rows visibly sum to the line total.
+  Widget _plTxnRow(MoneyFmt fmt, Map t, String accountType) {
+    final dr = _n(t['debit']), cr = _n(t['credit']);
+    final net = accountType == 'expense' ? (dr - cr) : (cr - dr);
+    final date = t['entry_date'] != null
+        ? DateFormat('d MMM').format(DateTime.parse(t['entry_date'].toString()))
+        : '';
+    final parts = <String>[
+      if ((t['voucher'] ?? '').toString().isNotEmpty) t['voucher'].toString(),
+      if ((t['party'] ?? '').toString().isNotEmpty) t['party'].toString(),
+      if ((t['description'] ?? '').toString().isNotEmpty) t['description'].toString(),
+    ];
+    return Container(
+      color: AppTheme.background.withOpacity(0.35),
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+      child: Row(children: [
+        const SizedBox(width: 18),
+        SizedBox(width: 56, child: Text(date, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+        Expanded(child: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: Text(parts.join('  ·  '), style: const TextStyle(fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+        )),
+        Text(_fmtNet(fmt, net),
+            style: TextStyle(fontSize: 11, color: net < 0 ? AppTheme.danger : null)),
+      ]),
+    );
+  }
+
+  Widget _plTxnInfo(String msg) => Container(
+    color: AppTheme.background.withOpacity(0.35),
+    padding: const EdgeInsets.fromLTRB(30, 6, 8, 6),
+    child: Row(children: [
+      const Icon(Icons.subdirectory_arrow_right, size: 12, color: AppTheme.textSecondary),
+      const SizedBox(width: 6),
+      Text(msg, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
+    ]),
+  );
+
+  Widget _plChildRow(MoneyFmt fmt, Map r) => Container(
+    color: AppTheme.background.withOpacity(0.35),
+    padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+    child: Row(children: [
+      const SizedBox(width: 18),
+      SizedBox(width: 48, child: Text(r['code']??'', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+      Expanded(child: Padding(padding: const EdgeInsets.only(left: 16), child: Row(children: [
+        const Icon(Icons.subdirectory_arrow_right, size: 12, color: AppTheme.textSecondary),
+        const SizedBox(width: 4),
+        Expanded(child: Text(r['name']??'', style: const TextStyle(fontSize: 11))),
+      ]))),
+      Text(_fmtNet(fmt, _n(r['net'])),
+          style: TextStyle(fontSize: 11, color: _n(r['net']) < 0 ? AppTheme.danger : null)),
+    ]),
+  );
+
+  Widget _subtotal(MoneyFmt fmt, String label, double value, Color color) => Container(
+    margin: const EdgeInsets.symmetric(vertical: 8),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(color: color.withOpacity(0.07), borderRadius: BorderRadius.circular(6)),
+    child: Row(children: [
+      Expanded(child: Text(label, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: color))),
+      Text(fmt.format(value), style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: color)),
+    ]),
+  );
+
+  Widget _bigLine(MoneyFmt fmt, String label, double value, Color color) => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3))),
+    child: Row(children: [
+      Expanded(child: Text(label, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: color))),
+      Text(fmt.format(value.abs()), style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20, color: color)),
+    ]),
+  );
+
+  String _fmtNet(MoneyFmt fmt, double v) => v < 0 ? '(${fmt.format(v.abs())})' : fmt.format(v);
+
+  Widget _card(String label, String value, Color color) => Expanded(child: Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+      const SizedBox(height: 4),
+      Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+    ]),
+  ));
+}

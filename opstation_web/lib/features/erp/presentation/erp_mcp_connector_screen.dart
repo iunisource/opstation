@@ -19,6 +19,10 @@ class ErpMcpConnectorScreen extends ConsumerStatefulWidget {
 class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
   static const _base =
       'https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/erp-mcp/';
+  // The single public connector URL. Everyone adds this same URL and signs in
+  // with their Opstation account; their login decides which company is read.
+  static const _connectorUrl =
+      'https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/erp-mcp';
 
   bool _loading = true;
   bool _busy = false;
@@ -148,8 +152,9 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
             label: const Text('Create key')),
         ]),
         const SizedBox(height: 4),
-        const Text('Connect this organization\'s data (read-only) to ChatGPT and Claude. '
-            'Ask them about your stock, balances, sales and more — in plain language.',
+        const Text('Connect your data (read-only) to ChatGPT and Claude. '
+            'Add the one connector URL below, sign in with your Opstation account, then '
+            'ask about your stock, balances, sales and more — in plain language.',
             style: TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 20),
         Expanded(child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -157,9 +162,11 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
             _newKeyBanner(),
             const SizedBox(height: 20),
           ],
-          _keysCard(),
+          _connectorUrlCard(),
           const SizedBox(height: 20),
           _howToCard(),
+          const SizedBox(height: 20),
+          _keysCard(),
           const SizedBox(height: 20),
           _safetyCard(),
         ]))),
@@ -233,14 +240,20 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
   );
 
   Widget _keysCard() {
-    return _card(title: 'Connector keys', icon: Icons.key_outlined, child: _loading
-        ? const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()))
-        : _tokens.isEmpty
-            ? const Text('No keys yet. Create one, then paste its URL into ChatGPT or Claude.',
-                style: TextStyle(color: AppTheme.textSecondary))
-            : Column(children: [
-                for (final t in _tokens) _tokenRow(t),
-              ]));
+    return _card(title: 'Static keys (optional)', icon: Icons.key_outlined, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Most people don\'t need this — just use the Connector URL above and sign in. '
+          'Static keys are an alternative for tools that can\'t do the sign-in: each key embeds '
+          'access to this company in the URL, so treat it like a password. Create one with the button top-right.',
+          style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+      const SizedBox(height: 12),
+      _loading
+          ? const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()))
+          : _tokens.isEmpty
+              ? const Text('No static keys.', style: TextStyle(color: AppTheme.textSecondary))
+              : Column(children: [
+                  for (final t in _tokens) _tokenRow(t),
+                ]),
+    ]));
   }
 
   Widget _tokenRow(Map<String, dynamic> t) {
@@ -290,23 +303,54 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
     ]),
   );
 
+  Widget _connectorUrlCard() {
+    return _card(title: 'Connector URL', icon: Icons.link_outlined,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Add this one URL in ChatGPT or Claude, then sign in with your Opstation '
+            'account — your login decides which company the assistant can read.',
+            style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: AppTheme.background,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.border)),
+          padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
+          child: Row(children: [
+            const Expanded(child: Text(_connectorUrl,
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontFamily: 'monospace', fontSize: 13))),
+            IconButton(
+              tooltip: 'Copy connector URL',
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () {
+                Clipboard.setData(const ClipboardData(text: _connectorUrl));
+                _snack('Connector URL copied');
+              },
+            ),
+          ]),
+        ),
+      ]));
+  }
+
   Widget _howToCard() {
-    return _card(title: 'How to connect', icon: Icons.link_outlined, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    return _card(title: 'How to connect', icon: Icons.help_outline, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('Claude (Pro/Team/Enterprise)', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
       const SizedBox(height: 8),
-      _step('1', 'Create a connector key above and copy its URL.'),
-      _step('2', 'In Claude, open Settings → Connectors → Add custom connector.'),
-      _step('3', 'Paste the URL, name it "Opstation", and save. No extra auth is needed — the URL is the key.'),
-      _step('4', 'In a chat, enable the Opstation connector and ask e.g. "What\'s my top overdue customer?"'),
+      _step('1', 'In Claude, open Settings → Connectors → Add custom connector.'),
+      _step('2', 'Paste the Connector URL above, name it "Opstation", and add it.'),
+      _step('3', 'Claude detects that sign-in is required — click Connect, then sign in with your Opstation email and password on the Opstation card.'),
+      _step('4', 'Back in a chat, turn on the Opstation connector and ask e.g. "What\'s my top overdue customer?"'),
       const SizedBox(height: 16),
       const Text('ChatGPT (Plus/Pro/Business, Developer Mode)', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
       const SizedBox(height: 8),
-      _step('1', 'Copy the same connector URL.'),
-      _step('2', 'In ChatGPT, Settings → Connectors (or Apps) → enable Developer Mode → Add / Create.'),
-      _step('3', 'Choose MCP server, paste the URL, set auth to "No authentication", and save.'),
+      _step('1', 'In ChatGPT, Settings → Connectors (or Apps) → enable Developer Mode → Add / Create.'),
+      _step('2', 'Choose MCP server, paste the same Connector URL, and set Authentication to "OAuth".'),
+      _step('3', 'Click Create, then Connect and sign in with your Opstation account.'),
       _step('4', 'Start a chat with the connector on and ask about your stock, balances or sales.'),
       const SizedBox(height: 6),
-      const Text('The exact menu names shift as both apps evolve; look for "custom connector" or "MCP server".',
+      const Text('You never type a token or key — signing in with your Opstation account is what authorizes it. '
+          'The exact menu names shift as both apps evolve; look for "custom connector" or "MCP server".',
           style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
     ]));
   }
@@ -315,9 +359,11 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
     return _card(title: 'What it can and can\'t do', icon: Icons.shield_outlined, child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text('• Read-only. It can look up stock, customer & supplier balances, aging, and business summaries — it cannot create, edit, post or delete anything.',
           style: TextStyle(fontSize: 13, height: 1.5)),
-      Text('• Scoped to this organization only. A key never exposes another org\'s data.',
+      Text('• Sign-in required. The connector URL is public, but it exposes nothing until someone signs in with an Opstation account.',
           style: TextStyle(fontSize: 13, height: 1.5)),
-      Text('• Anyone holding the URL can read this org\'s data, so treat it like a password. Revoke a key the moment it\'s no longer needed.',
+      Text('• Scoped by login. Each person only ever sees the company their own Opstation account belongs to.',
+          style: TextStyle(fontSize: 13, height: 1.5)),
+      Text('• Static keys (if used) embed access in the URL — treat those like a password and revoke them the moment they\'re no longer needed.',
           style: TextStyle(fontSize: 13, height: 1.5)),
     ]));
   }

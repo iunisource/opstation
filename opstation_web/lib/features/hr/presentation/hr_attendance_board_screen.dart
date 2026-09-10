@@ -320,8 +320,11 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
             e.state == _St.present && e.checkIn != null
                 ? 'In ${_to12(e.checkIn!)}'
                 : e.state == _St.left && e.checkOut != null
-                    ? 'Out ${_to12(e.checkOut!)}'
+                    ? (e.checkIn != null
+                        ? 'In ${_to12(e.checkIn!)} · Out ${_to12(e.checkOut!)}'
+                        : 'Out ${_to12(e.checkOut!)}')
                     : _label(e.state),
+            maxLines: 1, overflow: TextOverflow.ellipsis,
             style: TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
         ),
       ]),

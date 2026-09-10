@@ -1,0 +1,1118 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:convert';
+import 'dart:html' as html;
+import '../../../core/search/text_search.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/layout/main_layout.dart';
+import '../../auth/auth_controller.dart';
+import '../../../core/widgets/responsive.dart';
+
+
+import 'customer_history_screen.dart';
+import 'erp_customer_360_screen.dart';
+
+class CustomersScreen extends ConsumerStatefulWidget {
+  final bool crmMode;
+  const CustomersScreen({super.key, this.crmMode = false, this.focusId});
+  final String? focusId;
+  @override
+  ConsumerState<CustomersScreen> createState() => _CustomersScreenState();
+}
+
+class _CustomersScreenState extends ConsumerState<CustomersScreen> {
+  List<Map<String, dynamic>> _customers = [];
+  List<Map<String, dynamic>> _filtered = [];
+  List<String> _categories = [];
+  List<String> _groups = [];
+  bool _loading = true;
+  bool _targetsEnabled = false; // org.customer_targets_enabled
+  bool _customerSuperviseEnabled = false; // org.customer_supervise_flow
+  final _searchCtrl = TextEditingController();
+  String _missingFilter = 'all'; // all | contact | phone | either
+  String _routeFilter = 'all'; // all | assigned | unassigned
+  Set<String> _assignedCustomerIds = {}; // customers present in any route stop
+  final Set<String> _selectedIds = {}; // for bulk delete (filtered rows)
+
+  bool get _canBulk => !widget.crmMode && _canDeleteCustomer(ref.read(currentUserProvider)?.role);
+  bool get _allFilteredSelected =>
+      _filtered.isNotEmpty && _filtered.every((c) => _selectedIds.contains(c['id'] as String));
+
+  @override
+  void initState() {
+    super.initState();
+    _load().then((_) => _maybeFocus());
+    _searchCtrl.addListener(_filter);
+  }
+
+  /// Open the focused customer's edit dialog when arriving from global search.
+  void _maybeFocus() {
+    final id = widget.focusId;
+    if (id == null || !mounted) return;
+    Map<String, dynamic>? row;
+    for (final c in _customers) {
+      if (c['id']?.toString() == id) { row = c; break; }
+    }
+    if (row != null) _showDialog(context, row);
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    try {
+      final client = Supabase.instance.client;
+
+      // Load customers — paginate past PostgREST's 1000-row default cap
+      final List<Map<String, dynamic>> rows = [];
+      const pageSize = 1000;
+      var offset = 0;
+      while (true) {
+        final page = await client
+            .from('customers')
+            .select()
+            .eq('org_id', orgId)
+            .order('shop_name')
+            .range(offset, offset + pageSize - 1);
+        rows.addAll(List<Map<String, dynamic>>.from(page));
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
+
+      // Load categories from app_config
+      final catRow = await client
+          .from('app_config')
+          .select('value')
+          .eq('key', 'org.categories')
+          .eq('org_id', orgId)
+          .maybeSingle();
+
+      List<String> cats = [];
+      if (catRow != null && catRow['value'] != null) {
+        try {
+          final decoded = jsonDecode(catRow['value'] as String);
+          if (decoded is List) cats = List<String>.from(decoded);
+        } catch (_) {}
+      }
+
+      // Load groups from app_config
+      final grpRow = await client
+          .from('app_config')
+          .select('value')
+          .eq('key', 'org.groups')
+          .eq('org_id', orgId)
+          .maybeSingle();
+
+      List<String> grps = [];
+      if (grpRow != null && grpRow['value'] != null) {
+        try {
+          final decoded = jsonDecode(grpRow['value'] as String);
+          if (decoded is List) grps = List<String>.from(decoded);
+        } catch (_) {}
+      }
+
+      // Two-way sync: any category/group already sitting on a customer (e.g.
+      // set via a SQL import or the mobile app) is merged into the org master
+      // so it appears in the dropdowns and in Settings. Persist back when we
+      // discover values the master didn't have yet.
+      final custCats = <String>{for (final c in rows) if (((c['category'] as String?)?.trim() ?? '').isNotEmpty) (c['category'] as String).trim()};
+      final custGrps = <String>{for (final c in rows) if (((c['group_name'] as String?)?.trim() ?? '').isNotEmpty) (c['group_name'] as String).trim()};
+      final mergedCats = ({...cats, ...custCats}.toList())..sort();
+      final mergedGrps = ({...grps, ...custGrps}.toList())..sort();
+      if (mergedCats.length != cats.length) { await _persistList('org.categories', mergedCats); }
+      if (mergedGrps.length != grps.length) { await _persistList('org.groups', mergedGrps); }
+      cats = mergedCats;
+      grps = mergedGrps;
+
+      final tgtRow = await client
+          .from('app_config')
+          .select('value')
+          .eq('key', 'org.customer_targets_enabled')
+          .eq('org_id', orgId)
+          .maybeSingle();
+      final targetsOn = (tgtRow?['value'] as String?) == 'true';
+
+      bool superviseOn = false;
+      try {
+        final supRow = await client.from('app_config').select('value')
+            .eq('key', 'org.customer_supervise_flow').eq('org_id', orgId).maybeSingle();
+        superviseOn = (supRow?['value'] as String?) == 'true';
+      } catch (_) {}
+
+      // Which customers are on a route? route_stops has no org_id, so scope by
+      // this org's routes. Used by the "Route" filter (assigned/unassigned).
+      final Set<String> assignedIds = {};
+      try {
+        final routeRows = await client
+            .from('sales_routes')
+            .select('id')
+            .eq('org_id', orgId);
+        final routeIds = [for (final r in routeRows) r['id'] as String];
+        if (routeIds.isNotEmpty) {
+          final stopRows = await client
+              .from('route_stops')
+              .select('customer_id, route_id')
+              .inFilter('route_id', routeIds);
+          for (final s in stopRows) {
+            final cid = s['customer_id'] as String?;
+            if (cid != null) assignedIds.add(cid);
+          }
+        }
+      } catch (_) {/* filter just falls back to showing all */}
+
+      setState(() {
+        _customers = List<Map<String, dynamic>>.from(rows);
+        _filtered = _customers;
+        _categories = cats;
+        _groups = grps;
+        _targetsEnabled = targetsOn;
+        _customerSuperviseEnabled = superviseOn;
+        _assignedCustomerIds = assignedIds;
+        _loading = false;
+      });
+    } catch (_) { setState(() => _loading = false); }
+  }
+
+  void _filter() {
+    final q = _searchCtrl.text.toLowerCase();
+    setState(() {
+      _filtered = _customers.where((c) {
+        final matchesSearch = matchesQuery(
+            '${c['shop_name'] ?? ''} ${c['code'] ?? ''} ${c['phone'] ?? ''}', q);
+        if (!matchesSearch) return false;
+        // Route assignment filter (independent of the missing-info filter).
+        if (_routeFilter == 'assigned' &&
+            !_assignedCustomerIds.contains(c['id'])) return false;
+        if (_routeFilter == 'unassigned' &&
+            _assignedCustomerIds.contains(c['id'])) return false;
+        final noContact =
+            (c['contact_person'] as String? ?? '').trim().isEmpty;
+        final noPhone = (c['phone'] as String? ?? '').trim().isEmpty;
+        final hasLoc = c['latitude'] != null && c['longitude'] != null;
+        switch (_missingFilter) {
+          case 'contact':
+            return noContact;
+          case 'phone':
+            return noPhone;
+          case 'either':
+            return noContact || noPhone;
+          case 'no_location':
+            return !hasLoc;
+          case 'has_location':
+            return hasLoc;
+          case 'malformed':
+            return _isMalformed(c);
+          case 'supervise_pending':
+            return c['supervised_at'] == null; // not yet supervised
+          default:
+            return true;
+        }
+      }).toList();
+    });
+  }
+
+  /// Heuristic for junk contact/phone data (distinct from simply missing):
+  ///   • phone present but not a plausible number — contains a '.', or its
+  ///     digit count falls outside 10–13 (PK mobile/landline range); or
+  ///   • contact_person present but contains no letters at all (a number or
+  ///     phone dumped into the name field).
+  bool _isMalformed(Map<String, dynamic> c) {
+    final phone = (c['phone'] as String? ?? '').trim();
+    final contact = (c['contact_person'] as String? ?? '').trim();
+    if (phone.isNotEmpty) {
+      if (phone.contains('.')) return true;
+      final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+      if (digits.length < 10 || digits.length > 13) return true;
+    }
+    if (contact.isNotEmpty && !RegExp(r'[A-Za-z]').hasMatch(contact)) {
+      return true;
+    }
+    return false;
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  /// Opens Google Maps (new browser tab) centered on the customer's coords.
+  void _openLocation(double lat, double lng) {
+    html.window.open(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+      '_blank',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppTheme.background,
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Text('Customers', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            const Spacer(),
+            if (!widget.crmMode) ...[
+              OutlinedButton.icon(
+                onPressed: () => context.push('/customers/import'),
+                icon: const Icon(Icons.upload_file, size: 18),
+                label: const Text('Bulk Import'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () => _showDialog(context, null),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add Customer'),
+              ),
+            ],
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Text('${_filtered.length} customers', style: const TextStyle(color: AppTheme.textSecondary)),
+            if (!widget.crmMode && _customerSuperviseEnabled && _canDeactivateCustomer(ref.watch(currentUserProvider)?.role)) ...[
+              () {
+                final pending = _customers.where((c) => c['supervised_at'] == null).length;
+                if (pending == 0) return const SizedBox.shrink();
+                return Padding(padding: const EdgeInsets.only(left: 12), child: TextButton.icon(
+                  onPressed: _superviseAllPending,
+                  icon: Icon(Icons.verified_user_outlined, size: 16, color: Colors.amber.shade800),
+                  label: Text('Supervise all pending ($pending)', style: TextStyle(fontSize: 12, color: Colors.amber.shade800)),
+                ));
+              }(),
+            ],
+            if (_canBulk && _selectedIds.isNotEmpty) ...[
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => setState(() => _selectedIds.clear()),
+                icon: const Icon(Icons.clear, size: 16),
+                label: Text('Clear (${_selectedIds.length})'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+                onPressed: _bulkDelete,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: Text('Delete selected (${_selectedIds.length})'),
+              ),
+            ],
+          ]),
+          const SizedBox(height: 16),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _searchCtrl,
+                decoration: const InputDecoration(
+                  hintText: 'Search by name, code or phone...',
+                  prefixIcon: Icon(Icons.search),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 240,
+              child: DropdownButtonFormField<String>(
+                value: _missingFilter,
+                decoration: const InputDecoration(
+                  labelText: 'Filter',
+                  isDense: true,
+                ),
+                items: [
+                  // Only when the supervise flow is on: jump straight to the
+                  // customers still awaiting supervision.
+                  if (!widget.crmMode && _customerSuperviseEnabled)
+                    const DropdownMenuItem(
+                        value: 'supervise_pending',
+                        child: Text('Supervision pending')),
+                  const DropdownMenuItem(
+                      value: 'all', child: Text('All customers')),
+                  const DropdownMenuItem(
+                      value: 'contact',
+                      child: Text('Missing: Contact Person')),
+                  const DropdownMenuItem(
+                      value: 'phone', child: Text('Missing: Phone')),
+                  const DropdownMenuItem(
+                      value: 'either',
+                      child: Text('Missing: Contact or Phone')),
+                  const DropdownMenuItem(
+                      value: 'no_location',
+                      child: Text('Missing: Location')),
+                  const DropdownMenuItem(
+                      value: 'has_location',
+                      child: Text('Has Location')),
+                  const DropdownMenuItem(
+                      value: 'malformed',
+                      child: Text('Malformed: Contact/Phone')),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _missingFilter = v);
+                  _filter();
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                value: _routeFilter,
+                decoration: const InputDecoration(
+                  labelText: 'Route',
+                  isDense: true,
+                ),
+                items: const [
+                  DropdownMenuItem(
+                      value: 'all', child: Text('All customers')),
+                  DropdownMenuItem(
+                      value: 'assigned', child: Text('Assigned to a route')),
+                  DropdownMenuItem(
+                      value: 'unassigned', child: Text('Route not assigned')),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _routeFilter = v);
+                  _filter();
+                },
+              ),
+            ),
+          ]),
+          const SizedBox(height: 16),
+          if (_loading)
+            const Center(child: CircularProgressIndicator())
+          else
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: HScrollOnNarrow(minWidth: 1000, child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      decoration: const BoxDecoration(
+                        color: AppTheme.background,
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+                      ),
+                      child: Row(children: [
+                        if (_canBulk)
+                          SizedBox(width: 40, child: Checkbox(
+                            value: _allFilteredSelected,
+                            tristate: true,
+                            onChanged: (v) => setState(() {
+                              if (_allFilteredSelected) {
+                                for (final c in _filtered) { _selectedIds.remove(c['id'] as String); }
+                              } else {
+                                for (final c in _filtered) { _selectedIds.add(c['id'] as String); }
+                              }
+                            }),
+                          )),
+                        const Expanded(flex: 1, child: Text('Code', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        const Expanded(flex: 3, child: Text('Shop Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        const Expanded(flex: 2, child: Text('Contact', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        const Expanded(flex: 2, child: Text('Phone', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        const Expanded(flex: 2, child: Text('Category', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        SizedBox(width: widget.crmMode ? 56 : 264),
+                      ]),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: _filtered.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, i) {
+                          final c = _filtered[i];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                            child: Row(children: [
+                              if (_canBulk)
+                                SizedBox(width: 40, child: Checkbox(
+                                  value: _selectedIds.contains(c['id'] as String),
+                                  onChanged: (v) => setState(() {
+                                    if (v == true) {
+                                      _selectedIds.add(c['id'] as String);
+                                    } else {
+                                      _selectedIds.remove(c['id'] as String);
+                                    }
+                                  }),
+                                )),
+                              Expanded(flex: 1, child: Text(c['code'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary))),
+                              Expanded(flex: 3, child: Row(children: [
+                                Flexible(child: Text(c['shop_name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                                if (!(c['is_active'] as bool? ?? true))
+                                  Container(
+                                    margin: const EdgeInsets.only(left: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                    decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                                    child: Text('Deactivated', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: AppTheme.danger)),
+                                  ),
+                                if (c['latitude'] != null && c['longitude'] != null)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 6),
+                                    child: Icon(Icons.location_on, size: 14, color: AppTheme.success),
+                                  ),
+                                if (!widget.crmMode && _customerSuperviseEnabled && c['supervised_at'] == null)
+                                  Container(
+                                    margin: const EdgeInsets.only(left: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                    decoration: BoxDecoration(color: Colors.amber.shade700.withOpacity(0.14), borderRadius: BorderRadius.circular(4)),
+                                    child: Text('Supervision pending', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.amber.shade800)),
+                                  ),
+                              ])),
+                              Expanded(flex: 2, child: Text(c['contact_person'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
+                              Expanded(flex: 2, child: Text(c['phone'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
+                              Expanded(flex: 2, child: Text(c['category'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
+                              SizedBox(width: widget.crmMode ? 56 : 264, child: Row(children: [
+                                if (!widget.crmMode && c['latitude'] != null && c['longitude'] != null)
+                                  IconButton(
+                                    icon: const Icon(Icons.place, size: 18, color: AppTheme.primary),
+                                    tooltip: 'Show location',
+                                    onPressed: () => _openLocation(
+                                      (c['latitude'] as num).toDouble(),
+                                      (c['longitude'] as num).toDouble(),
+                                    ),
+                                  ),
+                                IconButton(
+                                  icon: const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary),
+                                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => Customer360Screen(customer: c),
+                                  )),
+                                  tooltip: 'Customer 360',
+                                ),
+                                if (!widget.crmMode)
+                                  IconButton(
+                                    icon: const Icon(Icons.history, size: 18, color: AppTheme.success),
+                                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => CustomerHistoryScreen(
+                                        customerId: c['id'] as String,
+                                        customerName: c['shop_name'] as String? ?? '',
+                                        customerCode: c['code'] as String?,
+                                      ),
+                                    )),
+                                    tooltip: 'View History',
+                                  ),
+                                if (!widget.crmMode && _customerSuperviseEnabled && c['supervised_at'] == null && _canDeactivateCustomer(ref.watch(currentUserProvider)?.role))
+                                  IconButton(
+                                    icon: const Icon(Icons.verified_user_outlined, size: 18, color: AppTheme.primary),
+                                    tooltip: 'Supervise (admin)',
+                                    onPressed: () => _superviseCustomer(c),
+                                  ),
+                                if (!widget.crmMode)
+                                  IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, c)),
+                                if (!widget.crmMode && _canDeactivateCustomer(ref.watch(currentUserProvider)?.role))
+                                  IconButton(
+                                    icon: Icon(
+                                      (c['is_active'] as bool? ?? true)
+                                          ? Icons.block
+                                          : Icons.check_circle_outline,
+                                      size: 18,
+                                      color: (c['is_active'] as bool? ?? true)
+                                          ? AppTheme.danger
+                                          : AppTheme.success,
+                                    ),
+                                    onPressed: () => _toggleCustomerActive(c),
+                                    tooltip: (c['is_active'] as bool? ?? true)
+                                        ? 'Deactivate'
+                                        : 'Activate',
+                                  ),
+                                if (!widget.crmMode && _canDeleteCustomer(ref.watch(currentUserProvider)?.role))
+                                  IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger), onPressed: () => _delete(c['id'] as String)),
+                              ])),
+                            ]),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                )),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  bool _canDeleteCustomer(WebUserRole? role) =>
+      role == WebUserRole.masterAdmin;
+
+  bool _canDeactivateCustomer(WebUserRole? role) =>
+      role == WebUserRole.masterAdmin || role == WebUserRole.admin;
+
+  Future<void> _toggleCustomerActive(Map<String, dynamic> c) async {
+    final newVal = !(c['is_active'] as bool? ?? true);
+    try {
+      await Supabase.instance.client
+          .from('customers')
+          .update({'is_active': newVal}).eq('id', c['id']);
+      _showSnack(newVal ? 'Customer activated' : 'Customer deactivated');
+      _load();
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  // Mark a newly-created customer as supervised (admin / master admin only).
+  // Clears it from the Sales → Customers menu pendency counter.
+  Future<void> _superviseCustomer(Map<String, dynamic> c) async {
+    final user = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('customers').update({
+        'supervised_by': user?.id,
+        'supervised_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', c['id']);
+      ref.invalidate(customerSupervisePendingProvider);
+      _showSnack('Customer supervised');
+      _load();
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _superviseAllPending() async {
+    final user = ref.read(currentUserProvider);
+    final pending = _customers.where((c) => c['supervised_at'] == null).toList();
+    if (pending.isEmpty) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Supervise all pending?'),
+      content: Text('Mark all ${pending.length} unsupervised customer(s) as supervised?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Supervise all')),
+      ],
+    ));
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.from('customers').update({
+        'supervised_by': user?.id,
+        'supervised_at': DateTime.now().toUtc().toIso8601String(),
+      }).filter('supervised_at', 'is', null).eq('org_id', user?.orgId ?? '');
+      ref.invalidate(customerSupervisePendingProvider);
+      _showSnack('Supervised ${pending.length} customer(s)');
+      _load();
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  // A customer with ANY ledger/transaction footprint must never be deleted —
+  // deleting would orphan invoices, receipts and GL lines (or silently succeed
+  // if no FK protects the row). Returns the first table that references it, else
+  // null. Checked before every delete; deactivate such customers instead.
+  Future<String?> _customerTransactionBlock(String id) async {
+    final client = Supabase.instance.client;
+    Future<bool> has(String table, String col) async {
+      try {
+        final r = await client.from(table).select('id').eq(col, id).limit(1);
+        return (r as List).isNotEmpty;
+      } catch (_) { return false; } // missing table/column → not a blocker
+    }
+    if (await has('sales_invoices', 'customer_id')) return 'a Sales Invoice';
+    if (await has('sales_orders', 'customer_id')) return 'a Sales Order';
+    if (await has('sales_return_invoices', 'customer_id')) return 'a Sales Return';
+    if (await has('deliveries', 'customer_id')) return 'a Delivery Order';
+    if (await has('receipt_vouchers', 'customer_id')) return 'a Receipt Voucher';
+    if (await has('crv_voucher_lines', 'account_id')) return 'a cash receipt';
+    if (await has('journal_lines', 'party_id')) return 'a ledger entry';
+    return null;
+  }
+
+  Future<void> _delete(String id) async {
+    final block = await _customerTransactionBlock(id);
+    if (block != null) {
+      _showSnack('Cannot delete: this customer has $block in the ledger. Deactivate it instead.');
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Customer'),
+        content: const Text('Are you sure you want to delete this customer?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      try {
+        await Supabase.instance.client.from('customers').delete().eq('id', id);
+        _showSnack('Customer deleted');
+        _load();
+      } catch (e) {
+        _showSnack('Cannot delete: this customer is referenced by transactions. Deactivate it instead.');
+      }
+    }
+  }
+
+  /// Bulk-delete the currently selected customers. Deletes per-id so one row
+  /// that can't be removed (e.g. it has transactions / FK references) doesn't
+  /// block the rest; reports how many succeeded and how many were blocked.
+  Future<void> _bulkDelete() async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Customers'),
+        content: Text('Delete ${ids.length} selected customer(s)? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(true),
+            child: Text('Delete ${ids.length}'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    int ok = 0, blocked = 0;
+    for (final id in ids) {
+      // Skip any customer with ledger activity — never orphan transactions.
+      if (await _customerTransactionBlock(id) != null) { blocked++; continue; }
+      try {
+        await Supabase.instance.client.from('customers').delete().eq('id', id);
+        ok++;
+      } catch (_) {
+        blocked++; // FK: customer has linked transactions
+      }
+    }
+    if (!mounted) return;
+    setState(() => _selectedIds.clear());
+    _showSnack(blocked == 0
+        ? '$ok customer(s) deleted'
+        : '$ok deleted · $blocked could not be deleted (have linked records)');
+    _load();
+  }
+
+  /// Generate the next available zero-padded numeric customer code for this org.
+  /// Strategy (per requirements): take the largest existing PURELY NUMERIC code,
+  /// add 1, and skip any value already taken (manual or auto share one space).
+  /// Width is padded to the longest existing numeric code (min 6), so codes sort
+  /// and read consistently. Re-checks the DB live so two near-simultaneous
+  /// creates are unlikely to collide; the insert's uniqueness is the final guard.
+  Future<String?> _generateCustomerCode() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) { _showSnack('No org — please re-login'); return null; }
+    try {
+      // Pull all existing codes fresh (don't rely only on the in-memory list).
+      final rows = await Supabase.instance.client
+          .from('customers').select('code').eq('org_id', orgId);
+      final taken = <String>{};
+      int maxNum = 0;
+      int width = 6;
+      for (final r in (rows as List)) {
+        final code = (r['code'] ?? '').toString().trim();
+        if (code.isEmpty) continue;
+        taken.add(code);
+        // Only purely-numeric codes participate in the max/width computation.
+        if (RegExp(r'^\d+$').hasMatch(code)) {
+          final n = int.tryParse(code) ?? 0;
+          if (n > maxNum) maxNum = n;
+          if (code.length > width) width = code.length;
+        }
+      }
+      // Advance past any already-taken value (covers manual codes in the range).
+      int candidate = maxNum + 1;
+      String code = candidate.toString().padLeft(width, '0');
+      while (taken.contains(code) || taken.contains(candidate.toString())) {
+        candidate++;
+        code = candidate.toString().padLeft(width, '0');
+      }
+      return code;
+    } catch (e) {
+      _showSnack('Could not generate code: $e');
+      return null;
+    }
+  }
+
+  String _norm(dynamic v) {
+    if (v == null) return '';
+    if (v is num) return v.toString();
+    return v.toString().trim();
+  }
+
+  /// Logs a customer edit into the shared voucher_audit_log (voucher_type
+  /// 'CUSTOMER'), recording which fields changed. Best-effort; never blocks
+  /// the save.
+  Future<void> _logCustomerEdit(
+      Map<String, dynamic> oldC, Map<String, dynamic> newC) async {
+    const labels = {
+      'shop_name': 'shop name',
+      'code': 'code',
+      'contact_person': 'contact',
+      'phone': 'phone',
+      'address': 'address',
+      'category': 'category',
+      'group_name': 'group',
+      'credit_limit': 'credit limit',
+      'ntn_gst': 'NTN',
+    };
+    String disp(dynamic v) {
+      final s = v?.toString().trim() ?? '';
+      return s.isEmpty ? '—' : s;
+    }
+
+    final changed = <String>[];
+    final changeTrail = <Map<String, String>>[];
+    void track(String label, dynamic oldV, dynamic newV) {
+      changed.add(label);
+      changeTrail
+          .add({'field': label, 'from': disp(oldV), 'to': disp(newV)});
+    }
+
+    labels.forEach((k, label) {
+      if (_norm(oldC[k]) != _norm(newC[k])) track(label, oldC[k], newC[k]);
+    });
+    if (_norm(oldC['latitude']) != _norm(newC['latitude']) ||
+        _norm(oldC['longitude']) != _norm(newC['longitude'])) {
+      track(
+        'location',
+        '${disp(oldC['latitude'])}, ${disp(oldC['longitude'])}',
+        '${disp(newC['latitude'])}, ${disp(newC['longitude'])}',
+      );
+    }
+    if (changed.isEmpty) return;
+
+    // NOTE: the audit-trail row is written by the DB trigger
+    // fn_audit_master_change on public.customers (covers web, mobile, API and
+    // SQL), so we no longer insert into voucher_audit_log here.
+
+    // Optional email alert — the Edge Function decides whether to actually
+    // send, based on the org's Admin Settings toggle + recipient list.
+    try {
+      await Supabase.instance.client.functions.invoke(
+        'notify-customer-edit',
+        body: {
+          'customerName': newC['shop_name'] ?? oldC['shop_name'],
+          'changes': changeTrail,
+        },
+      );
+    } catch (_) {/* alert is best-effort */}
+  }
+
+  // Persist a category/group master list to app_config (org.categories / org.groups).
+  Future<void> _persistList(String key, List<String> vals) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    try {
+      await Supabase.instance.client.from('app_config').upsert(
+        {'key': key, 'value': jsonEncode(vals), 'org_id': orgId},
+        onConflict: 'key,org_id,branch_id',
+      );
+    } catch (_) {/* best-effort */}
+  }
+
+  // Add a new category/group from the customer screen and sync it to the master.
+  Future<void> _addToList(String key, String value) async {
+    final list = key == 'org.groups' ? _groups : _categories;
+    if (value.isEmpty || list.contains(value)) return;
+    setState(() { list.add(value); list.sort(); });
+    await _persistList(key, list);
+  }
+
+  Future<String?> _promptNewValue(BuildContext ctx, String title) async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(context: ctx, builder: (_) => AlertDialog(
+      title: Text(title),
+      content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'Name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim().isEmpty ? null : v.trim())),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim().isEmpty ? null : ctrl.text.trim()), child: const Text('Add')),
+      ],
+    ));
+  }
+
+  Widget _catGroupField({required String label, required String? value, required List<String> items, required ValueChanged<String?> onChanged, required VoidCallback onAdd}) {
+    return Row(children: [
+      Expanded(child: DropdownButtonFormField<String>(
+        value: value,
+        decoration: InputDecoration(labelText: label),
+        hint: Text('Select ${label.toLowerCase()}'),
+        items: items.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+        onChanged: onChanged,
+      )),
+      IconButton(icon: const Icon(Icons.add_circle_outline, color: AppTheme.primary), tooltip: 'New $label', onPressed: onAdd),
+    ]);
+  }
+
+  void _showDialog(BuildContext context, Map<String, dynamic>? customer) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    final allBranches = orgId != null ? await Supabase.instance.client
+        .from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name') : [];
+    Set<String> selectedBranches = {};
+    if (customer != null && orgId != null) {
+      final existing = await Supabase.instance.client
+          .from('customer_branches').select('branch_id').eq('customer_id', customer['id']);
+      selectedBranches = (existing as List).map((b) => b['branch_id'] as String).toSet();
+    }
+    // New customers get an auto-generated code (highest + 1) up front; the
+    // field is read-only. Existing customers keep their code (also read-only).
+    String initialCode = customer?['code'] as String? ?? '';
+    if (customer == null) {
+      initialCode = await _generateCustomerCode() ?? '';
+    }
+    if (!mounted) return;
+    final shopCtrl = TextEditingController(text: customer?['shop_name'] ?? '');
+    final codeCtrl = TextEditingController(text: initialCode);
+    final contactCtrl = TextEditingController(text: customer?['contact_person'] ?? '');
+    final phoneCtrl = TextEditingController(text: customer?['phone'] ?? '');
+    final addressCtrl = TextEditingController(text: customer?['address'] ?? '');
+    final latCtrl = TextEditingController(text: customer?['latitude']?.toString() ?? '');
+    final lngCtrl = TextEditingController(text: customer?['longitude']?.toString() ?? '');
+    final creditLimitCtrl = TextEditingController(text: customer?['credit_limit']?.toString() ?? '');
+    final targetCtrl = TextEditingController(
+        text: (customer?['monthly_sale_target'] != null &&
+                (customer?['monthly_sale_target'] as num) != 0)
+            ? customer!['monthly_sale_target'].toString()
+            : '');
+    final ntnCtrl = TextEditingController(text: customer?['ntn_gst'] ?? '');
+    String? category = customer?['category'] as String?;
+       String? group = customer?['group_name'] as String?;
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: Text(customer == null ? 'Add Customer' : 'Edit Customer'),
+          content: SizedBox(
+            width: 560,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                // Basic info
+                const Align(alignment: Alignment.centerLeft,
+                  child: Text('Basic Info', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(child: TextField(controller: shopCtrl, decoration: const InputDecoration(labelText: 'Shop Name *'))),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(
+                    controller: codeCtrl,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Customer Code',
+                      helperText: 'Generated automatically',
+                    ),
+                  )),
+                ]),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(child: TextField(controller: contactCtrl, decoration: const InputDecoration(labelText: 'Contact Person'))),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'Phone'), keyboardType: TextInputType.phone)),
+                ]),
+                const SizedBox(height: 12),
+                // Category & Group dropdowns side-by-side, each with inline "＋ new".
+                Row(children: [
+                  Expanded(child: _catGroupField(
+                    label: 'Category',
+                    value: category,
+                    items: ({..._categories, if (category != null && category!.isNotEmpty) category!}.toList()),
+                    onChanged: (v) => setS(() => category = v),
+                    onAdd: () async {
+                      final nv = await _promptNewValue(context, 'New category');
+                      if (nv != null) { await _addToList('org.categories', nv); setS(() => category = nv); }
+                    },
+                  )),
+                  const SizedBox(width: 12),
+                  Expanded(child: _catGroupField(
+                    label: 'Group',
+                    value: group,
+                    items: ({..._groups, if (group != null && group!.isNotEmpty) group!}.toList()),
+                    onChanged: (v) => setS(() => group = v),
+                    onAdd: () async {
+                      final nv = await _promptNewValue(context, 'New group');
+                      if (nv != null) { await _addToList('org.groups', nv); setS(() => group = nv); }
+                    },
+                  )),
+                ]),
+                const SizedBox(height: 16),
+                // Credit Limit
+                const Align(alignment: Alignment.centerLeft,
+                  child: Text('Credit Limit', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(child: TextField(controller: creditLimitCtrl,
+                      decoration: const InputDecoration(labelText: 'Credit Limit (optional)', hintText: 'Leave blank for no limit'),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))])),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(controller: ntnCtrl,
+                      decoration: const InputDecoration(labelText: 'NTN'))),
+                ]),
+                if (_targetsEnabled) ...[
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(child: TextField(controller: targetCtrl,
+                        decoration: const InputDecoration(
+                            labelText: 'Monthly Sales Target (optional)',
+                            hintText: 'Target sales value per month'),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))])),
+                    const SizedBox(width: 12),
+                    const Spacer(),
+                  ]),
+                ],
+                const SizedBox(height: 16),
+                // Address
+                const Align(alignment: Alignment.centerLeft,
+                  child: Text('Address', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                const SizedBox(height: 8),
+                TextField(controller: addressCtrl, decoration: const InputDecoration(labelText: 'Street Address'), maxLines: 2),
+                const SizedBox(height: 16),
+                // Branch assignment
+                if ((allBranches as List).isNotEmpty)
+                  StatefulBuilder(builder: (ctx2, setSB) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Align(alignment: Alignment.centerLeft,
+                        child: Text('Branch Assignment', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                      const SizedBox(height: 6),
+                      Container(
+                        decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+                        child: Column(children: (allBranches as List).map((b) => CheckboxListTile(
+                          dense: true,
+                          title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
+                          value: selectedBranches.contains(b['id'] as String),
+                          onChanged: (v) => setSB(() {
+                            if (v == true) selectedBranches.add(b['id'] as String);
+                            else selectedBranches.remove(b['id'] as String);
+                          }),
+                        )).toList()),
+                      ),
+                    ],
+                  )),
+                const SizedBox(height: 16),
+                // Location
+                const Align(alignment: Alignment.centerLeft,
+                  child: Text('Location Coordinates', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                const SizedBox(height: 4),
+                const Align(alignment: Alignment.centerLeft,
+                  child: Text('Enter GPS coordinates manually or use the mobile app to set location on-site.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(child: TextField(
+                    controller: latCtrl,
+                    decoration: const InputDecoration(labelText: 'Latitude', hintText: 'e.g. 31.5204'),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  )),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(
+                    controller: lngCtrl,
+                    decoration: const InputDecoration(labelText: 'Longitude', hintText: 'e.g. 74.3587'),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  )),
+                ]),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.map_outlined, size: 16),
+                    label: const Text('Open Google Maps to find coordinates', style: TextStyle(fontSize: 12)),
+                    onPressed: () {
+                      final lat = double.tryParse(latCtrl.text.trim());
+                      final lng = double.tryParse(lngCtrl.text.trim());
+                      final q = (lat != null && lng != null) ? '$lat,$lng' : '';
+                      html.window.open(
+                        'https://www.google.com/maps/search/?api=1&query=$q',
+                        '_blank',
+                      );
+                    },
+                  ),
+                ),
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                if (shopCtrl.text.trim().isEmpty || codeCtrl.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Shop name and code are required')));
+                  return;
+                }
+                final orgId = ref.read(currentUserProvider)?.orgId;
+                final lat = double.tryParse(latCtrl.text.trim());
+                final lng = double.tryParse(lngCtrl.text.trim());
+                final data = {
+                  'shop_name': shopCtrl.text.trim(),
+                  'code': codeCtrl.text.trim(),
+                  'contact_person': contactCtrl.text.trim(),
+                  'phone': phoneCtrl.text.trim(),
+                  'address': addressCtrl.text.trim(),
+                  'category': category,
+                  'group_name': group,
+                  'latitude': lat,
+                  'longitude': lng,
+                  'credit_limit': creditLimitCtrl.text.trim().isEmpty ? null : double.tryParse(creditLimitCtrl.text.trim()),
+                  'monthly_sale_target': targetCtrl.text.trim().isEmpty ? 0 : (double.tryParse(targetCtrl.text.trim()) ?? 0),
+                  'ntn_gst': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
+                  'org_id': orgId,
+                  'is_active': true,
+                };
+                final isNew = customer == null;
+                try {
+                  if (isNew) {
+                    // Insert; if the auto code lost a race (unique violation),
+                    // regenerate the next code and retry a few times.
+                    var attempt = 0;
+                    while (true) {
+                      final id = 'cust_${DateTime.now().millisecondsSinceEpoch}';
+                      try {
+                        await Supabase.instance.client.from('customers')
+                            .insert({...data, 'id': id, 'updated_at': DateTime.now().toIso8601String()});
+                        break;
+                      } catch (e) {
+                        final msg = e.toString().toLowerCase();
+                        final isDup = msg.contains('duplicate') || msg.contains('unique') || msg.contains('23505');
+                        if (isDup && attempt < 4) {
+                          attempt++;
+                          final regen = await _generateCustomerCode();
+                          if (regen != null) data['code'] = regen;
+                          continue;
+                        }
+                        rethrow;
+                      }
+                    }
+                  } else {
+                    await Supabase.instance.client.from('customers').update(data).eq('id', customer['id']);
+                    await _logCustomerEdit(customer, data);
+                  }
+                  if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+                  _showSnack(isNew ? 'Customer added' : 'Customer updated');
+                  _load();
+                } catch (e) {
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                      content: Text('Failed: ${e.toString().split('\n').first}'),
+                    ));
+                  }
+                }
+              },
+              child: Text(customer == null ? 'Add' : 'Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
