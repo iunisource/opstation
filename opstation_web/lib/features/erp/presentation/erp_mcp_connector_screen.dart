@@ -29,6 +29,7 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
   String? _newUrl;
   String? _newName;
   final TextEditingController _newUrlCtrl = TextEditingController();
+  final TextEditingController _nameCtrl = TextEditingController(); // inline key name
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
@@ -36,6 +37,7 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
   @override
   void dispose() {
     _newUrlCtrl.dispose();
+    _nameCtrl.dispose();
     super.dispose();
   }
 
@@ -65,26 +67,10 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
   }
 
   Future<void> _create() async {
-    final nameCtrl = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('New connector key'),
-        content: SizedBox(width: 360, child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('Give this key a name so you can tell them apart later '
-              '(e.g. "Hamza — ChatGPT" or "Finance — Claude").',
-              style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-          const SizedBox(height: 12),
-          TextField(controller: nameCtrl, autofocus: true,
-            decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder(), isDense: true)),
-        ])),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, nameCtrl.text.trim()), child: const Text('Create')),
-        ],
-      ),
-    );
-    if (name == null) return;
+    if (_busy) return;
+    // Name comes from the inline field in the header — no dialog (a dialog with
+    // an autofocus field was blanking the web canvas).
+    final name = _nameCtrl.text.trim();
     setState(() => _busy = true);
     try {
       final res = await Supabase.instance.client.rpc('mcp_create_token',
@@ -109,6 +95,7 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
           _newName = name.isEmpty ? 'Connector key' : name;
           _newUrl = '$_base$raw';
           _newUrlCtrl.text = _newUrl!;
+          _nameCtrl.clear();
         });
       }
     } catch (e) {
@@ -145,9 +132,20 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
         Row(children: [
           const Text('AI Connector', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const Spacer(),
+          SizedBox(width: 220, child: TextField(
+            controller: _nameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Key name (optional)', isDense: true, border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
+            onSubmitted: (_) { if (!_busy) _create(); },
+          )),
+          const SizedBox(width: 10),
           ElevatedButton.icon(
             onPressed: _busy ? null : _create,
-            icon: const Icon(Icons.add, size: 18), label: const Text('New connector key')),
+            icon: _busy
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.add, size: 18),
+            label: const Text('Create key')),
         ]),
         const SizedBox(height: 4),
         const Text('Connect this organization\'s data (read-only) to ChatGPT and Claude. '
