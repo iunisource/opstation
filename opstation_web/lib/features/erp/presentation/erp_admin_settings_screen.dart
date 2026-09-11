@@ -299,6 +299,17 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.production_updates_cost_price',
+    'Update product Cost Price from Production',
+    'The manufacturing counterpart of the Purchase-Invoice setting above. When '
+        'ON, posting a Production Voucher or Job Run updates the finished good\'s '
+        'Cost Price in the product profile to that run\'s actual unit cost — '
+        'keeping made-in-house items\' cost current the same way purchases keep '
+        'bought items current. Only the finished good is touched, and only a '
+        'non-zero cost is written. When OFF, Cost Price is left unchanged.',
+  ),
+
+  _AdminToggle(
     'org.foc_enabled',
     'Free-of-Cost (FOC) items on Sales Orders',
     'When ON, a separate "Free of Cost Items" section appears on the Sales Order '
@@ -560,6 +571,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.job_card_price_restrict',
     'org.job_ack_flow',
     'org.job_ack_skip_admin',
+    'org.production_updates_cost_price',
     'feature.qc_station',
   ]),
   _ToggleGroup('Inventory & Products', Icons.inventory_2_outlined, [
