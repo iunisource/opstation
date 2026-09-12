@@ -1105,6 +1105,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _menuItem(context, 'Admin Settings', Icons.admin_panel_settings_outlined, '/erp/admin-settings', location),
       if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
         _menuItem(context, 'AI Connector', Icons.smart_toy_outlined, '/erp/ai-connector', location),
+      if (user?.role == WebUserRole.masterAdmin)
+        _menuItem(context, 'Account Linking', Icons.hub_outlined, '/account-linking', location),
     ];
 
     // Legacy combined list (still used for isNotEmpty guards)
@@ -1191,6 +1193,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (user?.role == WebUserRole.superAdmin) ...[
           _navButton(context, 'Organizations', Icons.business, '/orgs', location),
           _navButton(context, 'Subscriptions', Icons.workspace_premium_outlined, '/subscriptions', location),
+          _navButton(context, 'Account Linking', Icons.hub_outlined, '/account-linking', location),
         ],
 
         if (isDispatch) ...[
