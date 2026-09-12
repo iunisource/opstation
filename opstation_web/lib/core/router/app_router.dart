@@ -65,6 +65,7 @@ import '../../features/orders/presentation/orders_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/superadmin/presentation/orgs_screen.dart';
 import '../../features/superadmin/presentation/subscriptions_screen.dart';
+import '../../features/settings/presentation/org_access_screen.dart';
 import '../../features/billing/presentation/billing_screen.dart';
 import '../../features/billing/presentation/subscription_expired_screen.dart';
 import '../../features/live_map/presentation/live_map_screen.dart';
@@ -362,6 +363,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/reports', builder: (_, __) => const ReportsScreen()),
           GoRoute(path: '/compliance', builder: (_, __) => const ComplianceScreen()),
           GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
+          GoRoute(path: '/account-linking', builder: (_, __) => const OrgAccessScreen()),
           GoRoute(path: '/operations/files', builder: (_, __) => const RetailerFilesScreen()),
           // Read-only Files view for ERP users — same screen, audience-filtered.
           GoRoute(path: '/erp/files', builder: (_, __) => const RetailerFilesScreen(audience: 'erpUser')),

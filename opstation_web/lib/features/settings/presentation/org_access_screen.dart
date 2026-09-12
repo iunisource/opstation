@@ -1,0 +1,319 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../../core/theme/app_theme.dart';
+import '../../../core/search/text_search.dart';
+
+/// Account Linking — join a person's separate per-org accounts under ONE login
+/// so they can switch orgs without logging out.
+///
+/// Scope is enforced server-side by the RPCs (linkable_users / link_accounts /
+/// unlink_account): a super admin sees & links across ANY orgs; a master admin
+/// only within orgs they own. Initial owner consolidation is a super-admin
+/// action (a not-yet-linked owner can't prove they own their other orgs).
+class OrgAccessScreen extends ConsumerStatefulWidget {
+  const OrgAccessScreen({super.key});
+  @override
+  ConsumerState<OrgAccessScreen> createState() => _OrgAccessScreenState();
+}
+
+class _Row {
+  final String email, name, role, orgId, orgName, accountId;
+  _Row(this.email, this.name, this.role, this.orgId, this.orgName, this.accountId);
+}
+
+class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
+  bool _loading = true;
+  String? _error;
+  List<_Row> _rows = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client.rpc('linkable_users');
+      final rows = List<Map<String, dynamic>>.from(res as List? ?? const [])
+          .map((m) => _Row(
+                (m['email'] as String?) ?? '',
+                (m['name'] as String?) ?? '',
+                (m['role'] as String?) ?? '',
+                (m['org_id'] as String?) ?? '',
+                (m['org_name'] as String?) ?? '',
+                (m['account_id'] as String?) ?? '',
+              ))
+          .toList();
+      if (!mounted) return;
+      setState(() { _rows = rows; _loading = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _error = e.toString().split('\n').first; _loading = false; });
+    }
+  }
+
+  Map<String, List<_Row>> get _byAccount {
+    final m = <String, List<_Row>>{};
+    for (final r in _rows) { (m[r.accountId] ??= []).add(r); }
+    return m;
+  }
+
+  Future<void> _unlink(String email) async {
+    try {
+      await Supabase.instance.client.rpc('unlink_account', params: {'p_email': email});
+      await _load();
+      _snack('Unlinked $email');
+    } catch (e) { _snack('Unlink failed: $e'); }
+  }
+
+  Future<void> _linkFlow() async {
+    final done = await showDialog<bool>(
+      context: context,
+      builder: (_) => _LinkDialog(rows: _rows),
+    );
+    if (done == true) await _load();
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = _byAccount;
+    final linked = groups.entries.where((e) => e.value.length > 1).toList()
+      ..sort((a, b) => a.value.first.name.toLowerCase().compareTo(b.value.first.name.toLowerCase()));
+    return Container(
+      color: AppTheme.background,
+      padding: const EdgeInsets.all(28),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Expanded(
+            child: Text('Account Linking',
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Refresh'),
+            onPressed: _load,
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            icon: const Icon(Icons.link, size: 18),
+            label: const Text('Link accounts'),
+            onPressed: _rows.isEmpty ? null : _linkFlow,
+          ),
+        ]),
+        const SizedBox(height: 4),
+        const Text(
+            'Join a person’s separate per-org accounts under one login so they can switch '
+            'organizations without logging out. You can only link accounts in organizations you manage.',
+            style: TextStyle(color: AppTheme.textSecondary)),
+        const SizedBox(height: 16),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+                  ? Center(child: Text('Failed to load: $_error',
+                      style: const TextStyle(color: AppTheme.danger)))
+                  : ListView(children: [
+                      Text('Linked logins (${linked.length})',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 8),
+                      if (linked.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Text('No multi-org logins yet. Use “Link accounts” to create one.',
+                              style: TextStyle(color: AppTheme.textSecondary)),
+                        ),
+                      for (final g in linked) _linkedCard(g.value),
+                    ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _linkedCard(List<_Row> members) {
+    members.sort((a, b) => a.orgName.toLowerCase().compareTo(b.orgName.toLowerCase()));
+    final name = members.first.name;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+          child: Row(children: [
+            const Icon(Icons.hub_outlined, size: 16, color: AppTheme.primary),
+            const SizedBox(width: 8),
+            Text(name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                  color: AppTheme.primary.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20)),
+              child: Text('${members.length} orgs',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+            ),
+          ]),
+        ),
+        const Divider(height: 1),
+        for (final m in members)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(children: [
+              const Icon(Icons.apartment_outlined, size: 15, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(m.orgName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text('${m.email} · ${m.role}',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                ]),
+              ),
+              TextButton(
+                onPressed: () => _confirmUnlink(m.email),
+                child: const Text('Unlink'),
+              ),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  Future<void> _confirmUnlink(String email) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Unlink account?'),
+        content: Text('$email will become a separate login again and lose the org switcher.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Unlink')),
+        ],
+      ),
+    );
+    if (ok == true) await _unlink(email);
+  }
+}
+
+/// Pick a primary login + the other accounts to fold into it.
+class _LinkDialog extends StatefulWidget {
+  final List<_Row> rows;
+  const _LinkDialog({required this.rows});
+  @override
+  State<_LinkDialog> createState() => _LinkDialogState();
+}
+
+class _LinkDialogState extends State<_LinkDialog> {
+  String? _primaryEmail;
+  final Set<String> _others = {};
+  final _searchCtrl = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() { _searchCtrl.dispose(); super.dispose(); }
+
+  List<_Row> get _filtered {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    final list = q.isEmpty
+        ? widget.rows
+        : widget.rows.where((r) => matchesQuery('${r.name} ${r.email} ${r.orgName}', q)).toList();
+    return list..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
+
+  Future<void> _submit() async {
+    if (_primaryEmail == null) return;
+    setState(() => _busy = true);
+    try {
+      final others = _others.where((e) => e != _primaryEmail).toList();
+      final res = await Supabase.instance.client.rpc('link_accounts', params: {
+        'p_primary_email': _primaryEmail,
+        'p_other_emails': others,
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$res')));
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Link failed: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // unique emails for the primary dropdown
+    final emails = {for (final r in widget.rows) r.email}.toList()..sort();
+    return AlertDialog(
+      title: const Text('Link accounts into one login'),
+      content: SizedBox(
+        width: 460,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Primary login (the email they will sign in with):',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            value: _primaryEmail,
+            isExpanded: true,
+            decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+            items: [for (final e in emails) DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))],
+            onChanged: (v) => setState(() { _primaryEmail = v; _others.remove(v); }),
+          ),
+          const SizedBox(height: 14),
+          const Text('Other accounts to fold into it:',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _searchCtrl,
+            decoration: const InputDecoration(
+                hintText: 'Search name / email / org…',
+                prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder()),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 240,
+            child: ListView(
+              children: [
+                for (final r in _filtered)
+                  if (r.email != _primaryEmail)
+                    CheckboxListTile(
+                      dense: true,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: _others.contains(r.email),
+                      onChanged: (v) => setState(() {
+                        if (v == true) _others.add(r.email); else _others.remove(r.email);
+                      }),
+                      title: Text('${r.name} — ${r.orgName}',
+                          style: const TextStyle(fontSize: 13)),
+                      subtitle: Text('${r.email} · ${r.role}',
+                          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ),
+              ],
+            ),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: (_busy || _primaryEmail == null || _others.isEmpty) ? null : _submit,
+          child: _busy
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : Text('Link ${_others.length} account(s)'),
+        ),
+      ],
+    );
+  }
+}
