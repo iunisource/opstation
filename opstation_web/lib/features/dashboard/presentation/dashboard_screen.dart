@@ -1370,14 +1370,26 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
   }
 }
 
-class _ActiveRouteExpansion extends StatelessWidget {
+class _ActiveRouteExpansion extends StatefulWidget {
   final _ActiveRoute r;
   const _ActiveRouteExpansion({required this.r});
 
   @override
+  State<_ActiveRouteExpansion> createState() => _ActiveRouteExpansionState();
+}
+
+class _ActiveRouteExpansionState extends State<_ActiveRouteExpansion> {
+  bool _showRemaining = false;
+
+  @override
   Widget build(BuildContext context) {
-    final visited = r.visits.where((v) => v.status != 'skipped').length;
-    final stopsLabel = '$visited stop${visited == 1 ? "" : "s"}';
+    final r = widget.r;
+    // Collected stops first; skipped / no-location / outside-geofence / Rs 0
+    // go behind a "Show remaining" toggle for a cleaner list.
+    final collected = r.visits.where((v) => v.amount > 0).toList();
+    final remaining = r.visits.where((v) => v.amount <= 0).toList();
+    final stopsLabel = '${collected.length} collected'
+        '${remaining.isNotEmpty ? " \u00b7 ${remaining.length} remaining" : ""}';
     final timeLabel = r.endedAt != null
         ? ' \u00b7 ended ${DateFormat('HH:mm').format(r.endedAt!)}'
         : (r.startedAt != null ? ' \u00b7 since ${DateFormat('HH:mm').format(r.startedAt!)}' : '');
@@ -1424,8 +1436,41 @@ class _ActiveRouteExpansion extends StatelessWidget {
                     style: TextStyle(
                         fontSize: 12, color: AppTheme.textSecondary)),
               )
-            else
-              for (final v in r.visits) _VisitDetailRow(v: v),
+            else ...[
+              for (final v in collected) _VisitDetailRow(v: v),
+              if (collected.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 6),
+                  child: Text('No collections on this route yet.',
+                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ),
+              if (remaining.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                InkWell(
+                  onTap: () => setState(() => _showRemaining = !_showRemaining),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(children: [
+                      Icon(_showRemaining ? Icons.expand_less : Icons.expand_more,
+                          size: 18, color: AppTheme.textSecondary),
+                      const SizedBox(width: 4),
+                      Text(
+                        _showRemaining
+                            ? 'Hide remaining'
+                            : 'Show remaining (${remaining.length})',
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textSecondary),
+                      ),
+                    ]),
+                  ),
+                ),
+                if (_showRemaining)
+                  for (final v in remaining) _VisitDetailRow(v: v),
+              ],
+            ],
           ],
         ),
       ),
