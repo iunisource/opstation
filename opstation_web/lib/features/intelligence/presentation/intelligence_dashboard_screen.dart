@@ -254,6 +254,14 @@ class _IntelligenceDashboardScreenState
           ? null
           : DateTime(_from!.year, _from!.month, _from!.day).toUtc().toIso8601String();
 
+      // The trend line is range-independent (it shows history regardless of the
+      // rollup window). Give it its OWN bounded fetch — last ~12 months, minimal
+      // columns — so it keeps history without pulling the whole audit table.
+      final trendSinceIso = DateTime.now()
+          .subtract(const Duration(days: 365))
+          .toUtc()
+          .toIso8601String();
+
       // route_stops / route_assignments have no org_id — scope them to THIS
       // org's routes so we don't paginate every org's route plan (500k rows).
       final orgRoutesRows =
@@ -297,6 +305,13 @@ class _IntelligenceDashboardScreenState
         }),
         client.from('competitor_categories').select('id, name').eq('org_id', orgId),
         client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId),
+        // [10] trend history — bounded to last 12 months, minimal columns.
+        pageAll((f, t) => client
+            .from('placement_audit')
+            .select('customer_id, is_present, surveyed_at')
+            .eq('org_id', orgId)
+            .gte('surveyed_at', trendSinceIso)
+            .range(f, t)),
       ]);
       final audits = List<Map<String, dynamic>>.from(res[0] as List);
       final routesRaw = res[1] as List;
@@ -593,7 +608,7 @@ class _IntelligenceDashboardScreenState
         _skuTotal = totAll;
         _bySalesman = sorted(bySalesman);
         _byRoute = sorted(byRoute);
-        _allAudits = audits; // FULL history for the trend (range-independent)
+        _allAudits = List<Map<String, dynamic>>.from(res[10] as List); // trend history (last 12 months)
         _routeNames = routeName;
         _custRoutes = custRoutes;
         _custName = custName;
