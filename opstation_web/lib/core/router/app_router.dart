@@ -219,7 +219,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
         if (loc == '/subscription-expired') return home();
         bool allowed() {
           if (role == WebUserRole.superAdmin) {
-            return loc == '/orgs' || loc == '/subscriptions';
+            return loc == '/orgs' || loc == '/subscriptions' || loc == '/account-linking';
           }
           if (role == WebUserRole.dispatchManager) {
             return loc == '/deliveries' ||
