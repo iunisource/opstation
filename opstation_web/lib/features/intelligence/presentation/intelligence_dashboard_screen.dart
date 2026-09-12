@@ -270,15 +270,35 @@ class _IntelligenceDashboardScreenState
       final orgRouteIds =
           orgRoutes.map((r) => r['id'] as String).toList(growable: false);
 
+      // "All time" (or long ranges) would fetch the entire audit history and
+      // reduce it in the browser — that was the timeout. Instead ask Postgres
+      // for the already-reduced latest-audit-per-shop-SKU set. Only for 'all';
+      // bounded ranges keep the fast windowed client path. Falls back to the
+      // client path if the RPC is absent or errors.
+      List<Map<String, dynamic>> rpcLatest = const [];
+      bool usedLatestRpc = false;
+      if (_range == 'all') {
+        try {
+          final r = await client.rpc('rpc_intelligence_latest',
+              params: {'p_org': orgId, 'p_start': null, 'p_end': null});
+          rpcLatest = List<Map<String, dynamic>>.from(r as List);
+          usedLatestRpc = true;
+        } catch (_) {
+          usedLatestRpc = false;
+        }
+      }
+
       final res = await Future.wait<dynamic>([
-        pageAll((f, t) {
-          var q = client
-              .from('placement_audit')
-              .select('customer_id, product_id, is_present, surveyed_at')
-              .eq('org_id', orgId);
-          if (sinceIso != null) q = q.gte('surveyed_at', sinceIso);
-          return q.range(f, t);
-        }),
+        usedLatestRpc
+            ? Future.value(const <Map<String, dynamic>>[])
+            : pageAll((f, t) {
+                var q = client
+                    .from('placement_audit')
+                    .select('customer_id, product_id, is_present, surveyed_at')
+                    .eq('org_id', orgId);
+                if (sinceIso != null) q = q.gte('surveyed_at', sinceIso);
+                return q.range(f, t);
+              }),
         Future.value(orgRoutes),
         orgRouteIds.isEmpty
             ? Future.value(const <Map<String, dynamic>>[])
@@ -335,28 +355,34 @@ class _IntelligenceDashboardScreenState
         return (c == null || c.isEmpty) ? b : c;
       }
 
-      // Optional date-range restriction (then latest-per-pair within it).
-      Iterable<Map<String, dynamic>> rows = audits;
-      if (_from != null || _to != null) {
-        final fromD = _from;
-        final toD = _to?.add(const Duration(days: 1));
-        rows = audits.where((a) {
-          final d = DateTime.tryParse('${a['surveyed_at']}');
-          if (d == null) return false;
-          if (fromD != null && d.isBefore(fromD)) return false;
-          if (toD != null && !d.isBefore(toD)) return false;
-          return true;
-        });
-      }
-
       // ── 2. Latest audit per (customer, product) ─────────────────────────
       final latest = <String, Map<String, dynamic>>{}; // key -> row
-      for (final a in rows) {
-        final key = '${a['customer_id']}|${a['product_id']}';
-        final prev = latest[key];
-        if (prev == null ||
-            '${a['surveyed_at']}'.compareTo('${prev['surveyed_at']}') > 0) {
-          latest[key] = a;
+      if (usedLatestRpc) {
+        // Already reduced server-side to the latest per (customer, product).
+        for (final a in rpcLatest) {
+          latest['${a['customer_id']}|${a['product_id']}'] = a;
+        }
+      } else {
+        // Client path: optional date-range restriction, then latest-per-pair.
+        Iterable<Map<String, dynamic>> rows = audits;
+        if (_from != null || _to != null) {
+          final fromD = _from;
+          final toD = _to?.add(const Duration(days: 1));
+          rows = audits.where((a) {
+            final d = DateTime.tryParse('${a['surveyed_at']}');
+            if (d == null) return false;
+            if (fromD != null && d.isBefore(fromD)) return false;
+            if (toD != null && !d.isBefore(toD)) return false;
+            return true;
+          });
+        }
+        for (final a in rows) {
+          final key = '${a['customer_id']}|${a['product_id']}';
+          final prev = latest[key];
+          if (prev == null ||
+              '${a['surveyed_at']}'.compareTo('${prev['surveyed_at']}') > 0) {
+            latest[key] = a;
+          }
         }
       }
 
