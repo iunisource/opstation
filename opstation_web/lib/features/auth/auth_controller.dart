@@ -173,61 +173,14 @@ class AuthController extends AsyncNotifier<WebUser?> {
             'This account has been deactivated. Contact an admin.');
       }
 
-      // Step 3: org gate.
-      final orgId = row['org_id'] as String?;
-      String? orgName;
-      bool subExpired = false;
-      if (orgId != null) {
-        final orgRows = await client
-            .from('orgs')
-            .select('name, is_active, expires_at')
-            .eq('id', orgId)
-            .limit(1);
-        if (orgRows.isNotEmpty) {
-          final orgActive = orgRows.first['is_active'] as bool? ?? true;
-          if (!orgActive) {
-            // Hard disable (super admin) — fully blocked.
-            await client.auth.signOut();
-            throw Exception(
-                'Your organization has been disabled. Contact support.');
-          }
-          final expRaw = orgRows.first['expires_at'] as String?;
-          if (expRaw != null && DateTime.parse(expRaw).isBefore(DateTime.now())) {
-            // Trial / subscription lapsed. Admins get in (to a "renew" wall);
-            // other users are paused until an admin renews.
-            final roleStr = row['role'] as String;
-            final isAdmin = roleStr == 'masterAdmin' || roleStr == 'admin';
-            if (isAdmin) {
-              subExpired = true;
-            } else {
-              await client.auth.signOut();
-              throw Exception(
-                  'Your workspace is paused. Please ask your administrator to renew the subscription.');
-            }
-          }
-          orgName = orgRows.first['name'] as String?;
-        }
-      }
-
-      // Step 4: role gate. Mobile-only roles get bounced from the web.
-      final role = row['role'] as String;
-      const allowedWebRoles = [
-        'superAdmin', 'masterAdmin', 'admin', 'dispatchManager', 'accountant', 'erpUser'
-      ];
-      if (!allowedWebRoles.contains(role)) {
-        await client.auth.signOut();
-        throw Exception('Access denied. Only admins can use the web panel.');
-      }
-
-      final user = WebUser(
-        id: row['id'] as String,
-        name: row['name'] as String,
-        email: row['email'] as String,
-        role: WebUserRole.values.firstWhere((r) => r.name == role),
-        orgId: orgId,
-        orgName: orgName,
-        mustChangePassword: row['password_temporary'] as bool? ?? false,
-        subscriptionExpired: subExpired,
+      // Step 3+4: resolve the ACTIVE org among this login's memberships (one
+      // login can belong to several orgs via users.account_id) and apply the
+      // org + role gates on that org. current_org() returns the server-
+      // remembered last-active org, defaulting to the user's own.
+      final user = await _buildActiveUser(
+        loginEmail: normalized,
+        mustChange: row['password_temporary'] as bool? ?? false,
+        forceOrg: null,
       );
 
       // Fresh login → show the support buttons again.
@@ -240,6 +193,111 @@ class AuthController extends AsyncNotifier<WebUser?> {
       }
       return user;
     });
+  }
+
+  /// Builds the WebUser for the ACTIVE org among this login's memberships.
+  /// [forceOrg] switches to a specific org first (validated server-side by
+  /// set_active_org). Applies the org (active/subscription) and role gates on
+  /// the active org, so a user's role follows the org they're in.
+  Future<WebUser> _buildActiveUser({
+    required String loginEmail,
+    required bool mustChange,
+    String? forceOrg,
+  }) async {
+    final client = Supabase.instance.client;
+    if (forceOrg != null) {
+      await client.rpc('set_active_org', params: {'p_org': forceOrg});
+    }
+    final memRaw = await client.rpc('my_org_memberships');
+    final mems = List<Map<String, dynamic>>.from(memRaw as List? ?? const []);
+    if (mems.isEmpty) {
+      await client.auth.signOut();
+      throw Exception('No profile found for this account. Contact an admin.');
+    }
+    // Active org: forced, else server-remembered (current_org), else first.
+    String? activeOrg = forceOrg;
+    if (activeOrg == null) {
+      try {
+        activeOrg = await client.rpc('current_org') as String?;
+      } catch (_) {}
+    }
+    Map<String, dynamic> m = mems.firstWhere(
+      (e) => e['org_id'] == activeOrg,
+      orElse: () => mems.first,
+    );
+    if (m['org_id'] != activeOrg) {
+      await client.rpc('set_active_org', params: {'p_org': m['org_id']});
+    }
+
+    // Org gate on the active org.
+    bool subExpired = false;
+    final orgId = m['org_id'] as String?;
+    if (orgId != null) {
+      final orgRows = await client
+          .from('orgs')
+          .select('is_active, expires_at')
+          .eq('id', orgId)
+          .limit(1);
+      if (orgRows.isNotEmpty) {
+        final orgActive = orgRows.first['is_active'] as bool? ?? true;
+        if (!orgActive) {
+          await client.auth.signOut();
+          throw Exception(
+              'Your organization has been disabled. Contact support.');
+        }
+        final expRaw = orgRows.first['expires_at'] as String?;
+        if (expRaw != null && DateTime.parse(expRaw).isBefore(DateTime.now())) {
+          final roleStr = (m['role'] as String?) ?? '';
+          final isAdmin = roleStr == 'masterAdmin' || roleStr == 'admin';
+          if (isAdmin) {
+            subExpired = true;
+          } else {
+            await client.auth.signOut();
+            throw Exception(
+                'Your workspace is paused. Please ask your administrator to renew the subscription.');
+          }
+        }
+      }
+    }
+
+    // Role gate.
+    final roleStr = (m['role'] as String?) ?? '';
+    const allowedWebRoles = [
+      'superAdmin', 'masterAdmin', 'admin', 'dispatchManager', 'accountant', 'erpUser'
+    ];
+    if (!allowedWebRoles.contains(roleStr)) {
+      await client.auth.signOut();
+      throw Exception('Access denied. Only admins can use the web panel.');
+    }
+
+    return WebUser(
+      id: (m['user_id'] as String?) ?? '',
+      name: (m['user_name'] as String?) ?? '',
+      email: loginEmail,
+      role: WebUserRole.values.firstWhere((r) => r.name == roleStr),
+      orgId: orgId,
+      orgName: m['org_name'] as String?,
+      mustChangePassword: mustChange,
+      subscriptionExpired: subExpired,
+    );
+  }
+
+  /// Switch the active org mid-session (top-bar org switcher). Re-hydrates the
+  /// session for the new org; callers should then invalidate org-scoped
+  /// providers so every screen re-queries under the new org.
+  Future<void> switchOrg(String orgId) async {
+    final cur = state.valueOrNull;
+    if (cur == null) return;
+    final user = await _buildActiveUser(
+      loginEmail: cur.email,
+      mustChange: cur.mustChangePassword,
+      forceOrg: orgId,
+    );
+    state = AsyncData(user);
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('opstation_web_remember_me') ?? true) {
+      await prefs.setString(_kSessionKey, jsonEncode(user.toJson()));
+    }
   }
 
   /// Clears the force-password-change flag in memory + cached session after the
@@ -270,6 +328,21 @@ final authControllerProvider =
 
 final currentUserProvider = Provider<WebUser?>((ref) {
   return ref.watch(authControllerProvider).valueOrNull;
+});
+
+/// Orgs the current login can enter. More than one => show the org switcher.
+/// Any user linked (via users.account_id) to multiple orgs gets this — an owner
+/// with several orgs, or a shared admin the owner added to more than one org.
+final orgMembershipsProvider =
+    FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null) return const [];
+  try {
+    final res = await Supabase.instance.client.rpc('my_org_memberships');
+    return List<Map<String, dynamic>>.from(res as List? ?? const []);
+  } catch (_) {
+    return const [];
+  }
 });
 
 /// Whether the dashboard support buttons (Request a call back / Get the Android

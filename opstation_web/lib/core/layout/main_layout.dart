@@ -797,14 +797,9 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
     final navItems = _buildNavItems(context, ref, user, location);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if ((user?.orgName ?? '').isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 12, 10),
-          child: Row(children: [
-            const Icon(Icons.apartment_rounded, size: 14, color: Colors.white54),
-            const SizedBox(width: 6),
-            Expanded(child: Text(user?.orgName ?? '', maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13))),
-          ]),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 12, 10),
+          child: Align(alignment: Alignment.centerLeft, child: _OrgSwitcher()),
         ),
       const Divider(height: 1, color: Colors.white12),
       Expanded(
@@ -1440,6 +1435,101 @@ Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
 
 // ─── Top Navigation Bar ────────────────────────────────────────
 
+/// Organization switcher — shown in place of the static org name. Static text
+/// when the login belongs to a single org; a dropdown (distinct from the branch
+/// selector: apartment icon + unfold arrows, at the top, not the branch toggle)
+/// when it belongs to several. Switching re-hydrates the session and reloads so
+/// every screen re-queries under the new org.
+class _OrgSwitcher extends ConsumerWidget {
+  const _OrgSwitcher();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(currentUserProvider);
+    final orgName = user?.orgName ?? '';
+    if (orgName.isEmpty) return const SizedBox.shrink();
+    final mems = ref.watch(orgMembershipsProvider).valueOrNull ?? const [];
+    final multi = mems.length > 1;
+
+    Widget label(bool showArrows) => Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.apartment_rounded, size: 15, color: Colors.white54),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 200),
+            child: Text(orgName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+          ),
+          if (showArrows)
+            const Padding(
+              padding: EdgeInsets.only(left: 4),
+              child: Icon(Icons.unfold_more_rounded, size: 16, color: Colors.white70),
+            ),
+        ]);
+
+    if (!multi) return label(false);
+
+    return PopupMenuButton<String>(
+      tooltip: 'Switch organization',
+      offset: const Offset(0, 34),
+      onSelected: (orgId) async {
+        if (orgId == user?.orgId) return;
+        try {
+          await ref.read(authControllerProvider.notifier).switchOrg(orgId);
+          // Full reload: the simplest, safest way to guarantee every screen
+          // re-queries under the new org (current_user_org_id now returns it).
+          html.window.location.reload();
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Could not switch organization: $e')));
+          }
+        }
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem<String>(
+          enabled: false,
+          height: 28,
+          child: Text('SWITCH ORGANIZATION',
+              style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w800, color: Colors.black45)),
+        ),
+        for (final m in mems)
+          PopupMenuItem<String>(
+            value: m['org_id'] as String,
+            child: Row(children: [
+              Icon(
+                  m['org_id'] == user?.orgId
+                      ? Icons.check_circle
+                      : Icons.apartment_outlined,
+                  size: 16,
+                  color: m['org_id'] == user?.orgId
+                      ? const Color(0xFF2F6FED)
+                      : Colors.black45),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: Text((m['org_name'] as String?) ?? '',
+                      style: const TextStyle(fontSize: 13))),
+              const SizedBox(width: 8),
+              Text((m['role'] as String?) ?? '',
+                  style: const TextStyle(fontSize: 10, color: Colors.black45)),
+            ]),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.white24),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: label(true),
+      ),
+    );
+  }
+}
+
 class _TopNav extends ConsumerWidget {
   final WebUser? user;
   const _TopNav({this.user});
@@ -1485,14 +1575,7 @@ class _TopNav extends ConsumerWidget {
         if ((user?.orgName ?? '').isNotEmpty) ...[
           Container(width: 1, height: 28, color: Colors.white12),
           const SizedBox(width: 10),
-          const Icon(Icons.apartment_rounded, size: 15, color: Colors.white54),
-          const SizedBox(width: 6),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 220),
-            child: Text(user?.orgName ?? '',
-                maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
-          ),
+          const _OrgSwitcher(),
           const SizedBox(width: 6),
         ],
         Container(width: 1, height: 28, color: Colors.white12),
