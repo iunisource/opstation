@@ -53,6 +53,17 @@ class _DashboardStats extends StatefulWidget {
 class _DashboardStatsState extends State<_DashboardStats> {
   Map<String, dynamic> _stats = {};
   bool _loading = true;
+  bool _partial = false; // some rollups failed to load
+
+  // Which day the dashboard is showing. Defaults to today; the date control
+  // lets an admin look back at earlier days.
+  DateTime _selectedDate = DateTime.now();
+  bool get _isToday {
+    final n = DateTime.now();
+    return _selectedDate.year == n.year &&
+        _selectedDate.month == n.month &&
+        _selectedDate.day == n.day;
+  }
 
   // ── dashboard privacy lock ────────────────────────────────────────────────
   // org.dashboard_password (sha256 hex) hides the numbers from non-master
@@ -185,80 +196,84 @@ class _DashboardStatsState extends State<_DashboardStats> {
   }
 
   Future<void> _load() async {
-    try {
-      final client = Supabase.instance.client;
-      final now = DateTime.now();
-      // Local midnight today + tomorrow, converted to UTC for the wire.
-      // Old code serialized a naive local DateTime, which Postgres read
-      // as UTC — so PK-morning rows fell outside the "today" filter.
-      final todayStart = DateTime(now.year, now.month, now.day)
-          .toUtc()
-          .toIso8601String();
-      final tomorrowStart = DateTime(now.year, now.month, now.day)
-          .add(const Duration(days: 1))
-          .toUtc()
-          .toIso8601String();
+    final client = Supabase.instance.client;
+    final d = _selectedDate;
+    // Local midnight of the selected day + next day, converted to UTC for the
+    // wire. Old code serialized a naive local DateTime, which Postgres read as
+    // UTC — so PK-morning rows fell outside the day filter.
+    final dayStart = DateTime(d.year, d.month, d.day).toUtc().toIso8601String();
+    final dayEnd = DateTime(d.year, d.month, d.day)
+        .add(const Duration(days: 1))
+        .toUtc()
+        .toIso8601String();
 
-      // All eight rollup queries are independent of one another, so fire them
-      // concurrently and await the batch. This turns eight serial round-trips
-      // (which dominated the dashboard's load time, worst on admin accounts
-      // with the largest data sets) into a single parallel wave — total wait
-      // drops from the SUM of the query latencies to the slowest single one.
-      final results = await Future.wait<dynamic>([
-        client
-            .from('users')
-            .select('id, role')
-            .eq('org_id', widget.orgId),
-        client
+    // Each rollup is independent. Run them concurrently BUT isolate failures —
+    // a single failing query must never zero the whole dashboard (it used to:
+    // one throw dropped everything to 0). Each guarded call returns a safe
+    // fallback and flips _partial so we can show a subtle "some data" hint.
+    bool anyFail = false;
+    Future<List<dynamic>> ql(Future<dynamic> b) async {
+      try {
+        final r = await b;
+        return (r as List?) ?? const [];
+      } catch (_) {
+        anyFail = true;
+        return const [];
+      }
+    }
+
+    Future<int> qCustomers() async {
+      try {
+        final c = await client
             .from('customers')
             .select('id')
             .eq('org_id', widget.orgId)
-            .count(CountOption.exact),
-        client
-            .from('sales_routes')
-            .select('id')
-            .eq('org_id', widget.orgId),
-        // Active = ended_at IS NULL, regardless of start date. A trip
-        // that started yesterday and is still running is still active.
-        client
-            .from('trips')
-            .select('id')
-            .eq('org_id', widget.orgId)
-            .filter('ended_at', 'is', null),
-        // Completed = a trip that STARTED today and has finished. Keying off
-        // started_at (not ended_at) stops a route that actually ran on a prior
-        // day — but was only closed this morning (e.g. a missed auto-cutoff) —
-        // from leaking into today's numbers and showing a rep on "two routes".
-        client
-            .from('trips')
-            .select('id')
-            .eq('org_id', widget.orgId)
-            .gte('started_at', todayStart)
-            .lt('started_at', tomorrowStart)
-            .not('ended_at', 'is', null),
-        // Today's visits — RLS scopes to the user's org. Bounded window
-        // (gte + lt) so trips that span midnight don't double-count.
-        client
-            .from('visits')
-            .select('amount, customer_id')
-            .gte('timestamp', todayStart)
-            .lt('timestamp', tomorrowStart),
-        // Intelligence rollups.
-        client
-            .from('placement_audit')
-            .select('customer_id, surveyed_at')
-            .eq('org_id', widget.orgId),
-        client
-            .from('competitor_spotting')
-            .select('customer_id, brand_name, surveyed_at')
-            .eq('org_id', widget.orgId),
-        client
-            .from('competitor_brand_aliases')
-            .select('alias, canonical')
-            .eq('org_id', widget.orgId),
-      ]);
+            .count(CountOption.exact);
+        return c.count;
+      } catch (_) {
+        anyFail = true;
+        return 0;
+      }
+    }
+
+    final results = await Future.wait<dynamic>([
+      ql(client.from('users').select('id, role').eq('org_id', widget.orgId)),
+      qCustomers(),
+      ql(client.from('sales_routes').select('id').eq('org_id', widget.orgId)),
+      // Active = ended_at IS NULL, regardless of start date. Only meaningful for
+      // "today"; for a back-date we show 0 (nothing is currently running "then").
+      _isToday
+          ? ql(client
+              .from('trips')
+              .select('id')
+              .eq('org_id', widget.orgId)
+              .filter('ended_at', 'is', null))
+          : Future<List<dynamic>>.value(const []),
+      // Completed = a trip that STARTED on the selected day and has finished.
+      // Keying off started_at (not ended_at) stops a route that actually ran on
+      // a prior day — but was only closed later — from leaking into the numbers.
+      ql(client
+          .from('trips')
+          .select('id')
+          .eq('org_id', widget.orgId)
+          .gte('started_at', dayStart)
+          .lt('started_at', dayEnd)
+          .not('ended_at', 'is', null)),
+      // Selected day's visits — RLS scopes to the user's org. Bounded window so
+      // trips that span midnight don't double-count.
+      ql(client
+          .from('visits')
+          .select('amount, customer_id')
+          .gte('timestamp', dayStart)
+          .lt('timestamp', dayEnd)),
+      // Intelligence rollups.
+      ql(client.from('placement_audit').select('customer_id, surveyed_at').eq('org_id', widget.orgId)),
+      ql(client.from('competitor_spotting').select('customer_id, brand_name, surveyed_at').eq('org_id', widget.orgId)),
+      ql(client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', widget.orgId)),
+    ]);
+    try {
       final users = results[0] as List;
-      final customerCount = results[1];
+      final customerCount = results[1] as int;
       final routes = results[2] as List;
       final activeTrips = results[3] as List;
       final completedTrips = results[4] as List;
@@ -319,10 +334,11 @@ class _DashboardStatsState extends State<_DashboardStats> {
       final recentCount = paRows.where((r) => within7d(r['surveyed_at'])).length +
           csRows.where((r) => within7d(r['surveyed_at'])).length;
 
+      if (!mounted) return;
       setState(() {
         _stats = {
           'team': users.length,
-          'customers': customerCount.count,
+          'customers': customerCount,
           'routes': routes.length,
           'activeRoutes': activeTrips.length,
           'shopsVisited': shopsVisited,
@@ -332,11 +348,20 @@ class _DashboardStatsState extends State<_DashboardStats> {
           'brandsTracked': brandsTracked.length,
           'intelActivity7d': recentCount,
         };
+        _partial = anyFail;
         _loading = false;
       });
     } catch (e) {
-      setState(() => _loading = false);
+      if (mounted) setState(() { _partial = true; _loading = false; });
     }
+  }
+
+  Future<void> _changeDate(DateTime d) async {
+    // Never allow the future.
+    final n = DateTime.now();
+    final capped = d.isAfter(DateTime(n.year, n.month, n.day)) ? DateTime(n.year, n.month, n.day) : d;
+    setState(() { _selectedDate = capped; _loading = true; });
+    await _load();
   }
 
   void _showCollectionBreakdown() {
@@ -347,7 +372,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
-          child: _CollectionBreakdownView(orgId: widget.orgId),
+          child: _CollectionBreakdownView(orgId: widget.orgId, date: _selectedDate),
         ),
       ),
     );
@@ -361,7 +386,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
-          child: _ActiveRoutesView(orgId: widget.orgId),
+          child: _ActiveRoutesView(orgId: widget.orgId, date: _selectedDate),
         ),
       ),
     );
@@ -375,7 +400,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
-          child: _ActiveRoutesView(orgId: widget.orgId, completed: true),
+          child: _ActiveRoutesView(orgId: widget.orgId, completed: true, date: _selectedDate),
         ),
       ),
     );
@@ -388,22 +413,23 @@ class _DashboardStatsState extends State<_DashboardStats> {
     final cards = [
       _StatCard(
         icon: Icons.payments_outlined,
-        label: "Today's Collection",
+        label: _isToday ? "Today's Collection" : 'Collection',
         value: _mask('Rs ${_stats['collection'] ?? 0}'),
         color: AppTheme.primary,
         featured: true,
         onTap: _locked ? null : _showCollectionBreakdown,
       ),
-      _StatCard(
-        icon: Icons.directions_walk,
-        label: 'Active Routes',
-        value: _mask('${_stats['activeRoutes'] ?? 0}'),
-        color: AppTheme.success,
-        onTap: _locked ? null : _showActiveRoutes,
-      ),
+      if (_isToday)
+        _StatCard(
+          icon: Icons.directions_walk,
+          label: 'Active Routes',
+          value: _mask('${_stats['activeRoutes'] ?? 0}'),
+          color: AppTheme.success,
+          onTap: _locked ? null : _showActiveRoutes,
+        ),
       _StatCard(
         icon: Icons.check_circle_outline,
-        label: 'Completed Today',
+        label: _isToday ? 'Completed Today' : 'Completed',
         value: _mask('${_stats['completedToday'] ?? 0}'),
         color: AppTheme.primary,
         onTap: _locked ? null : _showCompletedToday,
@@ -443,6 +469,14 @@ class _DashboardStatsState extends State<_DashboardStats> {
               decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(3))),
           const SizedBox(width: 9),
           const Text("Today's Overview", style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: -0.2)),
+          if (_partial)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Tooltip(
+                message: 'Some figures could not load — tap refresh to retry',
+                child: Icon(Icons.cloud_off_outlined, size: 15, color: AppTheme.warning),
+              ),
+            ),
           // Subtle lock affordance — a quiet icon, only when the numbers are hidden.
           if (_locked)
             Padding(
@@ -460,20 +494,61 @@ class _DashboardStatsState extends State<_DashboardStats> {
               ),
             ),
           const Spacer(),
+          if (!_isToday) ...[
+            TextButton(
+              onPressed: () => _changeDate(DateTime.now()),
+              style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10), minimumSize: const Size(0, 32)),
+              child: const Text('Today', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 2),
+          ],
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: AppTheme.border),
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.calendar_today_outlined, size: 12, color: AppTheme.textSecondary),
-              const SizedBox(width: 6),
-              Text(
-                DateFormat(context.isMobile ? 'd MMM' : 'EEEE, d MMM yyyy').format(DateTime.now()),
-                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12.5, fontWeight: FontWeight.w500),
-                overflow: TextOverflow.ellipsis),
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => _changeDate(_selectedDate.subtract(const Duration(days: 1))),
+                child: const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(Icons.chevron_left, size: 18, color: AppTheme.textSecondary)),
+              ),
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _selectedDate,
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null) _changeDate(picked);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.calendar_today_outlined, size: 12, color: AppTheme.textSecondary),
+                    const SizedBox(width: 6),
+                    Text(
+                      DateFormat(context.isMobile ? 'd MMM' : 'EEEE, d MMM yyyy').format(_selectedDate),
+                      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12.5, fontWeight: FontWeight.w500),
+                      overflow: TextOverflow.ellipsis),
+                  ]),
+                ),
+              ),
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: _isToday ? null : () => _changeDate(_selectedDate.add(const Duration(days: 1))),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(Icons.chevron_right, size: 18,
+                      color: _isToday ? AppTheme.textSecondary.withOpacity(0.3) : AppTheme.textSecondary)),
+              ),
             ]),
           ),
           const SizedBox(width: 6),
@@ -603,7 +678,8 @@ class _StatCard extends StatelessWidget {
 
 class _CollectionBreakdownView extends StatefulWidget {
   final String orgId;
-  const _CollectionBreakdownView({required this.orgId});
+  final DateTime date;
+  const _CollectionBreakdownView({required this.orgId, required this.date});
 
   @override
   State<_CollectionBreakdownView> createState() =>
@@ -625,7 +701,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
   Future<void> _load() async {
     try {
       final client = Supabase.instance.client;
-      final now = DateTime.now();
+      final now = widget.date;
       final todayStart = DateTime(now.year, now.month, now.day)
           .toUtc()
           .toIso8601String();
@@ -1172,7 +1248,8 @@ String _fmtNumber(int n) {
 class _ActiveRoutesView extends StatefulWidget {
   final String orgId;
   final bool completed; // false = active (ended_at null), true = ended today
-  const _ActiveRoutesView({required this.orgId, this.completed = false});
+  final DateTime date;
+  const _ActiveRoutesView({required this.orgId, this.completed = false, required this.date});
 
   @override
   State<_ActiveRoutesView> createState() => _ActiveRoutesViewState();
@@ -1196,7 +1273,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
       // Active trips = ended_at IS NULL. Completed = STARTED today and finished
       // (same formula as the dashboard counter) — see _load() for why we key off
       // started_at, not ended_at.
-      final now = DateTime.now();
+      final now = widget.date;
       final todayStart =
           DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
       final tomorrowStart = DateTime(now.year, now.month, now.day)
