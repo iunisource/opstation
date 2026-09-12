@@ -277,6 +277,8 @@ class _IntelligenceDashboardScreenState
       // client path if the RPC is absent or errors.
       List<Map<String, dynamic>> rpcLatest = const [];
       bool usedLatestRpc = false;
+      List<Map<String, dynamic>> rpcComp = const [];
+      bool usedCompRpc = false;
       if (_range == 'all') {
         try {
           final r = await client.rpc('rpc_intelligence_latest',
@@ -285,6 +287,14 @@ class _IntelligenceDashboardScreenState
           usedLatestRpc = true;
         } catch (_) {
           usedLatestRpc = false;
+        }
+        try {
+          final r = await client.rpc('rpc_intelligence_competitor',
+              params: {'p_org': orgId, 'p_start': null, 'p_end': null});
+          rpcComp = List<Map<String, dynamic>>.from(r as List);
+          usedCompRpc = true;
+        } catch (_) {
+          usedCompRpc = false;
         }
       }
 
@@ -315,14 +325,16 @@ class _IntelligenceDashboardScreenState
         client.from('users').select('id, name').eq('org_id', orgId),
         pageAll((f, t) => client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).range(f, t)),
         pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
-        pageAll((f, t) {
-          var q = client
-              .from('competitor_spotting')
-              .select('customer_id, category_id, brand_name, surveyed_at')
-              .eq('org_id', orgId);
-          if (sinceIso != null) q = q.gte('surveyed_at', sinceIso);
-          return q.range(f, t);
-        }),
+        usedCompRpc
+            ? Future.value(const <Map<String, dynamic>>[])
+            : pageAll((f, t) {
+                var q = client
+                    .from('competitor_spotting')
+                    .select('customer_id, category_id, brand_name, surveyed_at')
+                    .eq('org_id', orgId);
+                if (sinceIso != null) q = q.gte('surveyed_at', sinceIso);
+                return q.range(f, t);
+              }),
         client.from('competitor_categories').select('id, name').eq('org_id', orgId),
         client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId),
         // [10] trend history — bounded to last 12 months, minimal columns.
@@ -340,7 +352,9 @@ class _IntelligenceDashboardScreenState
       final usersRaw = res[4] as List;
       final custRaw = res[5] as List;
       final prodRaw = res[6] as List; // intelligence_products (the audited SKUs)
-      final compRaw = List<Map<String, dynamic>>.from(res[7] as List);
+      final compRaw = usedCompRpc
+          ? rpcComp
+          : List<Map<String, dynamic>>.from(res[7] as List);
       final catRaw = res[8] as List;
       // Brand alias map (lowercased/trimmed variant -> correct brand). Applied
       // to every spotting's brand before it is tallied, so typos roll up under
