@@ -222,14 +222,13 @@ class _DashboardStatsState extends State<_DashboardStats> {
       }
     }
 
-    Future<int> qCustomers() async {
+    // Count-only rollups: ask Postgres for the count (HEAD, no row payload)
+    // instead of fetching every row just to call .length — much less data over
+    // the wire, which is the bulk of the dashboard's load time on big orgs.
+    Future<int> qCount(Future<dynamic> b) async {
       try {
-        final c = await client
-            .from('customers')
-            .select('id')
-            .eq('org_id', widget.orgId)
-            .count(CountOption.exact);
-        return c.count;
+        final r = await b;
+        return ((r as dynamic).count as int?) ?? 0;
       } catch (_) {
         anyFail = true;
         return 0;
@@ -237,28 +236,30 @@ class _DashboardStatsState extends State<_DashboardStats> {
     }
 
     final results = await Future.wait<dynamic>([
-      ql(client.from('users').select('id, role').eq('org_id', widget.orgId)),
-      qCustomers(),
-      ql(client.from('sales_routes').select('id').eq('org_id', widget.orgId)),
+      qCount(client.from('users').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
+      qCount(client.from('customers').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
+      qCount(client.from('sales_routes').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
       // Active = ended_at IS NULL, regardless of start date. Only meaningful for
       // "today"; for a back-date we show 0 (nothing is currently running "then").
       _isToday
-          ? ql(client
+          ? qCount(client
               .from('trips')
               .select('id')
               .eq('org_id', widget.orgId)
-              .filter('ended_at', 'is', null))
-          : Future<List<dynamic>>.value(const []),
+              .filter('ended_at', 'is', null)
+              .count(CountOption.exact))
+          : Future<int>.value(0),
       // Completed = a trip that STARTED on the selected day and has finished.
       // Keying off started_at (not ended_at) stops a route that actually ran on
       // a prior day — but was only closed later — from leaking into the numbers.
-      ql(client
+      qCount(client
           .from('trips')
           .select('id')
           .eq('org_id', widget.orgId)
           .gte('started_at', dayStart)
           .lt('started_at', dayEnd)
-          .not('ended_at', 'is', null)),
+          .not('ended_at', 'is', null)
+          .count(CountOption.exact)),
       // Selected day's visits — RLS scopes to the user's org. Bounded window so
       // trips that span midnight don't double-count.
       ql(client
@@ -272,11 +273,11 @@ class _DashboardStatsState extends State<_DashboardStats> {
       ql(client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', widget.orgId)),
     ]);
     try {
-      final users = results[0] as List;
+      final teamCount = results[0] as int;
       final customerCount = results[1] as int;
-      final routes = results[2] as List;
-      final activeTrips = results[3] as List;
-      final completedTrips = results[4] as List;
+      final routeCount = results[2] as int;
+      final activeCount = results[3] as int;
+      final completedCount = results[4] as int;
       final todayVisits = results[5] as List;
       final paRows = results[6] as List;
       final csRows = results[7] as List;
@@ -337,13 +338,13 @@ class _DashboardStatsState extends State<_DashboardStats> {
       if (!mounted) return;
       setState(() {
         _stats = {
-          'team': users.length,
+          'team': teamCount,
           'customers': customerCount,
-          'routes': routes.length,
-          'activeRoutes': activeTrips.length,
+          'routes': routeCount,
+          'activeRoutes': activeCount,
           'shopsVisited': shopsVisited,
           'collection': totalCollection,
-          'completedToday': completedTrips.length,
+          'completedToday': completedCount,
           'auditedShops': auditedShops.length,
           'brandsTracked': brandsTracked.length,
           'intelActivity7d': recentCount,
@@ -711,17 +712,34 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
           .toIso8601String();
 
       final orgId = widget.orgId;
-      final results = await Future.wait([
+      // route_stops / route_assignments carry NO org_id. Fetching them unscoped
+      // pulls EVERY org's route plan — which inflated "not visited" to a rep's
+      // entire cross-org customer base and slowed the query. Scope them to this
+      // org's own routes (sales_routes has org_id) so "not visited" is only the
+      // customers on the rep's routes within this org.
+      final orgRoutesRows = await client
+          .from('sales_routes')
+          .select('id')
+          .eq('org_id', orgId);
+      final orgRouteIds = (orgRoutesRows as List)
+          .map((r) => (r as Map)['id'] as String)
+          .toList(growable: false);
+
+      final results = await Future.wait<dynamic>([
         client
             .from('visits')
             .select(
                 'user_id, user_name, customer_id, amount, timestamp, status, customers(shop_name)')
             .gte('timestamp', todayStart)
             .lt('timestamp', tomorrowStart),
-        // Standing route plan: who is assigned to which route, and which
-        // customers each route carries — used to surface "not visited" stops.
-        client.from('route_assignments').select('user_id, route_id'),
-        client.from('route_stops').select('route_id, customer_id'),
+        // Standing route plan, scoped to THIS org's routes: who is assigned to
+        // which route, and which customers each route carries.
+        orgRouteIds.isEmpty
+            ? Future<dynamic>.value(const <dynamic>[])
+            : client.from('route_assignments').select('user_id, route_id').inFilter('route_id', orgRouteIds),
+        orgRouteIds.isEmpty
+            ? Future<dynamic>.value(const <dynamic>[])
+            : client.from('route_stops').select('route_id, customer_id').inFilter('route_id', orgRouteIds),
         client.from('customers').select('id, shop_name').eq('org_id', orgId),
       ]);
 
