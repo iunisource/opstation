@@ -207,7 +207,8 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
   }
 }
 
-/// Pick a primary login + the other accounts to fold into it.
+/// Select the admin accounts (across orgs) that belong to one person, then pick
+/// which is the primary login. Admin-tier only (masterAdmin / admin), searchable.
 class _LinkDialog extends StatefulWidget {
   final List<_Row> rows;
   const _LinkDialog({required this.rows});
@@ -216,27 +217,40 @@ class _LinkDialog extends StatefulWidget {
 }
 
 class _LinkDialogState extends State<_LinkDialog> {
+  final Set<String> _selected = {}; // emails to link (incl. primary)
   String? _primaryEmail;
-  final Set<String> _others = {};
   final _searchCtrl = TextEditingController();
   bool _busy = false;
 
   @override
   void dispose() { _searchCtrl.dispose(); super.dispose(); }
 
+  // Admin-tier accounts only, de-duplicated by email.
+  List<_Row> get _adminRows {
+    final seen = <String>{};
+    final out = <_Row>[];
+    for (final r in widget.rows) {
+      if (r.role != 'masterAdmin' && r.role != 'admin') continue;
+      if (seen.add(r.email.toLowerCase())) out.add(r);
+    }
+    out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return out;
+  }
+
   List<_Row> get _filtered {
     final q = _searchCtrl.text.trim().toLowerCase();
-    final list = q.isEmpty
-        ? widget.rows
-        : widget.rows.where((r) => matchesQuery('${r.name} ${r.email} ${r.orgName}', q)).toList();
-    return list..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    if (q.isEmpty) return _adminRows;
+    return _adminRows
+        .where((r) => matchesQuery('${r.name} ${r.email} ${r.orgName} ${r.role}', q))
+        .toList();
   }
 
   Future<void> _submit() async {
     if (_primaryEmail == null) return;
+    final others = _selected.where((e) => e != _primaryEmail).toList();
+    if (others.isEmpty) return;
     setState(() => _busy = true);
     try {
-      final others = _others.where((e) => e != _primaryEmail).toList();
       final res = await Supabase.instance.client.rpc('link_accounts', params: {
         'p_primary_email': _primaryEmail,
         'p_other_emails': others,
@@ -253,65 +267,72 @@ class _LinkDialogState extends State<_LinkDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // unique emails for the primary dropdown
-    final emails = {for (final r in widget.rows) r.email}.toList()..sort();
+    // Keep the primary valid & default it to the first selected.
+    if (_primaryEmail != null && !_selected.contains(_primaryEmail)) _primaryEmail = null;
+    if (_primaryEmail == null && _selected.isNotEmpty) {
+      _primaryEmail = (_selected.toList()..sort()).first;
+    }
+    final selectedList = _selected.toList()..sort();
     return AlertDialog(
       title: const Text('Link accounts into one login'),
       content: SizedBox(
-        width: 460,
+        width: 480,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Primary login (the email they will sign in with):',
+          const Text(
+              'Pick the admin accounts that belong to the same person (across orgs), then choose which one is the primary login.',
               style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          const SizedBox(height: 6),
-          DropdownButtonFormField<String>(
-            value: _primaryEmail,
-            isExpanded: true,
-            decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-            items: [for (final e in emails) DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))],
-            onChanged: (v) => setState(() { _primaryEmail = v; _others.remove(v); }),
-          ),
-          const SizedBox(height: 14),
-          const Text('Other accounts to fold into it:',
-              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           TextField(
             controller: _searchCtrl,
             decoration: const InputDecoration(
-                hintText: 'Search name / email / org…',
+                hintText: 'Search admin by name / email / org…',
                 prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder()),
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 8),
           SizedBox(
             height: 240,
-            child: ListView(
-              children: [
-                for (final r in _filtered)
-                  if (r.email != _primaryEmail)
-                    CheckboxListTile(
-                      dense: true,
-                      controlAffinity: ListTileControlAffinity.leading,
-                      value: _others.contains(r.email),
-                      onChanged: (v) => setState(() {
-                        if (v == true) _others.add(r.email); else _others.remove(r.email);
-                      }),
-                      title: Text('${r.name} — ${r.orgName}',
-                          style: const TextStyle(fontSize: 13)),
-                      subtitle: Text('${r.email} · ${r.role}',
-                          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                    ),
-              ],
-            ),
+            child: _filtered.isEmpty
+                ? const Center(child: Text('No matching admins', style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView(children: [
+                    for (final r in _filtered)
+                      CheckboxListTile(
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: _selected.contains(r.email),
+                        onChanged: (v) => setState(() {
+                          if (v == true) _selected.add(r.email); else _selected.remove(r.email);
+                        }),
+                        title: Text('${r.name} — ${r.orgName}', style: const TextStyle(fontSize: 13)),
+                        subtitle: Text('${r.email} · ${r.role}',
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      ),
+                  ]),
           ),
+          const SizedBox(height: 10),
+          if (_selected.length >= 2) ...[
+            const Text('Primary login (they sign in with this email):',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(height: 6),
+            DropdownButtonFormField<String>(
+              value: _primaryEmail,
+              isExpanded: true,
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+              items: [for (final e in selectedList) DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))],
+              onChanged: (v) => setState(() => _primaryEmail = v),
+            ),
+          ] else
+            Text('Selected ${_selected.length} — pick at least 2 accounts to link.',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         ]),
       ),
       actions: [
         TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
         FilledButton(
-          onPressed: (_busy || _primaryEmail == null || _others.isEmpty) ? null : _submit,
+          onPressed: (_busy || _selected.length < 2 || _primaryEmail == null) ? null : _submit,
           child: _busy
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-              : Text('Link ${_others.length} account(s)'),
+              : Text('Link ${_selected.length} accounts'),
         ),
       ],
     );
