@@ -60,6 +60,12 @@ class WebUser {
 /// the web admin panel. The custom hash columns are now vestigial;
 /// auth.users is the single source of truth for credentials.
 class AuthController extends AsyncNotifier<WebUser?> {
+  // Pending login-time org choice (multi-org logins): stashed between signIn()
+  // deferring and completeOrgChoice() finishing.
+  String? _pendingEmail;
+  bool _pendingMustChange = false;
+  bool _pendingRemember = true;
+
   @override
   Future<WebUser?> build() async {
     // Listen for auth events — handles token refresh, forced sign-out, etc.
@@ -173,19 +179,42 @@ class AuthController extends AsyncNotifier<WebUser?> {
             'This account has been deactivated. Contact an admin.');
       }
 
-      // Step 3+4: resolve the ACTIVE org among this login's memberships (one
-      // login can belong to several orgs via users.account_id) and apply the
-      // org + role gates on that org. current_org() returns the server-
-      // remembered last-active org, defaulting to the user's own.
+      final mustChange = row['password_temporary'] as bool? ?? false;
+
+      // Step 3: how many orgs does this login belong to? One login can span
+      // several orgs via users.account_id.
+      List<Map<String, dynamic>> mems = const [];
+      try {
+        final memRaw = await client.rpc('my_org_memberships');
+        mems = List<Map<String, dynamic>>.from(memRaw as List? ?? const []);
+      } catch (_) {
+        mems = const [];
+      }
+
+      // Multi-org: defer to the login-time org picker instead of auto-selecting.
+      // We stay authenticated (the Supabase session is live) but return null so
+      // the login screen shows the picker; completeOrgChoice() then finishes.
+      if (mems.length > 1) {
+        _pendingEmail = normalized;
+        _pendingMustChange = mustChange;
+        _pendingRemember = rememberMe;
+        ref.read(pendingOrgChoiceProvider.notifier).state = mems;
+        return null;
+      }
+
+      // Step 4: single org (or none) → resolve the active org and apply the
+      // org + role gates on it. current_org() returns the server-remembered
+      // last-active org, defaulting to the user's own.
       final user = await _buildActiveUser(
         loginEmail: normalized,
-        mustChange: row['password_temporary'] as bool? ?? false,
+        mustChange: mustChange,
         forceOrg: null,
         fallbackRow: row,
       );
 
       // Fresh login → show the support buttons again.
       ref.read(supportButtonsHiddenProvider.notifier).state = false;
+      ref.read(pendingOrgChoiceProvider.notifier).state = null;
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('opstation_web_remember_me', rememberMe);
@@ -194,6 +223,38 @@ class AuthController extends AsyncNotifier<WebUser?> {
       }
       return user;
     });
+  }
+
+  /// Finishes a multi-org login after the user picks an org in the login-time
+  /// picker. Applies the org + role gates on the chosen org.
+  Future<void> completeOrgChoice(String orgId) async {
+    final email = _pendingEmail;
+    if (email == null) return;
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() async {
+      final user = await _buildActiveUser(
+        loginEmail: email,
+        mustChange: _pendingMustChange,
+        forceOrg: orgId,
+        fallbackRow: null,
+      );
+      ref.read(supportButtonsHiddenProvider.notifier).state = false;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('opstation_web_remember_me', _pendingRemember);
+      if (_pendingRemember) {
+        await prefs.setString(_kSessionKey, jsonEncode(user.toJson()));
+      }
+      ref.read(pendingOrgChoiceProvider.notifier).state = null;
+      _pendingEmail = null;
+      return user;
+    });
+  }
+
+  /// User backed out of the login-time org picker — drop the session.
+  Future<void> cancelOrgChoice() async {
+    _pendingEmail = null;
+    ref.read(pendingOrgChoiceProvider.notifier).state = null;
+    await signOut();
   }
 
   /// Builds the WebUser for the ACTIVE org among this login's memberships.
@@ -390,6 +451,11 @@ class AuthController extends AsyncNotifier<WebUser?> {
     state = const AsyncData(null);
   }
 }
+
+/// Holds the org memberships awaiting a login-time pick when a login belongs
+/// to more than one org. Null when there's nothing to choose.
+final pendingOrgChoiceProvider =
+    StateProvider<List<Map<String, dynamic>>?>((ref) => null);
 
 final authControllerProvider =
     AsyncNotifierProvider<AuthController, WebUser?>(AuthController.new);
