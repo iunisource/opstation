@@ -181,6 +181,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
         loginEmail: normalized,
         mustChange: row['password_temporary'] as bool? ?? false,
         forceOrg: null,
+        fallbackRow: row,
       );
 
       // Fresh login → show the support buttons again.
@@ -203,14 +204,26 @@ class AuthController extends AsyncNotifier<WebUser?> {
     required String loginEmail,
     required bool mustChange,
     String? forceOrg,
+    Map<String, dynamic>? fallbackRow,
   }) async {
     final client = Supabase.instance.client;
     if (forceOrg != null) {
       await client.rpc('set_active_org', params: {'p_org': forceOrg});
     }
-    final memRaw = await client.rpc('my_org_memberships');
-    final mems = List<Map<String, dynamic>>.from(memRaw as List? ?? const []);
+    List<Map<String, dynamic>> mems = const [];
+    try {
+      final memRaw = await client.rpc('my_org_memberships');
+      mems = List<Map<String, dynamic>>.from(memRaw as List? ?? const []);
+    } catch (_) {
+      mems = const [];
+    }
     if (mems.isEmpty) {
+      // Super admins / null-org / legacy accounts have no org membership row —
+      // fall back to the email-matched profile (original single-org behaviour)
+      // so they can still sign in.
+      if (fallbackRow != null) {
+        return await _userFromRow(fallbackRow, loginEmail, mustChange);
+      }
       await client.auth.signOut();
       throw Exception('No profile found for this account. Contact an admin.');
     }
@@ -277,6 +290,61 @@ class AuthController extends AsyncNotifier<WebUser?> {
       role: WebUserRole.values.firstWhere((r) => r.name == roleStr),
       orgId: orgId,
       orgName: m['org_name'] as String?,
+      mustChangePassword: mustChange,
+      subscriptionExpired: subExpired,
+    );
+  }
+
+  /// Legacy/single-org build straight from the email-matched users row — used
+  /// for accounts with no org membership (super admins, null-org).
+  Future<WebUser> _userFromRow(
+      Map<String, dynamic> row, String loginEmail, bool mustChange) async {
+    final client = Supabase.instance.client;
+    final orgId = row['org_id'] as String?;
+    String? orgName;
+    bool subExpired = false;
+    if (orgId != null) {
+      final orgRows = await client
+          .from('orgs')
+          .select('name, is_active, expires_at')
+          .eq('id', orgId)
+          .limit(1);
+      if (orgRows.isNotEmpty) {
+        final orgActive = orgRows.first['is_active'] as bool? ?? true;
+        if (!orgActive) {
+          await client.auth.signOut();
+          throw Exception('Your organization has been disabled. Contact support.');
+        }
+        final expRaw = orgRows.first['expires_at'] as String?;
+        if (expRaw != null && DateTime.parse(expRaw).isBefore(DateTime.now())) {
+          final roleStr = row['role'] as String;
+          final isAdmin = roleStr == 'masterAdmin' || roleStr == 'admin';
+          if (isAdmin) {
+            subExpired = true;
+          } else {
+            await client.auth.signOut();
+            throw Exception(
+                'Your workspace is paused. Please ask your administrator to renew the subscription.');
+          }
+        }
+        orgName = orgRows.first['name'] as String?;
+      }
+    }
+    final roleStr = row['role'] as String;
+    const allowedWebRoles = [
+      'superAdmin', 'masterAdmin', 'admin', 'dispatchManager', 'accountant', 'erpUser'
+    ];
+    if (!allowedWebRoles.contains(roleStr)) {
+      await client.auth.signOut();
+      throw Exception('Access denied. Only admins can use the web panel.');
+    }
+    return WebUser(
+      id: row['id'] as String,
+      name: row['name'] as String,
+      email: loginEmail,
+      role: WebUserRole.values.firstWhere((r) => r.name == roleStr),
+      orgId: orgId,
+      orgName: orgName,
       mustChangePassword: mustChange,
       subscriptionExpired: subExpired,
     );
