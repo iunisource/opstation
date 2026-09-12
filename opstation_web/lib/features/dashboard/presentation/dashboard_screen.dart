@@ -207,6 +207,42 @@ class _DashboardStatsState extends State<_DashboardStats> {
         .toUtc()
         .toIso8601String();
 
+    // Fast path: one server-side summary (rpc_dashboard_summary) computes every
+    // tile in a single indexed, RLS-free pass — instead of ~9 RLS-checked
+    // round-trips that shipped thousands of rows and timed out under load. Falls
+    // back to the legacy per-query path below if the RPC is absent or errors.
+    try {
+      final res = await client.rpc('rpc_dashboard_summary', params: {
+        'p_org': widget.orgId,
+        'p_start': dayStart,
+        'p_end': dayEnd,
+      });
+      final m = (res is Map) ? Map<String, dynamic>.from(res) : null;
+      if (m != null && m.isNotEmpty) {
+        int gi(String k) => (m[k] as num?)?.toInt() ?? 0;
+        if (!mounted) return;
+        setState(() {
+          _stats = {
+            'team': gi('team'),
+            'customers': gi('customers'),
+            'routes': gi('routes'),
+            'activeRoutes': _isToday ? gi('active') : 0,
+            'shopsVisited': gi('shops_visited'),
+            'collection': gi('collection'),
+            'completedToday': gi('completed'),
+            'auditedShops': gi('audited_shops'),
+            'brandsTracked': gi('brands_tracked'),
+            'intelActivity7d': gi('intel_7d'),
+          };
+          _partial = false;
+          _loading = false;
+        });
+        return;
+      }
+    } catch (_) {
+      // RPC not deployed yet, or failed — fall through to the legacy path.
+    }
+
     // Each rollup is independent. Run them concurrently BUT isolate failures —
     // a single failing query must never zero the whole dashboard (it used to:
     // one throw dropped everything to 0). Each guarded call returns a safe
@@ -757,12 +793,14 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         if (rid == null || cid == null) continue;
         (routeCustomers[rid] ??= <String>{}).add(cid);
       }
-      final userPlanned = <String, Set<String>>{};
+      // user -> assigned route ids (their standing beat, which can be several
+      // routes). We narrow to "today's" route(s) per rep below.
+      final userRoutes = <String, Set<String>>{};
       for (final a in (results[1] as List)) {
         final uid = a['user_id'] as String?;
         final rid = a['route_id'] as String?;
         if (uid == null || rid == null) continue;
-        (userPlanned[uid] ??= <String>{}).addAll(routeCustomers[rid] ?? const {});
+        (userRoutes[uid] ??= <String>{}).add(rid);
       }
 
       final collectedByUser = <String, List<_VisitRow>>{};
@@ -807,9 +845,20 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         final collected = (collectedByUser[uid] ?? [])
           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
         final other = List<_OtherStop>.from(otherByUser[uid] ?? const []);
-        // not-visited = planned customers this user did not touch today
+        // "Not visited" = the other stops on the route(s) this rep actually
+        // WORKED today (a route holding at least one shop they visited), minus
+        // the ones they hit — not their entire multi-route beat.
         final visited = visitedByUser[uid] ?? const <String>{};
-        for (final cid in (userPlanned[uid] ?? const <String>{})) {
+        final todayRoutes = <String>{};
+        for (final rid in (userRoutes[uid] ?? const <String>{})) {
+          final stops = routeCustomers[rid];
+          if (stops != null && stops.any(visited.contains)) todayRoutes.add(rid);
+        }
+        final plannedToday = <String>{};
+        for (final rid in todayRoutes) {
+          plannedToday.addAll(routeCustomers[rid] ?? const {});
+        }
+        for (final cid in plannedToday) {
           if (!visited.contains(cid)) {
             other.add(_OtherStop(
                 customerName: custName[cid] ?? 'Unknown shop',
