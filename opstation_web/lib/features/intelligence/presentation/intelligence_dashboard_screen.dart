@@ -147,7 +147,8 @@ class _IntelligenceDashboardScreenState
   String? _error;
   DateTime? _from;
   DateTime? _to;
-  String _range = 'all'; // all | today | 7d | 30d | custom
+  String _range = '30d'; // all | today | 7d | 30d | custom — default bounded so
+  // the initial load never scans the full audit history (which timed out).
 
   // Aggregates
   int _shopsAudited = 0;
@@ -214,6 +215,10 @@ class _IntelligenceDashboardScreenState
   @override
   void initState() {
     super.initState();
+    // Seed the default 30-day window so the first load is bounded.
+    final today = DateTime.now();
+    _from = DateTime(today.year, today.month, today.day).subtract(const Duration(days: 29));
+    _to = DateTime(today.year, today.month, today.day);
     _load();
   }
 
@@ -243,23 +248,53 @@ class _IntelligenceDashboardScreenState
         return out;
       }
 
+      // Push the date window to the DB (surveyed_at >= window start) so we don't
+      // pull the entire audit history and filter client-side. Null for "all".
+      final String? sinceIso = _from == null
+          ? null
+          : DateTime(_from!.year, _from!.month, _from!.day).toUtc().toIso8601String();
+
+      // route_stops / route_assignments have no org_id — scope them to THIS
+      // org's routes so we don't paginate every org's route plan (500k rows).
+      final orgRoutesRows =
+          await client.from('sales_routes').select('id, name').eq('org_id', orgId);
+      final orgRoutes = List<Map<String, dynamic>>.from(orgRoutesRows as List);
+      final orgRouteIds =
+          orgRoutes.map((r) => r['id'] as String).toList(growable: false);
+
       final res = await Future.wait<dynamic>([
-        pageAll((f, t) => client
-            .from('placement_audit')
-            .select('customer_id, product_id, is_present, surveyed_at')
-            .eq('org_id', orgId)
-            .range(f, t)),
-        client.from('sales_routes').select('id, name').eq('org_id', orgId),
-        pageAll((f, t) => client.from('route_stops').select('route_id, customer_id').range(f, t)),
-        pageAll((f, t) => client.from('route_assignments').select('user_id, route_id').range(f, t)),
+        pageAll((f, t) {
+          var q = client
+              .from('placement_audit')
+              .select('customer_id, product_id, is_present, surveyed_at')
+              .eq('org_id', orgId);
+          if (sinceIso != null) q = q.gte('surveyed_at', sinceIso);
+          return q.range(f, t);
+        }),
+        Future.value(orgRoutes),
+        orgRouteIds.isEmpty
+            ? Future.value(const <Map<String, dynamic>>[])
+            : pageAll((f, t) => client.from('route_stops')
+                .select('route_id, customer_id')
+                .inFilter('route_id', orgRouteIds)
+                .range(f, t)),
+        orgRouteIds.isEmpty
+            ? Future.value(const <Map<String, dynamic>>[])
+            : pageAll((f, t) => client.from('route_assignments')
+                .select('user_id, route_id')
+                .inFilter('route_id', orgRouteIds)
+                .range(f, t)),
         client.from('users').select('id, name').eq('org_id', orgId),
         pageAll((f, t) => client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).range(f, t)),
         pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
-        pageAll((f, t) => client
-            .from('competitor_spotting')
-            .select('customer_id, category_id, brand_name, surveyed_at')
-            .eq('org_id', orgId)
-            .range(f, t)),
+        pageAll((f, t) {
+          var q = client
+              .from('competitor_spotting')
+              .select('customer_id, category_id, brand_name, surveyed_at')
+              .eq('org_id', orgId);
+          if (sinceIso != null) q = q.gte('surveyed_at', sinceIso);
+          return q.range(f, t);
+        }),
         client.from('competitor_categories').select('id, name').eq('org_id', orgId),
         client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId),
       ]);
