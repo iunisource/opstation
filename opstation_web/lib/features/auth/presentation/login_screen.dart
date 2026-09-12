@@ -148,54 +148,141 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   /// Login-time org picker. Returns the chosen org_id, or null if cancelled.
   Future<String?> _pickOrg(List<Map<String, dynamic>> mems) {
-    return showDialog<String>(
+    return showGeneralDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('Choose organization'),
-        contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 8),
-        content: SizedBox(
-          width: 380,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'This login has access to more than one organization. Pick one to continue — you can switch anytime from the top bar.',
-                    style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
+      barrierLabel: 'choose-org',
+      barrierColor: Colors.black.withOpacity(0.5),
+      transitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (dialogCtx, __, ___) => const SizedBox.shrink(),
+      transitionBuilder: (dialogCtx, anim, __, child) {
+        final curved = Curves.easeOutBack.transform(anim.value.clamp(0.0, 1.0));
+        return Opacity(
+          opacity: anim.value.clamp(0.0, 1.0),
+          child: Transform.scale(
+            scale: 0.9 + 0.1 * curved,
+            child: Center(
+              child: Material(
+                color: Colors.transparent,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 480, maxHeight: 620),
+                  child: Container(
+                    margin: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.22),
+                            blurRadius: 48,
+                            offset: const Offset(0, 20)),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _pickerHeader(),
+                        Flexible(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                            child: Column(
+                              children: [
+                                for (final m in mems)
+                                  _OrgPickCard(
+                                    orgName:
+                                        (m['org_name'] as String?) ?? 'Organization',
+                                    role: m['role'] as String?,
+                                    onTap: () => Navigator.of(dialogCtx)
+                                        .pop(m['org_id'] as String?),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: () =>
+                                  Navigator.of(dialogCtx).pop(null),
+                              child: const Text('Cancel'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-              Flexible(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    for (final m in mems)
-                      ListTile(
-                        leading: const Icon(Icons.apartment_rounded,
-                            color: AppTheme.primary),
-                        title: Text((m['org_name'] as String?) ?? 'Organization',
-                            style: const TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: (m['role'] as String?) != null
-                            ? Text(m['role'] as String,
-                                style: const TextStyle(fontSize: 11.5))
-                            : null,
-                        onTap: () =>
-                            Navigator.of(dialogCtx).pop(m['org_id'] as String?),
-                      ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
+        );
+      },
+    );
+  }
+
+  /// Branded header for the login-time org picker.
+  Widget _pickerHeader() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+      decoration: const BoxDecoration(
+        borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(20), topRight: Radius.circular(20)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF0B1220), Color(0xFF16234A)],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(null),
-            child: const Text('Cancel'),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [AppTheme.primary, Color(0xFF4B84F5)]),
+                borderRadius: BorderRadius.circular(11),
+                boxShadow: [
+                  BoxShadow(
+                      color: AppTheme.primary.withOpacity(0.45),
+                      blurRadius: 18,
+                      offset: const Offset(0, 5)),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: const Text('O',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 20)),
+            ),
+            const SizedBox(width: 12),
+            const Text('Opstation',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800)),
+          ]),
+          const SizedBox(height: 16),
+          const Text('Choose your organization',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Text(
+            'This login has access to more than one organization. Pick one to continue — you can switch anytime from the top bar.',
+            style: TextStyle(
+                color: Colors.white.withOpacity(0.72),
+                fontSize: 12.5,
+                height: 1.45),
           ),
         ],
       ),
@@ -638,6 +725,121 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One selectable organization row in the login-time picker. On hover it shows
+/// a "running" (pulsing) green outline so the option under the cursor is clear.
+class _OrgPickCard extends StatefulWidget {
+  final String orgName;
+  final String? role;
+  final VoidCallback onTap;
+  const _OrgPickCard({required this.orgName, this.role, required this.onTap});
+
+  @override
+  State<_OrgPickCard> createState() => _OrgPickCardState();
+}
+
+class _OrgPickCardState extends State<_OrgPickCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  );
+  bool _hover = false;
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  void _setHover(bool v) {
+    if (v == _hover) return;
+    setState(() => _hover = v);
+    if (v) {
+      _pulse.repeat(reverse: true);
+    } else {
+      _pulse.stop();
+      _pulse.value = 0;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const green = AppTheme.success;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => _setHover(true),
+      onExit: (_) => _setHover(false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedBuilder(
+          animation: _pulse,
+          builder: (_, __) {
+            final t = _pulse.value; // 0..1 while hovering
+            final borderColor = _hover
+                ? Color.lerp(green.withOpacity(0.55), green, t)!
+                : AppTheme.border;
+            return Container(
+              margin: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              decoration: BoxDecoration(
+                color: _hover ? green.withOpacity(0.05) : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color: borderColor, width: _hover ? 2 : 1.2),
+                boxShadow: _hover
+                    ? [
+                        BoxShadow(
+                          color: green.withOpacity(0.18 + 0.22 * t),
+                          blurRadius: 10 + 12 * t,
+                          spreadRadius: 0.5 + 1.5 * t,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: (_hover ? green : AppTheme.primary).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(Icons.apartment_rounded,
+                      size: 20, color: _hover ? green : AppTheme.primary),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.orgName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700)),
+                      if (widget.role != null && widget.role!.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(widget.role!,
+                            style: const TextStyle(
+                                fontSize: 11.5,
+                                color: AppTheme.textSecondary)),
+                      ],
+                    ],
+                  ),
+                ),
+                Icon(Icons.arrow_forward_ios_rounded,
+                    size: 14,
+                    color: _hover ? green : AppTheme.textSecondary.withOpacity(0.5)),
+              ]),
+            );
+          },
         ),
       ),
     );

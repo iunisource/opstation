@@ -1,8 +1,11 @@
+import 'dart:html' as html;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/org_switch_overlay.dart';
 import '../../auth/auth_controller.dart';
 import '../../support/presentation/request_callback_button.dart';
 import 'plan_cards.dart';
@@ -50,6 +53,85 @@ class _State extends ConsumerState<SubscriptionExpiredScreen> {
     );
   }
 
+  Future<void> _switchTo(String orgId, String orgName) async {
+    try {
+      showOrgSwitchedAnimation(context, orgName);
+      await ref.read(authControllerProvider.notifier).switchOrg(orgId);
+      await Future<void>.delayed(const Duration(milliseconds: 1050));
+      html.window.location.reload();
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).maybePop();
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not switch organization: $e')));
+      }
+    }
+  }
+
+  /// Multi-org admins who land on this wall (because the org they switched into
+  /// has a lapsed trial) still need a way back to their other orgs.
+  Widget _buildOrgSwitch(String? currentOrgId) {
+    final mems = ref.watch(orgMembershipsProvider).valueOrNull ?? const [];
+    if (mems.length < 2) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: PopupMenuButton<String>(
+        tooltip: 'Switch organization',
+        onSelected: (orgId) {
+          if (orgId == currentOrgId) return;
+          String name = 'organization';
+          for (final m in mems) {
+            if (m['org_id'] == orgId) name = (m['org_name'] as String?) ?? name;
+          }
+          _switchTo(orgId, name);
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem<String>(
+            enabled: false,
+            height: 28,
+            child: Text('SWITCH ORGANIZATION',
+                style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.black45)),
+          ),
+          for (final m in mems)
+            PopupMenuItem<String>(
+              value: m['org_id'] as String,
+              child: Row(children: [
+                Icon(
+                    m['org_id'] == currentOrgId
+                        ? Icons.check_circle
+                        : Icons.apartment_outlined,
+                    size: 16,
+                    color: m['org_id'] == currentOrgId
+                        ? AppTheme.primary
+                        : Colors.black45),
+                const SizedBox(width: 8),
+                Expanded(
+                    child: Text((m['org_name'] as String?) ?? 'Organization',
+                        overflow: TextOverflow.ellipsis)),
+              ]),
+            ),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          margin: const EdgeInsets.only(right: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: AppTheme.border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: const [
+            Icon(Icons.swap_horiz_rounded, size: 18, color: AppTheme.primary),
+            SizedBox(width: 6),
+            Text('Switch org',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProvider);
@@ -71,6 +153,7 @@ class _State extends ConsumerState<SubscriptionExpiredScreen> {
                   const SizedBox(width: 10),
                   const Text('Opstation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   const Spacer(),
+                  _buildOrgSwitch(user?.orgId),
                   TextButton.icon(
                     onPressed: () => ref.read(authControllerProvider.notifier).signOut(),
                     icon: const Icon(Icons.logout, size: 18),

@@ -16,6 +16,7 @@ import '../notifications/global_transfer_alert.dart';
 import '../notifications/user_reminders.dart';
 import '../notifications/global_badge_sync.dart';
 import '../onboarding/first_login_tour.dart';
+import '../widgets/org_switch_overlay.dart';
 import '../station_master/station_master.dart';
 import '../../features/support/presentation/request_callback_button.dart';
 import '../../features/support/presentation/support_buttons.dart';
@@ -1479,13 +1480,23 @@ class _OrgSwitcher extends ConsumerWidget {
       offset: const Offset(0, 34),
       onSelected: (orgId) async {
         if (orgId == user?.orgId) return;
+        String targetName = 'organization';
+        for (final m in mems) {
+          if (m['org_id'] == orgId) {
+            targetName = (m['org_name'] as String?) ?? targetName;
+          }
+        }
         try {
-          await ref.read(authControllerProvider.notifier).switchOrg(orgId);
-          // Full reload: the simplest, safest way to guarantee every screen
+          // Show the "Organization switched" animation, run the switch, then do
+          // a full reload — the simplest, safest way to guarantee every screen
           // re-queries under the new org (current_user_org_id now returns it).
+          showOrgSwitchedAnimation(context, targetName);
+          await ref.read(authControllerProvider.notifier).switchOrg(orgId);
+          await Future<void>.delayed(const Duration(milliseconds: 1050));
           html.window.location.reload();
         } catch (e) {
           if (context.mounted) {
+            Navigator.of(context, rootNavigator: true).maybePop();
             ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('Could not switch organization: $e')));
           }
