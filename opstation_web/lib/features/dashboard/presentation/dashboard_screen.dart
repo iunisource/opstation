@@ -1384,11 +1384,17 @@ class _ActiveRouteExpansionState extends State<_ActiveRouteExpansion> {
   @override
   Widget build(BuildContext context) {
     final r = widget.r;
-    // Collected stops first; skipped / no-location / outside-geofence / Rs 0
-    // go behind a "Show remaining" toggle for a cleaner list.
-    final collected = r.visits.where((v) => v.amount > 0).toList();
-    final remaining = r.visits.where((v) => v.amount <= 0).toList();
-    final stopsLabel = '${collected.length} collected'
+    // Marked visits (verified / no-location / outside-geofence) stay in the main
+    // list, whether or not anything was collected. Only skipped / not-visited
+    // stops go behind a "Show remaining" toggle for a cleaner view.
+    bool isRemaining(String status) {
+      final s = status.toLowerCase();
+      return s == 'skipped' || s == 'not_visited' || s == 'notvisited';
+    }
+
+    final visited = r.visits.where((v) => !isRemaining(v.status)).toList();
+    final remaining = r.visits.where((v) => isRemaining(v.status)).toList();
+    final stopsLabel = '${visited.length} visited'
         '${remaining.isNotEmpty ? " \u00b7 ${remaining.length} remaining" : ""}';
     final timeLabel = r.endedAt != null
         ? ' \u00b7 ended ${DateFormat('HH:mm').format(r.endedAt!)}'
@@ -1437,11 +1443,11 @@ class _ActiveRouteExpansionState extends State<_ActiveRouteExpansion> {
                         fontSize: 12, color: AppTheme.textSecondary)),
               )
             else ...[
-              for (final v in collected) _VisitDetailRow(v: v),
-              if (collected.isEmpty)
+              for (final v in visited) _VisitDetailRow(v: v),
+              if (visited.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 6),
-                  child: Text('No collections on this route yet.',
+                  child: Text('No visits on this route yet.',
                       style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                 ),
               if (remaining.isNotEmpty) ...[
