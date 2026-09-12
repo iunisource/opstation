@@ -634,47 +634,104 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
           .toUtc()
           .toIso8601String();
 
-      final rows = await client
-          .from('visits')
-          .select(
-              'user_id, user_name, customer_id, amount, timestamp, status, customers(shop_name)')
-          .gte('timestamp', todayStart)
-          .lt('timestamp', tomorrowStart);
+      final orgId = widget.orgId;
+      final results = await Future.wait([
+        client
+            .from('visits')
+            .select(
+                'user_id, user_name, customer_id, amount, timestamp, status, customers(shop_name)')
+            .gte('timestamp', todayStart)
+            .lt('timestamp', tomorrowStart),
+        // Standing route plan: who is assigned to which route, and which
+        // customers each route carries — used to surface "not visited" stops.
+        client.from('route_assignments').select('user_id, route_id'),
+        client.from('route_stops').select('route_id, customer_id'),
+        client.from('customers').select('id, shop_name').eq('org_id', orgId),
+      ]);
 
-      final byUser = <String, List<_VisitRow>>{};
+      final rows = results[0] as List;
+      // customer id -> name
+      final custName = <String, String>{
+        for (final c in (results[3] as List))
+          (c['id'] as String): ((c['shop_name'] as String?) ?? 'Unknown shop')
+      };
+      // user -> planned customer ids (via their assigned routes)
+      final routeCustomers = <String, Set<String>>{};
+      for (final s in (results[2] as List)) {
+        final rid = s['route_id'] as String?;
+        final cid = s['customer_id'] as String?;
+        if (rid == null || cid == null) continue;
+        (routeCustomers[rid] ??= <String>{}).add(cid);
+      }
+      final userPlanned = <String, Set<String>>{};
+      for (final a in (results[1] as List)) {
+        final uid = a['user_id'] as String?;
+        final rid = a['route_id'] as String?;
+        if (uid == null || rid == null) continue;
+        (userPlanned[uid] ??= <String>{}).addAll(routeCustomers[rid] ?? const {});
+      }
+
+      final collectedByUser = <String, List<_VisitRow>>{};
+      final otherByUser = <String, List<_OtherStop>>{};
+      final visitedByUser = <String, Set<String>>{};
       final userNames = <String, String>{};
       int grand = 0;
-      for (final r in (rows as List)) {
+      for (final r in rows) {
         final m = Map<String, dynamic>.from(r as Map);
-        final amount = (m['amount'] as int?) ?? 0;
-        if (amount <= 0) continue;
         final uid = (m['user_id'] as String?) ?? '';
         userNames[uid] = (m['user_name'] as String?) ?? 'Unknown';
+        final amount = (m['amount'] as int?) ?? 0;
         final cust = m['customers'] as Map<String, dynamic>?;
         final customerName =
             (cust != null ? cust['shop_name'] as String? : null) ?? 'Unknown shop';
+        final cid = m['customer_id'] as String?;
+        if (cid != null) (visitedByUser[uid] ??= <String>{}).add(cid);
         final ts = m['timestamp'] != null
             ? DateTime.parse(m['timestamp'] as String).toLocal()
             : DateTime.now();
         final status = (m['status'] as String?) ?? '';
-        byUser.putIfAbsent(uid, () => []).add(_VisitRow(
-              customerName: customerName,
-              amount: amount,
-              timestamp: ts,
-              status: status,
-            ));
-        grand += amount;
+        if (amount > 0) {
+          collectedByUser.putIfAbsent(uid, () => []).add(_VisitRow(
+                customerName: customerName,
+                amount: amount,
+                timestamp: ts,
+                status: status,
+              ));
+          grand += amount;
+        } else {
+          // Visited but nothing collected, or explicitly skipped.
+          otherByUser.putIfAbsent(uid, () => []).add(_OtherStop(
+                customerName: customerName,
+                status: status.isEmpty ? 'no_collection' : status,
+              ));
+        }
       }
 
-      final out = byUser.entries.map((e) {
-        final visits = e.value
+      // Any user who did something today (collected or otherwise).
+      final activeUsers = <String>{...collectedByUser.keys, ...otherByUser.keys};
+      final out = activeUsers.map((uid) {
+        final collected = (collectedByUser[uid] ?? [])
           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-        final total = visits.fold<int>(0, (s, v) => s + v.amount);
+        final other = List<_OtherStop>.from(otherByUser[uid] ?? const []);
+        // not-visited = planned customers this user did not touch today
+        final visited = visitedByUser[uid] ?? const <String>{};
+        for (final cid in (userPlanned[uid] ?? const <String>{})) {
+          if (!visited.contains(cid)) {
+            other.add(_OtherStop(
+                customerName: custName[cid] ?? 'Unknown shop',
+                status: 'not_visited'));
+          }
+        }
+        other.sort((a, b) => a.customerName
+            .toLowerCase()
+            .compareTo(b.customerName.toLowerCase()));
+        final total = collected.fold<int>(0, (s, v) => s + v.amount);
         return _SalespersonCollection(
-          userId: e.key,
-          userName: userNames[e.key] ?? 'Unknown',
+          userId: uid,
+          userName: userNames[uid] ?? 'Unknown',
           total: total,
-          visits: visits,
+          visits: collected,
+          otherStops: other,
         );
       }).toList()
         ..sort((a, b) => b.total.compareTo(a.total));
@@ -818,6 +875,20 @@ class _SalespersonExpansion extends StatelessWidget {
   final _SalespersonCollection sp;
   const _SalespersonExpansion({required this.sp});
 
+  String _subtitle(_SalespersonCollection sp) {
+    final collected = sp.visits.length;
+    final skipped =
+        sp.otherStops.where((o) => o.status == 'skipped').length;
+    final notVisited =
+        sp.otherStops.where((o) => o.status == 'not_visited').length;
+    final parts = <String>[
+      '$collected collected',
+      if (skipped > 0) '$skipped skipped',
+      if (notVisited > 0) '$notVisited not visited',
+    ];
+    return parts.join(' · ');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -841,7 +912,7 @@ class _SalespersonExpansion extends StatelessWidget {
                 fontSize: 15, fontWeight: FontWeight.w700),
           ),
           subtitle: Text(
-            '${sp.visits.length} stop${sp.visits.length == 1 ? "" : "s"}',
+            _subtitle(sp),
             style: const TextStyle(
                 fontSize: 12, color: AppTheme.textSecondary),
           ),
@@ -857,6 +928,25 @@ class _SalespersonExpansion extends StatelessWidget {
             const Divider(height: 1),
             const SizedBox(height: 8),
             for (final v in sp.visits) _VisitDetailRow(v: v),
+            if (sp.otherStops.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: Container(height: 1, color: AppTheme.border)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(
+                    'Skipped / not visited (${sp.otherStops.length})',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textSecondary),
+                  ),
+                ),
+                Expanded(child: Container(height: 1, color: AppTheme.border)),
+              ]),
+              const SizedBox(height: 6),
+              for (final o in sp.otherStops) _OtherStopRow(o: o),
+            ],
           ],
         ),
       ),
@@ -864,45 +954,61 @@ class _SalespersonExpansion extends StatelessWidget {
   }
 }
 
-class _VisitDetailRow extends StatelessWidget {
+class _VisitDetailRow extends StatefulWidget {
   final _VisitRow v;
   const _VisitDetailRow({required this.v});
 
   @override
+  State<_VisitDetailRow> createState() => _VisitDetailRowState();
+}
+
+class _VisitDetailRowState extends State<_VisitDetailRow> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          _statusIcon(v.status),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  v.customerName,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${DateFormat('HH:mm').format(v.timestamp)} \u00b7 ${_statusLabel(v.status)}',
-                  style: const TextStyle(
-                      fontSize: 11, color: AppTheme.textSecondary),
-                ),
-              ],
+    final v = widget.v;
+    return InkWell(
+      onTap: () => setState(() => _expanded = !_expanded),
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: _statusIcon(v.status)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    v.customerName,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600),
+                    maxLines: _expanded ? null : 1,
+                    overflow:
+                        _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${DateFormat('HH:mm').format(v.timestamp)} \u00b7 ${_statusLabel(v.status)}',
+                    style: const TextStyle(
+                        fontSize: 11, color: AppTheme.textSecondary),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            'Rs ${_fmtNumber(v.amount)}',
-            style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w700),
-          ),
-        ],
+            const SizedBox(width: 8),
+            Text(
+              'Rs ${_fmtNumber(v.amount)}',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -945,16 +1051,83 @@ class _VisitDetailRow extends StatelessWidget {
   }
 }
 
+class _OtherStopRow extends StatefulWidget {
+  final _OtherStop o;
+  const _OtherStopRow({required this.o});
+
+  @override
+  State<_OtherStopRow> createState() => _OtherStopRowState();
+}
+
+class _OtherStopRowState extends State<_OtherStopRow> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final o = widget.o;
+    final isSkip = o.status == 'skipped';
+    final isNotVisited = o.status == 'not_visited';
+    final icon = isSkip
+        ? Icons.skip_next
+        : (isNotVisited
+            ? Icons.radio_button_unchecked
+            : Icons.remove_circle_outline);
+    final label = isSkip
+        ? 'Skipped'
+        : (isNotVisited ? 'Not visited' : 'No collection');
+    return InkWell(
+      onTap: () => setState(() => _expanded = !_expanded),
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(icon, size: 16, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    o.customerName,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppTheme.textSecondary),
+                    maxLines: _expanded ? null : 1,
+                    overflow:
+                        _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(label,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textSecondary)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SalespersonCollection {
   final String userId;
   final String userName;
   final int total;
   final List<_VisitRow> visits;
+  final List<_OtherStop> otherStops; // skipped / visited-no-collection / not-visited
   const _SalespersonCollection({
     required this.userId,
     required this.userName,
     required this.total,
     required this.visits,
+    this.otherStops = const [],
   });
 }
 
@@ -969,6 +1142,12 @@ class _VisitRow {
     required this.timestamp,
     required this.status,
   });
+}
+
+class _OtherStop {
+  final String customerName;
+  final String status; // 'skipped' | 'not_visited' | 'no_collection'
+  const _OtherStop({required this.customerName, required this.status});
 }
 
 String _fmtNumber(int n) {

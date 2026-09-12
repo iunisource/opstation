@@ -66,6 +66,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   bool _loadingList = true;
   String _listSearch = '';
   String _statusFilter = 'all'; // all | queued | in_progress | completed | cancelled
+  bool _groupByCustomer = false; // group the active list by customer
   bool _completedExpanded = false; // the collapsible "Completed" drawer section
   bool _drawerOpen = true;
 
@@ -1782,6 +1783,71 @@ $runSection
     );
   }
 
+  // Group the active job list by customer, each group led by a header with a
+  // status roll-up (total / queued / in-progress). Jobs with no customer land
+  // under "No customer" last.
+  List<Widget> _groupedByCustomer(List<Map<String, dynamic>> jobs) {
+    final groups = <String?, List<Map<String, dynamic>>>{};
+    for (final j in jobs) {
+      (groups[j['customer_id'] as String?] ??= []).add(j);
+    }
+    final keys = groups.keys.toList()
+      ..sort((a, b) {
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return (_custLabel[a] ?? '')
+            .toLowerCase()
+            .compareTo((_custLabel[b] ?? '').toLowerCase());
+      });
+    final out = <Widget>[];
+    for (final k in keys) {
+      final list = groups[k]!;
+      final queued =
+          list.where((j) => (j['status'] as String? ?? 'queued') == 'queued').length;
+      final inprog = list.where((j) => j['status'] == 'in_progress').length;
+      final name = k == null
+          ? 'No customer'
+          : ((_custLabel[k] ?? '').isNotEmpty ? _custLabel[k]! : 'Customer');
+      out.add(_custGroupHeader(name, list.length, queued, inprog));
+      for (final j in list) out.add(_jobTile(j));
+    }
+    return out;
+  }
+
+  Widget _grpCount(String t, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+            color: c.withOpacity(0.13), borderRadius: BorderRadius.circular(10)),
+        child: Text(t,
+            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: c)),
+      );
+
+  Widget _custGroupHeader(String name, int total, int queued, int inprog) =>
+      Container(
+        color: const Color(0xFFF2F6FF),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(children: [
+          const Icon(Icons.storefront_outlined, size: 13, color: AppTheme.primary),
+          const SizedBox(width: 5),
+          Expanded(
+              child: Text(name,
+                  style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.primary),
+                  overflow: TextOverflow.ellipsis)),
+          _grpCount('$total', AppTheme.textSecondary),
+          if (queued > 0) ...[
+            const SizedBox(width: 4),
+            _grpCount('$queued queued', Colors.orange)
+          ],
+          if (inprog > 0) ...[
+            const SizedBox(width: 4),
+            _grpCount('$inprog running', Colors.blue)
+          ],
+        ]),
+      );
+
   // One job row in the drawer list. Shared by the active list and the
   // collapsible Completed section.
   Widget _jobTile(Map<String, dynamic> j) {
@@ -1963,13 +2029,43 @@ $runSection
                   _statusChip('Voided', 'cancelled'),
                 ]),
               ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: InkWell(
+                  onTap: () => setState(() => _groupByCustomer = !_groupByCustomer),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(
+                          _groupByCustomer
+                              ? Icons.check_box
+                              : Icons.check_box_outline_blank,
+                          size: 15,
+                          color: _groupByCustomer
+                              ? AppTheme.primary
+                              : AppTheme.textSecondary),
+                      const SizedBox(width: 4),
+                      Text('Group by customer',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: _groupByCustomer
+                                  ? AppTheme.primary
+                                  : AppTheme.textSecondary)),
+                    ]),
+                  ),
+                ),
+              ),
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
             : filtered.isEmpty ? Center(child: Text(_jobs.isEmpty ? 'No job cards yet' : 'No jobs match this filter', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
             : ListView(children: [
                 // Active jobs (queued / in progress). When the filter itself is a
                 // finished status, activeJobs is empty and only the section below shows.
-                for (final j in activeJobs) _jobTile(j),
+                if (_groupByCustomer) ..._groupedByCustomer(activeJobs)
+                else for (final j in activeJobs) _jobTile(j),
                 // Completed / voided in their own collapsible section (only in the
                 // "All" view — a specific finished-status filter lists them flat).
                 if (doneJobs.isNotEmpty && _statusFilter == 'all') ...[

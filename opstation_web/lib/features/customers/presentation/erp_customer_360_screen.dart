@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/format/money.dart';
+import '../../../core/permissions/access_control.dart'; // accessSyncProvider (production module gate)
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import 'customer_history_screen.dart';
@@ -60,6 +61,12 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   bool _loadingComplaints = true;
   List<Map<String, dynamic>> _complaints = [];
 
+  // Manufacturing jobs — only shown when the Production module is enabled.
+  bool _showJobs = false;
+  bool _loadingJobs = true;
+  List<Map<String, dynamic>> _jobs = [];
+  Map<String, String> _jobProductNames = {};
+
   bool _targetsEnabled = false;
   bool _loadingTarget = true;
   double _target = 0;
@@ -79,7 +86,8 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 6, vsync: this);
+    _showJobs = ref.read(accessSyncProvider)?.hasModule('production') ?? false;
+    _tabs = TabController(length: _showJobs ? 7 : 6, vsync: this);
     _loadAr();
     _loadVisits();
     _loadIntel();
@@ -87,6 +95,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadComplaints();
     _loadTarget();
     _loadRoutes();
+    if (_showJobs) _loadJobs();
   }
 
   @override
@@ -103,6 +112,48 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadComplaints();
     _loadTarget();
     _loadRoutes();
+    if (_showJobs) _loadJobs();
+  }
+
+  Future<void> _loadJobs() async {
+    setState(() => _loadingJobs = true);
+    try {
+      final client = Supabase.instance.client;
+      final orgId = ref.read(currentUserProvider)?.orgId;
+      final rows = await client
+          .from('job_cards')
+          .select(
+              'id, job_number, product_id, status, priority, planned_qty, is_open_ended, voucher_date, created_at, notes')
+          .eq('org_id', orgId as Object)
+          .eq('customer_id', _customerId)
+          .order('created_at', ascending: false);
+      final jobs = List<Map<String, dynamic>>.from(rows as List);
+      final pids = jobs
+          .map((j) => j['product_id'] as String?)
+          .where((e) => e != null)
+          .cast<String>()
+          .toSet()
+          .toList();
+      final names = <String, String>{};
+      if (pids.isNotEmpty) {
+        final prods = await client
+            .from('products')
+            .select('id, name')
+            .inFilter('id', pids);
+        for (final p in (prods as List)) {
+          names[p['id'] as String] = (p['name'] as String?) ?? '';
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _jobs = jobs;
+        _jobProductNames = names;
+        _loadingJobs = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingJobs = false);
+    }
   }
 
   Future<void> _loadRoutes() async {
@@ -229,6 +280,107 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   int get _openComplaints => _complaints
       .where((c) => (c['status'] as String?) == 'open' || (c['status'] as String?) == 'in_progress')
       .length;
+
+  Widget _jobsTab() {
+    if (_loadingJobs) {
+      return const Center(child: Padding(padding: EdgeInsets.all(48), child: CircularProgressIndicator()));
+    }
+    if (_jobs.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(48),
+          child: Text('No manufacturing jobs for this customer.',
+              style: TextStyle(color: AppTheme.textSecondary)),
+        ),
+      );
+    }
+    int cnt(String s) => _jobs.where((j) => (j['status'] as String? ?? 'queued') == s).length;
+    final open = cnt('queued') + cnt('in_progress');
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        // Status roll-up
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          _jobStat('Total', _jobs.length, AppTheme.primary),
+          _jobStat('Queued', cnt('queued'), AppTheme.warning),
+          _jobStat('In progress', cnt('in_progress'), const Color(0xFF06B6D4)),
+          _jobStat('Completed', cnt('completed'), AppTheme.success),
+          if (cnt('cancelled') > 0) _jobStat('Cancelled', cnt('cancelled'), AppTheme.textSecondary),
+        ]),
+        const SizedBox(height: 8),
+        Text('$open open job${open == 1 ? "" : "s"} for this customer',
+            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        for (final j in _jobs) _jobRow(j),
+      ],
+    );
+  }
+
+  Widget _jobStat(String label, int n, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: c.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: c.withOpacity(0.25)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('$n', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: c)),
+          const SizedBox(width: 6),
+          Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        ]),
+      );
+
+  Widget _jobRow(Map<String, dynamic> j) {
+    final status = (j['status'] as String?) ?? 'queued';
+    final product = _jobProductNames[j['product_id']] ?? '(product)';
+    final openEnded = (j['is_open_ended'] as bool?) ?? false;
+    final qty = openEnded ? null : j['planned_qty'];
+    final created = j['voucher_date'] != null
+        ? DateFormat('d MMM y').format(DateTime.parse('${j['voucher_date']}').toLocal())
+        : (j['created_at'] != null
+            ? DateFormat('d MMM y').format(DateTime.parse(j['created_at'] as String).toLocal())
+            : '');
+    Color sc;
+    switch (status) {
+      case 'completed': sc = AppTheme.success; break;
+      case 'in_progress': sc = const Color(0xFF06B6D4); break;
+      case 'cancelled': sc = AppTheme.textSecondary; break;
+      default: sc = AppTheme.warning;
+    }
+    final statusLabel = status == 'in_progress' ? 'In progress' : (status.isEmpty ? 'Queued' : status[0].toUpperCase() + status.substring(1));
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text((j['job_number'] as String?) ?? '(no number)',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(product,
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 2),
+            Text([
+              if (openEnded) 'Open-ended' else if (qty != null) 'Qty ${qty is num ? _money.format(qty) : qty}',
+              if (created.isNotEmpty) created,
+            ].join(' · '), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(color: sc.withOpacity(0.12), borderRadius: BorderRadius.circular(20)),
+          child: Text(statusLabel, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: sc)),
+        ),
+      ]),
+    );
+  }
 
   Widget _complaintsTab() {
     if (_loadingComplaints) {
@@ -696,6 +848,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                       ],
                     ]),
                   ),
+                  if (_showJobs) const Tab(text: 'Jobs'),
                 ],
               ),
             ),
@@ -710,6 +863,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   _intelTab(),
                   _activitiesTab(),
                   _complaintsTab(),
+                  if (_showJobs) _jobsTab(),
                 ],
               ),
             ),
