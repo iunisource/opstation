@@ -16,9 +16,11 @@ import '../../auth/auth_controller.dart';
 /// arrive via manual adjustment — the same reason a PO's "FG on-hand" figure
 /// goes blank.
 ///
-/// Products are filtered/labelled by their product GROUP (product_main_group),
-/// because that's the field this data actually uses to mark "Finished Goods" /
-/// "Pre-Production/Raw Material" etc. Raw-material groups are excluded outright
+/// Products can be narrowed by the full product hierarchy — Main group
+/// (product_main_group), Group (product_group) and Sub group
+/// (product_sub_group) — each a multi-select (pick 1..N values), and the three
+/// cascade (Group options reflect the chosen Main groups, Sub group options the
+/// chosen Groups). Raw-material groups are excluded from the finished-goods view
 /// — raws don't need a BOM.
 class ErpFgWithoutBomScreen extends ConsumerStatefulWidget {
   const ErpFgWithoutBomScreen({super.key});
@@ -30,17 +32,23 @@ class _Row {
   final String id;
   final String name;
   final String sku;
-  final String group;
+  final String mainGroup; // product_main_group
+  final String group; // product_group
+  final String subGroup; // product_sub_group
   final double stock;
   final bool isRaw; // raw material / pre-production input
-  _Row(this.id, this.name, this.sku, this.group, this.stock, this.isRaw);
+  _Row(this.id, this.name, this.sku, this.mainGroup, this.group, this.subGroup,
+      this.stock, this.isRaw);
 }
 
 class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
   bool _loading = true;
   String? _error;
   List<_Row> _rows = [];
-  String _group = 'all';
+  // Multi-select filters (empty set == "All"). They cascade top→bottom.
+  final Set<String> _mainSel = {};
+  final Set<String> _groupSel = {};
+  final Set<String> _subSel = {};
   String _type = 'finished'; // 'finished' | 'raw' | 'all'
   final _searchCtrl = TextEditingController();
   final _qty = NumberFormat('#,##0.##');
@@ -84,7 +92,8 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
       final c = Supabase.instance.client;
 
       final prods = await _pageAll((f, t) => c.from('products')
-          .select('id, name, sku, product_class, product_main_group')
+          .select(
+              'id, name, sku, product_class, product_main_group, product_group, product_sub_group')
           .eq('org_id', orgId).range(f, t));
 
       // Products that ARE the output of an active BOM — these are covered.
@@ -109,23 +118,26 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         final id = p['id'] as String;
         if (withBom.contains(id)) continue; // has an assembly — fine
         final cls = (p['product_class'] as String?)?.trim() ?? '';
-        final grp = (p['product_main_group'] as String?)?.trim() ?? '';
+        final mg = (p['product_main_group'] as String?)?.trim() ?? '';
+        final g = (p['product_group'] as String?)?.trim() ?? '';
+        final sg = (p['product_sub_group'] as String?)?.trim() ?? '';
         rows.add(_Row(
           id,
           (p['name'] as String?) ?? '(unnamed)',
           (p['sku'] as String?) ?? '',
-          grp.isEmpty ? '—' : grp,
+          mg.isEmpty ? '—' : mg,
+          g.isEmpty ? '—' : g,
+          sg.isEmpty ? '—' : sg,
           stock[id] ?? 0,
-          _isRaw(cls, grp),
+          _isRaw(cls, mg),
         ));
       }
 
       if (!mounted) return;
       setState(() {
         _rows = rows;
-        // Clamp a stale group selection against the groups available for the
-        // current type filter.
-        if (_group != 'all' && !_groupOptions.contains(_group)) _group = 'all';
+        // Drop any stale selections not present for the current type filter.
+        _pruneSelections();
         _loading = false;
       });
     } catch (e) {
@@ -144,21 +156,54 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
     return true; // all
   }
 
-  // Groups present among rows matching the current type filter.
+  // Cascading option lists. Each level respects the type filter and the
+  // selections made at the levels above it, so the choices always make sense.
+  List<String> get _mainGroupOptions {
+    final set = <String>{};
+    for (final r in _rows) {
+      if (!_matchesType(r)) continue;
+      if (r.mainGroup != '—') set.add(r.mainGroup);
+    }
+    return set.toList()..sort();
+  }
+
   List<String> get _groupOptions {
     final set = <String>{};
     for (final r in _rows) {
       if (!_matchesType(r)) continue;
+      if (_mainSel.isNotEmpty && !_mainSel.contains(r.mainGroup)) continue;
       if (r.group != '—') set.add(r.group);
     }
     return set.toList()..sort();
+  }
+
+  List<String> get _subGroupOptions {
+    final set = <String>{};
+    for (final r in _rows) {
+      if (!_matchesType(r)) continue;
+      if (_mainSel.isNotEmpty && !_mainSel.contains(r.mainGroup)) continue;
+      if (_groupSel.isNotEmpty && !_groupSel.contains(r.group)) continue;
+      if (r.subGroup != '—') set.add(r.subGroup);
+    }
+    return set.toList()..sort();
+  }
+
+  // Remove any selected value that is no longer a valid option (after a type
+  // change or a change in a higher level of the hierarchy). Prune top→bottom so
+  // a narrowed parent correctly narrows its children.
+  void _pruneSelections() {
+    _mainSel.retainWhere(_mainGroupOptions.contains);
+    _groupSel.retainWhere(_groupOptions.contains);
+    _subSel.retainWhere(_subGroupOptions.contains);
   }
 
   List<_Row> get _visible {
     final q = _searchCtrl.text.trim().toLowerCase();
     return _rows.where((r) {
       if (!_matchesType(r)) return false;
-      if (_group != 'all' && r.group != _group) return false;
+      if (_mainSel.isNotEmpty && !_mainSel.contains(r.mainGroup)) return false;
+      if (_groupSel.isNotEmpty && !_groupSel.contains(r.group)) return false;
+      if (_subSel.isNotEmpty && !_subSel.contains(r.subGroup)) return false;
       return matchesQuery('${r.name} ${r.sku}', q);
     }).toList()
       ..sort((a, b) {
@@ -168,10 +213,24 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
       });
   }
 
+  String _selLabel(Set<String> s) => s.isEmpty ? 'All' : (s.toList()..sort()).join(', ');
+
+  // Compact "group · sub" line for a row (drops empty levels).
+  String _subPath(_Row r) =>
+      [if (r.group != '—') r.group, if (r.subGroup != '—') r.subGroup].join(' · ');
+
   Future<void> _print() async {
     final rows = _visible;
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     final doc = pw.Document();
+    final meta = <String>[
+      'Type: ${_typeLabel()}',
+      if (_mainSel.isNotEmpty) 'Main group: ${_selLabel(_mainSel)}',
+      if (_groupSel.isNotEmpty) 'Group: ${_selLabel(_groupSel)}',
+      if (_subSel.isNotEmpty) 'Sub group: ${_selLabel(_subSel)}',
+      '${rows.length} item(s)',
+      DateFormat('d MMM y').format(DateTime.now()),
+    ].join('     |     ');
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(28),
@@ -181,23 +240,21 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         pw.Text('Goods without BOM',
             style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
-        pw.Text(
-            'Type: ${_typeLabel()}     |     Group: ${_group == 'all' ? 'All' : _group}     |     ${rows.length} item(s)     |     ${DateFormat('d MMM y').format(DateTime.now())}',
-            style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+        pw.Text(meta, style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
         pw.TableHelper.fromTextArray(
-          headers: const ['#', 'Product', 'SKU', 'Group', 'In Stock'],
+          headers: const ['#', 'Product', 'SKU', 'Main Group', 'Group / Sub', 'In Stock'],
           data: [
             for (var i = 0; i < rows.length; i++)
               [
-                '${i + 1}', rows[i].name, rows[i].sku, rows[i].group,
-                _qty.format(rows[i].stock),
+                '${i + 1}', rows[i].name, rows[i].sku, rows[i].mainGroup,
+                _subPath(rows[i]), _qty.format(rows[i].stock),
               ],
           ],
           headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
           cellStyle: const pw.TextStyle(fontSize: 9),
           headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-          cellAlignments: const {0: pw.Alignment.centerLeft, 4: pw.Alignment.centerRight},
+          cellAlignments: const {0: pw.Alignment.centerLeft, 5: pw.Alignment.centerRight},
         ),
       ],
     ));
@@ -228,7 +285,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         ]),
         const SizedBox(height: 4),
         const Text(
-            'Products with no active Product Assembly (BOM). Use the Type filter to view Finished Goods, Raw Materials, or all goods. Until an assembly is set up these items can\'t be produced or planned, and their stock can only come from manual adjustments.',
+            'Products with no active Product Assembly (BOM). Use the Type filter to view Finished Goods, Raw Materials, or all goods, and narrow by Main group, Group and Sub group (each takes multiple values). Until an assembly is set up these items can\'t be produced or planned, and their stock can only come from manual adjustments.',
             style: TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
 
@@ -237,7 +294,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
           Expanded(
             child: Wrap(spacing: 12, runSpacing: 8, children: [
               SizedBox(
-                width: 220,
+                width: 200,
                 child: DropdownButtonFormField<String>(
                   value: _type,
                   isExpanded: true,
@@ -250,28 +307,47 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
                   ],
                   onChanged: (v) => setState(() {
                     _type = v ?? 'finished';
-                    // Reset a group selection that isn't available for this type.
-                    if (_group != 'all' && !_groupOptions.contains(_group)) _group = 'all';
+                    _pruneSelections();
                   }),
                 ),
               ),
-              SizedBox(
+              _MultiSelectField(
+                label: 'Main group',
                 width: 240,
-                child: DropdownButtonFormField<String>(
-                  value: _group,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                      labelText: 'Group', isDense: true, border: OutlineInputBorder()),
-                  items: [
-                    const DropdownMenuItem(value: 'all', child: Text('All groups')),
-                    for (final g in _groupOptions)
-                      DropdownMenuItem(value: g, child: Text(g, overflow: TextOverflow.ellipsis)),
-                  ],
-                  onChanged: (v) => setState(() => _group = v ?? 'all'),
-                ),
+                options: _mainGroupOptions,
+                selected: _mainSel,
+                onChanged: (s) => setState(() {
+                  _mainSel
+                    ..clear()
+                    ..addAll(s);
+                  _pruneSelections();
+                }),
+              ),
+              _MultiSelectField(
+                label: 'Group',
+                width: 240,
+                options: _groupOptions,
+                selected: _groupSel,
+                onChanged: (s) => setState(() {
+                  _groupSel
+                    ..clear()
+                    ..addAll(s);
+                  _pruneSelections();
+                }),
+              ),
+              _MultiSelectField(
+                label: 'Sub group',
+                width: 240,
+                options: _subGroupOptions,
+                selected: _subSel,
+                onChanged: (s) => setState(() {
+                  _subSel
+                    ..clear()
+                    ..addAll(s);
+                }),
               ),
               SizedBox(
-                width: 300,
+                width: 280,
                 child: TextField(
                   controller: _searchCtrl,
                   decoration: InputDecoration(
@@ -295,9 +371,23 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         const SizedBox(height: 12),
 
         if (!_loading && _error == null)
-          Wrap(spacing: 18, runSpacing: 4, children: [
+          Wrap(spacing: 18, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
             _kv('Missing BOM', '${rows.length}'),
             _kv('Of which hold stock', '$withStock'),
+            if (_mainSel.isNotEmpty || _groupSel.isNotEmpty || _subSel.isNotEmpty)
+              TextButton.icon(
+                onPressed: () => setState(() {
+                  _mainSel.clear();
+                  _groupSel.clear();
+                  _subSel.clear();
+                }),
+                icon: const Icon(Icons.filter_alt_off_outlined, size: 16),
+                label: const Text('Clear filters'),
+                style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 32),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+              ),
           ]),
         const SizedBox(height: 12),
 
@@ -357,6 +447,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
   }
 
   Widget _row(int n, _Row r) {
+    final sub = _subPath(r);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(children: [
@@ -370,7 +461,18 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
               Text(r.sku, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ]),
         ),
-        Expanded(flex: 3, child: Text(r.group, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis)),
+        Expanded(
+          flex: 3,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(r.mainGroup,
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            if (sub.isNotEmpty)
+              Text(sub,
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+          ]),
+        ),
         Expanded(
           flex: 2,
           child: Text(_qty.format(r.stock),
@@ -382,5 +484,112 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         ),
       ]),
     );
+  }
+}
+
+/// A dropdown-styled field that lets the user pick multiple values. Shows "All"
+/// when nothing is picked, the single value when one is picked, or "N selected"
+/// otherwise; tapping opens a checklist with Select all / Clear.
+class _MultiSelectField extends StatelessWidget {
+  final String label;
+  final List<String> options;
+  final Set<String> selected;
+  final ValueChanged<Set<String>> onChanged;
+  final double width;
+  const _MultiSelectField({
+    required this.label,
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+    this.width = 240,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final count = selected.length;
+    final summary = count == 0
+        ? 'All'
+        : (count == 1 ? selected.first : '$count selected');
+    final enabled = options.isNotEmpty;
+    return SizedBox(
+      width: width,
+      child: InkWell(
+        onTap: enabled ? () => _open(context) : null,
+        borderRadius: BorderRadius.circular(4),
+        child: InputDecorator(
+          isEmpty: false,
+          decoration: InputDecoration(
+            labelText: label,
+            isDense: true,
+            border: const OutlineInputBorder(),
+            enabled: enabled,
+            suffixIcon: const Icon(Icons.arrow_drop_down),
+          ),
+          child: Text(
+            summary,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                color: count == 0 ? AppTheme.textSecondary : Colors.black87),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _open(BuildContext context) async {
+    final temp = {...selected}..retainWhere(options.contains);
+    final result = await showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return AlertDialog(
+          title: Text(label),
+          content: SizedBox(
+            width: 360,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                TextButton(
+                    onPressed: () => setLocal(() => temp
+                      ..clear()
+                      ..addAll(options)),
+                    child: const Text('Select all')),
+                TextButton(
+                    onPressed: () => setLocal(() => temp.clear()),
+                    child: const Text('Clear')),
+              ]),
+              const Divider(height: 1),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final o in options)
+                      CheckboxListTile(
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: temp.contains(o),
+                        title: Text(o),
+                        onChanged: (v) => setLocal(() {
+                          if (v == true) {
+                            temp.add(o);
+                          } else {
+                            temp.remove(o);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, temp),
+                child: const Text('Apply')),
+          ],
+        );
+      }),
+    );
+    if (result != null) onChanged(result);
   }
 }
