@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -27,6 +28,7 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
   bool _loading = true;
   String? _error;
   List<_Row> _rows = [];
+  List<Map<String, dynamic>> _ownedOrgs = [];
 
   @override
   void initState() {
@@ -37,7 +39,8 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final res = await Supabase.instance.client.rpc('linkable_users');
+      final client = Supabase.instance.client;
+      final res = await client.rpc('linkable_users');
       final rows = List<Map<String, dynamic>>.from(res as List? ?? const [])
           .map((m) => _Row(
                 (m['email'] as String?) ?? '',
@@ -48,12 +51,107 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
                 (m['account_id'] as String?) ?? '',
               ))
           .toList();
+      List<Map<String, dynamic>> owned = const [];
+      try {
+        final o = await client.rpc('my_owned_orgs');
+        owned = List<Map<String, dynamic>>.from(o as List? ?? const []);
+      } catch (_) {}
       if (!mounted) return;
-      setState(() { _rows = rows; _loading = false; });
+      setState(() { _rows = rows; _ownedOrgs = owned; _loading = false; });
     } catch (e) {
       if (!mounted) return;
       setState(() { _error = e.toString().split('\n').first; _loading = false; });
     }
+  }
+
+  Future<void> _generateFlow() async {
+    if (_ownedOrgs.isEmpty) return;
+    Map<String, dynamic>? org = _ownedOrgs.first;
+    if (_ownedOrgs.length > 1) {
+      org = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (c) => SimpleDialog(
+          title: const Text('Generate a join code for…'),
+          children: [
+            for (final o in _ownedOrgs)
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(c).pop(o),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(children: [
+                    const Icon(Icons.apartment_rounded, size: 18, color: AppTheme.primary),
+                    const SizedBox(width: 10),
+                    Text((o['org_name'] as String?) ?? 'Organization',
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+    if (org == null) return;
+    try {
+      final res = await Supabase.instance.client.rpc('generate_org_join_code',
+          params: {'p_org': org['org_id']});
+      final row = (res is List && res.isNotEmpty)
+          ? Map<String, dynamic>.from(res.first as Map)
+          : <String, dynamic>{};
+      final code = (row['code'] as String?) ?? '';
+      if (!mounted || code.isEmpty) { _snack('Could not generate a code.'); return; }
+      await _showCodeDialog(code, (org['org_name'] as String?) ?? 'your organization');
+    } catch (e) {
+      _snack('Could not generate code: ${e.toString().replaceFirst('Exception: ', '').split('\n').first}');
+    }
+  }
+
+  Future<void> _showCodeDialog(String code, String orgName) {
+    return showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Join code'),
+        content: SizedBox(
+          width: 360,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('Share this code with the person you want to add to $orgName. '
+                'They open “Join an organization” from the org menu and enter it.',
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+              ),
+              alignment: Alignment.center,
+              child: Text(code,
+                  style: const TextStyle(
+                      fontSize: 40, fontWeight: FontWeight.w900, letterSpacing: 10,
+                      color: AppTheme.primary)),
+            ),
+            const SizedBox(height: 10),
+            const Text('Single use · expires in 15 minutes · adds them as admin',
+                style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          ]),
+        ),
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('Copy'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: code));
+              _snack('Code copied');
+            },
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(c).pop(),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   Map<String, List<_Row>> get _byAccount {
@@ -103,6 +201,14 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
             onPressed: _load,
           ),
           const SizedBox(width: 8),
+          if (_ownedOrgs.isNotEmpty) ...[
+            OutlinedButton.icon(
+              icon: const Icon(Icons.vpn_key_outlined, size: 18),
+              label: const Text('Generate join code'),
+              onPressed: _generateFlow,
+            ),
+            const SizedBox(width: 8),
+          ],
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
             icon: const Icon(Icons.link, size: 18),
@@ -311,7 +417,7 @@ class _LinkDialogState extends State<_LinkDialog> {
           ),
           const SizedBox(height: 10),
           if (_selected.length >= 2) ...[
-            const Text('Primary login (they sign in with this email):',
+            const Text('Primary login (the main one — every linked email still works):',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             const SizedBox(height: 6),
             DropdownButtonFormField<String>(

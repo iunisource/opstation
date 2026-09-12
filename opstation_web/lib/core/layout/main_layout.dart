@@ -1473,64 +1473,84 @@ class _OrgSwitcher extends ConsumerWidget {
             ),
         ]);
 
-    if (!multi) return label(false);
+    const kJoin = '__join_org__';
+
+    Future<void> doSwitch(String orgId) async {
+      if (orgId == user?.orgId) return;
+      String targetName = 'organization';
+      for (final m in mems) {
+        if (m['org_id'] == orgId) {
+          targetName = (m['org_name'] as String?) ?? targetName;
+        }
+      }
+      try {
+        // Show the "Organization switched" animation, run the switch, then do a
+        // full reload — the simplest, safest way to guarantee every screen
+        // re-queries under the new org (current_user_org_id now returns it).
+        showOrgSwitchedAnimation(context, targetName);
+        await ref.read(authControllerProvider.notifier).switchOrg(orgId);
+        await Future<void>.delayed(const Duration(milliseconds: 1050));
+        html.window.location.reload();
+      } catch (e) {
+        if (context.mounted) {
+          Navigator.of(context, rootNavigator: true).maybePop();
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not switch organization: $e')));
+        }
+      }
+    }
 
     return PopupMenuButton<String>(
-      tooltip: 'Switch organization',
+      tooltip: multi ? 'Switch organization' : 'Organizations',
       offset: const Offset(0, 34),
-      onSelected: (orgId) async {
-        if (orgId == user?.orgId) return;
-        String targetName = 'organization';
-        for (final m in mems) {
-          if (m['org_id'] == orgId) {
-            targetName = (m['org_name'] as String?) ?? targetName;
-          }
+      onSelected: (value) async {
+        if (value == kJoin) {
+          await showJoinOrgDialog(context);
+          return;
         }
-        try {
-          // Show the "Organization switched" animation, run the switch, then do
-          // a full reload — the simplest, safest way to guarantee every screen
-          // re-queries under the new org (current_user_org_id now returns it).
-          showOrgSwitchedAnimation(context, targetName);
-          await ref.read(authControllerProvider.notifier).switchOrg(orgId);
-          await Future<void>.delayed(const Duration(milliseconds: 1050));
-          html.window.location.reload();
-        } catch (e) {
-          if (context.mounted) {
-            Navigator.of(context, rootNavigator: true).maybePop();
-            ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Could not switch organization: $e')));
-          }
-        }
+        await doSwitch(value);
       },
       itemBuilder: (_) => [
-        const PopupMenuItem<String>(
-          enabled: false,
-          height: 28,
-          child: Text('SWITCH ORGANIZATION',
-              style: TextStyle(
-                  fontSize: 10, fontWeight: FontWeight.w800, color: Colors.black45)),
-        ),
-        for (final m in mems)
-          PopupMenuItem<String>(
-            value: m['org_id'] as String,
-            child: Row(children: [
-              Icon(
-                  m['org_id'] == user?.orgId
-                      ? Icons.check_circle
-                      : Icons.apartment_outlined,
-                  size: 16,
-                  color: m['org_id'] == user?.orgId
-                      ? const Color(0xFF2F6FED)
-                      : Colors.black45),
-              const SizedBox(width: 8),
-              Expanded(
-                  child: Text((m['org_name'] as String?) ?? '',
-                      style: const TextStyle(fontSize: 13))),
-              const SizedBox(width: 8),
-              Text((m['role'] as String?) ?? '',
-                  style: const TextStyle(fontSize: 10, color: Colors.black45)),
-            ]),
+        if (multi) ...[
+          const PopupMenuItem<String>(
+            enabled: false,
+            height: 28,
+            child: Text('SWITCH ORGANIZATION',
+                style: TextStyle(
+                    fontSize: 10, fontWeight: FontWeight.w800, color: Colors.black45)),
           ),
+          for (final m in mems)
+            PopupMenuItem<String>(
+              value: m['org_id'] as String,
+              child: Row(children: [
+                Icon(
+                    m['org_id'] == user?.orgId
+                        ? Icons.check_circle
+                        : Icons.apartment_outlined,
+                    size: 16,
+                    color: m['org_id'] == user?.orgId
+                        ? const Color(0xFF2F6FED)
+                        : Colors.black45),
+                const SizedBox(width: 8),
+                Expanded(
+                    child: Text((m['org_name'] as String?) ?? '',
+                        style: const TextStyle(fontSize: 13))),
+                const SizedBox(width: 8),
+                Text((m['role'] as String?) ?? '',
+                    style: const TextStyle(fontSize: 10, color: Colors.black45)),
+              ]),
+            ),
+          const PopupMenuDivider(),
+        ],
+        PopupMenuItem<String>(
+          value: kJoin,
+          child: Row(children: const [
+            Icon(Icons.add_business_outlined, size: 16, color: Color(0xFF2F6FED)),
+            SizedBox(width: 8),
+            Text('Join an organization…',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ]),
+        ),
       ],
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1540,6 +1560,116 @@ class _OrgSwitcher extends ConsumerWidget {
         ),
         child: label(true),
       ),
+    );
+  }
+}
+
+/// Dialog to redeem an org join code (OTP) from the org switcher. On success it
+/// plays the switch animation and reloads so the newly-joined org appears.
+Future<void> showJoinOrgDialog(BuildContext context) {
+  return showDialog<void>(
+    context: context,
+    builder: (_) => const _JoinOrgDialog(),
+  );
+}
+
+class _JoinOrgDialog extends StatefulWidget {
+  const _JoinOrgDialog();
+  @override
+  State<_JoinOrgDialog> createState() => _JoinOrgDialogState();
+}
+
+class _JoinOrgDialogState extends State<_JoinOrgDialog> {
+  final _ctrl = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final code = _ctrl.text.trim();
+    if (code.isEmpty) {
+      setState(() => _error = 'Enter the code your admin gave you.');
+      return;
+    }
+    setState(() { _busy = true; _error = null; });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('redeem_org_join_code', params: {'p_code': code});
+      final orgName = (res as String?) ?? 'the organization';
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      showOrgSwitchedAnimation(context, orgName);
+      await Future<void>.delayed(const Duration(milliseconds: 1050));
+      html.window.location.reload();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.toString().replaceFirst('Exception: ', '').split('\n').first;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Join an organization'),
+      content: SizedBox(
+        width: 360,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Enter the join code shown by the organization’s admin. You’ll be added as an admin and can switch to it from here.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            enabled: !_busy,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: 6),
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              hintText: '000000',
+              counterText: '',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            maxLength: 6,
+            onSubmitted: (_) => _busy ? null : _submit(),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_error!,
+                  style: const TextStyle(color: AppTheme.danger, fontSize: 12.5)),
+            ),
+          ],
+        ]),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _busy ? null : _submit,
+          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+          child: _busy
+              ? const SizedBox(
+                  height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Join'),
+        ),
+      ],
     );
   }
 }
