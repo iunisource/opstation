@@ -119,6 +119,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           rememberMe: _rememberMe,
         );
     if (!mounted) return;
+
+    // Multi-org login → ask which org to enter before finishing.
+    final pending = ref.read(pendingOrgChoiceProvider);
+    if (pending != null && pending.length > 1) {
+      final chosen = await _pickOrg(pending);
+      if (!mounted) return;
+      final ctrl = ref.read(authControllerProvider.notifier);
+      if (chosen == null) {
+        await ctrl.cancelOrgChoice();
+      } else {
+        await ctrl.completeOrgChoice(chosen);
+      }
+      if (!mounted) return;
+    }
+
     final err = ref.read(authControllerProvider).error;
     if (err != null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -129,6 +144,62 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         ),
       );
     }
+  }
+
+  /// Login-time org picker. Returns the chosen org_id, or null if cancelled.
+  Future<String?> _pickOrg(List<Map<String, dynamic>> mems) {
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Choose organization'),
+        contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 8),
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'This login has access to more than one organization. Pick one to continue — you can switch anytime from the top bar.',
+                    style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final m in mems)
+                      ListTile(
+                        leading: const Icon(Icons.apartment_rounded,
+                            color: AppTheme.primary),
+                        title: Text((m['org_name'] as String?) ?? 'Organization',
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: (m['role'] as String?) != null
+                            ? Text(m['role'] as String,
+                                style: const TextStyle(fontSize: 11.5))
+                            : null,
+                        onTap: () =>
+                            Navigator.of(dialogCtx).pop(m['org_id'] as String?),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(null),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openSignup() async {
