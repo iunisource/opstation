@@ -1,6 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -1321,131 +1320,215 @@ class _IntelligenceDashboardScreenState
               ]),
             ),
         ],
-        const SizedBox(height: 6),
-        Row(children: [
-          Expanded(
-            child: Text(scopeLabel,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 11.5, color: AppTheme.textSecondary)),
-          ),
-          if (series.isNotEmpty) ...[
-            Text('Latest: ${_pct.format(series.last.value)}%',
-                style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.primary)),
-            if (series.length >= 2) ...[
-              const SizedBox(width: 8),
-              Builder(builder: (_) {
-                final delta = series.last.value - series.first.value;
-                final up = delta >= 0;
-                return Text(
-                  '${up ? '▲' : '▼'} ${_pct.format(delta.abs())} pts since ${series.first.key.day}/${series.first.key.month}',
+        const SizedBox(height: 12),
+        if (series.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 28),
+            child: Center(
+              child: Text('No placement audits yet in this view.',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: up
-                          ? const Color(0xFF16A34A)
-                          : const Color(0xFFDC2626)),
-                );
-              }),
-            ],
-          ],
-        ]),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: mobile ? 180 : 220,
-          child: series.length < 2
-              ? const Center(
-                  child: Text(
-                      'Not enough history yet — the trend builds as audits repeat over time.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          fontSize: 12, color: AppTheme.textSecondary)))
-              : LineChart(LineChartData(
-                  minY: 0,
-                  maxY: 100,
-                  minX: 0,
-                  maxX: (series.length - 1).toDouble(),
-                  gridData:
-                      const FlGridData(show: true, drawVerticalLine: false),
-                  titlesData: FlTitlesData(
-                    rightTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    leftTitles: AxisTitles(
-                        sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 42,
-                      interval: 25,
-                      getTitlesWidget: (v, _) => Text('${v.toInt()}%',
-                          maxLines: 1,
+                      fontSize: 12.5, color: AppTheme.textSecondary)),
+            ),
+          )
+        else ...[
+          Builder(builder: (context) {
+            final latestVal = series.last.value;
+            final onCount = latestVal.round().clamp(0, 100);
+            final missCount = 100 - onCount;
+            final delta =
+                series.length >= 2 ? series.last.value - series.first.value : null;
+
+            final figures = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('$onCount%',
+                    style: const TextStyle(
+                        fontSize: 56,
+                        fontWeight: FontWeight.w800,
+                        height: 1,
+                        letterSpacing: -1.5,
+                        color: AppTheme.textPrimary)),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: 250,
+                  child: Text.rich(
+                    TextSpan(children: [
+                      TextSpan(
+                          text: '$onCount of every 100',
                           style: const TextStyle(
-                              fontSize: 10, color: AppTheme.textSecondary)),
-                    )),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 24,
-                        interval:
-                            (series.length / 6).ceilToDouble().clamp(1, 99),
-                        getTitlesWidget: (v, _) {
-                          final i = v.toInt();
-                          if (i < 0 || i >= series.length) {
-                            return const SizedBox.shrink();
-                          }
-                          final d = series[i].key;
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text('${d.day}/${d.month}',
-                                style: const TextStyle(
-                                    fontSize: 10,
-                                    color: AppTheme.textSecondary)),
-                          );
-                        },
-                      ),
-                    ),
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.textPrimary)),
+                      const TextSpan(
+                          text:
+                              ' shelf spots we checked had our product on the shelf.'),
+                    ]),
+                    style: const TextStyle(
+                        fontSize: 14,
+                        height: 1.4,
+                        color: AppTheme.textSecondary),
                   ),
-                  borderData: FlBorderData(show: false),
-                  lineTouchData: LineTouchData(
-                    touchTooltipData: LineTouchTooltipData(
-                      getTooltipItems: (spots) => [
-                        for (final s in spots)
-                          LineTooltipItem(
-                              '${_pct.format(s.y)}%',
-                              const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white)),
-                      ],
-                    ),
-                  ),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: [
-                        for (var i = 0; i < series.length; i++)
-                          FlSpot(i.toDouble(), series[i].value),
-                      ],
-                      color: AppTheme.primary,
-                      barWidth: 2.5,
-                      isCurved: false,
-                      dotData: const FlDotData(show: true),
-                      belowBarData: BarAreaData(
-                          show: true,
-                          color: AppTheme.primary.withOpacity(0.08)),
-                    ),
-                  ],
-                )),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-            'How to read: each dot = the placement score as it stood on that date — of all shop-SKU shelf checks done up to then, the % where the SKU was on the shelf (latest check per shop-SKU counts). The line rises when surveyors find more SKUs placed on re-audit, falls when previously-placed SKUs go missing. Daily dots while history is young, weekly after 3 weeks.',
-            style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+                ),
+                if (delta != null) ...[
+                  const SizedBox(height: 14),
+                  _trendChip(delta, series.first.key),
+                ],
+              ],
+            );
+
+            final waffle = Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _waffleGrid(onCount),
+                const SizedBox(height: 12),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  _legendSwatch(AppTheme.primary, null),
+                  const SizedBox(width: 6),
+                  const Text('On shelf ',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary)),
+                  Text('$onCount',
+                      style: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary)),
+                  const SizedBox(width: 16),
+                  _legendSwatch(
+                      const Color(0xFFE7ECF3), const Color(0xFFD5DCE6)),
+                  const SizedBox(width: 6),
+                  const Text('Missing ',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary)),
+                  Text('$missCount',
+                      style: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary)),
+                ]),
+              ],
+            );
+
+            return LayoutBuilder(builder: (context, c) {
+              final narrow = c.maxWidth < 480;
+              if (narrow) {
+                return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      figures,
+                      const SizedBox(height: 22),
+                      Center(child: waffle),
+                    ]);
+              }
+              return Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(child: figures),
+                    const SizedBox(width: 24),
+                    waffle,
+                  ]);
+            });
+          }),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.only(top: 14),
+            decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: AppTheme.border))),
+            child: Builder(builder: (context) {
+              final miss = (100 - series.last.value.round().clamp(0, 100));
+              return Text.rich(
+                TextSpan(children: [
+                  const TextSpan(
+                      text:
+                          'Each square is 1% of the shelf checks your surveyors did. '),
+                  TextSpan(
+                      text:
+                          '$miss empty squares = $miss% of spots where the product should be stocked but wasn\'t',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textPrimary)),
+                  const TextSpan(
+                      text:
+                          ' — the restocking opportunity. The score rises when re-audits find more SKUs placed, and falls when placed SKUs go missing.'),
+                ]),
+                style: const TextStyle(
+                    fontSize: 12, height: 1.55, color: AppTheme.textSecondary),
+              );
+            }),
+          ),
+        ],
       ]),
     );
   }
+
+  // Trend delta chip: "Up 2.1 pts since 2/8" (green up / red down).
+  Widget _trendChip(double delta, DateTime since) {
+    final up = delta >= 0;
+    final color = up ? const Color(0xFF15925A) : const Color(0xFFDC2626);
+    final bg = up ? const Color(0xFFDCF3E7) : const Color(0xFFFCE4E4);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      decoration:
+          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(up ? Icons.arrow_upward : Icons.arrow_downward,
+            size: 13, color: color),
+        const SizedBox(width: 5),
+        Text(
+            '${up ? 'Up' : 'Down'} ${_pct.format(delta.abs())} pts since ${since.day}/${since.month}',
+            style: TextStyle(
+                fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
+      ]),
+    );
+  }
+
+  // 10×10 waffle: each square = 1%. First [onCount] squares filled (on shelf).
+  Widget _waffleGrid(int onCount) {
+    const cell = 17.0;
+    const gap = 4.0;
+    Widget one(int i) => Container(
+          width: cell,
+          height: cell,
+          decoration: BoxDecoration(
+            color: i < onCount
+                ? AppTheme.primary
+                : const Color(0xFFE7ECF3),
+            borderRadius: BorderRadius.circular(4),
+            border: i < onCount
+                ? null
+                : Border.all(color: const Color(0xFFD5DCE6), width: 1),
+          ),
+        );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var r = 0; r < 10; r++) ...[
+          if (r > 0) const SizedBox(height: gap),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            for (var col = 0; col < 10; col++) ...[
+              if (col > 0) const SizedBox(width: gap),
+              one(r * 10 + col),
+            ],
+          ]),
+        ],
+      ],
+    );
+  }
+
+  Widget _legendSwatch(Color fill, Color? border) => Container(
+        width: 13,
+        height: 13,
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: BorderRadius.circular(4),
+          border: border != null ? Border.all(color: border) : null,
+        ),
+      );
 
   Widget _statTile(String label, String value) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
