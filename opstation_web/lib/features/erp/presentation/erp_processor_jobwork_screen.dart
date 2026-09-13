@@ -310,7 +310,7 @@ class _ErpProcessorJobworkScreenState
   Widget build(BuildContext context) {
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: _loading
           ? const Center(child: CircularProgressIndicator())
           : _editing == null

@@ -190,7 +190,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     final totalCollection = _trips.fold<int>(0, (s, t) => s + (t['total_collected'] as int? ?? 0));
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Reports', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
         const SizedBox(height: 24),

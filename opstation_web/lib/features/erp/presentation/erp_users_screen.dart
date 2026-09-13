@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../../core/permissions/permission_registry.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
@@ -717,17 +718,20 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final narrow = isNarrow(context);
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(narrow ? 16 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text('ERP Users', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-          const Spacer(),
+          const Expanded(
+            child: Text('ERP Users', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: () => _showDialog(context, null),
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('Add ERP User'),
+            label: Text(narrow ? 'Add' : 'Add ERP User'),
           ),
         ]),
         const SizedBox(height: 8),
@@ -735,6 +739,19 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
         const SizedBox(height: 24),
         if (_loading)
           const Center(child: CircularProgressIndicator())
+        else if (_users.isEmpty)
+          const Expanded(
+            child: Center(child: Text('No ERP users yet.', style: TextStyle(color: AppTheme.textSecondary))),
+          )
+        else if (narrow)
+          // Phone: stacked cards instead of a crushed 5-column table.
+          Expanded(
+            child: ListView.separated(
+              itemCount: _users.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (_, i) => _userCardNarrow(_users[i]),
+            ),
+          )
         else
           Expanded(
             child: Container(
@@ -760,9 +777,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                 ),
                 const Divider(height: 1),
                 Expanded(
-                  child: _users.isEmpty
-                      ? const Center(child: Text('No ERP users yet.', style: TextStyle(color: AppTheme.textSecondary)))
-                      : ListView.separated(
+                  child: ListView.separated(
                           itemCount: _users.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (_, i) {
@@ -778,25 +793,8 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                                   Expanded(flex: 3, child: Text(u['email'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                                   Expanded(flex: 3, child: Text(branches.isEmpty ? 'No branches' : branches,
                                       style: TextStyle(fontSize: 13, color: branches.isEmpty ? AppTheme.danger : AppTheme.textSecondary))),
-                                  Expanded(flex: 1, child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: isActive ? AppTheme.success.withOpacity(0.1) : AppTheme.danger.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(isActive ? 'Active' : 'Inactive',
-                                        style: TextStyle(color: isActive ? AppTheme.success : AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w600)),
-                                  )),
-                                  SizedBox(width: 120, child: Row(children: [
-                                    IconButton(icon: const Icon(Icons.insights_outlined, size: 18, color: AppTheme.primary),
-                                        tooltip: 'How they use the app', onPressed: () => _showActivity(u)),
-                                    IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, u)),
-                                    IconButton(
-                                      icon: Icon(isActive ? Icons.block : Icons.check_circle_outline, size: 18,
-                                          color: isActive ? AppTheme.danger : AppTheme.success),
-                                      onPressed: () => _toggleActive(u),
-                                    ),
-                                  ])),
+                                  Expanded(flex: 1, child: _statusChip(isActive)),
+                                  SizedBox(width: 120, child: _userActions(u, isActive)),
                                 ]),
                               ),
                             );
@@ -806,6 +804,66 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
             ),
           ),
       ]),
+    );
+  }
+
+  Widget _statusChip(bool isActive) => Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: isActive ? AppTheme.success.withOpacity(0.1) : AppTheme.danger.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(isActive ? 'Active' : 'Inactive',
+              style: TextStyle(color: isActive ? AppTheme.success : AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w600)),
+        ),
+      );
+
+  Widget _userActions(Map<String, dynamic> u, bool isActive) => Row(mainAxisSize: MainAxisSize.min, children: [
+        IconButton(icon: const Icon(Icons.insights_outlined, size: 18, color: AppTheme.primary),
+            tooltip: 'How they use the app', onPressed: () => _showActivity(u)),
+        IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, u)),
+        IconButton(
+          icon: Icon(isActive ? Icons.block : Icons.check_circle_outline, size: 18,
+              color: isActive ? AppTheme.danger : AppTheme.success),
+          onPressed: () => _toggleActive(u),
+        ),
+      ]);
+
+  // Phone card: name + status on top, email, branches, then actions.
+  Widget _userCardNarrow(Map<String, dynamic> u) {
+    final isActive = u['is_active'] as bool? ?? true;
+    final branches = (u['_branches'] as List<String>).join(', ');
+    return Opacity(
+      opacity: isActive ? 1.0 : 0.5,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.border),
+        ),
+        padding: const EdgeInsets.fromLTRB(14, 12, 6, 6),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(u['name'] as String? ?? '',
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15))),
+            const SizedBox(width: 8),
+            _statusChip(isActive),
+          ]),
+          const SizedBox(height: 4),
+          Text(u['email'] as String? ?? '',
+              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          const SizedBox(height: 8),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.store_outlined, size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Expanded(child: Text(branches.isEmpty ? 'No branches' : branches,
+                style: TextStyle(fontSize: 13, color: branches.isEmpty ? AppTheme.danger : AppTheme.textSecondary))),
+          ]),
+          Align(alignment: Alignment.centerRight, child: _userActions(u, isActive)),
+        ]),
+      ),
     );
   }
 }

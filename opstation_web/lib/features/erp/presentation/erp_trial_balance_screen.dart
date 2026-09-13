@@ -143,7 +143,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
     final lines = _display();
 
     return Container(
-      color: AppTheme.background, padding: const EdgeInsets.all(32),
+      color: AppTheme.background, padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         LayoutBuilder(builder: (_, cc) {
           final narrow = cc.maxWidth < 640;

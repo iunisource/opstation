@@ -368,7 +368,7 @@ class _ErpStockValueReportScreenState extends ConsumerState<ErpStockValueReportS
     final list = _filtered;
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Text('Stock Value Report', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),

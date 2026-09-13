@@ -207,42 +207,6 @@ class _DashboardStatsState extends State<_DashboardStats> {
         .toUtc()
         .toIso8601String();
 
-    // Fast path: one server-side summary (rpc_dashboard_summary) computes every
-    // tile in a single indexed, RLS-free pass — instead of ~9 RLS-checked
-    // round-trips that shipped thousands of rows and timed out under load. Falls
-    // back to the legacy per-query path below if the RPC is absent or errors.
-    try {
-      final res = await client.rpc('rpc_dashboard_summary', params: {
-        'p_org': widget.orgId,
-        'p_start': dayStart,
-        'p_end': dayEnd,
-      });
-      final m = (res is Map) ? Map<String, dynamic>.from(res) : null;
-      if (m != null && m.isNotEmpty) {
-        int gi(String k) => (m[k] as num?)?.toInt() ?? 0;
-        if (!mounted) return;
-        setState(() {
-          _stats = {
-            'team': gi('team'),
-            'customers': gi('customers'),
-            'routes': gi('routes'),
-            'activeRoutes': _isToday ? gi('active') : 0,
-            'shopsVisited': gi('shops_visited'),
-            'collection': gi('collection'),
-            'completedToday': gi('completed'),
-            'auditedShops': gi('audited_shops'),
-            'brandsTracked': gi('brands_tracked'),
-            'intelActivity7d': gi('intel_7d'),
-          };
-          _partial = false;
-          _loading = false;
-        });
-        return;
-      }
-    } catch (_) {
-      // RPC not deployed yet, or failed — fall through to the legacy path.
-    }
-
     // Each rollup is independent. Run them concurrently BUT isolate failures —
     // a single failing query must never zero the whole dashboard (it used to:
     // one throw dropped everything to 0). Each guarded call returns a safe
@@ -258,13 +222,14 @@ class _DashboardStatsState extends State<_DashboardStats> {
       }
     }
 
-    // Count-only rollups: ask Postgres for the count (HEAD, no row payload)
-    // instead of fetching every row just to call .length — much less data over
-    // the wire, which is the bulk of the dashboard's load time on big orgs.
-    Future<int> qCount(Future<dynamic> b) async {
+    Future<int> qCustomers() async {
       try {
-        final r = await b;
-        return ((r as dynamic).count as int?) ?? 0;
+        final c = await client
+            .from('customers')
+            .select('id')
+            .eq('org_id', widget.orgId)
+            .count(CountOption.exact);
+        return c.count;
       } catch (_) {
         anyFail = true;
         return 0;
@@ -272,30 +237,28 @@ class _DashboardStatsState extends State<_DashboardStats> {
     }
 
     final results = await Future.wait<dynamic>([
-      qCount(client.from('users').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
-      qCount(client.from('customers').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
-      qCount(client.from('sales_routes').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
+      ql(client.from('users').select('id, role').eq('org_id', widget.orgId)),
+      qCustomers(),
+      ql(client.from('sales_routes').select('id').eq('org_id', widget.orgId)),
       // Active = ended_at IS NULL, regardless of start date. Only meaningful for
       // "today"; for a back-date we show 0 (nothing is currently running "then").
       _isToday
-          ? qCount(client
+          ? ql(client
               .from('trips')
               .select('id')
               .eq('org_id', widget.orgId)
-              .filter('ended_at', 'is', null)
-              .count(CountOption.exact))
-          : Future<int>.value(0),
+              .filter('ended_at', 'is', null))
+          : Future<List<dynamic>>.value(const []),
       // Completed = a trip that STARTED on the selected day and has finished.
       // Keying off started_at (not ended_at) stops a route that actually ran on
       // a prior day — but was only closed later — from leaking into the numbers.
-      qCount(client
+      ql(client
           .from('trips')
           .select('id')
           .eq('org_id', widget.orgId)
           .gte('started_at', dayStart)
           .lt('started_at', dayEnd)
-          .not('ended_at', 'is', null)
-          .count(CountOption.exact)),
+          .not('ended_at', 'is', null)),
       // Selected day's visits — RLS scopes to the user's org. Bounded window so
       // trips that span midnight don't double-count.
       ql(client
@@ -309,11 +272,11 @@ class _DashboardStatsState extends State<_DashboardStats> {
       ql(client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', widget.orgId)),
     ]);
     try {
-      final teamCount = results[0] as int;
+      final users = results[0] as List;
       final customerCount = results[1] as int;
-      final routeCount = results[2] as int;
-      final activeCount = results[3] as int;
-      final completedCount = results[4] as int;
+      final routes = results[2] as List;
+      final activeTrips = results[3] as List;
+      final completedTrips = results[4] as List;
       final todayVisits = results[5] as List;
       final paRows = results[6] as List;
       final csRows = results[7] as List;
@@ -374,13 +337,13 @@ class _DashboardStatsState extends State<_DashboardStats> {
       if (!mounted) return;
       setState(() {
         _stats = {
-          'team': teamCount,
+          'team': users.length,
           'customers': customerCount,
-          'routes': routeCount,
-          'activeRoutes': activeCount,
+          'routes': routes.length,
+          'activeRoutes': activeTrips.length,
           'shopsVisited': shopsVisited,
           'collection': totalCollection,
-          'completedToday': completedCount,
+          'completedToday': completedTrips.length,
           'auditedShops': auditedShops.length,
           'brandsTracked': brandsTracked.length,
           'intelActivity7d': recentCount,
@@ -748,34 +711,17 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
           .toIso8601String();
 
       final orgId = widget.orgId;
-      // route_stops / route_assignments carry NO org_id. Fetching them unscoped
-      // pulls EVERY org's route plan — which inflated "not visited" to a rep's
-      // entire cross-org customer base and slowed the query. Scope them to this
-      // org's own routes (sales_routes has org_id) so "not visited" is only the
-      // customers on the rep's routes within this org.
-      final orgRoutesRows = await client
-          .from('sales_routes')
-          .select('id')
-          .eq('org_id', orgId);
-      final orgRouteIds = (orgRoutesRows as List)
-          .map((r) => (r as Map)['id'] as String)
-          .toList(growable: false);
-
-      final results = await Future.wait<dynamic>([
+      final results = await Future.wait([
         client
             .from('visits')
             .select(
                 'user_id, user_name, customer_id, amount, timestamp, status, customers(shop_name)')
             .gte('timestamp', todayStart)
             .lt('timestamp', tomorrowStart),
-        // Standing route plan, scoped to THIS org's routes: who is assigned to
-        // which route, and which customers each route carries.
-        orgRouteIds.isEmpty
-            ? Future<dynamic>.value(const <dynamic>[])
-            : client.from('route_assignments').select('user_id, route_id').inFilter('route_id', orgRouteIds),
-        orgRouteIds.isEmpty
-            ? Future<dynamic>.value(const <dynamic>[])
-            : client.from('route_stops').select('route_id, customer_id').inFilter('route_id', orgRouteIds),
+        // Standing route plan: who is assigned to which route, and which
+        // customers each route carries — used to surface "not visited" stops.
+        client.from('route_assignments').select('user_id, route_id'),
+        client.from('route_stops').select('route_id, customer_id'),
         client.from('customers').select('id, shop_name').eq('org_id', orgId),
       ]);
 
@@ -793,14 +739,12 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         if (rid == null || cid == null) continue;
         (routeCustomers[rid] ??= <String>{}).add(cid);
       }
-      // user -> assigned route ids (their standing beat, which can be several
-      // routes). We narrow to "today's" route(s) per rep below.
-      final userRoutes = <String, Set<String>>{};
+      final userPlanned = <String, Set<String>>{};
       for (final a in (results[1] as List)) {
         final uid = a['user_id'] as String?;
         final rid = a['route_id'] as String?;
         if (uid == null || rid == null) continue;
-        (userRoutes[uid] ??= <String>{}).add(rid);
+        (userPlanned[uid] ??= <String>{}).addAll(routeCustomers[rid] ?? const {});
       }
 
       final collectedByUser = <String, List<_VisitRow>>{};
@@ -845,20 +789,9 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         final collected = (collectedByUser[uid] ?? [])
           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
         final other = List<_OtherStop>.from(otherByUser[uid] ?? const []);
-        // "Not visited" = the other stops on the route(s) this rep actually
-        // WORKED today (a route holding at least one shop they visited), minus
-        // the ones they hit — not their entire multi-route beat.
+        // not-visited = planned customers this user did not touch today
         final visited = visitedByUser[uid] ?? const <String>{};
-        final todayRoutes = <String>{};
-        for (final rid in (userRoutes[uid] ?? const <String>{})) {
-          final stops = routeCustomers[rid];
-          if (stops != null && stops.any(visited.contains)) todayRoutes.add(rid);
-        }
-        final plannedToday = <String>{};
-        for (final rid in todayRoutes) {
-          plannedToday.addAll(routeCustomers[rid] ?? const {});
-        }
-        for (final cid in plannedToday) {
+        for (final cid in (userPlanned[uid] ?? const <String>{})) {
           if (!visited.contains(cid)) {
             other.add(_OtherStop(
                 customerName: custName[cid] ?? 'Unknown shop',
@@ -940,7 +873,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
                 )
               : _error != null
                   ? Padding(
-                      padding: const EdgeInsets.all(32),
+                      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
                       child: Text('Error: $_error',
                           style:
                               const TextStyle(color: Color(0xFFDC2626))),
@@ -1482,7 +1415,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
                 )
               : _error != null
                   ? Padding(
-                      padding: const EdgeInsets.all(32),
+                      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
                       child: Text('Error: $_error',
                           style: const TextStyle(color: Color(0xFFDC2626))),
                     )

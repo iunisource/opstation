@@ -210,7 +210,7 @@ class _ErpStockAgingReportScreenState extends ConsumerState<ErpStockAgingReportS
     final list = _list;
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Text('Stock Aging Report', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),

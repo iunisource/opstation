@@ -1277,7 +1277,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     if (_arError != null) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
           child: Text('Failed to load receivables: $_arError',
               style: const TextStyle(color: AppTheme.danger)),
         ),

@@ -1334,7 +1334,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     });
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

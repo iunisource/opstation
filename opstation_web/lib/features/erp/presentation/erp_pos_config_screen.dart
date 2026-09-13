@@ -174,7 +174,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
       if (prev?['id'] != next?['id']) _load();
     });
     if (_loading) return const Center(child: CircularProgressIndicator());
-    return SingleChildScrollView(padding: const EdgeInsets.all(32),
+    return SingleChildScrollView(padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [

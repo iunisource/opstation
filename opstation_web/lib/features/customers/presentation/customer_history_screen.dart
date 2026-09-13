@@ -210,7 +210,7 @@ class _CustomerHistoryScreenState
     if (_error != null) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
           child: Text('Failed to load: $_error',
               style: const TextStyle(color: AppTheme.danger)),
         ),

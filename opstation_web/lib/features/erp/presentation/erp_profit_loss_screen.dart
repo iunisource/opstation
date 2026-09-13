@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpProfitLossScreen extends ConsumerStatefulWidget {
@@ -234,6 +235,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     final scope = ref.watch(branchScopeProvider).valueOrNull ??
         const BranchScope(restricted: false, allowed: []);
     final fmt = const MoneyFmt();
+    final narrow = isNarrow(context);
 
     final revenue = _rows.where((r) => r['account_type'] == 'revenue').toList();
     final cogs    = _rows.where((r) => r['account_type'] == 'expense' && r['account_group'] == 'Cost of Goods Sold').toList();
@@ -246,7 +248,7 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
     final netIncome    = grossProfit - totalOpex;
 
     return Container(
-      color: AppTheme.background, padding: const EdgeInsets.all(32),
+      color: AppTheme.background, padding: EdgeInsets.all(narrow ? 16 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         LayoutBuilder(builder: (_, cc) {
           final narrow = cc.maxWidth < 640;
@@ -263,15 +265,11 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
         const SizedBox(height: 4),
         Text(scope.label(allSelected: _allBranches, selected: branch), style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
-        Row(children: [
+        Wrap(spacing: 8, runSpacing: 8, children: [
           _datePicker('From', _from, (d) { setState(() => _from = d); _load(); }, maxDate: _to),
-          const SizedBox(width: 12),
           _datePicker('To', _to, (d) { setState(() => _to = d); _load(); }, minDate: _from),
-          const SizedBox(width: 12),
           _quickRangeButton('This Month', _setThisMonth),
-          const SizedBox(width: 8),
           _quickRangeButton('This Quarter', _setThisQuarter),
-          const SizedBox(width: 12),
           // "All" means different things to different people: org-wide for an
           // admin, but only the user's OWN branches for an erpUser — which is why
           // BranchScope resolves it rather than passing null blindly. A user with
@@ -286,18 +284,36 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
         ]),
         if (!_loading && _rows.isNotEmpty) ...[
           const SizedBox(height: 12),
-          Row(children: [
-            _card('Revenue', fmt.format(totalRevenue), AppTheme.success),
-            const SizedBox(width: 12),
-            _card('COGS', fmt.format(totalCogs), AppTheme.warning),
-            const SizedBox(width: 12),
-            _card('Gross Profit', fmt.format(grossProfit), AppTheme.primary),
-            const SizedBox(width: 12),
-            _card('Operating Expenses', fmt.format(totalOpex), Colors.orange),
-            const SizedBox(width: 12),
-            _card(netIncome >= 0 ? 'Net Income' : 'Net Loss', fmt.format(netIncome.abs()),
-                netIncome >= 0 ? AppTheme.success : AppTheme.danger),
-          ]),
+          Builder(builder: (_) {
+            final cards = <_CardData>[
+              _CardData('Revenue', fmt.format(totalRevenue), AppTheme.success),
+              _CardData('COGS', fmt.format(totalCogs), AppTheme.warning),
+              _CardData('Gross Profit', fmt.format(grossProfit), AppTheme.primary),
+              _CardData('Operating Expenses', fmt.format(totalOpex), Colors.orange),
+              _CardData(netIncome >= 0 ? 'Net Income' : 'Net Loss',
+                  fmt.format(netIncome.abs()),
+                  netIncome >= 0 ? AppTheme.success : AppTheme.danger),
+            ];
+            if (narrow) {
+              // Phone: fixed-width cards that scroll sideways instead of being
+              // crushed to a few pixels each.
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  for (var i = 0; i < cards.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 10),
+                    SizedBox(width: 150, child: _cardBox(cards[i])),
+                  ],
+                ]),
+              );
+            }
+            return Row(children: [
+              for (var i = 0; i < cards.length; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                Expanded(child: _cardBox(cards[i])),
+              ],
+            ]);
+          }),
         ],
         const SizedBox(height: 16),
         Expanded(child: Container(
@@ -505,13 +521,22 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
 
   String _fmtNet(MoneyFmt fmt, double v) => v < 0 ? '(${fmt.format(v.abs())})' : fmt.format(v);
 
-  Widget _card(String label, String value, Color color) => Expanded(child: Container(
+  Widget _cardBox(_CardData d) => Container(
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-      Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+      Text(d.label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary),
+          maxLines: 1, overflow: TextOverflow.ellipsis),
       const SizedBox(height: 4),
-      Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+      Text(d.value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: d.color),
+          maxLines: 1, overflow: TextOverflow.ellipsis),
     ]),
-  ));
+  );
+}
+
+class _CardData {
+  final String label;
+  final String value;
+  final Color color;
+  const _CardData(this.label, this.value, this.color);
 }

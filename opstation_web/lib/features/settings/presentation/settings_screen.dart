@@ -170,7 +170,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Container(
       color: AppTheme.background,
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(32),
+        padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Settings',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
