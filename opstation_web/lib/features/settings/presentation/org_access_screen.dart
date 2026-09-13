@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
+import '../../auth/auth_controller.dart';
 
 /// Account Linking — join a person's separate per-org accounts under ONE login
 /// so they can switch orgs without logging out.
@@ -20,8 +21,10 @@ class OrgAccessScreen extends ConsumerStatefulWidget {
 }
 
 class _Row {
-  final String email, name, role, orgId, orgName, accountId;
-  _Row(this.email, this.name, this.role, this.orgId, this.orgName, this.accountId);
+  final String email, name, role, orgId, orgName, accountId, userId;
+  final bool isHome;
+  _Row(this.email, this.name, this.role, this.orgId, this.orgName, this.accountId,
+      {this.userId = '', this.isHome = false});
 }
 
 class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
@@ -49,6 +52,8 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
                 (m['org_id'] as String?) ?? '',
                 (m['org_name'] as String?) ?? '',
                 (m['account_id'] as String?) ?? '',
+                userId: (m['user_id'] as String?) ?? '',
+                isHome: (m['is_home'] as bool?) ?? false,
               ))
           .toList();
       List<Map<String, dynamic>> owned = const [];
@@ -248,6 +253,8 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
   Widget _linkedCard(List<_Row> members) {
     members.sort((a, b) => a.orgName.toLowerCase().compareTo(b.orgName.toLowerCase()));
     final name = members.first.name;
+    final ownedIds = _ownedOrgs.map((o) => o['org_id'] as String).toSet();
+    final myEmail = ref.read(currentUserProvider)?.email?.toLowerCase();
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -287,14 +294,80 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                 ]),
               ),
-              TextButton(
-                onPressed: () => _confirmUnlink(m.email),
-                child: const Text('Unlink'),
-              ),
+              if (m.isHome)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: AppTheme.textSecondary.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(20)),
+                  child: const Text('Home',
+                      style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+                )
+              else if (myEmail != null && m.email.toLowerCase() == myEmail)
+                TextButton(
+                  onPressed: () => _confirmLeave(m),
+                  style: TextButton.styleFrom(foregroundColor: AppTheme.warning),
+                  child: const Text('Leave'),
+                )
+              else if (ownedIds.contains(m.orgId))
+                TextButton(
+                  onPressed: () => _confirmRemove(m),
+                  style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+                  child: const Text('Remove'),
+                ),
             ]),
           ),
       ]),
     );
+  }
+
+  Future<void> _confirmLeave(_Row m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Leave organization?'),
+        content: Text('You will lose access to ${m.orgName} and it will no longer appear in your switcher. Your home organization is unaffected.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.warning),
+            onPressed: () => Navigator.pop(c, true), child: const Text('Leave')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.rpc('leave_org', params: {'p_org': m.orgId});
+      await _load();
+      _snack('Left ${m.orgName}');
+    } catch (e) {
+      _snack('Could not leave: ${e.toString().replaceFirst('Exception: ', '').split('\n').first}');
+    }
+  }
+
+  Future<void> _confirmRemove(_Row m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Remove from organization?'),
+        content: Text('${m.name} (${m.email}) will lose access to ${m.orgName}. This removes the seat you invited them into; their home organization is unaffected.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(c, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.rpc('remove_member',
+          params: {'p_account_id': m.accountId, 'p_org': m.orgId});
+      await _load();
+      _snack('Removed ${m.name} from ${m.orgName}');
+    } catch (e) {
+      _snack('Could not remove: ${e.toString().replaceFirst('Exception: ', '').split('\n').first}');
+    }
   }
 
   Future<void> _confirmUnlink(String email) async {
