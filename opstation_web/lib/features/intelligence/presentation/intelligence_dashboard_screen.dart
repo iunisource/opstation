@@ -339,7 +339,7 @@ class _IntelligenceDashboardScreenState
         // [10] trend history — bounded to last 12 months, minimal columns.
         pageAll((f, t) => client
             .from('placement_audit')
-            .select('customer_id, is_present, surveyed_at')
+            .select('customer_id, product_id, is_present, surveyed_at')
             .eq('org_id', orgId)
             .gte('surveyed_at', trendSinceIso)
             .range(f, t)),
