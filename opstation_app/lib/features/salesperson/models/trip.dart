@@ -153,6 +153,9 @@ class Trip {
   bool get isOpen => endedAt == null;
   bool get isClosed => !isOpen;
 
+  /// Open-ended route the salesperson builds by adding customers on the fly.
+  bool get isFree => routeKind == RouteKind.free;
+
   int get totalStops => stopSnapshot.length;
 
   /// For each customer on the route, the *final* status for this trip
@@ -244,6 +247,7 @@ class Trip {
     DateTime? endedAt,
     TripCloseReason? closeReason,
     List<Visit>? visits,
+    List<Customer>? stopSnapshot,
     double? endLat,
     double? endLng,
   }) {
@@ -252,7 +256,7 @@ class Trip {
       routeId: routeId,
       routeName: routeName,
       routeKind: routeKind,
-      stopSnapshot: stopSnapshot,
+      stopSnapshot: stopSnapshot ?? this.stopSnapshot,
       startedAt: startedAt,
       endedAt: endedAt ?? this.endedAt,
       closeReason: closeReason ?? this.closeReason,

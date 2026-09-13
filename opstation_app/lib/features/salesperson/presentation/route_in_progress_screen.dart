@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -12,6 +14,7 @@ import '../../../shared/widgets/status_badge.dart';
 import '../models/customer.dart';
 import '../models/trip.dart';
 import '../providers/trip_controller.dart';
+import '../data/salesperson_repository.dart';
 import '../../reports/presentation/export_pdf_sheet.dart';
 import 'dialogs/mark_visit_dialog.dart';
 import 'dialogs/skip_visit_dialog.dart';
@@ -98,6 +101,33 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
       ),
       builder: (_) => SkipVisitDialog(customer: customer),
     );
+  }
+
+  /// Free route: pick an existing customer (excluding ones already added), add
+  /// them as a stop, then open the normal visit modal immediately.
+  Future<void> _addFreeCustomer(Trip trip) async {
+    final existingIds = trip.stopSnapshot.map((c) => c.id).toSet();
+    final picked = await showModalBottomSheet<Customer>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _FreeCustomerPickerSheet(excludeIds: existingIds),
+    );
+    if (picked == null || !mounted) return;
+    try {
+      await ref.read(tripControllerProvider.notifier).addFreeStop(picked);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not add customer: $e')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await _openMarkVisit(picked);
   }
 
   Future<void> _completeTrip() async {
@@ -199,6 +229,12 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
         ),
         actions: [
+          if (trip.isFree && !isCompleted)
+            IconButton(
+              tooltip: 'Add customer',
+              icon: const Icon(Icons.person_add_alt_1),
+              onPressed: () => _addFreeCustomer(trip),
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: Center(
@@ -214,6 +250,20 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
       body: Column(
         children: [
           _ProgressHeader(trip: trip),
+          if (trip.isFree && !isCompleted)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => _addFreeCustomer(trip),
+                  icon: const Icon(Icons.person_add_alt_1, size: 18),
+                  label: Text(trip.stopSnapshot.isEmpty
+                      ? 'Add first customer'
+                      : 'Add customer'),
+                ),
+              ),
+            ),
           if (!isCompleted) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -1076,4 +1126,145 @@ String _thousands(int v) {
     b.write(s[i]);
   }
   return b.toString();
+}
+
+/// Free-route "Add customer" picker: search existing customers and pick one to
+/// add as a stop. Excludes customers already on the route (once per free route).
+class _FreeCustomerPickerSheet extends ConsumerStatefulWidget {
+  final Set<String> excludeIds;
+  const _FreeCustomerPickerSheet({required this.excludeIds});
+
+  @override
+  ConsumerState<_FreeCustomerPickerSheet> createState() =>
+      _FreeCustomerPickerSheetState();
+}
+
+class _FreeCustomerPickerSheetState
+    extends ConsumerState<_FreeCustomerPickerSheet> {
+  final _ctrl = TextEditingController();
+  List<Customer> _results = const [];
+  bool _searching = false;
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search(String raw) async {
+    final q = raw.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _results = const [];
+        _searching = false;
+      });
+      return;
+    }
+    setState(() => _searching = true);
+    try {
+      final repo = ref.read(salespersonRepositoryProvider);
+      final rows = await repo.searchCustomers(q);
+      if (!mounted) return;
+      setState(() {
+        _results =
+            rows.where((c) => !widget.excludeIds.contains(c.id)).toList();
+        _searching = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _searching = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        top: false,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+                color: AppColors.borderLight,
+                borderRadius: BorderRadius.circular(2)),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Add customer',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TextField(
+              controller: _ctrl,
+              autofocus: true,
+              onChanged: (v) {
+                _debounce?.cancel();
+                _debounce =
+                    Timer(const Duration(milliseconds: 300), () => _search(v));
+              },
+              decoration: InputDecoration(
+                hintText: 'Search by name, code or phone',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searching
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2)))
+                    : null,
+                isDense: true,
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+          Flexible(
+            child: _results.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      _ctrl.text.trim().isEmpty
+                          ? 'Type to search your customers.'
+                          : (_searching ? '' : 'No matching customers.'),
+                      style:
+                          const TextStyle(color: AppColors.textSecondaryLight),
+                    ),
+                  )
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: _results.length,
+                    itemBuilder: (_, i) {
+                      final c = _results[i];
+                      final sub = [
+                        if (c.code.isNotEmpty) c.code,
+                        if (c.address.isNotEmpty) c.address,
+                      ].join(' · ');
+                      return ListTile(
+                        leading: const Icon(Icons.storefront_outlined,
+                            color: AppColors.primary),
+                        title: Text(c.shopName,
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: sub.isEmpty
+                            ? null
+                            : Text(sub,
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                        onTap: () => Navigator.of(context).pop(c),
+                      );
+                    },
+                  ),
+          ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
 }

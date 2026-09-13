@@ -308,6 +308,45 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
                   }
                 },
               ),
+              ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryLight,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.route_outlined, color: AppColors.primary),
+                ),
+                title: const Text('Free route',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle:
+                    const Text('Open a route and add customers as you go'),
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  try {
+                    await ref
+                        .read(tripControllerProvider.notifier)
+                        .startFreeTrip();
+                    ref
+                        .read(soundControllerProvider.notifier)
+                        .play(AppSound.routeStart);
+                    if (!mounted) return;
+                    context.push('/salesperson/route');
+                  } on StateError catch (e) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(e.message)),
+                    );
+                  } catch (e) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to start free route: $e')),
+                    );
+                  }
+                },
+              ),
               const SizedBox(height: 8),
             ],
           ),

@@ -1,6 +1,6 @@
 import 'customer.dart';
 
-enum RouteKind { oneTime, recurring }
+enum RouteKind { oneTime, recurring, free }
 
 /// A route template — a named, ordered list of customers assigned to a user.
 class SalesRoute {
@@ -20,4 +20,5 @@ class SalesRoute {
 
   bool get isOneTime => kind == RouteKind.oneTime;
   bool get isRecurring => kind == RouteKind.recurring;
+  bool get isFree => kind == RouteKind.free;
 }

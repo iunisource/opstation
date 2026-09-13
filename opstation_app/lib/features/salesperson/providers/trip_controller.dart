@@ -163,6 +163,32 @@ class TripController extends AsyncNotifier<TripState> {
     return trip;
   }
 
+  /// Start an open-ended "Free Route": a trip with no predefined stops. The
+  /// salesperson adds customers on the fly (addFreeStop) and each add opens the
+  /// normal visit modal. Closes and summarizes exactly like a regular route.
+  Future<Trip> startFreeTrip() async {
+    final route = SalesRoute(
+      id: _newId('freeroute'),
+      name: 'Free Route',
+      stops: const [],
+      kind: RouteKind.free,
+    );
+    return startTrip(route);
+  }
+
+  /// Append a customer as a stop to the active free route (once per route),
+  /// persisting + syncing the stop so it renders and can be visited normally.
+  Future<void> addFreeStop(Customer customer) async {
+    final s = state.valueOrNull;
+    final active = s?.active;
+    if (s == null || active == null) throw StateError('No active trip.');
+    if (active.stopSnapshot.any((c) => c.id == customer.id)) return; // once per route
+    await _repo.addTripStop(active.id, customer.id, active.stopSnapshot.length);
+    final updated =
+        active.copyWith(stopSnapshot: [...active.stopSnapshot, customer]);
+    state = AsyncData(s.copyWith(active: updated));
+  }
+
   Future<void> completeTrip() async {
     final s = state.valueOrNull;
     final active = s?.active;

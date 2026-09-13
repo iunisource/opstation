@@ -468,6 +468,28 @@ class SalespersonRepository {
     } catch (_) {}
   }
 
+  /// Append one customer as a stop to an existing (free) trip, then push it.
+  /// Used by the Free Route flow, where stops are added on the fly rather than
+  /// snapshotted at start. The customer already exists locally (picked from the
+  /// customer list), so _tripFromRow can resolve it on the next read.
+  Future<void> addTripStop(String tripId, String customerId, int position) async {
+    await _db.into(_db.tripStops).insert(
+          TripStopsCompanion.insert(
+            tripId: tripId,
+            customerId: customerId,
+            position: position,
+          ),
+        );
+    try {
+      final rows = await (_db.select(_db.tripStops)
+            ..where((s) => s.tripId.equals(tripId) & s.customerId.equals(customerId)))
+          .get();
+      for (final s in rows) {
+        await _sync?.pushTripStop(s);
+      }
+    } catch (_) {}
+  }
+
   TripsCompanion _tripCompanion(Trip t, {String? orgIdOverride}) {
     return TripsCompanion.insert(
       id: t.id,
@@ -517,8 +539,9 @@ class SalespersonRepository {
       id: r.id,
       routeId: r.routeId,
       routeName: r.routeName,
-      routeKind:
-          r.routeKind == 'oneTime' ? RouteKind.oneTime : RouteKind.recurring,
+      routeKind: r.routeKind == 'oneTime'
+          ? RouteKind.oneTime
+          : (r.routeKind == 'free' ? RouteKind.free : RouteKind.recurring),
       stopSnapshot: ordered,
       startedAt: r.startedAt,
       endedAt: r.endedAt,
