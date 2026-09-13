@@ -43,6 +43,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   String? get _userId => ref.read(currentUserProvider)?.id;
   String get _userName => ref.read(currentUserProvider)?.name ?? ref.read(currentUserProvider)?.id ?? '-';
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin; }
+  bool get _isMaster { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin; }
   DateTime _d0(DateTime d) => DateTime(d.year, d.month, d.day);
   bool get _canNext => _d0(_date).isBefore(_d0(DateTime.now()));
 
@@ -246,6 +247,64 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   }
 
   @override
+  // Master-admin config for the twice-daily attendance summary emails.
+  // Saved to app_config: org.attendance_summary (on/off) + org.attendance_summary_emails.
+  // The pg_cron-driven attendance-summary edge function reads these per org.
+  Future<void> _summaryEmailsDialog() async {
+    final orgId = _orgId;
+    if (orgId == null) { _snack('Not authenticated'); return; }
+    final client = Supabase.instance.client;
+    bool enabled = false;
+    String emails = '';
+    try {
+      final t = await client.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', 'org.attendance_summary').maybeSingle();
+      final e = await client.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', 'org.attendance_summary_emails').maybeSingle();
+      enabled = ['true', '1', 'on', 'yes'].contains('${t?['value'] ?? ''}'.toLowerCase());
+      emails = '${e?['value'] ?? ''}';
+    } catch (_) {}
+    if (!mounted) return;
+    final ctrl = TextEditingController(text: emails);
+    await showDialog(context: context, builder: (ctx) {
+      bool en = enabled;
+      return StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
+        title: const Text('Attendance summary emails'),
+        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('A summary is emailed twice daily — 9:30am and 6:30pm PKT — to the addresses below: counts plus who is late, absent, or not checked out.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 14),
+          SwitchListTile(contentPadding: EdgeInsets.zero, value: en, dense: true,
+              title: const Text('Send daily summary', style: TextStyle(fontSize: 14)),
+              onChanged: (v) => setLocal(() => en = v)),
+          const SizedBox(height: 8),
+          TextField(controller: ctrl, minLines: 2, maxLines: 5,
+              decoration: const InputDecoration(labelText: 'Recipient emails', hintText: 'ceo@acme.com, hr@acme.com',
+                  border: OutlineInputBorder(), isDense: true)),
+          const SizedBox(height: 6),
+          const Text('Separate multiple addresses with commas or new lines.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () async {
+            final cleaned = ctrl.text.split(RegExp(r'[,\n;]')).map((e) => e.trim()).where((e) => e.isNotEmpty).join(', ');
+            try {
+              await client.from('app_config').upsert(
+                  {'key': 'org.attendance_summary', 'value': en ? 'true' : 'false', 'org_id': orgId, 'branch_id': ''},
+                  onConflict: 'key,org_id,branch_id');
+              await client.from('app_config').upsert(
+                  {'key': 'org.attendance_summary_emails', 'value': cleaned, 'org_id': orgId, 'branch_id': ''},
+                  onConflict: 'key,org_id,branch_id');
+              if (ctx.mounted) Navigator.pop(ctx);
+              _snack('Saved attendance summary settings');
+            } catch (e) { _snack('Save failed: $e'); }
+          }, child: const Text('Save')),
+        ],
+      ));
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final access = ref.watch(accessSyncProvider);
     _canWrite = _isAdmin;  // attendance editable by admin / masterAdmin / superAdmin only
@@ -275,6 +334,8 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           const SizedBox(width: 8),
           OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 15), label: const Text('Print register', style: TextStyle(fontSize: 12)), onPressed: _printDialog),
           const SizedBox(width: 8),
+          if (_isMaster) OutlinedButton.icon(icon: const Icon(Icons.mark_email_read_outlined, size: 15), label: const Text('Summary emails', style: TextStyle(fontSize: 12)), onPressed: _summaryEmailsDialog),
+          if (_isMaster) const SizedBox(width: 8),
           if (_canWrite) PopupMenuButton<String>(tooltip: 'Mark all', onSelected: _markAll,
             itemBuilder: (_) => _statuses.map((s) => PopupMenuItem(value: s['v'], child: Text('Mark all ${s['l']}'))).toList(),
             child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
