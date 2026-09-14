@@ -383,6 +383,73 @@ class SupabaseSyncService {
     return out;
   }
 
+  /// Login-blocking essentials only: everything the home screen needs to work
+  /// offline (org, users, customers, catalog, routes + their stops and
+  /// assignments). The heavy history is fetched separately by [pullHistory] in
+  /// the background so login isn't slow.
+  Future<OrgPullData> pullEssentials(String orgId) async {
+    final parents = await Future.wait([
+      _client.from('orgs').select().eq('id', orgId),                            // 0
+      _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'), // 1
+      _pullAllCustomers(orgId),                                                 // 2
+      _pullAllProducts(orgId),                                                  // 3
+      _client.from('sales_routes').select().eq('org_id', orgId),               // 4
+    ]);
+    final routes = List<Map<String, dynamic>>.from(parents[4]);
+    final routeIds = [for (final r in routes) r['id'] as String];
+    final children = await Future.wait([
+      _pullChildIn('route_stops', 'route_id', routeIds),       // 0
+      _pullChildIn('route_assignments', 'route_id', routeIds), // 1
+    ]);
+    return OrgPullData(
+      orgs: List<Map<String, dynamic>>.from(parents[0]),
+      users: List<Map<String, dynamic>>.from(parents[1]),
+      customers: List<Map<String, dynamic>>.from(parents[2]),
+      products: List<Map<String, dynamic>>.from(parents[3]),
+      routes: routes,
+      routeStops: children[0],
+      routeAssignments: children[1],
+      trips: const [],
+      tripStops: const [],
+      visits: const [],
+      deliveries: const [],
+      deliveryStops: const [],
+    );
+  }
+
+  /// The heavy history — trips, trip_stops, visits, deliveries, delivery_stops —
+  /// scoped to this org's trips/deliveries (batched + paginated). Pulled in the
+  /// background after login so it never blocks getting into the app.
+  Future<OrgPullData> pullHistory(String orgId) async {
+    final parents = await Future.wait([
+      _client.from('trips').select().or('org_id.eq.$orgId,org_id.is.null'),     // 0
+      _client.from('deliveries').select().or('org_id.eq.$orgId,org_id.is.null'), // 1
+    ]);
+    final trips = List<Map<String, dynamic>>.from(parents[0]);
+    final deliveries = List<Map<String, dynamic>>.from(parents[1]);
+    final tripIds = [for (final t in trips) t['id'] as String];
+    final deliveryIds = [for (final d in deliveries) d['id'] as String];
+    final children = await Future.wait([
+      _pullChildIn('trip_stops', 'trip_id', tripIds),             // 0
+      _pullChildIn('visits', 'trip_id', tripIds),                 // 1
+      _pullChildIn('delivery_stops', 'delivery_id', deliveryIds), // 2
+    ]);
+    return OrgPullData(
+      orgs: const [],
+      users: const [],
+      customers: const [],
+      products: const [],
+      routes: const [],
+      routeStops: const [],
+      routeAssignments: const [],
+      trips: trips,
+      tripStops: children[0],
+      visits: children[1],
+      deliveries: deliveries,
+      deliveryStops: children[2],
+    );
+  }
+
   Future<List<Map<String, dynamic>>> pullTable(
       String table, String? orgId) async {
     if (orgId == null) {

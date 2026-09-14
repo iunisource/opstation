@@ -140,15 +140,18 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
             organizationName: null, // resolved after pull below
           );
 
-          // Pull org data — blocking so home screen has data on arrival.
-          // No outer catch: if this fails we surface the error so login
-          // doesn't silently complete with no data.
+          // Fresh install: block only on the ESSENTIALS the home screen needs
+          // (org, users, customers, catalog, routes + stops/assignments) so
+          // login is quick, then pull the heavy history (trips/visits/
+          // deliveries/intelligence) in the background. Previously login
+          // blocked on the entire history, which made first login very slow on
+          // large orgs.
           if (orgId != null) {
-            print('AUTH PULL: starting for orgId=$orgId');
+            print('AUTH PULL: essentials for orgId=$orgId');
             try {
-              await pullService.pullOrgData(orgId)
-                  .timeout(const Duration(seconds: 60));
-              print('AUTH PULL: completed');
+              await pullService.pullEssentials(orgId)
+                  .timeout(const Duration(seconds: 45));
+              print('AUTH PULL: essentials completed');
             } catch (e, st) {
               print('AUTH PULL ERROR: $e');
               print(st);
@@ -164,6 +167,13 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
               organizationId: user.organizationId,
               organizationName: resolvedName,
             );
+            // History in the background — fire and forget.
+            final bgOrgId = orgId;
+            pullService
+                .pullHistory(bgOrgId)
+                .timeout(const Duration(seconds: 180))
+                .then((_) => print('AUTH PULL: history completed'))
+                .catchError((e) => print('AUTH PULL: history error: $e'));
           } else {
             try {
               await pullService.pullUserRecord(remoteUser)
@@ -227,23 +237,28 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
             organizationName: null, // resolved after pull below
           );
 
-          // Pull fresh org data so cached data is current.
+          // Returning user: the local cache already holds this org's data, so
+          // DON'T block login on a full re-pull — that made every login crawl
+          // on large orgs. Resolve the org name from cache, complete login now,
+          // and refresh from the server in the background.
           if (user.organizationId != null) {
-            try {
-              await pullService.pullOrgData(user.organizationId!)
-                  .timeout(const Duration(seconds: 60));
-              final resolvedName = await _resolveOrgName(user.organizationId!);
-              user = app.AuthUser(
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                organizationId: user.organizationId,
-                organizationName: resolvedName,
-              );
-            } catch (e) {
-              print('AUTH PULL ERROR (returning user): $e');
-            }
+            final orgId = user.organizationId!;
+            final resolvedName = await _resolveOrgName(orgId);
+            user = app.AuthUser(
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              organizationId: user.organizationId,
+              organizationName: resolvedName,
+            );
+            // Background refresh — fire and forget; non-fatal on error since
+            // the app is already usable from cache.
+            pullService
+                .pullOrgData(orgId)
+                .timeout(const Duration(seconds: 180))
+                .then((_) => print('AUTH BG PULL: done'))
+                .catchError((e) => print('AUTH BG PULL ERROR: $e'));
           }
         }
       } else {

@@ -85,6 +85,41 @@ class SupabasePullService {
     await _pullIntelligenceTables(orgId);
   }
 
+  /// Login-blocking essentials: writes only what the home screen needs to work
+  /// offline. Pair with [pullHistory] (run in the background) for the rest.
+  Future<void> pullEssentials(String orgId) async {
+    final data = await _sync.pullEssentials(orgId);
+    await _db.transaction(() async {
+      await _pullOrgs(data.orgs);
+      // Same per-org set-replace semantics as pullOrgData: refresh only this
+      // org's users, and never wipe the org if the pull returned none.
+      if (data.users.isNotEmpty) {
+        await (_db.delete(_db.users)..where((u) => u.orgId.equals(orgId))).go();
+      }
+      await _pullUsers(data.users);
+      await _pullCustomers(data.customers);
+      await _pullCatalogProducts(data.products);
+      await _pullRoutes(data.routes);
+      await _pullRouteStops(data.routeStops);
+      await _pullRouteAssignments(data.routeAssignments);
+    });
+  }
+
+  /// Background history pull: trips, stops, visits, deliveries + Intelligence.
+  /// Safe to call unawaited after login — the app is already usable from the
+  /// essentials, and this just fills in past activity.
+  Future<void> pullHistory(String orgId) async {
+    final data = await _sync.pullHistory(orgId);
+    await _db.transaction(() async {
+      await _pullTrips(data.trips);
+      await _pullTripStops(data.tripStops);
+      await _pullVisits(data.visits);
+      await _pullDeliveries(data.deliveries);
+      await _pullDeliveryStops(data.deliveryStops);
+    });
+    await _pullIntelligenceTables(orgId);
+  }
+
   /// Fast targeted pull — today's trips (plus their stops and visits) for one
   /// org. Team-monitoring reads local Drift, which previously only refreshed
   /// at login, so an admin's Live tab went stale through the day and showed
