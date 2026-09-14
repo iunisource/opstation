@@ -67,6 +67,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   String _listSearch = '';
   String _statusFilter = 'all'; // all | queued | in_progress | completed | cancelled
   bool _groupByCustomer = false; // group the active list by customer
+  String? _custFilter; // list filter: show only this customer's jobs (null = all)
   bool _completedExpanded = false; // the collapsible "Completed" drawer section
   bool _drawerOpen = true;
 
@@ -1960,15 +1961,34 @@ $runSection
     final byBranch = branchId == null
         ? _jobs
         : _jobs.where((j) => j['branch_id'] == branchId).toList();
+
+    // Customers that actually have jobs (in the current branch scope) — the only
+    // options offered in the customer filter. Sorted by label.
+    final custIds = <String>{
+      for (final j in byBranch)
+        if (j['customer_id'] != null && (j['customer_id'] as String).isNotEmpty)
+          j['customer_id'] as String
+    };
+    final custOptions = custIds
+        .map((id) => MapEntry(id, _custLabel[id] ?? id))
+        .toList()
+      ..sort((a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()));
+
     final searched = _listSearch.isEmpty ? byBranch : byBranch.where((j) {
       return matchesQuery('${j['job_number'] ?? ''} ${_prodLabel[j['product_id']] ?? ''}', _listSearch);
     }).toList();
 
+    // Customer filter (in addition to search). Falls back to "all" if the chosen
+    // customer no longer has jobs in scope (e.g. after a branch change).
+    final custFiltered = (_custFilter == null || !custIds.contains(_custFilter))
+        ? searched
+        : searched.where((j) => j['customer_id'] == _custFilter).toList();
+
     // Status filter chips (in addition to search).
     String stOf(Map<String, dynamic> j) => (j['status'] as String? ?? 'queued');
     final filtered = _statusFilter == 'all'
-        ? searched
-        : searched.where((j) => stOf(j) == _statusFilter).toList();
+        ? custFiltered
+        : custFiltered.where((j) => stOf(j) == _statusFilter).toList();
 
     // Jobs awaiting acknowledgement bubble to the very top (and blink) until
     // someone notes them — regardless of the normal priority/serial order.
@@ -2029,6 +2049,47 @@ $runSection
                   _statusChip('Voided', 'cancelled'),
                 ]),
               ),
+              // Customer filter — only customers that have jobs are listed.
+              if (custOptions.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(children: [
+                  const Icon(Icons.person_outline, size: 15, color: AppTheme.textSecondary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: DropdownButtonFormField<String?>(
+                      value: custIds.contains(_custFilter) ? _custFilter : null,
+                      isDense: true,
+                      isExpanded: true,
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textPrimary),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        border: OutlineInputBorder(),
+                      ),
+                      hint: const Text('All customers', style: TextStyle(fontSize: 11)),
+                      items: [
+                        const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('All customers', style: TextStyle(fontSize: 11))),
+                        for (final c in custOptions)
+                          DropdownMenuItem<String?>(
+                              value: c.key,
+                              child: Text(c.value, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis)),
+                      ],
+                      onChanged: (v) => setState(() => _custFilter = v),
+                    ),
+                  ),
+                  if (_custFilter != null)
+                    IconButton(
+                      icon: const Icon(Icons.clear, size: 15),
+                      tooltip: 'Clear customer filter',
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(),
+                      padding: const EdgeInsets.only(left: 6),
+                      onPressed: () => setState(() => _custFilter = null),
+                    ),
+                ]),
+              ],
               const SizedBox(height: 6),
               Align(
                 alignment: Alignment.centerLeft,
