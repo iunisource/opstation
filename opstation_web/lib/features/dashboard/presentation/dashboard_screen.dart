@@ -751,34 +751,22 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
           .toIso8601String();
 
       final orgId = widget.orgId;
-      // route_stops / route_assignments carry NO org_id. Fetching them unscoped
-      // pulls EVERY org's route plan — which inflated "not visited" to a rep's
-      // entire cross-org customer base and slowed the query. Scope them to this
-      // org's own routes (sales_routes has org_id) so "not visited" is only the
-      // customers on the rep's routes within this org.
-      final orgRoutesRows = await client
-          .from('sales_routes')
-          .select('id')
-          .eq('org_id', orgId);
-      final orgRouteIds = (orgRoutesRows as List)
-          .map((r) => (r as Map)['id'] as String)
-          .toList(growable: false);
-
+      // route_stops / route_assignments now carry org_id (backfilled + indexed),
+      // so scope them directly instead of first fetching sales_routes and doing a
+      // big route_id IN (...) filter. That drops a whole round-trip and lets each
+      // query use its (org_id) index — the main win for this modal's load time.
       final results = await Future.wait<dynamic>([
         client
             .from('visits')
             .select(
                 'user_id, user_name, customer_id, amount, timestamp, status, customers(shop_name)')
+            .eq('org_id', orgId)
             .gte('timestamp', todayStart)
             .lt('timestamp', tomorrowStart),
-        // Standing route plan, scoped to THIS org's routes: who is assigned to
-        // which route, and which customers each route carries.
-        orgRouteIds.isEmpty
-            ? Future<dynamic>.value(const <dynamic>[])
-            : client.from('route_assignments').select('user_id, route_id').inFilter('route_id', orgRouteIds),
-        orgRouteIds.isEmpty
-            ? Future<dynamic>.value(const <dynamic>[])
-            : client.from('route_stops').select('route_id, customer_id').inFilter('route_id', orgRouteIds),
+        // Standing route plan for THIS org: who is assigned to which route, and
+        // which customers each route carries.
+        client.from('route_assignments').select('user_id, route_id').eq('org_id', orgId),
+        client.from('route_stops').select('route_id, customer_id').eq('org_id', orgId),
         client.from('customers').select('id, shop_name').eq('org_id', orgId),
       ]);
 
@@ -1074,25 +1062,8 @@ class _SalespersonExpansion extends StatelessWidget {
             const Divider(height: 1),
             const SizedBox(height: 8),
             for (final v in sp.visits) _VisitDetailRow(v: v),
-            if (sp.otherStops.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Row(children: [
-                Expanded(child: Container(height: 1, color: AppTheme.border)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text(
-                    'Skipped / not visited (${sp.otherStops.length})',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.textSecondary),
-                  ),
-                ),
-                Expanded(child: Container(height: 1, color: AppTheme.border)),
-              ]),
-              const SizedBox(height: 6),
-              for (final o in sp.otherStops) _OtherStopRow(o: o),
-            ],
+            if (sp.otherStops.isNotEmpty)
+              _CollapsibleOtherStops(stops: sp.otherStops),
           ],
         ),
       ),
@@ -1194,6 +1165,54 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
       default:
         return status.isEmpty ? '-' : status;
     }
+  }
+}
+
+// Skipped / not-visited list — collapsed by default. The rows are built only
+// when opened, so a rep with 180+ unvisited stops doesn't render them all up
+// front (keeps the modal snappy).
+class _CollapsibleOtherStops extends StatefulWidget {
+  final List<_OtherStop> stops;
+  const _CollapsibleOtherStops({required this.stops});
+  @override
+  State<_CollapsibleOtherStops> createState() => _CollapsibleOtherStopsState();
+}
+
+class _CollapsibleOtherStopsState extends State<_CollapsibleOtherStops> {
+  bool _open = false;
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const SizedBox(height: 8),
+      InkWell(
+        onTap: () => setState(() => _open = !_open),
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(children: [
+            Expanded(child: Container(height: 1, color: AppTheme.border)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(_open ? Icons.expand_less : Icons.expand_more,
+                    size: 15, color: AppTheme.textSecondary),
+                const SizedBox(width: 2),
+                Text('Skipped / not visited (${widget.stops.length})',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textSecondary)),
+              ]),
+            ),
+            Expanded(child: Container(height: 1, color: AppTheme.border)),
+          ]),
+        ),
+      ),
+      if (_open) ...[
+        const SizedBox(height: 6),
+        for (final o in widget.stops) _OtherStopRow(o: o),
+      ],
+    ]);
   }
 }
 
