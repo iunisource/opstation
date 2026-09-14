@@ -300,34 +300,87 @@ class SupabaseSyncService {
   }
 
   Future<OrgPullData> pullOrgData(String orgId) async {
-    final results = await Future.wait([
-      _client.from('orgs').select().eq('id', orgId),
-      _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'),
-      _pullAllCustomers(orgId),
-      _pullAllProducts(orgId),
-      _client.from('sales_routes').select().eq('org_id', orgId),
-      _client.from('route_stops').select(),
-      _client.from('route_assignments').select(),
-      _client.from('trips').select().or('org_id.eq.$orgId,org_id.is.null'),
-      _client.from('trip_stops').select(),
-      _client.from('visits').select(),
-      _client.from('deliveries').select().or('org_id.eq.$orgId,org_id.is.null'),
-      _client.from('delivery_stops').select(),
+    // Phase 1 — parents, every query org-scoped (parallel). The child tables
+    // (route_stops, route_assignments, trip_stops, visits, delivery_stops)
+    // carry no org_id, so they used to be pulled with a bare .select() and
+    // filtered by RLS afterward. On a large org that unfiltered scan (visits
+    // especially) exceeded the DB statement timeout — surfacing as
+    // "Could not load org data … 57014" — and was silently capped at 1000
+    // rows. We now fetch the parents first, then each child scoped to those
+    // parent ids (Phase 2), so every query is bounded and index-friendly.
+    final parents = await Future.wait([
+      _client.from('orgs').select().eq('id', orgId),                            // 0
+      _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'), // 1
+      _pullAllCustomers(orgId),                                                 // 2
+      _pullAllProducts(orgId),                                                  // 3
+      _client.from('sales_routes').select().eq('org_id', orgId),               // 4
+      _client.from('trips').select().or('org_id.eq.$orgId,org_id.is.null'),    // 5
+      _client.from('deliveries').select().or('org_id.eq.$orgId,org_id.is.null'), // 6
     ]);
+    final orgs = List<Map<String, dynamic>>.from(parents[0]);
+    final users = List<Map<String, dynamic>>.from(parents[1]);
+    final customers = List<Map<String, dynamic>>.from(parents[2]);
+    final products = List<Map<String, dynamic>>.from(parents[3]);
+    final routes = List<Map<String, dynamic>>.from(parents[4]);
+    final trips = List<Map<String, dynamic>>.from(parents[5]);
+    final deliveries = List<Map<String, dynamic>>.from(parents[6]);
+
+    // Phase 2 — children scoped to the parents just fetched.
+    final routeIds = [for (final r in routes) r['id'] as String];
+    final tripIds = [for (final t in trips) t['id'] as String];
+    final deliveryIds = [for (final d in deliveries) d['id'] as String];
+    final children = await Future.wait([
+      _pullChildIn('route_stops', 'route_id', routeIds),          // 0
+      _pullChildIn('route_assignments', 'route_id', routeIds),    // 1
+      _pullChildIn('trip_stops', 'trip_id', tripIds),             // 2
+      _pullChildIn('visits', 'trip_id', tripIds),                 // 3
+      _pullChildIn('delivery_stops', 'delivery_id', deliveryIds), // 4
+    ]);
+
     return OrgPullData(
-      orgs: List<Map<String, dynamic>>.from(results[0]),
-      users: List<Map<String, dynamic>>.from(results[1]),
-      customers: List<Map<String, dynamic>>.from(results[2]),
-      products: List<Map<String, dynamic>>.from(results[3]),
-      routes: List<Map<String, dynamic>>.from(results[4]),
-      routeStops: List<Map<String, dynamic>>.from(results[5]),
-      routeAssignments: List<Map<String, dynamic>>.from(results[6]),
-      trips: List<Map<String, dynamic>>.from(results[7]),
-      tripStops: List<Map<String, dynamic>>.from(results[8]),
-      visits: List<Map<String, dynamic>>.from(results[9]),
-      deliveries: List<Map<String, dynamic>>.from(results[10]),
-      deliveryStops: List<Map<String, dynamic>>.from(results[11]),
+      orgs: orgs,
+      users: users,
+      customers: customers,
+      products: products,
+      routes: routes,
+      routeStops: children[0],
+      routeAssignments: children[1],
+      trips: trips,
+      tripStops: children[2],
+      visits: children[3],
+      deliveries: deliveries,
+      deliveryStops: children[4],
     );
+  }
+
+  /// Fetch [table] for a set of parent ids via [fkColumn], batched so the id
+  /// list never overflows the request URL and paginated past PostgREST's
+  /// 1000-row cap. Scoping by an indexed foreign key keeps each query bounded
+  /// and fast — unlike a bare full-table .select() that RLS filters row by row.
+  Future<List<Map<String, dynamic>>> _pullChildIn(
+      String table, String fkColumn, List<String> parentIds) async {
+    final out = <Map<String, dynamic>>[];
+    if (parentIds.isEmpty) return out;
+    const batchSize = 100; // keep the in.(...) id list short enough for the URL
+    const pageSize = 1000;
+    for (var i = 0; i < parentIds.length; i += batchSize) {
+      final end =
+          i + batchSize > parentIds.length ? parentIds.length : i + batchSize;
+      final batch = parentIds.sublist(i, end);
+      var offset = 0;
+      while (true) {
+        final page = await _client
+            .from(table)
+            .select()
+            .inFilter(fkColumn, batch)
+            .range(offset, offset + pageSize - 1);
+        final rows = List<Map<String, dynamic>>.from(page);
+        out.addAll(rows);
+        if (rows.length < pageSize) break;
+        offset += pageSize;
+      }
+    }
+    return out;
   }
 
   Future<List<Map<String, dynamic>>> pullTable(
