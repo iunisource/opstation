@@ -37,12 +37,22 @@ class SupabaseAuthService {
   /// Fetch user record from Supabase users table by email.
   Future<Map<String, dynamic>?> getUserByEmail(String email) async {
     try {
+      // An email can belong to more than one org (a person who administers or
+      // works in several orgs has one `users` row per org, all sharing the same
+      // email). Using .maybeSingle() would throw on that — which surfaced as a
+      // false "Account not found" at login — so fetch all matching rows and pick
+      // the home-org row (id == account_id) when there's more than one.
       final res = await _client
           .from('users')
           .select()
-          .eq('email', email.toLowerCase().trim())
-          .maybeSingle();
-      return res;
+          .eq('email', email.toLowerCase().trim());
+      final list = List<Map<String, dynamic>>.from(res as List);
+      if (list.isEmpty) return null;
+      if (list.length == 1) return list.first;
+      return list.firstWhere(
+        (r) => r['id'] == r['account_id'],
+        orElse: () => list.first,
+      );
     } catch (_) {
       return null;
     }
