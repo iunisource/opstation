@@ -894,29 +894,19 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         }
       },
     );
-    final mainGroup = DropdownButtonFormField<String?>(
+    final mainGroup = _SearchableFilter(
+      label: 'Main Group',
       value: _mainGroupFilter,
-      isDense: true,
-      isExpanded: true,
-      decoration: const InputDecoration(labelText: 'Main Group', isDense: true),
-      items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(color: AppTheme.textSecondary))),
-        ..._mainGroupOptions.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g, overflow: TextOverflow.ellipsis))),
-      ],
+      options: _mainGroupOptions.toList(),
       onChanged: (v) => setState(() {
         _mainGroupFilter = v;
         if (_groupFilter != null && !_groupOptions.contains(_groupFilter)) _groupFilter = null;
       }),
     );
-    final group = DropdownButtonFormField<String?>(
+    final group = _SearchableFilter(
+      label: 'Group',
       value: _groupFilter,
-      isDense: true,
-      isExpanded: true,
-      decoration: const InputDecoration(labelText: 'Group', isDense: true),
-      items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(color: AppTheme.textSecondary))),
-        ..._groupOptions.map((g) => DropdownMenuItem<String?>(value: g, child: Text(g, overflow: TextOverflow.ellipsis))),
-      ],
+      options: _groupOptions.toList(),
       onChanged: (v) => setState(() => _groupFilter = v),
     );
     final search = TextField(
@@ -1356,6 +1346,114 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
               bal.toStringAsFixed(bal % 1 == 0 ? 0 : 2) + ' ' + entryUom, bal > 0 ? AppTheme.success : AppTheme.danger)),
         ]),
       ]),
+    );
+  }
+}
+
+// Dropdown-style filter with a searchable option list. Tapping opens a dialog
+// with a search box + filtered list, so long Main Group / Group lists are
+// quick to pick from. Returns null for the "All" option.
+class _SearchableFilter extends StatelessWidget {
+  final String label;
+  final String? value;
+  final List<String> options;
+  final ValueChanged<String?> onChanged;
+  const _SearchableFilter({
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () async {
+        final picked = await showDialog<String>(
+          context: context,
+          builder: (_) => _SearchableFilterDialog(
+              label: label, options: options, current: value),
+        );
+        if (picked == null) return; // dismissed — no change
+        onChanged(picked == '__ALL__' ? null : picked);
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(
+            labelText: label, isDense: true, border: const OutlineInputBorder()),
+        child: Row(children: [
+          Expanded(
+            child: Text(value ?? 'All',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 14,
+                    color: value == null ? AppTheme.textSecondary : null)),
+          ),
+          const Icon(Icons.arrow_drop_down, size: 20),
+        ]),
+      ),
+    );
+  }
+}
+
+class _SearchableFilterDialog extends StatefulWidget {
+  final String label;
+  final List<String> options;
+  final String? current;
+  const _SearchableFilterDialog(
+      {required this.label, required this.options, required this.current});
+  @override
+  State<_SearchableFilterDialog> createState() =>
+      _SearchableFilterDialogState();
+}
+
+class _SearchableFilterDialogState extends State<_SearchableFilterDialog> {
+  String _q = '';
+  @override
+  Widget build(BuildContext context) {
+    final ql = _q.trim().toLowerCase();
+    final filtered = ql.isEmpty
+        ? widget.options
+        : widget.options.where((o) => o.toLowerCase().contains(ql)).toList();
+    return AlertDialog(
+      title: Text(widget.label, style: const TextStyle(fontSize: 16)),
+      contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      content: SizedBox(
+        width: 380,
+        height: 420,
+        child: Column(children: [
+          TextField(
+            autofocus: true,
+            decoration: const InputDecoration(
+                hintText: 'Search...',
+                prefixIcon: Icon(Icons.search, size: 18),
+                isDense: true,
+                border: OutlineInputBorder()),
+            onChanged: (v) => setState(() => _q = v),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView(children: [
+              ListTile(
+                dense: true,
+                title: const Text('All'),
+                selected: widget.current == null,
+                onTap: () => Navigator.pop(context, '__ALL__'),
+              ),
+              for (final o in filtered)
+                ListTile(
+                  dense: true,
+                  title: Text(o, overflow: TextOverflow.ellipsis),
+                  selected: widget.current == o,
+                  onTap: () => Navigator.pop(context, o),
+                ),
+            ]),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      ],
     );
   }
 }

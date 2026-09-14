@@ -168,6 +168,8 @@ class _IntelligenceDashboardScreenState
   List<Map<String, dynamic>> _trendCustomers = []; // lazy: id, shop_name, code
   final _trendCustSearchCtrl = TextEditingController();
   bool _trendCustPicking = false;
+  final _trendRouteSearchCtrl = TextEditingController();
+  bool _trendRoutePicking = false;
 
   // Shop names for expanding the "Unassigned" rows, and which rows are open.
   Map<String, String> _custName = {};
@@ -206,6 +208,7 @@ class _IntelligenceDashboardScreenState
   @override
   void dispose() {
     _trendCustSearchCtrl.dispose();
+    _trendRouteSearchCtrl.dispose();
     super.dispose();
   }
 
@@ -1221,9 +1224,25 @@ class _IntelligenceDashboardScreenState
             : (_trendCustomerLabel.isNotEmpty
                 ? _trendCustomerLabel
                 : 'Pick a shop');
-    final routeIds = _routeNames.keys.toList()
-      ..sort((a, b) =>
-          (_routeNames[a] ?? '').compareTo(_routeNames[b] ?? ''));
+    // Only routes that actually have placement audits: a route qualifies if any
+    // of its customers appears in the audit history.
+    final auditedRouteIds = <String>{};
+    for (final a in _allAudits) {
+      final cid = a['customer_id'] as String?;
+      if (cid == null) continue;
+      final rids = _custRoutes[cid];
+      if (rids != null) auditedRouteIds.addAll(rids);
+    }
+    final routeIds = auditedRouteIds
+        .where((r) => _routeNames.containsKey(r))
+        .toList()
+      ..sort((a, b) => (_routeNames[a] ?? '').compareTo(_routeNames[b] ?? ''));
+
+    final rq = _trendRouteSearchCtrl.text.trim().toLowerCase();
+    final routeMatches = routeIds
+        .where((r) => rq.isEmpty || (_routeNames[r] ?? '').toLowerCase().contains(rq))
+        .take(30)
+        .toList();
 
     final q = _trendCustSearchCtrl.text.trim().toLowerCase();
     final custMatches = q.isEmpty
@@ -1252,25 +1271,58 @@ class _IntelligenceDashboardScreenState
               _trendScopeChip('By Shop', 'customer'),
             ]),
         const SizedBox(height: 10),
-        if (_trendScope == 'route')
+        if (_trendScope == 'route') ...[
           SizedBox(
             width: mobile ? double.infinity : 340,
-            child: DropdownButtonFormField<String>(
-              value: _trendRouteId,
-              isExpanded: true,
-              isDense: true,
-              decoration: const InputDecoration(
-                  labelText: 'Route', isDense: true, border: OutlineInputBorder()),
-              items: [
-                for (final rid in routeIds)
-                  DropdownMenuItem(
-                      value: rid,
-                      child: Text(_routeNames[rid] ?? '',
-                          overflow: TextOverflow.ellipsis)),
-              ],
-              onChanged: (v) => setState(() => _trendRouteId = v),
+            child: TextField(
+              controller: _trendRouteSearchCtrl,
+              decoration: InputDecoration(
+                labelText: 'Route',
+                hintText: _trendRouteId != null
+                    ? (_routeNames[_trendRouteId] ?? 'Route')
+                    : 'Search route with audits...',
+                isDense: true,
+                prefixIcon: const Icon(Icons.search, size: 16),
+                border: const OutlineInputBorder(),
+              ),
+              onTap: () => setState(() => _trendRoutePicking = true),
+              onChanged: (_) => setState(() => _trendRoutePicking = true),
             ),
           ),
+          if (routeIds.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('No routes have audits yet.',
+                  style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            ),
+          if (_trendRoutePicking && routeMatches.isNotEmpty)
+            Container(
+              width: mobile ? double.infinity : 340,
+              margin: const EdgeInsets.only(top: 2),
+              constraints: const BoxConstraints(maxHeight: 220),
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: AppTheme.border),
+                  borderRadius: BorderRadius.circular(6)),
+              child: ListView(shrinkWrap: true, children: [
+                for (final rid in routeMatches)
+                  InkWell(
+                    onTap: () => setState(() {
+                      _trendRouteId = rid;
+                      _trendRouteSearchCtrl.clear();
+                      _trendRoutePicking = false;
+                    }),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 7),
+                      child: Text(_routeNames[rid] ?? '',
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+              ]),
+            ),
+        ],
         if (_trendScope == 'customer') ...[
           SizedBox(
             width: mobile ? double.infinity : 340,
