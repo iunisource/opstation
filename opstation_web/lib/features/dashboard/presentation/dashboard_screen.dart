@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:html' as html;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -90,7 +91,38 @@ class _DashboardStatsState extends State<_DashboardStats> {
           .eq('org_id', widget.orgId)
           .eq('key', 'org.dashboard_password')
           .maybeSingle();
-      if (mounted) setState(() => _lockHash = row?['value'] as String?);
+      if (mounted) {
+        setState(() {
+          _lockHash = row?['value'] as String?;
+          // Persisted unlock: if this browser already unlocked the CURRENT
+          // password (same hash), stay unlocked across visits. Changing the
+          // password changes the hash, so a stored unlock no longer matches
+          // and the prompt returns automatically.
+          if (_lockHash != null &&
+              _lockHash!.isNotEmpty &&
+              _readUnlock(widget.orgId) == _lockHash) {
+            _sessionUnlocked.add(widget.orgId);
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  // Persisted dashboard unlock, keyed to the password hash so a password change
+  // invalidates it automatically.
+  String? _readUnlock(String org) {
+    try {
+      return html.window.localStorage['dash_unlock_$org'];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _writeUnlock(String org, String? hash) {
+    try {
+      if (hash != null && hash.isNotEmpty) {
+        html.window.localStorage['dash_unlock_$org'] = hash;
+      }
     } catch (_) {}
   }
 
@@ -137,6 +169,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
       )),
     );
     if (ok == true && mounted) {
+      _writeUnlock(widget.orgId, _lockHash); // remember across visits
       setState(() => _sessionUnlocked.add(widget.orgId));
     }
   }
