@@ -112,10 +112,15 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
   void _assign(String field, String zone) {
     setState(() {
-      _rows.remove(field); _cols.remove(field); _values.remove(field); _filters.remove(field);
+      // A dimension may live in Rows/Columns AND carry a filter at the same time
+      // (e.g. group by Customer but only show 3 selected customers), so assigning
+      // to Rows/Columns no longer drops an existing filter. Only moving a field
+      // into Values (a measure) clears a dimension filter, since a field can't be
+      // both a grouped dimension and an aggregated measure.
+      _rows.remove(field); _cols.remove(field); _values.remove(field);
       if (zone == 'rows') _rows.add(field);
       else if (zone == 'cols') _cols.add(field);
-      else if (zone == 'values') _values.add(field);
+      else if (zone == 'values') { _filters.remove(field); _values.add(field); }
     });
   }
 
@@ -272,7 +277,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       if (result.clear || result.vals == null) {
         _filters.remove(field);
       } else {
-        _rows.remove(field); _cols.remove(field); _filters[field] = _Cond(result.op!, result.vals!);
+        // Keep the field in Rows/Columns if it's already there — a dimension can
+        // be both grouped and filtered at once.
+        _filters[field] = _Cond(result.op!, result.vals!);
       }
     });
   }
