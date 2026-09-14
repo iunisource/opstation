@@ -78,6 +78,9 @@ class _DashboardStatsState extends State<_DashboardStats> {
       !_sessionUnlocked.contains(widget.orgId);
 
   String _mask(String v) => _locked ? '• • •' : v;
+  // A count that failed to load is stored as null → show a dash, never a
+  // misleading 0 (e.g. a customer count that timed out on a big org).
+  String _cnt(String k) => _mask(_stats[k] == null ? '—' : '${_stats[k]}');
 
   Future<void> _loadLock() async {
     try {
@@ -207,6 +210,42 @@ class _DashboardStatsState extends State<_DashboardStats> {
         .toUtc()
         .toIso8601String();
 
+    // Fast path: one server-side summary (rpc_dashboard_summary) computes every
+    // tile in a single indexed, RLS-free pass — instead of ~9 RLS-checked
+    // round-trips that shipped thousands of rows and timed out under load. Falls
+    // back to the legacy per-query path below if the RPC is absent or errors.
+    try {
+      final res = await client.rpc('rpc_dashboard_summary', params: {
+        'p_org': widget.orgId,
+        'p_start': dayStart,
+        'p_end': dayEnd,
+      });
+      final m = (res is Map) ? Map<String, dynamic>.from(res) : null;
+      if (m != null && m.isNotEmpty) {
+        int gi(String k) => (m[k] as num?)?.toInt() ?? 0;
+        if (!mounted) return;
+        setState(() {
+          _stats = {
+            'team': gi('team'),
+            'customers': gi('customers'),
+            'routes': gi('routes'),
+            'activeRoutes': _isToday ? gi('active') : 0,
+            'shopsVisited': gi('shops_visited'),
+            'collection': gi('collection'),
+            'completedToday': gi('completed'),
+            'auditedShops': gi('audited_shops'),
+            'brandsTracked': gi('brands_tracked'),
+            'intelActivity7d': gi('intel_7d'),
+          };
+          _partial = false;
+          _loading = false;
+        });
+        return;
+      }
+    } catch (_) {
+      // RPC not deployed yet, or failed — fall through to the legacy path.
+    }
+
     // Each rollup is independent. Run them concurrently BUT isolate failures —
     // a single failing query must never zero the whole dashboard (it used to:
     // one throw dropped everything to 0). Each guarded call returns a safe
@@ -222,43 +261,44 @@ class _DashboardStatsState extends State<_DashboardStats> {
       }
     }
 
-    Future<int> qCustomers() async {
+    // Count-only rollups: ask Postgres for the count (HEAD, no row payload)
+    // instead of fetching every row just to call .length — much less data over
+    // the wire, which is the bulk of the dashboard's load time on big orgs.
+    Future<int?> qCount(Future<dynamic> b) async {
       try {
-        final c = await client
-            .from('customers')
-            .select('id')
-            .eq('org_id', widget.orgId)
-            .count(CountOption.exact);
-        return c.count;
+        final r = await b;
+        return ((r as dynamic).count as int?) ?? 0;
       } catch (_) {
         anyFail = true;
-        return 0;
+        return null; // failed → null so the tile shows "—", not a misleading 0
       }
     }
 
     final results = await Future.wait<dynamic>([
-      ql(client.from('users').select('id, role').eq('org_id', widget.orgId)),
-      qCustomers(),
-      ql(client.from('sales_routes').select('id').eq('org_id', widget.orgId)),
+      qCount(client.from('users').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
+      qCount(client.from('customers').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
+      qCount(client.from('sales_routes').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
       // Active = ended_at IS NULL, regardless of start date. Only meaningful for
       // "today"; for a back-date we show 0 (nothing is currently running "then").
       _isToday
-          ? ql(client
+          ? qCount(client
               .from('trips')
               .select('id')
               .eq('org_id', widget.orgId)
-              .filter('ended_at', 'is', null))
-          : Future<List<dynamic>>.value(const []),
+              .filter('ended_at', 'is', null)
+              .count(CountOption.exact))
+          : Future<int>.value(0),
       // Completed = a trip that STARTED on the selected day and has finished.
       // Keying off started_at (not ended_at) stops a route that actually ran on
       // a prior day — but was only closed later — from leaking into the numbers.
-      ql(client
+      qCount(client
           .from('trips')
           .select('id')
           .eq('org_id', widget.orgId)
           .gte('started_at', dayStart)
           .lt('started_at', dayEnd)
-          .not('ended_at', 'is', null)),
+          .not('ended_at', 'is', null)
+          .count(CountOption.exact)),
       // Selected day's visits — RLS scopes to the user's org. Bounded window so
       // trips that span midnight don't double-count.
       ql(client
@@ -272,11 +312,11 @@ class _DashboardStatsState extends State<_DashboardStats> {
       ql(client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', widget.orgId)),
     ]);
     try {
-      final users = results[0] as List;
-      final customerCount = results[1] as int;
-      final routes = results[2] as List;
-      final activeTrips = results[3] as List;
-      final completedTrips = results[4] as List;
+      final teamCount = results[0] as int?;
+      final customerCount = results[1] as int?;
+      final routeCount = results[2] as int?;
+      final activeCount = results[3] as int?;
+      final completedCount = results[4] as int?;
       final todayVisits = results[5] as List;
       final paRows = results[6] as List;
       final csRows = results[7] as List;
@@ -337,13 +377,13 @@ class _DashboardStatsState extends State<_DashboardStats> {
       if (!mounted) return;
       setState(() {
         _stats = {
-          'team': users.length,
+          'team': teamCount,
           'customers': customerCount,
-          'routes': routes.length,
-          'activeRoutes': activeTrips.length,
+          'routes': routeCount,
+          'activeRoutes': activeCount,
           'shopsVisited': shopsVisited,
           'collection': totalCollection,
-          'completedToday': completedTrips.length,
+          'completedToday': completedCount,
           'auditedShops': auditedShops.length,
           'brandsTracked': brandsTracked.length,
           'intelActivity7d': recentCount,
@@ -414,7 +454,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
       _StatCard(
         icon: Icons.payments_outlined,
         label: _isToday ? "Today's Collection" : 'Collection',
-        value: _mask('Rs ${_stats['collection'] ?? 0}'),
+        value: _mask(_stats['collection'] == null ? 'Rs —' : 'Rs ${_stats['collection']}'),
         color: AppTheme.primary,
         featured: true,
         onTap: _locked ? null : _showCollectionBreakdown,
@@ -423,21 +463,21 @@ class _DashboardStatsState extends State<_DashboardStats> {
         _StatCard(
           icon: Icons.directions_walk,
           label: 'Active Routes',
-          value: _mask('${_stats['activeRoutes'] ?? 0}'),
+          value: _cnt('activeRoutes'),
           color: AppTheme.success,
           onTap: _locked ? null : _showActiveRoutes,
         ),
       _StatCard(
         icon: Icons.check_circle_outline,
         label: _isToday ? 'Completed Today' : 'Completed',
-        value: _mask('${_stats['completedToday'] ?? 0}'),
+        value: _cnt('completedToday'),
         color: AppTheme.primary,
         onTap: _locked ? null : _showCompletedToday,
       ),
-      _StatCard(icon: Icons.storefront_outlined, label: 'Shops Visited', value: _mask('${_stats['shopsVisited'] ?? 0}'), color: const Color(0xFF0EA5E9)),
-      _StatCard(icon: Icons.people_outline, label: 'Team Members', value: _mask('${_stats['team'] ?? 0}'), color: AppTheme.warning),
-      _StatCard(icon: Icons.store_outlined, label: 'Customers', value: _mask('${_stats['customers'] ?? 0}'), color: AppTheme.danger),
-      _StatCard(icon: Icons.route_outlined, label: 'Total Routes', value: _mask('${_stats['routes'] ?? 0}'), color: const Color(0xFF06B6D4)),
+      _StatCard(icon: Icons.storefront_outlined, label: 'Shops Visited', value: _cnt('shopsVisited'), color: const Color(0xFF0EA5E9)),
+      _StatCard(icon: Icons.people_outline, label: 'Team Members', value: _cnt('team'), color: AppTheme.warning),
+      _StatCard(icon: Icons.store_outlined, label: 'Customers', value: _cnt('customers'), color: AppTheme.danger),
+      _StatCard(icon: Icons.route_outlined, label: 'Total Routes', value: _cnt('routes'), color: const Color(0xFF06B6D4)),
     ];
 
     final intelligenceCards = [
@@ -711,17 +751,34 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
           .toIso8601String();
 
       final orgId = widget.orgId;
-      final results = await Future.wait([
+      // route_stops / route_assignments carry NO org_id. Fetching them unscoped
+      // pulls EVERY org's route plan — which inflated "not visited" to a rep's
+      // entire cross-org customer base and slowed the query. Scope them to this
+      // org's own routes (sales_routes has org_id) so "not visited" is only the
+      // customers on the rep's routes within this org.
+      final orgRoutesRows = await client
+          .from('sales_routes')
+          .select('id')
+          .eq('org_id', orgId);
+      final orgRouteIds = (orgRoutesRows as List)
+          .map((r) => (r as Map)['id'] as String)
+          .toList(growable: false);
+
+      final results = await Future.wait<dynamic>([
         client
             .from('visits')
             .select(
                 'user_id, user_name, customer_id, amount, timestamp, status, customers(shop_name)')
             .gte('timestamp', todayStart)
             .lt('timestamp', tomorrowStart),
-        // Standing route plan: who is assigned to which route, and which
-        // customers each route carries — used to surface "not visited" stops.
-        client.from('route_assignments').select('user_id, route_id'),
-        client.from('route_stops').select('route_id, customer_id'),
+        // Standing route plan, scoped to THIS org's routes: who is assigned to
+        // which route, and which customers each route carries.
+        orgRouteIds.isEmpty
+            ? Future<dynamic>.value(const <dynamic>[])
+            : client.from('route_assignments').select('user_id, route_id').inFilter('route_id', orgRouteIds),
+        orgRouteIds.isEmpty
+            ? Future<dynamic>.value(const <dynamic>[])
+            : client.from('route_stops').select('route_id, customer_id').inFilter('route_id', orgRouteIds),
         client.from('customers').select('id, shop_name').eq('org_id', orgId),
       ]);
 
@@ -739,12 +796,14 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         if (rid == null || cid == null) continue;
         (routeCustomers[rid] ??= <String>{}).add(cid);
       }
-      final userPlanned = <String, Set<String>>{};
+      // user -> assigned route ids (their standing beat, which can be several
+      // routes). We narrow to "today's" route(s) per rep below.
+      final userRoutes = <String, Set<String>>{};
       for (final a in (results[1] as List)) {
         final uid = a['user_id'] as String?;
         final rid = a['route_id'] as String?;
         if (uid == null || rid == null) continue;
-        (userPlanned[uid] ??= <String>{}).addAll(routeCustomers[rid] ?? const {});
+        (userRoutes[uid] ??= <String>{}).add(rid);
       }
 
       final collectedByUser = <String, List<_VisitRow>>{};
@@ -789,9 +848,20 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         final collected = (collectedByUser[uid] ?? [])
           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
         final other = List<_OtherStop>.from(otherByUser[uid] ?? const []);
-        // not-visited = planned customers this user did not touch today
+        // "Not visited" = the other stops on the route(s) this rep actually
+        // WORKED today (a route holding at least one shop they visited), minus
+        // the ones they hit — not their entire multi-route beat.
         final visited = visitedByUser[uid] ?? const <String>{};
-        for (final cid in (userPlanned[uid] ?? const <String>{})) {
+        final todayRoutes = <String>{};
+        for (final rid in (userRoutes[uid] ?? const <String>{})) {
+          final stops = routeCustomers[rid];
+          if (stops != null && stops.any(visited.contains)) todayRoutes.add(rid);
+        }
+        final plannedToday = <String>{};
+        for (final rid in todayRoutes) {
+          plannedToday.addAll(routeCustomers[rid] ?? const {});
+        }
+        for (final cid in plannedToday) {
           if (!visited.contains(cid)) {
             other.add(_OtherStop(
                 customerName: custName[cid] ?? 'Unknown shop',
