@@ -47,6 +47,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   Map<String, Set<String>> _hiddenByBranch = {};   // branchId -> hidden main_groups
   bool _productSuperviseEnabled = false;           // org.product_supervise_flow
   bool _superviseFilter = false;                   // show only supervision-pending
+  bool _noLowStockLimit = false;                   // show only products with no low-stock limit set
 
   bool get _canDelete {
     final r = ref.read(currentUserProvider)?.role.name;
@@ -180,6 +181,10 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       if (posFilter == 'in' && !posIds.contains(p['id'])) return false;
       if (posFilter == 'out' && posIds.contains(p['id'])) return false;
       if (_superviseFilter && p['supervised_at'] != null) return false;
+      // "No low-stock limit": limit unset counts as 0/null/empty.
+      if (_noLowStockLimit && ((p['low_stock_limit'] as num?)?.toDouble() ?? 0) > 0) {
+        return false;
+      }
       if (_fMain != null && p['product_main_group'] != _fMain) return false;
       if (_fGroup != null && p['product_group'] != _fGroup) return false;
       if (_fSub != null && p['product_sub_group'] != _fSub) return false;
@@ -1445,6 +1450,13 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 selectedColor: Colors.amber.withOpacity(0.20),
                 labelStyle: TextStyle(fontSize: 12, color: _superviseFilter ? Colors.amber.shade900 : AppTheme.textSecondary, fontWeight: _superviseFilter ? FontWeight.w700 : FontWeight.w500),
               ),
+            ChoiceChip(
+              label: const Text('No low-stock limit'),
+              selected: _noLowStockLimit,
+              onSelected: (v) { setState(() => _noLowStockLimit = v); _runFilter(); },
+              selectedColor: AppTheme.primary.withOpacity(0.15),
+              labelStyle: TextStyle(fontSize: 12, color: _noLowStockLimit ? AppTheme.primary : AppTheme.textSecondary, fontWeight: _noLowStockLimit ? FontWeight.w700 : FontWeight.w500),
+            ),
             Text(_selected.isNotEmpty ? 'Export ${_selected.length} selected:' : 'Export ${_filtered.length} shown:',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             OutlinedButton.icon(
