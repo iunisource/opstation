@@ -308,7 +308,36 @@ class _IntelligenceDashboardScreenState
         }
       }
 
-      final res = await Future.wait<dynamic>([
+      // Fetch a table filtered to a set of ids, batched (so the in.(...) list
+      // never overflows the URL) and paginated. Used to pull ONLY the customers
+      // and route-stops the audited shops reference, instead of every row in the
+      // org — the big orgs have ~2,600 customers / ~1,600 route-stops but only a
+      // few hundred audited shops, and pulling the lot on every load was the
+      // main reason the dashboard was slow.
+      Future<List<Map<String, dynamic>>> fetchByIds(
+          String table, String col, List<String> ids, String cols) async {
+        final out = <Map<String, dynamic>>[];
+        const batch = 200;
+        for (int i = 0; i < ids.length; i += batch) {
+          final end = i + batch > ids.length ? ids.length : i + batch;
+          final slice = ids.sublist(i, end);
+          for (int from = 0;; from += 1000) {
+            final page = await client
+                .from(table)
+                .select(cols)
+                .inFilter(col, slice)
+                .range(from, from + 999);
+            final list = List<Map<String, dynamic>>.from(page as List);
+            out.addAll(list);
+            if (list.length < 1000) break;
+          }
+        }
+        return out;
+      }
+
+      // ── Phase A: audits + small reference tables (independent of which shops
+      // were audited). These are all small or window-bounded.
+      final resA = await Future.wait<dynamic>([
         usedLatestRpc
             ? Future.value(const <Map<String, dynamic>>[])
             : pageAll((f, t) {
@@ -319,13 +348,6 @@ class _IntelligenceDashboardScreenState
                 if (sinceIso != null) q = q.gte('surveyed_at', sinceIso);
                 return q.range(f, t);
               }),
-        Future.value(orgRoutes),
-        orgRouteIds.isEmpty
-            ? Future.value(const <Map<String, dynamic>>[])
-            : pageAll((f, t) => client.from('route_stops')
-                .select('route_id, customer_id')
-                .inFilter('route_id', orgRouteIds)
-                .range(f, t)),
         orgRouteIds.isEmpty
             ? Future.value(const <Map<String, dynamic>>[])
             : pageAll((f, t) => client.from('route_assignments')
@@ -333,7 +355,6 @@ class _IntelligenceDashboardScreenState
                 .inFilter('route_id', orgRouteIds)
                 .range(f, t)),
         client.from('users').select('id, name').eq('org_id', orgId),
-        pageAll((f, t) => client.from('customers').select('id, shop_name, code').eq('org_id', orgId).eq('is_active', true).range(f, t)),
         pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
         usedCompRpc
             ? Future.value(const <Map<String, dynamic>>[])
@@ -348,25 +369,47 @@ class _IntelligenceDashboardScreenState
         client.from('competitor_categories').select('id, name').eq('org_id', orgId),
         client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId),
       ]);
-      final audits = List<Map<String, dynamic>>.from(res[0] as List);
-      final routesRaw = res[1] as List;
-      final stopsRaw = res[2] as List;
-      final assignsRaw = res[3] as List;
-      final usersRaw = res[4] as List;
-      final custRaw = res[5] as List;
-      final prodRaw = res[6] as List; // intelligence_products (the audited SKUs)
+      final audits = List<Map<String, dynamic>>.from(resA[0] as List);
+      final routesRaw = orgRoutes;
+      final assignsRaw = resA[1] as List;
+      final usersRaw = resA[2] as List;
+      final prodRaw = resA[3] as List; // intelligence_products (the audited SKUs)
       final compRaw = usedCompRpc
           ? rpcComp
-          : List<Map<String, dynamic>>.from(res[7] as List);
-      final catRaw = res[8] as List;
+          : List<Map<String, dynamic>>.from(resA[4] as List);
+      final catRaw = resA[5] as List;
       // Brand alias map (lowercased/trimmed variant -> correct brand). Applied
       // to every spotting's brand before it is tallied, so typos roll up under
       // the correct name (and with the correct label, not just merged).
       final brandAlias = <String, String>{
-        for (final a in (res[9] as List))
+        for (final a in (resA[6] as List))
           (a['alias'] as String? ?? '').toLowerCase().trim():
               (a['canonical'] as String? ?? '')
       };
+
+      // ── Phase B: only the customers & route-stops the audited shops touch.
+      // Collect the customer ids that actually appear in this period's audits
+      // (and competitor spottings), then fetch just those.
+      final neededCustIds = <String>{};
+      for (final a in (usedLatestRpc ? rpcLatest : audits)) {
+        final c = a['customer_id'] as String?;
+        if (c != null) neededCustIds.add(c);
+      }
+      for (final s in compRaw) {
+        final c = s['customer_id'] as String?;
+        if (c != null) neededCustIds.add(c);
+      }
+      final custIdList = neededCustIds.toList(growable: false);
+      final resB = await Future.wait<dynamic>([
+        custIdList.isEmpty
+            ? Future.value(const <Map<String, dynamic>>[])
+            : fetchByIds('customers', 'id', custIdList, 'id, shop_name, code'),
+        custIdList.isEmpty
+            ? Future.value(const <Map<String, dynamic>>[])
+            : fetchByIds('route_stops', 'customer_id', custIdList, 'route_id, customer_id'),
+      ]);
+      final custRaw = resB[0] as List;
+      final stopsRaw = resB[1] as List;
       String canonBrand(String b) {
         final c = brandAlias[b.toLowerCase().trim()];
         return (c == null || c.isEmpty) ? b : c;
