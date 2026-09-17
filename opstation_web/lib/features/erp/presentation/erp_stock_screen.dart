@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
-import '../../../core/utils/friendly_error.dart';
 
 class ErpStockScreen extends ConsumerStatefulWidget {
   const ErpStockScreen({super.key});
@@ -73,93 +72,6 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
     });
   }
 
-  void _showAdjustDialog(Map<String, dynamic> stock) {
-    final qtyCtrl = TextEditingController(
-        text: stock['quantity']?.toString() ?? '0');
-    final notesCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Adjust Stock — ${stock['products']?['name'] ?? ''}'),
-        content: SizedBox(
-          width: 400,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(
-              'Branch: ${stock['branches']?['name'] ?? ''}',
-              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: qtyCtrl,
-              decoration: InputDecoration(
-                labelText: 'New Quantity *',
-                suffixText: stock['uoms']?['abbreviation'] as String? ?? '',
-              ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: notesCtrl,
-              decoration: const InputDecoration(
-                  labelText: 'Reason / Notes *',
-                  hintText: 'e.g. Physical count correction'),
-            ),
-          ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final newQty = double.tryParse(qtyCtrl.text.trim());
-              if (newQty == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Enter a valid quantity')));
-                return;
-              }
-              if (notesCtrl.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Reason is required for adjustments')));
-                return;
-              }
-              final orgId = ref.read(currentUserProvider)?.orgId;
-              final userId = ref.read(currentUserProvider)?.id;
-              try {
-                final client = Supabase.instance.client;
-                // Atomic + naturally idempotent: the DB function locks the stock
-                // row, computes the diff itself, posts the movement and sets the
-                // new quantity in ONE transaction. A double-click's second call
-                // computes a zero diff and posts nothing.
-                await client.rpc('adjust_stock', params: {
-                  'p_org_id': orgId,
-                  'p_branch_id': stock['branch_id'],
-                  'p_product_id': stock['product_id'],
-                  'p_uom_id': stock['uom_id'],
-                  'p_new_qty': newQty,
-                  'p_notes': notesCtrl.text.trim(),
-                  'p_user_id': userId,
-                });
-                if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Stock adjusted'), behavior: SnackBarBehavior.floating));
-                }
-                _load();
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(friendlyError('That did not save', e))));
-                }
-              }
-            },
-            child: const Text('Adjust'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -171,7 +83,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
           const Text('Stock Levels',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
-          Text('${_filtered.length} entries',
+          Text('${_pivotRows().length} products',
               style: const TextStyle(color: AppTheme.textSecondary)),
           const SizedBox(height: 16),
           Row(children: [
@@ -208,113 +120,141 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
           if (_loading)
             const Center(child: CircularProgressIndicator())
           else
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.border),
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      decoration: const BoxDecoration(
-                        color: AppTheme.background,
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
-                      ),
-                      child: const Row(children: [
-                        Expanded(flex: 3, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('SKU', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        Expanded(flex: 2, child: Text('Quantity', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        SizedBox(width: 60),
-                      ]),
-                    ),
-                    const Divider(height: 1),
-                    Expanded(
-                      child: _filtered.isEmpty
-                          ? const Center(
-                              child: Text('No stock entries yet.\nReceive a purchase order to populate stock.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: AppTheme.textSecondary)))
-                          : ListView.separated(
-                              itemCount: _filtered.length,
-                              separatorBuilder: (_, __) => const Divider(height: 1),
-                              itemBuilder: (_, i) {
-                                final s = _filtered[i];
-                                final qty = (s['quantity'] as num?)?.toDouble() ?? 0;
-                                final isLow = qty <= 0;
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 20, vertical: 12),
-                                  child: Row(children: [
-                                    Expanded(
-                                        flex: 3,
-                                        child: Text(
-                                            s['products']?['name'] as String? ?? '',
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.w600))),
-                                    Expanded(
-                                        flex: 2,
-                                        child: Text(
-                                            s['products']?['sku'] as String? ?? '-',
-                                            style: const TextStyle(
-                                                color: AppTheme.primary,
-                                                fontWeight: FontWeight.w600))),
-                                    Expanded(
-                                        flex: 2,
-                                        child: Text(
-                                            s['branches']?['name'] as String? ?? '-',
-                                            style: const TextStyle(
-                                                color: AppTheme.textSecondary,
-                                                fontSize: 13))),
-                                    Expanded(
-                                      flex: 2,
-                                      child: Row(children: [
-                                        Text(
-                                          '${qty % 1 == 0 ? qty.toInt() : qty} ${s['uoms']?['abbreviation'] ?? ''}',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            color: isLow ? AppTheme.danger : Colors.black87,
-                                          ),
-                                        ),
-                                        if (isLow) ...[
-                                          const SizedBox(width: 6),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(
-                                              color: AppTheme.danger.withOpacity(0.1),
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: const Text('Out',
-                                                style: TextStyle(
-                                                    color: AppTheme.danger,
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.w600)),
-                                          ),
-                                        ],
-                                      ]),
-                                    ),
-                                    SizedBox(
-                                      width: 60,
-                                      child: IconButton(
-                                        icon: const Icon(Icons.tune, size: 18),
-                                        tooltip: 'Adjust stock',
-                                        onPressed: () => _showAdjustDialog(s),
-                                      ),
-                                    ),
-                                  ]),
-                                );
-                              },
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            Expanded(child: _buildPivot()),
         ],
       ),
     );
   }
+
+  // Branches that actually appear in the filtered stock, ordered like _branches.
+  List<Map<String, dynamic>> get _displayBranches {
+    final ids = <String>{};
+    for (final s in _filtered) {
+      final b = s['branch_id'] as String?;
+      if (b != null) ids.add(b);
+    }
+    return _branches.where((b) => ids.contains(b['id'])).toList();
+  }
+
+  // One row per product; quantity split across branch columns.
+  List<_PivotRow> _pivotRows() {
+    final map = <String, _PivotRow>{};
+    for (final s in _filtered) {
+      final pid = s['product_id'] as String? ?? (s['products']?['sku'] as String? ?? '');
+      final row = map.putIfAbsent(pid, () => _PivotRow(
+            name: s['products']?['name'] as String? ?? '',
+            sku: s['products']?['sku'] as String? ?? '-',
+            uom: s['uoms']?['abbreviation'] as String? ?? '',
+          ));
+      final b = s['branch_id'] as String?;
+      final qty = (s['quantity'] as num?)?.toDouble() ?? 0;
+      if (b != null) row.byBranch[b] = (row.byBranch[b] ?? 0) + qty;
+    }
+    final rows = map.values.toList();
+    for (final r in rows) {
+      r.total = r.byBranch.values.fold(0.0, (a, b) => a + b);
+    }
+    rows.sort((a, b) => b.total.compareTo(a.total));
+    return rows;
+  }
+
+  String _fmtQty(double? q, String uom) {
+    if (q == null || q == 0) return '—';
+    final s = q % 1 == 0 ? q.toInt().toString() : q.toStringAsFixed(2);
+    return uom.isEmpty ? s : '$s $uom';
+  }
+
+  Widget _buildPivot() {
+    final cols = _displayBranches;
+    final rows = _pivotRows();
+    const wProd = 260.0, wSku = 100.0, wBranch = 150.0, wTotal = 160.0;
+    final totalW = wProd + wSku + cols.length * wBranch + wTotal;
+
+    Widget headerCell(String t, double w, {bool right = false}) => SizedBox(
+          width: w,
+          child: Text(t,
+              textAlign: right ? TextAlign.right : TextAlign.left,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary)),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: rows.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('No stock entries yet.\nReceive a purchase order to populate stock.',
+                    textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary)),
+              ))
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: totalW < 600 ? 600 : totalW,
+                child: Column(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    decoration: const BoxDecoration(
+                      color: AppTheme.background,
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+                    ),
+                    child: Row(children: [
+                      headerCell('Product', wProd),
+                      headerCell('SKU', wSku),
+                      for (final b in cols) headerCell(b['name'] as String? ?? '-', wBranch, right: true),
+                      headerCell('Total', wTotal, right: true),
+                    ]),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: rows.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final r = rows[i];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                          child: Row(children: [
+                            SizedBox(width: wProd, child: Text(r.name, style: const TextStyle(fontWeight: FontWeight.w600))),
+                            SizedBox(width: wSku, child: Text(r.sku, style: const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
+                            for (final b in cols)
+                              SizedBox(
+                                width: wBranch,
+                                child: Text(_fmtQty(r.byBranch[b['id']], r.uom),
+                                    textAlign: TextAlign.right,
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: (r.byBranch[b['id']] ?? 0) > 0 ? Colors.black87 : AppTheme.textSecondary)),
+                              ),
+                            SizedBox(
+                              width: wTotal,
+                              child: Text(_fmtQty(r.total, r.uom),
+                                  textAlign: TextAlign.right,
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      color: r.total <= 0 ? AppTheme.danger : Colors.black87)),
+                            ),
+                          ]),
+                        );
+                      },
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+    );
+  }
+}
+
+class _PivotRow {
+  final String name;
+  final String sku;
+  final String uom;
+  final Map<String, double> byBranch = {};
+  double total = 0;
+  _PivotRow({required this.name, required this.sku, required this.uom});
 }
