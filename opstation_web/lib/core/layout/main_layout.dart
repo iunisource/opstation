@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/auth_controller.dart';
+import '../../features/auth/presentation/change_password_dialog.dart';
 import '../theme/app_theme.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
@@ -744,7 +745,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ),
           actions: [
             _searchButton(context, user, _showFn(ref, user)),
-            const NotificationBell(), _userMenu(ref, user, const Offset(0, 8)),
+            const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
             const SizedBox(width: 6),
           ],
         ),
@@ -818,7 +819,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
         child: Row(children: [
           const Spacer(),
-          const NotificationBell(), _userMenu(ref, user, const Offset(0, 8)),
+          const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
         ]),
       ),
     ]);
@@ -1371,7 +1372,7 @@ Widget _branchSelector(WidgetRef ref, Set<String> modules) {
         });
 }
 
-Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
+Widget _userMenu(BuildContext context, WidgetRef ref, WebUser? user, Offset offset) {
   return         PopupMenuButton<String>(
           offset: offset,
           color: AppTheme.sidebarPanel,
@@ -1383,6 +1384,7 @@ Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
           onSelected: (v) {
             if (v == 'logout') ref.read(authControllerProvider.notifier).signOut();
             if (v == 'tour') ref.read(tourReplayProvider.notifier).state++;
+            if (v == 'change_password' && user != null) showSelfPasswordChangeDialog(context, user);
           },
           itemBuilder: (_) => [
             PopupMenuItem(
@@ -1399,6 +1401,14 @@ Widget _userMenu(WidgetRef ref, WebUser? user, Offset offset) {
               child: const NotificationsMenuTile(),
             ),
             const PopupMenuDivider(),
+            const PopupMenuItem(
+              value: 'change_password',
+              child: Row(children: [
+                Icon(Icons.lock_reset, size: 15, color: AppTheme.sidebarText),
+                SizedBox(width: 8),
+                Text('Change password', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ]),
+            ),
             const PopupMenuItem(
               value: 'tour',
               child: Row(children: [
@@ -1737,7 +1747,7 @@ class _TopNav extends ConsumerWidget {
         const SizedBox(width: 4),
         _branchSelector(ref, modules),
         Container(width: 1, height: 28, color: Colors.white12),
-        const NotificationBell(), _userMenu(ref, user, const Offset(0, 52)),
+        const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 52)),
       ]),
     );
   }
@@ -1814,7 +1824,7 @@ class _SideNav extends ConsumerWidget {
           child: Row(children: [
             _searchButton(context, user, show),
             const Spacer(),
-            const NotificationBell(), _userMenu(ref, user, const Offset(0, 8)),
+            const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
           ]),
         ),
         Padding(
