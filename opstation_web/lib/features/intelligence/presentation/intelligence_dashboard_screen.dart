@@ -184,6 +184,17 @@ class _IntelligenceDashboardScreenState
   // Section-wide market/route filter. null = All routes.
   String? _filterRouteId;
 
+  // Section-wide salesperson filter. null = All salespeople. Mutually exclusive
+  // with _filterRouteId — picking one clears the other, so the dashboard is
+  // scoped by either a route OR a salesperson, never both.
+  String? _filterSalespersonId;
+
+  // Salespeople who have audited shops this period (id -> name), for the
+  // searchable salesperson picker, with each one's audited-shop count.
+  // Filter-independent (computed over the whole audited set).
+  Map<String, String> _salespeopleWithData = {};
+  Map<String, int> _salespersonShopCount = {};
+
   // Auto-insights (narrative), computed each load from the same period's data.
   List<_SkuStat> _skuStats = [];          // sorted best-placed first
   String? _leadBrand;                     // most-spotted competitor overall
@@ -256,13 +267,10 @@ class _IntelligenceDashboardScreenState
           ? null
           : DateTime(_from!.year, _from!.month, _from!.day).toUtc().toIso8601String();
 
-      // The trend line is range-independent (it shows history regardless of the
-      // rollup window). Give it its OWN bounded fetch — last ~12 months, minimal
-      // columns — so it keeps history without pulling the whole audit table.
-      final trendSinceIso = DateTime.now()
-          .subtract(const Duration(days: 365))
-          .toUtc()
-          .toIso8601String();
+      // The trend line is range-independent history. It used to be fetched here
+      // (a full 12 months of audit rows) inside the same parallel batch, which
+      // dominated load time. It's now deferred to _loadTrendHistory() and run in
+      // the background AFTER the dashboard paints, so first render is fast.
 
       // route_stops / route_assignments have no org_id — scope them to THIS
       // org's routes so we don't paginate every org's route plan (500k rows).
@@ -339,13 +347,6 @@ class _IntelligenceDashboardScreenState
               }),
         client.from('competitor_categories').select('id, name').eq('org_id', orgId),
         client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId),
-        // [10] trend history — bounded to last 12 months, minimal columns.
-        pageAll((f, t) => client
-            .from('placement_audit')
-            .select('customer_id, product_id, is_present, surveyed_at')
-            .eq('org_id', orgId)
-            .gte('surveyed_at', trendSinceIso)
-            .range(f, t)),
       ]);
       final audits = List<Map<String, dynamic>>.from(res[0] as List);
       final routesRaw = res[1] as List;
@@ -465,6 +466,21 @@ class _IntelligenceDashboardScreenState
         for (final u in usersRaw)
           u['id'] as String: (u['name'] as String? ?? 'Unknown')
       };
+      // Salespeople who have audited shops this period (for the salesperson
+      // filter), with each one's audited-shop count. A shop counts for a
+      // salesperson if any of the shop's routes is assigned to them.
+      final salespeopleWithData = <String, String>{};
+      final salespersonShopCount = <String, int>{};
+      for (final cid in auditedCustomers) {
+        final sset = <String>{};
+        for (final rid in (custRoutes[cid] ?? const <String>{})) {
+          sset.addAll(routeUsers[rid] ?? const <String>{});
+        }
+        for (final uid in sset) {
+          salespeopleWithData[uid] = userName[uid] ?? 'Unknown';
+          salespersonShopCount[uid] = (salespersonShopCount[uid] ?? 0) + 1;
+        }
+      }
       // Shop names, for expanding the "Unassigned" rows.
       final custName = <String, String>{
         for (final c in custRaw)
@@ -511,9 +527,28 @@ class _IntelligenceDashboardScreenState
       // (KPIs, score cards, SKU insights, competitor read) counts only shops on
       // that route. null = All routes.
       final filterRoute = _filterRouteId;
-      bool passesRoute(String? cid) =>
-          filterRoute == null ||
-          (cid != null && (custRoutes[cid]?.contains(filterRoute) ?? false));
+      final filterSalesperson = _filterSalespersonId;
+      bool custHasSalesperson(String? cid, String uid) {
+        if (cid == null) return false;
+        final rids = custRoutes[cid];
+        if (rids == null) return false;
+        for (final rid in rids) {
+          if (routeUsers[rid]?.contains(uid) ?? false) return true;
+        }
+        return false;
+      }
+      // Section-wide scope: a route filter takes precedence, else a salesperson
+      // filter, else everything. (The two are mutually exclusive in the UI.)
+      bool passesRoute(String? cid) {
+        if (filterRoute != null) {
+          return cid != null &&
+              (custRoutes[cid]?.contains(filterRoute) ?? false);
+        }
+        if (filterSalesperson != null) {
+          return custHasSalesperson(cid, filterSalesperson);
+        }
+        return true;
+      }
 
       final shopsInScope = auditedCustomers.where(passesRoute).length;
 
@@ -650,7 +685,8 @@ class _IntelligenceDashboardScreenState
         _skuTotal = totAll;
         _bySalesman = sorted(bySalesman);
         _byRoute = sorted(byRoute);
-        _allAudits = List<Map<String, dynamic>>.from(res[10] as List); // trend history (last 12 months)
+        // _allAudits (trend history) is filled by _loadTrendHistory() in the
+        // background — not part of this critical-path load anymore.
         _routeNames = routeName;
         _custRoutes = custRoutes;
         _custName = custName;
@@ -664,8 +700,17 @@ class _IntelligenceDashboardScreenState
         _routesWithData = routesWithData;
         _orgAvgScore = orgAvgScore;
         _routeShopCount = routeShopCount;
+        _salespeopleWithData = salespeopleWithData;
+        _salespersonShopCount = salespersonShopCount;
         _loading = false;
       });
+      // Trend history is range-independent, so fetch it once in the background
+      // (after the dashboard has painted) rather than blocking every load on a
+      // full year of audit rows. Fire-and-forget; the trend widget fills in when
+      // it arrives.
+      if (_allAudits.isEmpty) {
+        _loadTrendHistory(orgId);
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -673,6 +718,33 @@ class _IntelligenceDashboardScreenState
           _loading = false;
         });
       }
+    }
+  }
+
+  // Background fetch of the last ~12 months of audits for the Placement Trend
+  // line and the audited-route picker. Kept off the critical load path.
+  Future<void> _loadTrendHistory(String orgId) async {
+    try {
+      final client = Supabase.instance.client;
+      final trendSinceIso = DateTime.now()
+          .subtract(const Duration(days: 365))
+          .toUtc()
+          .toIso8601String();
+      final out = <Map<String, dynamic>>[];
+      for (int from = 0;; from += 1000) {
+        final page = await client
+            .from('placement_audit')
+            .select('customer_id, product_id, is_present, surveyed_at')
+            .eq('org_id', orgId)
+            .gte('surveyed_at', trendSinceIso)
+            .range(from, from + 999);
+        final list = List<Map<String, dynamic>>.from(page as List);
+        out.addAll(list);
+        if (list.length < 1000 || from > 500000) break;
+      }
+      if (mounted) setState(() => _allAudits = out);
+    } catch (_) {
+      // Non-fatal: the rest of the dashboard is already usable.
     }
   }
 
@@ -956,6 +1028,36 @@ class _IntelligenceDashboardScreenState
       ),
     );
 
+    // Salesperson filter — mutually exclusive with the route filter above.
+    // Only salespeople who carry audited shops this period are offered.
+    final salespersonLabel = _filterSalespersonId != null
+        ? (_salespeopleWithData[_filterSalespersonId] ?? 'All salespeople')
+        : 'All salespeople';
+    final salespersonFilter = InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: _openSalespersonPicker,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: AppTheme.border),
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.white,
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.person_outline, size: 15, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(salespersonLabel,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary)),
+          ),
+          const SizedBox(width: 4),
+          const Icon(Icons.expand_more, size: 16, color: AppTheme.textSecondary),
+        ]),
+      ),
+    );
+
     // Task sheet: a printable, auto-derived action list. Scoped to the selected
     // market, or org-wide (grouped by market) when "All routes" is showing.
     final taskSheetBtn = OutlinedButton.icon(
@@ -984,12 +1086,14 @@ class _IntelligenceDashboardScreenState
       if (mobile) ...[
         chips,
         const SizedBox(height: 10),
-        Wrap(spacing: 10, runSpacing: 10, children: [routeFilter, taskSheetBtn]),
+        Wrap(spacing: 10, runSpacing: 10, children: [routeFilter, salespersonFilter, taskSheetBtn]),
       ] else
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(child: chips),
           const SizedBox(width: 12),
           routeFilter,
+          const SizedBox(width: 8),
+          salespersonFilter,
           const SizedBox(width: 8),
           taskSheetBtn,
         ]),
@@ -1959,8 +2063,101 @@ class _IntelligenceDashboardScreenState
     );
     if (picked == null) return; // cancelled
     final newId = picked == _kAllMarkets ? null : picked;
-    if (newId == _filterRouteId) return;
-    setState(() => _filterRouteId = newId);
+    if (newId == _filterRouteId && _filterSalespersonId == null) return;
+    // Route and salesperson filters are mutually exclusive.
+    setState(() {
+      _filterRouteId = newId;
+      _filterSalespersonId = null;
+    });
+    _load();
+  }
+
+  // ── Searchable, data-only salesperson picker ────────────────────────────
+  static const String _kAllSalespeople = '__all_salespeople__';
+
+  Future<void> _openSalespersonPicker() async {
+    final all = _salespeopleWithData.entries.toList()
+      ..sort((a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()));
+    String query = '';
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        final q = query.trim().toLowerCase();
+        final filtered =
+            q.isEmpty ? all : all.where((e) => matchesQuery(e.value, q)).toList();
+        return AlertDialog(
+          contentPadding: const EdgeInsets.fromLTRB(0, 14, 0, 0),
+          title: const Text('Filter by salesperson', style: TextStyle(fontSize: 16)),
+          content: SizedBox(
+            width: 440,
+            height: 480,
+            child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: TextField(
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    hintText: 'Search salespeople…',
+                    border:
+                        OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onChanged: (v) => setLocal(() => query = v),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: ListView(children: [
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.groups_outlined, size: 18),
+                    title: const Text('All salespeople'),
+                    trailing: _filterSalespersonId == null
+                        ? const Icon(Icons.check, size: 18, color: AppTheme.primary)
+                        : null,
+                    onTap: () => Navigator.pop(ctx, _kAllSalespeople),
+                  ),
+                  const Divider(height: 1),
+                  if (filtered.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(28),
+                      child: Text('No salespeople match your search.',
+                          style: TextStyle(color: AppTheme.textSecondary)),
+                    ),
+                  for (final e in filtered)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.person_outline, size: 18),
+                      title: Text(e.value,
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                      subtitle: Text('${_salespersonShopCount[e.key] ?? 0} shop'
+                          '${(_salespersonShopCount[e.key] ?? 0) == 1 ? '' : 's'} audited'),
+                      trailing: _filterSalespersonId == e.key
+                          ? const Icon(Icons.check, size: 18, color: AppTheme.primary)
+                          : null,
+                      onTap: () => Navigator.pop(ctx, e.key),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+          ],
+        );
+      }),
+    );
+    if (picked == null) return; // cancelled
+    final newId = picked == _kAllSalespeople ? null : picked;
+    if (newId == _filterSalespersonId && _filterRouteId == null) return;
+    // Route and salesperson filters are mutually exclusive.
+    setState(() {
+      _filterSalespersonId = newId;
+      _filterRouteId = null;
+    });
     _load();
   }
 
