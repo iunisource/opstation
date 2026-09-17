@@ -842,11 +842,6 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
     // behind the Manufacturing module, not stock-transfers' Inventory module).
     final mod = kRouteToModule[route];
     if (mod != null && !modules.contains(mod)) return false;
-    // The processor tracker + job-work screens have no permission item of their
-    // own, so they inherit Stock Transfers' visibility.
-    if (route == '/erp/processor-tracker' || route == '/erp/processor-jobwork') {
-      route = '/erp/stock-transfers';
-    }
     final r = user?.role;
     final isAdminTier2 = r == WebUserRole.admin ||
         r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;

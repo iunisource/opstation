@@ -259,11 +259,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc == '/erp/home' ||
                 loc == '/erp/onboarding') return true;
             if (access == null) return true;
-            // The processor tracker + job-work screens have no permission item of
-            // their own — they inherit Stock Transfers' visibility.
-            final permLoc =
-                (loc == '/erp/processor-tracker' || loc == '/erp/processor-jobwork')
-                    ? '/erp/stock-transfers' : loc;
+            final permLoc = loc;
             final it = kRouteToPerm[permLoc];
             // Unregistered ERP-area route => no access. Was `return true`, the
             // fail-open leak that let one grant expose whole unrelated menus.

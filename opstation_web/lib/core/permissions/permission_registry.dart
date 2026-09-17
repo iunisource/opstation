@@ -61,6 +61,10 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('product_classifications', 'Product Classifications', PermKind.doc, '/erp/product-classifications'),
     PermItem('opening_stock', 'Opening Stock', PermKind.doc, '/erp/opening-stock'),
     PermItem('stock_transfer', 'Stock Transfers', PermKind.doc, '/erp/stock-transfers'),
+    // Processor / off-site features — gated to the Manufacturing ('production')
+    // module via `module`, but grantable in their own right here.
+    PermItem('processor_tracker', 'Out for Processing', PermKind.report, '/erp/processor-tracker', module: 'production'),
+    PermItem('processor_jobwork', 'Processor Job-work', PermKind.doc, '/erp/processor-jobwork', module: 'production'),
     PermItem('stock_adjustment', 'Stock Adjustment', PermKind.doc, '/erp/stock-adjustment'),
     PermItem('demand_plan', 'Demand Planner', PermKind.report, '/erp/demand-plan'),
     PermItem('price_list', 'Price List Generator', PermKind.report, '/erp/price-list'),

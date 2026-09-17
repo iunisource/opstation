@@ -405,12 +405,16 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
     if (orgId == null) return;
     final client = Supabase.instance.client;
 
-    final branches = await client
-        .from('branches')
-        .select()
-        .eq('org_id', orgId)
-        .eq('is_active', true)
-        .order('name');
+    // Processor / off-site (is_virtual) locations aren't operational branches —
+    // keep them out of the user's branch scope + assignment lists.
+    final branches = ((await client
+            .from('branches')
+            .select()
+            .eq('org_id', orgId)
+            .eq('is_active', true)
+            .order('name')) as List)
+        .where((b) => b['is_virtual'] != true)
+        .toList();
 
     List<String> currentBranches = [];
     // scope key '*' == all branches (branch_id NULL / global grant); else a branch_id.
