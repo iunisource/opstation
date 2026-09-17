@@ -5,6 +5,64 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 
+/// Count of unreviewed absences (no punch + no approved leave, on working days)
+/// over the last 7 days ending yesterday. Drives the pendency badge on the
+/// Attendance Review menu item and the HR nav group. Mirrors the review
+/// screen's own pending detection.
+final attendanceReviewPendingCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    String fmt(DateTime d) =>
+        '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final to = today.subtract(const Duration(days: 1)); // yesterday
+    final from = to.subtract(const Duration(days: 6));   // last 7 days
+    int? restDay;
+    try {
+      final c = await client.from('app_config').select('value')
+          .eq('org_id', user.orgId!).eq('key', 'org.weekly_rest_day').maybeSingle();
+      final v = c?['value'] as String?;
+      restDay = (v != null && v.isNotEmpty) ? int.tryParse(v) : null;
+    } catch (_) {}
+    final emps = await client.from('hr_employees').select('id')
+        .eq('org_id', user.orgId!).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false);
+    final empIds = [for (final e in (emps as List)) e['id'] as String];
+    if (empIds.isEmpty) return 0;
+    final att = await client.from('hr_attendance')
+        .select('employee_id, att_date, status, check_in, is_penalty, review_status')
+        .eq('org_id', user.orgId!).gte('att_date', fmt(from)).lte('att_date', fmt(to));
+    final map = <String, Map<String, Map<String, dynamic>>>{};
+    for (final r in (att as List)) {
+      final e = r['employee_id'] as String?; final d = r['att_date'] as String?;
+      if (e == null || d == null) continue;
+      (map[e] ??= {})[d] = Map<String, dynamic>.from(r);
+    }
+    int count = 0;
+    for (var d = from; !d.isAfter(to); d = d.add(const Duration(days: 1))) {
+      if (restDay != null && (d.weekday % 7) == restDay) continue;
+      final ds = fmt(d);
+      for (final empId in empIds) {
+        final row = map[empId]?[ds];
+        final st = row?['status'] as String?;
+        final ci = row?['check_in'] as String?;
+        final reviewed = row?['review_status'] as String?;
+        if (st == 'present' || st == 'half_day') continue;
+        if (st == 'leave' || st == 'holiday' || st == 'rest_day') continue;
+        if (ci != null && ci.isNotEmpty) continue;
+        if (row?['is_penalty'] == true) continue;
+        if (reviewed == 'excused' || reviewed == 'unapproved') continue;
+        count++;
+      }
+    }
+    return count;
+  } catch (_) {
+    return 0;
+  }
+});
+
 /// Attendance Review — the "pendency" workspace.
 ///
 /// Lists every UNREVIEWED absence (no punch + no approved leave, on a working
@@ -208,6 +266,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
       }
       await _loadAtt();
       _rebuildPending();
+      ref.invalidate(attendanceReviewPendingCountProvider);
       _snack('${p.emp['full_name']} — ${DateFormat('d MMM').format(p.date)} excused as approved leave.');
     } catch (e) {
       _snack('Failed: $e');
@@ -282,6 +341,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
 
       await _loadAtt();
       _rebuildPending();
+      ref.invalidate(attendanceReviewPendingCountProvider);
       final msg = placed.isEmpty
           ? '${p.emp['full_name']} — absence on ${DateFormat('d MMM').format(p.date)} marked unapproved.'
           : '${p.emp['full_name']} — unapproved. Penalty absent added on ${placed.join(', ')}.';

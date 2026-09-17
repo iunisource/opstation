@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/auth_controller.dart';
 import '../../features/auth/presentation/change_password_dialog.dart';
+import '../../features/hr/presentation/hr_attendance_review_screen.dart' show attendanceReviewPendingCountProvider;
 import '../theme/app_theme.dart';
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
@@ -880,6 +881,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
   final processorOverduePending = ref.watch(processorOverdueCountProvider).valueOrNull ?? 0;
   final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
+  final attReviewPending = ref.watch(attendanceReviewPendingCountProvider).valueOrNull ?? 0;
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
 
@@ -1057,7 +1059,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     ];
     final hrAttendance = <Widget>[
       if (show('/hr/attendance')) _menuItem(context, 'Attendance', Icons.fact_check_outlined, '/hr/attendance', location),
-      if (show('/hr/attendance-review')) _menuItem(context, 'Attendance Review', Icons.pending_actions_outlined, '/hr/attendance-review', location),
+      if (show('/hr/attendance-review')) _menuItem(context, 'Attendance Review', Icons.pending_actions_outlined, '/hr/attendance-review', location, badge: attReviewPending),
       if (show('/hr/attendance-kiosk')) _menuItem(context, 'Attendance Kiosk', Icons.qr_code_scanner_outlined, '/hr/attendance-kiosk', location),
       if (show('/hr/attendance-board')) _menuItem(context, 'Attendance Board', Icons.grid_view_outlined, '/hr/attendance-board', location),
     ];
@@ -1162,7 +1164,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(financialItems)),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
-          ['/hr/employees', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems)),
+          ['/hr/employees', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
       if (show('/assets') || show('/facility'))
