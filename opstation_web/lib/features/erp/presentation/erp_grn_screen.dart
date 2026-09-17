@@ -83,6 +83,13 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   // locked — otherwise confirm_grn rejects with "already confirmed (or is locked)".
   bool get _isConfirmed => _grnStatus != 'draft';
   bool get _isDraft  => !_isLocked && !_isConfirmed;
+  // Once a GRN is saved/posted (not a draft and not being adjusted), lines that
+  // received 0 are dropped from the read-only view and the printout — a zero
+  // line carries nothing forward. While drafting or adjusting, every ordered
+  // line stays visible so a quantity can still be entered.
+  List<Map<String, dynamic>> get _visibleItems => (_isDraft || _adjustMode)
+      ? _items
+      : _items.where((it) => ((it['qty_received'] as num?)?.toDouble() ?? 0) > 0).toList();
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
@@ -543,7 +550,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       customerAddress: sup?['address'] as String?,
       customerContact: sup?['contact_person'] as String?,
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
-      lines: _isDraft ? [] : _items.map((it) => VoucherLine(
+      lines: _isDraft ? [] : _visibleItems.map((it) => VoucherLine(
         product: it['products']?['name'] as String? ?? '-',
         sku: it['products']?['sku'] as String?, uom: it['uoms']?['abbreviation'] as String?,
         qty: (it['qty_received'] as num?)?.toDouble() ?? 0,
@@ -750,8 +757,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                 Expanded(flex: 2, child: Text('Received', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
               ])),
             const Divider(height: 1),
-            if (_items.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text('No items', style: TextStyle(color: AppTheme.textSecondary))),
-            ..._items.map((it) {
+            if (_visibleItems.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text('No items', style: TextStyle(color: AppTheme.textSecondary))),
+            ..._visibleItems.map((it) {
               final id = it['id'] as String;
               final ordered = (it['qty_ordered'] as num?)?.toDouble() ?? 0;
               final received = (it['qty_received'] as num?)?.toDouble() ?? 0;
