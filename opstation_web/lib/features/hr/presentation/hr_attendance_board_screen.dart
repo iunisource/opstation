@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
@@ -283,7 +284,9 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
 
   Widget _card(_Emp e) {
     final c = _color(e.state);
-    return Container(
+    return GestureDetector(
+      onTap: () => context.go('/hr/employees?focus=${e.id}'),
+      child: Container(
       width: 150,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -328,6 +331,7 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
             style: TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
         ),
       ]),
+      ),
     );
   }
 

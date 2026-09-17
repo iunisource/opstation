@@ -426,7 +426,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => const ErpClaimProcessingVoucherScreen()),
       GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => const ErpProductionWasteReportScreen()),
       GoRoute(path: '/manufacturing/overheads-summary', builder: (_, __) => const ErpOverheadsSummaryScreen()),
-      GoRoute(path: '/hr/employees', builder: (_, __) => const HrEmployeesScreen()),
+      GoRoute(path: '/hr/employees', builder: (_, state) => HrEmployeesScreen(focusId: state.uri.queryParameters['focus'])),
       GoRoute(path: '/hr/attendance', builder: (_, __) => const HrAttendanceScreen()),
       // These two screens existed and were registered in the permission registry
       // (so they rendered as menu items) but had no GoRoute — clicking them threw

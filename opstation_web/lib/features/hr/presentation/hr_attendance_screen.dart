@@ -586,11 +586,8 @@ class _State extends ConsumerState<HrAttendanceScreen> {
             cells += '<td class="day">${code(st)}</td>';
             if (st == 'present' || st == 'half_day') {
               final wh = _hours(rec?['check_in'] as String?, rec?['check_out'] as String?);
-              // Hrs var only compares days where BOTH in & out are recorded — a
-              // present day with missing times must not read as a full-shift
-              // shortfall. Days-worked still counts the attendance either way.
-              if (wh != null) { worked += wh; expected += (st == 'present') ? stdHrs : stdHrs / 2; }
-              daysWorked += (st == 'present') ? 1 : 0.5;
+              if (wh != null) worked += wh;
+              if (st == 'present') { daysWorked += 1; expected += stdHrs; } else { daysWorked += 0.5; expected += stdHrs / 2; }
             }
           }
           final variance = worked - expected;
@@ -600,7 +597,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
         }
         body = '<table class="matrix"><thead><tr>$head</tr></thead><tbody>'
             '${rows.isEmpty ? '<tr><td>No employees.</td></tr>' : rows}</tbody></table>'
-            '<div class="legend">P = Present &nbsp; A = Absent &nbsp; L = Leave &nbsp; &frac12; = Half day &nbsp; H = Holiday &nbsp; R = Rest day &nbsp;&nbsp;|&nbsp;&nbsp; Hrs var = worked hours minus expected shift hours, counted only on days with both check-in &amp; check-out (+ surplus / - short)</div>';
+            '<div class="legend">P = Present &nbsp; A = Absent &nbsp; L = Leave &nbsp; &frac12; = Half day &nbsp; H = Holiday &nbsp; R = Rest day &nbsp;&nbsp;|&nbsp;&nbsp; Hrs var = worked hours minus expected shift hours (+ surplus / - short)</div>';
       }
 
       // Edit trail is intentionally NOT included in the exported/printed
