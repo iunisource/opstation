@@ -1109,6 +1109,8 @@ $docsHtml
       final nameCtrl = TextEditingController();
       final graceCtrl = TextEditingController(text: '0');
       final halfCtrl = TextEditingController();
+      final penaltyDaysCtrl = TextEditingController(text: '1');
+      bool penalize = false;
       String? editId; String? sStart; String? sEnd;
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       return StatefulBuilder(builder: (ctx, setLocal) {
@@ -1122,11 +1124,12 @@ $docsHtml
           final orgId = _orgId; if (orgId == null) return;
           if (nameCtrl.text.trim().isEmpty) { _snack('Shift name required'); return; }
           final half = double.tryParse(halfCtrl.text.trim());
-          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'half_day_hours': (half != null && half > 0) ? half : null, 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'is_active': true};
+          final penaltyDays = int.tryParse(penaltyDaysCtrl.text.trim()) ?? 1;
+          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'half_day_hours': (half != null && half > 0) ? half : null, 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'penalize_unapproved_absence': penalize, 'absence_penalty_days': penalize ? (penaltyDays < 0 ? 0 : penaltyDays) : 1, 'is_active': true};
           try {
             if (editId == null) { payload['id'] = 'shift_' + DateTime.now().millisecondsSinceEpoch.toString(); await Supabase.instance.client.from('hr_shifts').insert(payload); }
             else { await Supabase.instance.client.from('hr_shifts').update(payload).eq('id', editId!); }
-            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); sStart = null; sEnd = null; editId = null; });
+            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; penalize = false; sStart = null; sEnd = null; editId = null; });
             await refresh();
           } catch (e) { _snack('Save failed: $e'); }
         }
@@ -1170,9 +1173,31 @@ $docsHtml
             ]),
             const SizedBox(height: 6),
             Align(alignment: Alignment.centerLeft, child: Text('Standard hours: ${calc()?.toString() ?? '\u2014'}  \u00b7  worked \u2264 half-day hours counts as \u00bd day', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+            const SizedBox(height: 10),
+            // Unapproved-absence penalty policy (applied from the Attendance Review screen).
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE0E0E0))),
+              child: Column(children: [
+                Row(children: [
+                  const Icon(Icons.gavel_outlined, size: 16, color: AppTheme.textSecondary),
+                  const SizedBox(width: 8),
+                  const Expanded(child: Text('Penalize unapproved absence', style: TextStyle(fontSize: 12))),
+                  Switch(value: penalize, onChanged: !_canWrite ? null : (v) => setLocal(() => penalize = v)),
+                ]),
+                if (penalize) Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(children: [
+                    SizedBox(width: 110, child: TextField(controller: penaltyDaysCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Extra absents', isDense: true, border: OutlineInputBorder()))),
+                    const SizedBox(width: 10),
+                    const Expanded(child: Text('Added on the next working day(s) after an unapproved absence. Punch times are kept but the day reports Absent.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+                  ]),
+                ),
+              ]),
+            ),
             const SizedBox(height: 8),
             Row(children: [
-              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
+              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; penalize = false; sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
               const Spacer(),
               ElevatedButton(onPressed: saveShift, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: Text(editId == null ? 'Add shift' : 'Update')),
             ]),
@@ -1183,9 +1208,9 @@ $docsHtml
                   final s = _shifts[i]; final active = s['is_active'] != false;
                   return ListTile(dense: true,
                     title: Text(s['name'] as String? ?? '', style: TextStyle(fontSize: 13, decoration: active ? null : TextDecoration.lineThrough)),
-                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  \u00bd @ ${s['half_day_hours'] ?? ((s['work_hours'] as num?) != null ? ((s['work_hours'] as num) / 2).toStringAsFixed(2) : '\u2014')}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m', style: const TextStyle(fontSize: 11)),
+                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  \u00bd @ ${s['half_day_hours'] ?? ((s['work_hours'] as num?) != null ? ((s['work_hours'] as num) / 2).toStringAsFixed(2) : '\u2014')}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m${s['penalize_unapproved_absence'] == true ? '  \u00b7  penalty +${s['absence_penalty_days'] ?? 1}' : ''}', style: const TextStyle(fontSize: 11)),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); halfCtrl.text = s['half_day_hours']?.toString() ?? ''; })),
+                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); halfCtrl.text = s['half_day_hours']?.toString() ?? ''; penalize = s['penalize_unapproved_absence'] == true; penaltyDaysCtrl.text = (s['absence_penalty_days'] ?? 1).toString(); })),
                       Switch(value: active, onChanged: (v) async { try { await Supabase.instance.client.from('hr_shifts').update({'is_active': v}).eq('id', s['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); } }),
                     ]));
                 })),

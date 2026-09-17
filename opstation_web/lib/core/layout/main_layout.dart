@@ -1056,11 +1056,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     ];
     final hrAttendance = <Widget>[
       if (show('/hr/attendance')) _menuItem(context, 'Attendance', Icons.fact_check_outlined, '/hr/attendance', location),
+      if (show('/hr/attendance-review')) _menuItem(context, 'Attendance Review', Icons.pending_actions_outlined, '/hr/attendance-review', location),
       if (show('/hr/attendance-kiosk')) _menuItem(context, 'Attendance Kiosk', Icons.qr_code_scanner_outlined, '/hr/attendance-kiosk', location),
       if (show('/hr/attendance-board')) _menuItem(context, 'Attendance Board', Icons.grid_view_outlined, '/hr/attendance-board', location),
     ];
     final hrLeave = <Widget>[
       if (show('/hr/leave')) _menuItem(context, 'Leave', Icons.beach_access_outlined, '/hr/leave', location),
+      if (show('/hr/payroll')) _menuItem(context, 'Payroll', Icons.payments_outlined, '/hr/payroll', location),
     ];
     final hrItems = <Widget>[
       ...hrDirectory,
@@ -1159,7 +1161,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(financialItems)),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
-          ['/hr/employees', '/hr/attendance', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave'], _trimDividers(hrItems)),
+          ['/hr/employees', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems)),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
       if (show('/assets') || show('/facility'))

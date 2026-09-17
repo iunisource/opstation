@@ -29,6 +29,8 @@ import '../../features/erp/presentation/erp_skipped_receipts_report_screen.dart'
 import '../../features/erp/presentation/erp_super_summary_screen.dart';
 import '../../features/hr/presentation/hr_employees_screen.dart';
 import '../../features/hr/presentation/hr_employee_attendance_screen.dart';
+import '../../features/hr/presentation/hr_attendance_review_screen.dart';
+import '../../features/hr/presentation/hr_payroll_screen.dart';
 import '../../features/hr/presentation/hr_attendance_board_screen.dart';
 import '../../features/hr/presentation/hr_attendance_kiosk_screen.dart';
 import '../../features/hr/presentation/hr_attendance_screen.dart';
@@ -430,12 +432,14 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/hr/employees', builder: (_, state) => HrEmployeesScreen(focusId: state.uri.queryParameters['focus'])),
       GoRoute(path: '/hr/employee-attendance', builder: (_, state) => HrEmployeeAttendanceScreen(empId: state.uri.queryParameters['emp'] ?? '')),
       GoRoute(path: '/hr/attendance', builder: (_, __) => const HrAttendanceScreen()),
+      GoRoute(path: '/hr/attendance-review', builder: (_, __) => const HrAttendanceReviewScreen()),
       // These two screens existed and were registered in the permission registry
       // (so they rendered as menu items) but had no GoRoute — clicking them threw
       // "no routes for location". Pre-existing gap, not introduced by the Files work.
       GoRoute(path: '/hr/attendance-kiosk', builder: (_, __) => const HrAttendanceKioskScreen()),
       GoRoute(path: '/hr/attendance-board', builder: (_, __) => const HrAttendanceBoardScreen()),
       GoRoute(path: '/hr/leave', builder: (_, __) => const HrLeaveScreen()),
+      GoRoute(path: '/hr/payroll', builder: (_, __) => const HrPayrollScreen()),
       GoRoute(path: '/erp/customer-ledger', builder: (_, __) => const ErpCustomerLedgerScreen()),
           GoRoute(path: '/erp/inventory-ledger', builder: (_, s) => ErpInventoryLedgerScreen(focusProductId: s.uri.queryParameters['focus'])),
           GoRoute(path: '/erp/price-list', builder: (_, __) => const ErpPriceListScreen()),

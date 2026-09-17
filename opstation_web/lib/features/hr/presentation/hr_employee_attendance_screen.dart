@@ -168,7 +168,7 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
     if (orgId == null) return;
     final r = await Supabase.instance.client
         .from('hr_attendance')
-        .select('att_date, status, check_in, check_out, work_hours')
+        .select('att_date, status, check_in, check_out, work_hours, is_penalty')
         .eq('org_id', orgId)
         .eq('employee_id', widget.empId)
         .gte('att_date', _fmt(_from))
@@ -231,6 +231,7 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
         checkOut: a['check_out'] as String?,
         hours: wh,
         late: (eff == 'present' || eff == 'half_day') && _isLate(a),
+        penalty: a['is_penalty'] == true,
       ));
     }
     return out;
@@ -447,7 +448,7 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
               child: Row(children: [
                 Expanded(flex: 3, child: Text(DateFormat('d MMM yyyy').format(r.date), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
                 Expanded(flex: 2, child: Text(DateFormat('EEE').format(r.date), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                Expanded(flex: 2, child: Text(_statusLabel(r.status), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _statusColor(r.status)))),
+                Expanded(flex: 2, child: Text(r.penalty ? '${_statusLabel(r.status)} (penalty)' : _statusLabel(r.status), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _statusColor(r.status)))),
                 Expanded(flex: 2, child: Text(r.checkIn ?? '—', style: const TextStyle(fontSize: 12))),
                 Expanded(flex: 2, child: Text(r.checkOut ?? '—', style: const TextStyle(fontSize: 12))),
                 Expanded(flex: 2, child: Text(r.hours != null ? r.hours!.toStringAsFixed(2) : '—', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
@@ -490,7 +491,7 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
       return '<tr>'
           '<td>${esc(DateFormat('d MMM yyyy').format(r.date))}</td>'
           '<td>${esc(DateFormat('EEE').format(r.date))}</td>'
-          '<td>${esc(_statusLabel(r.status))}</td>'
+          '<td>${esc(r.penalty ? _statusLabel(r.status) + ' (penalty)' : _statusLabel(r.status))}</td>'
           '<td>${esc(r.checkIn ?? '—')}</td>'
           '<td>${esc(r.checkOut ?? '—')}</td>'
           '<td style="text-align:right">${r.hours != null ? r.hours!.toStringAsFixed(2) : '—'}</td>'
@@ -560,6 +561,7 @@ class _Rec {
   final String? checkOut;
   final double? hours;
   final bool late;
+  final bool penalty;
   _Rec({
     required this.date,
     required this.dateStr,
@@ -568,5 +570,6 @@ class _Rec {
     required this.checkOut,
     required this.hours,
     required this.late,
+    this.penalty = false,
   });
 }
