@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
@@ -124,121 +125,6 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     }
   }
 
-  // Attendance record for the currently-open employee, over a date range.
-  Future<void> _attendanceRecordDialog() async {
-    final emp = _current;
-    final orgId = _orgId;
-    if (emp == null || orgId == null) return;
-    final empId = emp['id'] as String;
-    final empName = (emp['full_name'] as String?) ?? 'Employee';
-    String fmt(DateTime d) =>
-        '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-    final today = DateTime.now();
-    DateTime to = DateTime(today.year, today.month, today.day);
-    DateTime from = to.subtract(const Duration(days: 29));
-
-    Future<List<Map<String, dynamic>>> fetch() async {
-      final r = await Supabase.instance.client
-          .from('hr_attendance')
-          .select('att_date, status, check_in, check_out')
-          .eq('org_id', orgId)
-          .eq('employee_id', empId)
-          .gte('att_date', fmt(from))
-          .lte('att_date', fmt(to))
-          .order('att_date', ascending: false);
-      return List<Map<String, dynamic>>.from(r);
-    }
-
-    List<Map<String, dynamic>> rows = [];
-    bool loading = true;
-    try {
-      rows = await fetch();
-    } catch (_) {}
-    loading = false;
-    if (!mounted) return;
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
-        Future<void> pick(bool isFrom) async {
-          final picked = await showDatePicker(
-            context: ctx,
-            initialDate: isFrom ? from : to,
-            firstDate: DateTime(2020),
-            lastDate: DateTime(2100),
-          );
-          if (picked == null) return;
-          setLocal(() {
-            if (isFrom) from = picked; else to = picked;
-            loading = true;
-          });
-          List<Map<String, dynamic>> r = [];
-          try { r = await fetch(); } catch (_) {}
-          setLocal(() { rows = r; loading = false; });
-        }
-
-        final present =
-            rows.where((a) => (a['status'] as String? ?? '').toLowerCase() == 'present').length;
-
-        return AlertDialog(
-          title: Text('Attendance — $empName', style: const TextStyle(fontSize: 16)),
-          content: SizedBox(
-            width: 480,
-            height: 470,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                OutlinedButton.icon(
-                    icon: const Icon(Icons.calendar_today_outlined, size: 15),
-                    label: Text('From ${fmt(from)}', style: const TextStyle(fontSize: 12)),
-                    onPressed: () => pick(true)),
-                OutlinedButton.icon(
-                    icon: const Icon(Icons.event_outlined, size: 15),
-                    label: Text('To ${fmt(to)}', style: const TextStyle(fontSize: 12)),
-                    onPressed: () => pick(false)),
-                if (!loading)
-                  Text('$present present · ${rows.length} days',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-              ]),
-              const SizedBox(height: 10),
-              Expanded(
-                child: loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : rows.isEmpty
-                        ? const Center(child: Text('No attendance in this range',
-                            style: TextStyle(color: AppTheme.textSecondary)))
-                        : ListView.separated(
-                            itemCount: rows.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
-                            itemBuilder: (_, i) {
-                              final a = rows[i];
-                              final st = (a['status'] as String?) ?? '';
-                              final ci = (a['check_in'] as String?) ?? '';
-                              final co = (a['check_out'] as String?) ?? '';
-                              final sub = [
-                                if (ci.isNotEmpty) 'In $ci',
-                                if (co.isNotEmpty) 'Out $co',
-                              ].join('  ·  ');
-                              return ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(a['att_date'] as String? ?? '',
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                                subtitle: sub.isEmpty ? null : Text(sub, style: const TextStyle(fontSize: 12)),
-                                trailing: Text(st,
-                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                              );
-                            },
-                          ),
-              ),
-            ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-          ],
-        );
-      }),
-    );
-  }
 
   Future<void> _loadDepts() async {
     final orgId = _orgId; if (orgId == null) return;
@@ -917,7 +803,7 @@ $docsHtml
             if (_canWrite) TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
             if (_canWrite) TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
             if (_isAdmin) TextButton.icon(icon: const Icon(Icons.schedule_outlined, size: 15), label: const Text('Shifts', style: TextStyle(fontSize: 12)), onPressed: _manageShifts),
-            if (_current != null) TextButton.icon(icon: const Icon(Icons.event_available_outlined, size: 15), label: const Text('Attendance record', style: TextStyle(fontSize: 12)), onPressed: _attendanceRecordDialog),
+            if (_current != null) TextButton.icon(icon: const Icon(Icons.event_available_outlined, size: 15), label: const Text('Attendance record', style: TextStyle(fontSize: 12)), onPressed: () { final id = _current?['id'] as String?; if (id != null) context.push('/hr/employee-attendance?emp=$id'); }),
             if (_current != null) _statusChip(),
             if (_current != null) const SizedBox(width: 6),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 19), tooltip: 'Print / PDF', onPressed: _printProfile),
