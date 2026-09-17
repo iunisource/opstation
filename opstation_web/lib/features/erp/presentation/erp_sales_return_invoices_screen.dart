@@ -35,6 +35,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   String _supFilter = 'all'; // supervision filter: all | yes | no
   bool _superviseFlow = false; // org.sri_supervise_flow: non-blocking admin supervise mark
   bool _superviseBusy = false;
+  final Set<String> _supSelected = {}; // SRI ids ticked for selected-bulk supervise
 
   @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); _loadSuperviseFlow(); }
   @override void dispose() { for (final c in _priceCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); super.dispose(); }
@@ -168,6 +169,79 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       });
       ref.invalidate(sriSupervisePendingProvider);
       _showSnack('Marked as supervised');
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    finally { if (mounted) setState(() => _superviseBusy = false); }
+  }
+
+  // ── Bulk supervision: mark pending (unsupervised, non-voided) SRIs supervised
+  // in one action. With [onlyIds] it supervises just the ticked selection;
+  // otherwise every pending SRI in the current list.
+  Future<void> _bulkSupervise({Set<String>? onlyIds}) async {
+    if (!_isAdmin) { _showSnack('Only admins can supervise'); return; }
+    if (_superviseBusy) return;
+    final ids = _invoices
+        .where((i) => i['supervised_at'] == null && i['is_voided'] != true)
+        .map((i) => i['id'] as String)
+        .where((id) => onlyIds == null || onlyIds.contains(id))
+        .toList();
+    if (ids.isEmpty) { _showSnack('Nothing pending to supervise'); return; }
+    final scope = onlyIds == null ? 'all' : 'selected';
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: Text(onlyIds == null ? 'Supervise all pending?' : 'Supervise selected?'),
+      content: Text('Mark $scope ${ids.length} pending sales return invoice(s) as supervised? '
+          'This is a review mark only — it does not affect the ledger or the return.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: Text('Supervise ${ids.length}')),
+      ],
+    ));
+    if (ok != true) return;
+    setState(() => _superviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      for (var i = 0; i < ids.length; i += 100) {
+        final chunk = ids.sublist(i, i + 100 > ids.length ? ids.length : i + 100);
+        await Supabase.instance.client.from('sales_return_invoices').update({
+          'supervised_by': userId, 'supervised_at': now,
+          'supervised_by_name': userName,
+          'supervised_signature_url': sigUrl,
+          'supervised_stamp_url': stampUrl,
+          'updated_at': now,
+        }).inFilter('id', chunk);
+        try {
+          await Supabase.instance.client.from('voucher_audit_log').insert([
+            for (final id in chunk)
+              {
+                'org_id': _orgId, 'voucher_type': 'SRI', 'voucher_id': id,
+                'action': 'supervised',
+                'details': 'Bulk supervised by ${userName ?? userId ?? 'admin'}',
+                'performed_by': userId,
+              }
+          ]);
+        } catch (_) { /* audit is best-effort */ }
+      }
+      if (mounted) setState(() {
+        final idset = ids.toSet();
+        for (final inv in _invoices) {
+          if (idset.contains(inv['id'])) {
+            inv['supervised_at'] = now; inv['supervised_by'] = userId; inv['supervised_by_name'] = userName;
+          }
+        }
+        if (_detail.isNotEmpty && idset.contains(_detail['id'])) {
+          _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
+          _detail['supervised_by_name'] = userName;
+          _detail['supervised_signature_url'] = sigUrl;
+          _detail['supervised_stamp_url'] = stampUrl;
+        }
+        _supSelected.clear();
+      });
+      ref.invalidate(sriSupervisePendingProvider);
+      _showSnack('Supervised ${ids.length} sales return invoice(s)');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
@@ -434,6 +508,25 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
             _SriTab(label: 'Pending${supPending > 0 ? ' ($supPending)' : ''}', value: 'no', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
           ])),
         ])),
+        if (supPending > 0) Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+          child: SizedBox(width: double.infinity, child: OutlinedButton.icon(
+            onPressed: _superviseBusy ? null : () => _bulkSupervise(),
+            icon: _superviseBusy
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.done_all, size: 16),
+            label: Text('Supervise all pending ($supPending)', style: const TextStyle(fontSize: 12)),
+          )),
+        ),
+        if (_supSelected.isNotEmpty) Padding(
+          padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+          child: SizedBox(width: double.infinity, child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+            onPressed: _superviseBusy ? null : () => _bulkSupervise(onlyIds: _supSelected.toSet()),
+            icon: const Icon(Icons.playlist_add_check, size: 16),
+            label: Text('Supervise selected (${_supSelected.length})', style: const TextStyle(fontSize: 12)),
+          )),
+        ),
       ],
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
@@ -448,7 +541,21 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                   title: Row(children: [
                     Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
-                    if (_superviseFlow && r['supervised_at'] == null && !voided) ...[
+                    if (_superviseFlow && _isAdmin && r['supervised_at'] == null && !voided) ...[
+                      InkWell(
+                        onTap: () => setState(() {
+                          final id = r['id'] as String;
+                          if (_supSelected.contains(id)) { _supSelected.remove(id); } else { _supSelected.add(id); }
+                        }),
+                        child: Tooltip(
+                          message: _supSelected.contains(r['id']) ? 'Selected for supervision' : 'Tick to supervise',
+                          child: Icon(
+                            _supSelected.contains(r['id']) ? Icons.check_box : Icons.check_box_outline_blank,
+                            size: 16, color: _supSelected.contains(r['id']) ? AppTheme.primary : Colors.orange),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ] else if (_superviseFlow && r['supervised_at'] == null && !voided) ...[
                       const Tooltip(message: 'Awaiting supervision', child: Icon(Icons.verified_user_outlined, size: 14, color: Colors.orange)),
                       const SizedBox(width: 4),
                     ],

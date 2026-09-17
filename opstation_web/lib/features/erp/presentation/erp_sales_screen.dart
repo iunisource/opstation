@@ -2908,6 +2908,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _reviewFlow = false; // org.doc_review_flow_si: support docs + admin review
   bool _superviseFlow = false; // org.si_supervise_flow: non-blocking admin supervise mark
   bool _superviseBusy = false;
+  final Set<String> _supSelected = {}; // invoice ids ticked for selected-bulk supervise
   String _search = '';
   String _siStatusFilter = 'all'; // all | draft | under_review | rejected | posted | voided
   String _siSupFilter = 'all'; // supervision filter: all | yes | no (only when supervise flow on)
@@ -3163,18 +3164,22 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     finally { if (mounted) setState(() => _superviseBusy = false); }
   }
 
-  // ── Bulk supervision: mark every pending (unsupervised, non-voided) invoice
-  // in the current view as supervised in one action.
-  Future<void> _bulkSupervise() async {
+  // ── Bulk supervision: mark pending (unsupervised, non-voided) invoices as
+  // supervised in one action. With [onlyIds] it supervises just those (the
+  // ticked selection); otherwise every pending invoice in the current view.
+  Future<void> _bulkSupervise({Set<String>? onlyIds}) async {
     if (!_canSupervise) { _showSnack('You are not allowed to supervise'); return; }
     if (_superviseBusy) return;
     final ids = _invoices
         .where((i) => i['supervised_at'] == null && i['is_voided'] != true)
-        .map((i) => i['id'] as String).toList();
+        .map((i) => i['id'] as String)
+        .where((id) => onlyIds == null || onlyIds.contains(id))
+        .toList();
     if (ids.isEmpty) { _showSnack('Nothing pending to supervise'); return; }
+    final scope = onlyIds == null ? 'all' : 'selected';
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Supervise all pending?'),
-      content: Text('Mark all ${ids.length} pending sales invoice(s) as supervised? '
+      title: Text(onlyIds == null ? 'Supervise all pending?' : 'Supervise selected?'),
+      content: Text('Mark $scope ${ids.length} pending sales invoice(s) as supervised? '
           'This is a review mark only — it does not affect posting or the ledger.'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
@@ -3223,6 +3228,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           _detail['supervised_signature_url'] = sigUrl;
           _detail['supervised_stamp_url'] = stampUrl;
         }
+        _supSelected.clear();
       });
       ref.invalidate(siSupervisePendingProvider);
       _showSnack('Supervised ${ids.length} sales invoice(s)');
@@ -3813,12 +3819,21 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   if (_siSupPendingCount > 0) ...[
                     const SizedBox(height: 8),
                     SizedBox(width: double.infinity, child: OutlinedButton.icon(
-                      onPressed: _superviseBusy ? null : _bulkSupervise,
+                      onPressed: _superviseBusy ? null : () => _bulkSupervise(),
                       icon: _superviseBusy
                           ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.done_all, size: 16),
                       label: Text('Supervise all pending ($_siSupPendingCount)',
                           style: const TextStyle(fontSize: 12)),
+                    )),
+                  ],
+                  if (_supSelected.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    SizedBox(width: double.infinity, child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+                      onPressed: _superviseBusy ? null : () => _bulkSupervise(onlyIds: _supSelected.toSet()),
+                      icon: const Icon(Icons.playlist_add_check, size: 16),
+                      label: Text('Supervise selected (${_supSelected.length})', style: const TextStyle(fontSize: 12)),
                     )),
                   ],
                 ],
@@ -3847,8 +3862,19 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                         style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: isSelected ? AppTheme.primary : Colors.black87)),
                                     const Spacer(),
                                     if (_superviseFlow && _canSupervise && inv['supervised_at'] == null && inv['is_voided'] != true) ...[
-                                      const Tooltip(message: 'Awaiting supervision', child: Icon(Icons.verified_user_outlined, size: 14, color: Colors.orange)),
-                                      const SizedBox(width: 4),
+                                      InkWell(
+                                        onTap: () => setState(() {
+                                          final id = inv['id'] as String;
+                                          if (_supSelected.contains(id)) { _supSelected.remove(id); } else { _supSelected.add(id); }
+                                        }),
+                                        child: Tooltip(
+                                          message: _supSelected.contains(inv['id']) ? 'Selected for supervision' : 'Tick to supervise',
+                                          child: Icon(
+                                            _supSelected.contains(inv['id']) ? Icons.check_box : Icons.check_box_outline_blank,
+                                            size: 16, color: _supSelected.contains(inv['id']) ? AppTheme.primary : Colors.orange),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
                                     ],
                                     _siListBadge(inv),
                                   ]),
