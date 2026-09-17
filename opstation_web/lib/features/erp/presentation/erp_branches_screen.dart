@@ -56,6 +56,58 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
         .showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
   }
 
+  // Searchable supplier picker for the processor "fee billed to" field.
+  // Returns the chosen supplier id, '' for "none", or null if cancelled.
+  Future<String?> _pickSupplier(BuildContext context, String? current) {
+    String q = '';
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        final ql = q.toLowerCase().trim();
+        final list = _suppliers
+            .where((s) => ql.isEmpty || (s['name'] as String? ?? '').toLowerCase().contains(ql))
+            .toList();
+        return AlertDialog(
+          title: const Text('Select supplier', style: TextStyle(fontSize: 16)),
+          content: SizedBox(
+            width: 420,
+            height: 480,
+            child: Column(children: [
+              TextField(
+                autofocus: true,
+                decoration: const InputDecoration(
+                    hintText: 'Search supplier…', prefixIcon: Icon(Icons.search, size: 18),
+                    isDense: true, border: OutlineInputBorder()),
+                onChanged: (v) => setLocal(() => q = v),
+              ),
+              const SizedBox(height: 8),
+              Expanded(child: ListView(children: [
+                ListTile(
+                  dense: true,
+                  title: const Text('— none —'),
+                  selected: current == null,
+                  onTap: () => Navigator.pop(ctx, ''),
+                ),
+                for (final s in list)
+                  ListTile(
+                    dense: true,
+                    title: Text(s['name'] as String? ?? ''),
+                    selected: s['id'] == current,
+                    onTap: () => Navigator.pop(ctx, s['id'] as String),
+                  ),
+                if (list.isEmpty) const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('No matches', style: TextStyle(color: AppTheme.textSecondary)),
+                ),
+              ])),
+            ]),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
+        );
+      }),
+    );
+  }
+
   Future<void> _toggleActive(Map<String, dynamic> w) async {
     final newVal = !(w['is_active'] as bool? ?? true);
     try {
@@ -118,22 +170,28 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
               // once this location is marked a processor.
               if (isVirtual) ...[
                 const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  value: _suppliers.any((s) => s['id'] == supplierId) ? supplierId : null,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                      labelText: 'Processor supplier (fee billed to)',
-                      isDense: true, border: OutlineInputBorder(),
-                      helperText: 'Pre-fills the payable on Job-work receipts',
-                      helperMaxLines: 2),
-                  hint: const Text('Select supplier (optional)'),
-                  items: [
-                    const DropdownMenuItem<String>(value: null, child: Text('— none —')),
-                    for (final s in _suppliers)
-                      DropdownMenuItem(value: s['id'] as String, child: Text('${s['name']}')),
-                  ],
-                  onChanged: (v) => setLocal(() => supplierId = v),
-                ),
+                Builder(builder: (fieldCtx) {
+                  final sel = _suppliers.firstWhere((s) => s['id'] == supplierId, orElse: () => const {});
+                  final selName = sel['name'] as String?;
+                  return InkWell(
+                    onTap: () async {
+                      final picked = await _pickSupplier(fieldCtx, supplierId);
+                      if (picked != null) setLocal(() => supplierId = picked.isEmpty ? null : picked);
+                    },
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                          labelText: 'Processor supplier (fee billed to)',
+                          isDense: true, border: OutlineInputBorder(),
+                          helperText: 'Pre-fills the payable on Job-work receipts',
+                          helperMaxLines: 2),
+                      child: Row(children: [
+                        Expanded(child: Text(selName ?? 'Select supplier (optional)',
+                            style: TextStyle(fontSize: 14, color: selName == null ? AppTheme.textSecondary : null))),
+                        const Icon(Icons.arrow_drop_down, color: AppTheme.textSecondary),
+                      ]),
+                    ),
+                  );
+                }),
               ],
             ],
           ]),

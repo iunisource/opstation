@@ -113,7 +113,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         client.from('products').select('*, uoms(name, abbreviation)').eq('org_id', orgId).order('name'),
         client.from('product_taxonomies').select().eq('org_id', orgId).order('name'),
         client.from('uoms').select().eq('org_id', orgId).order('name'),
-        client.from('branches').select('id, name').eq('org_id', orgId!).eq('is_active', true).order('name'),
+        client.from('branches').select('id, name, is_virtual').eq('org_id', orgId!).eq('is_active', true).order('name'),
         client.from('app_config').select('key, value').eq('org_id', orgId)
             .inFilter('key', ['org.consignment_enabled', 'org.product_supervise_flow', 'org.hide_main_groups_by_branch']),
         client.from('branch_hidden_main_groups').select('branch_id, main_group').eq('org_id', orgId),
@@ -148,7 +148,9 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         grouped.putIfAbsent(type, () => []).add(Map<String, dynamic>.from(t));
       }
       setState(() {
-        _branches = List<Map<String, dynamic>>.from(branches);
+        // Processor / off-site (is_virtual) locations aren't sold or allocated
+        // from — keep them out of Branch Allocation and the POS branch pickers.
+        _branches = List<Map<String, dynamic>>.from(branches).where((b) => b['is_virtual'] != true).toList();
         _posProductIds = posIds;
         _posByBranch = posByBranch;
         _products = List<Map<String, dynamic>>.from(products);

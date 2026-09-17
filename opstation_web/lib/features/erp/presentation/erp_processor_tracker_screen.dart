@@ -21,6 +21,7 @@ class _ErpProcessorTrackerScreenState
   bool _loading = true;
   bool _sending = false;
   bool _overdueOnly = false;
+  String? _processorFilter; // processor_id; null = all processors
   List<Map<String, dynamic>> _rows = [];
 
   @override
@@ -84,8 +85,27 @@ class _ErpProcessorTrackerScreenState
 
   double _n(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
-  List<Map<String, dynamic>> get _filtered =>
-      _overdueOnly ? _rows.where((r) => r['is_overdue'] == true).toList() : _rows;
+  List<Map<String, dynamic>> get _filtered {
+    var list = _rows;
+    if (_processorFilter != null) {
+      list = list.where((r) => r['processor_id'] == _processorFilter).toList();
+    }
+    if (_overdueOnly) {
+      list = list.where((r) => r['is_overdue'] == true).toList();
+    }
+    return list;
+  }
+
+  // Distinct processors present in the data, id -> name, sorted by name.
+  List<MapEntry<String, String>> get _processorOptions {
+    final map = <String, String>{};
+    for (final r in _rows) {
+      final id = r['processor_id'] as String?;
+      if (id != null) map[id] = (r['processor_name'] as String?) ?? '—';
+    }
+    final entries = map.entries.toList()..sort((a, b) => a.value.compareTo(b.value));
+    return entries;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -145,12 +165,44 @@ class _ErpProcessorTrackerScreenState
           _card('Processors', '$processors', Colors.purple),
         ]),
         const SizedBox(height: 16),
-        Row(children: [
+        Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           FilterChip(
             label: const Text('Overdue only'),
             selected: _overdueOnly,
             onSelected: (v) => setState(() => _overdueOnly = v),
           ),
+          if (_processorOptions.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.factory_outlined, size: 15, color: Colors.purple),
+                const SizedBox(width: 6),
+                DropdownButton<String?>(
+                  value: _processorFilter,
+                  underline: const SizedBox.shrink(),
+                  isDense: true,
+                  hint: const Text('All processors', style: TextStyle(fontSize: 13)),
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('All processors', style: TextStyle(fontSize: 13))),
+                    for (final e in _processorOptions)
+                      DropdownMenuItem<String?>(value: e.key, child: Text(e.value, style: const TextStyle(fontSize: 13))),
+                  ],
+                  onChanged: (v) => setState(() => _processorFilter = v),
+                ),
+                if (_processorFilter != null) ...[
+                  const SizedBox(width: 2),
+                  InkWell(
+                    onTap: () => setState(() => _processorFilter = null),
+                    child: const Icon(Icons.close, size: 15, color: AppTheme.textSecondary),
+                  ),
+                ],
+              ]),
+            ),
         ]),
         const SizedBox(height: 12),
         Expanded(
