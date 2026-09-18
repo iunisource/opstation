@@ -905,10 +905,9 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   const SizedBox(width: 12),
                   Expanded(child: TextField(
                     controller: codeCtrl,
-                    readOnly: true,
                     decoration: const InputDecoration(
                       labelText: 'Customer Code',
-                      helperText: 'Generated automatically',
+                      helperText: 'Auto-filled — edit if needed',
                     ),
                   )),
                 ]),
