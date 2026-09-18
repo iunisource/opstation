@@ -62,7 +62,19 @@ function pktNow() {
 
 type Emp = { id: string; full_name: string; employee_code?: string; branch_id?: string; shift_id?: string };
 
+// CORS — the manual "Send test now" call comes from the browser, so preflight
+// and the actual response both need these. Cron (server-to-server) ignores them.
+const CORS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (obj: unknown, status = 200) =>
+  new Response(JSON.stringify(obj), { status, headers: { ...CORS, "content-type": "application/json" } });
+
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+
   const url = new URL(req.url);
   // Params come from the query string (cron) OR a JSON body (manual invoke()).
   let body: any = {};
@@ -86,7 +98,7 @@ Deno.serve(async (req) => {
   }
   // When no CRON_SECRET is configured, the cron path stays open as before.
   if (CRON_SECRET !== "" && !cronOk && !manualOk) {
-    return new Response("forbidden", { status: 403 });
+    return new Response("forbidden", { status: 403, headers: CORS });
   }
   const isManual = !cronOk && manualOk;
 
@@ -106,9 +118,7 @@ Deno.serve(async (req) => {
     orgs = toggles.filter((t) => ENABLED(t.value)).map((t) => t.org_id as string);
   }
   if (!orgs.length) {
-    return new Response(JSON.stringify({ slot, orgs: 0, sent: 0 }), {
-      headers: { "content-type": "application/json" },
-    });
+    return json({ slot, orgs: 0, sent: 0 });
   }
 
   const client = new SMTPClient({
@@ -220,10 +230,35 @@ Deno.serve(async (req) => {
         ];
       }
 
-      const chipsHtml = chips.map(([l, n]) =>
-        `<span style="display:inline-block;margin:0 10px 6px 0;padding:6px 12px;border-radius:999px;` +
-        `background:#f1f5ff;font-size:13px"><b>${n}</b> <span style="color:#667">${H(l)}</span></span>`
-      ).join("");
+      // Colour a count chip by what it represents, so the strip reads at a glance.
+      const chipColor = (l: string): [string, string] => {
+        const k = l.toLowerCase();
+        if (k.includes("present") || k === "in") return ["#e7f6ec", "#1e7e34"];
+        if (k.includes("absent")) return ["#fdecea", "#c0392b"];
+        if (k.includes("late") || k.includes("not in")) return ["#fff6e5", "#b9770e"];
+        if (k.includes("leave")) return ["#eaf1ff", "#2b5fd0"];
+        if (k.includes("holiday")) return ["#eef0f4", "#5a6172"];
+        return ["#f1f5ff", "#334"];
+      };
+      const chipsHtml = chips.map(([l, n]) => {
+        const [bg, fg] = chipColor(l);
+        return `<span style="display:inline-block;margin:0 8px 8px 0;padding:7px 13px;border-radius:999px;` +
+          `background:${bg};color:${fg};font-size:13px"><b style="font-size:15px">${n}</b>&nbsp; ${H(l)}</span>`;
+      }).join("");
+
+      const sectionAccent = (title: string): string => {
+        const k = title.toLowerCase();
+        if (k.includes("absent")) return "#c0392b";
+        if (k.includes("late") || k.includes("not in")) return "#b9770e";
+        if (k.includes("checked out") || k.includes("still")) return "#2b5fd0";
+        return "#667";
+      };
+      const th = (label: string, align = "left") =>
+        `<th style="text-align:${align};padding:7px 10px;font-size:11px;font-weight:600;color:#8a94a6;` +
+        `border-bottom:2px solid #e6e9f0;text-transform:uppercase;letter-spacing:.3px">${label}</th>`;
+      const td = (v: string, extra = "") =>
+        `<td style="padding:8px 10px;border-bottom:1px solid #eef0f4;${extra}">${v}</td>`;
+      const dash = `<span style="color:#c3c8d2">—</span>`;
 
       let bodyHtml = "";
       let bodyText = "";
@@ -231,38 +266,48 @@ Deno.serve(async (req) => {
         if (!list.length) continue;
         let rows = "";
         let text = "";
-        if (isLate) {
-          for (const it of (list as { e: Emp; cin: number; mins: number }[])) {
-            rows += `<tr><td style="padding:6px 8px;border-top:1px solid #eee">${H(nm(it.e))}</td>` +
-              `<td style="padding:6px 8px;border-top:1px solid #eee;color:#888">${H(br(it.e))}</td>` +
-              `<td style="padding:6px 8px;border-top:1px solid #eee;text-align:right;color:#c0392b">` +
-              `in ${hhmm(it.cin)} · +${it.mins}m</td></tr>`;
-            text += `- ${nm(it.e)} [${br(it.e)}] in ${hhmm(it.cin)} (+${it.mins}m)\n`;
-          }
-        } else {
-          for (const e of (list as Emp[])) {
-            rows += `<tr><td style="padding:6px 8px;border-top:1px solid #eee">${H(nm(e))}</td>` +
-              `<td style="padding:6px 8px;border-top:1px solid #eee;color:#888" colspan="2">${H(br(e))}</td></tr>`;
-            text += `- ${nm(e)} [${br(e)}]\n`;
-          }
+        // Unify late and non-late rows: every row shows Employee, Branch, In, Out.
+        const items = isLate
+          ? (list as { e: Emp; cin: number; mins: number }[])
+          : (list as Emp[]).map((e) => ({ e, cin: null as number | null, mins: 0 }));
+        for (const it of items) {
+          const e = it.e;
+          const a = byEmp[e.id];
+          const cin = toMin(a?.check_in);
+          const cout = toMin(a?.check_out);
+          const inCell = cin !== null
+            ? (isLate
+                ? `<span style="color:#c0392b;font-weight:600">${hhmm(cin)}</span> <span style="color:#c0392b;font-size:12px">+${it.mins}m</span>`
+                : hhmm(cin))
+            : dash;
+          const outCell = cout !== null ? hhmm(cout) : dash;
+          rows +=
+            `<tr>${td(H(nm(e)), "font-weight:500")}${td(H(br(e)), "color:#8a94a6")}` +
+            `${td(inCell, "text-align:right;white-space:nowrap")}${td(outCell, "text-align:right")}</tr>`;
+          text += `- ${nm(e)}  [${br(e)}]  in ${cin !== null ? hhmm(cin) : "—"}  out ${cout !== null ? hhmm(cout) : "—"}\n`;
         }
         bodyHtml +=
-          `<h3 style="margin:16px 0 4px;font-size:15px">${H(title)} <span style="color:#888">(${list.length})</span></h3>` +
-          `<table style="width:100%;border-collapse:collapse;font-size:14px"><tbody>${rows}</tbody></table>`;
+          `<h3 style="margin:20px 0 6px;font-size:15px;color:#2d3340">` +
+          `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${sectionAccent(title)};margin-right:8px"></span>` +
+          `${H(title)} <span style="color:#98a0b0;font-weight:500">(${list.length})</span></h3>` +
+          `<table style="width:100%;border-collapse:collapse;font-size:14px">` +
+          `<thead><tr>${th("Employee")}${th("Branch")}${th("Time In", "right")}${th("Time Out", "right")}</tr></thead>` +
+          `<tbody>${rows}</tbody></table>`;
         bodyText += `\n${title} (${list.length}):\n${text}`;
       }
       if (!bodyHtml) {
-        bodyHtml = `<p style="color:#2e7d32;margin:16px 0">No exceptions — all clear.</p>`;
-        bodyText = "\nNo exceptions — all clear.\n";
+        bodyHtml = `<div style="margin:18px 0;padding:14px 16px;background:#e7f6ec;border-radius:10px;color:#1e7e34;font-size:14px">✅ No exceptions — everyone is accounted for.</div>`;
+        bodyText = "\nNo exceptions — everyone is accounted for.\n";
       }
 
       const html =
-        `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:640px">` +
-        `<h2 style="margin:0 0 2px">${H(headline)}</h2>` +
-        `<p style="color:#666;margin:0 0 12px">${prettyDate}</p>` +
-        `<div style="margin:0 0 4px">${chipsHtml}</div>` +
+        `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:660px;margin:0 auto;` +
+        `padding:22px 24px;background:#ffffff;border:1px solid #eceef3;border-radius:14px;color:#2d3340">` +
+        `<h2 style="margin:0 0 2px;font-size:20px">${H(headline)}</h2>` +
+        `<p style="color:#8a94a6;margin:0 0 16px;font-size:13px">${prettyDate}</p>` +
+        `<div style="margin:0 0 6px">${chipsHtml}</div>` +
         bodyHtml +
-        `<p style="color:#999;font-size:12px;margin-top:16px">Opstation · HR · Attendance</p></div>`;
+        `<p style="color:#aab0bd;font-size:12px;margin-top:22px;border-top:1px solid #eef0f4;padding-top:12px">Opstation · HR · Attendance</p></div>`;
 
       const text =
         `${headline} — ${prettyDate}\n` +
@@ -287,8 +332,5 @@ Deno.serve(async (req) => {
     await client.close();
   }
 
-  return new Response(
-    JSON.stringify({ slot, orgs: orgs.length, sent, recipients, manual: isManual, error: sendError || undefined }),
-    { headers: { "content-type": "application/json" } },
-  );
+  return json({ slot, orgs: orgs.length, sent, recipients, manual: isManual, error: sendError || undefined });
 });
