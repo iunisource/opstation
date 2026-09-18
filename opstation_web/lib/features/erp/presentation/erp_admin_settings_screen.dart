@@ -437,6 +437,17 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.jv_supervise_flow',
+    'Supervision & documents on Journal Vouchers',
+    'When ON, Journal Vouchers gain a Support Documents panel (attach images / '
+        'PDFs, stored in a separate JV bucket and named after the voucher number), '
+        'and admins get a "Supervise" action as an extra review layer. Supervision '
+        'is NON-BLOCKING — the JV still posts to the general ledger exactly as before '
+        'whether or not it has been supervised. When OFF, Journal Vouchers behave '
+        'exactly as today.',
+  ),
+
+  _AdminToggle(
     'org.si_supervise_flow',
     'Supervision for Sales Invoices',
     'When ON, admins get a "Supervise" action on each Sales Invoice as an extra '
@@ -580,6 +591,9 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.consignment_enabled',
     'org.hide_main_groups_by_branch',
     'org.product_supervise_flow',
+  ]),
+  _ToggleGroup('Financials', Icons.account_balance_outlined, [
+    'org.jv_supervise_flow',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
     'org.show_org_name_sales',

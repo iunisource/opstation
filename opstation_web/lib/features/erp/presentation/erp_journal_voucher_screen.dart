@@ -12,6 +12,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
+import '../widgets/voucher_docs_panel.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class _JvLine {
   static int _seq = 0;
@@ -42,11 +44,17 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   List<Map<String,dynamic>> _allAccounts = [];
   List<Map<String,dynamic>> _auditTrail = [];
   bool _loadingMaster = true, _saving = false;
+  bool _jvSuperviseFlow = false; // org.jv_supervise_flow: docs + non-blocking supervise
+  bool _superviseBusy = false;
   String? _pendingFocusId;
   int _auditSeq = 0;
 
   String? get _orgId    => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
+  bool get _isAdmin {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
   bool get _isLocked => _status == 'posted';
   double get _totalDr => _lines.fold(0, (s,l) => s + l.debit);
   double get _totalCr => _lines.fold(0, (s,l) => s + l.credit);
@@ -57,10 +65,94 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     super.initState();
     _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date);
     _lines = [_JvLine(), _JvLine()];
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); _ensureAccessReady(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); _ensureAccessReady(); _loadJvFlag(); });
   }
   @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+
+  Future<void> _loadJvFlag() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final c = await Supabase.instance.client.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', 'org.jv_supervise_flow').maybeSingle();
+      if (mounted) setState(() => _jvSuperviseFlow = (c?['value'] as String?) == 'true');
+    } catch (_) {}
+  }
+
+  // Non-blocking supervise mark on a JV (org.jv_supervise_flow). The JV posts to
+  // the GL regardless — this only records that an admin reviewed it.
+  Future<void> _supervise() async {
+    if (!_isAdmin) { _snack('You are not allowed to supervise'); return; }
+    final id = _current?['id'] as String?; if (id == null || _superviseBusy) return;
+    setState(() => _superviseBusy = true);
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await Supabase.instance.client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final s = await Supabase.instance.client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = s?['value'] as String?; } catch (_) {}
+    try {
+      await Supabase.instance.client.from('journal_entries').update({
+        'supervised_by': userId, 'supervised_at': now, 'supervised_by_name': userName,
+        'supervised_signature_url': sigUrl, 'supervised_stamp_url': stampUrl,
+      }).eq('id', id);
+      if (mounted) setState(() {
+        _current!['supervised_by'] = userId; _current!['supervised_at'] = now;
+        _current!['supervised_by_name'] = userName;
+      });
+      _snack('Marked as supervised');
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
+    finally { if (mounted) setState(() => _superviseBusy = false); }
+  }
+
+  Future<void> _clearSupervision() async {
+    if (!_isAdmin) return;
+    final id = _current?['id'] as String?; if (id == null) return;
+    try {
+      await Supabase.instance.client.from('journal_entries').update({
+        'supervised_by': null, 'supervised_at': null, 'supervised_by_name': null,
+        'supervised_signature_url': null, 'supervised_stamp_url': null,
+      }).eq('id', id);
+      if (mounted) setState(() {
+        _current!['supervised_by'] = null; _current!['supervised_at'] = null; _current!['supervised_by_name'] = null;
+      });
+      _snack('Supervision cleared');
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
+  }
+
+  Widget _jvSuperviseBlock() {
+    final supervisedAt = _current?['supervised_at'] as String?;
+    final by = _current?['supervised_by_name'] as String?;
+    if (supervisedAt != null) {
+      String when = supervisedAt;
+      try { when = DateFormat('d MMM yyyy').format(DateTime.parse(supervisedAt).toLocal()); } catch (_) {}
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: Colors.green.withOpacity(0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.35))),
+        child: Row(children: [
+          const Icon(Icons.verified_user, size: 16, color: Colors.green),
+          const SizedBox(width: 8),
+          Expanded(child: Text('Supervised${by != null && by.isNotEmpty ? ' by $by' : ''} · $when', style: const TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w600))),
+          if (_isAdmin) TextButton(onPressed: _clearSupervision, child: const Text('Clear', style: TextStyle(fontSize: 12))),
+        ]),
+      );
+    }
+    if (!_isAdmin) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+        child: const Row(children: [
+          Icon(Icons.verified_user_outlined, size: 15, color: Colors.orange), SizedBox(width: 8),
+          Text('Awaiting supervision', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        ]),
+      );
+    }
+    return OutlinedButton.icon(
+      onPressed: _superviseBusy ? null : _supervise,
+      icon: _superviseBusy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.verified_user_outlined, size: 16),
+      label: const Text('Supervise', style: TextStyle(fontSize: 12)),
+    );
+  }
 
   // Cold-refresh access fix: currentUserProvider can populate without notifying
   // accessProvider's watch, so accessProvider stays parked on its first (null-user)
@@ -613,6 +705,20 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 Text('Difference: ' + fmt.format((_totalDr - _totalCr).abs()) + ' — must be 0 to post',
                   style: TextStyle(fontSize: 12, color: Colors.red.shade700, fontWeight: FontWeight.w600)),
               ]))),
+          if (_jvSuperviseFlow && _current != null) ...[
+            const SizedBox(height: 20),
+            _jvSuperviseBlock(),
+            const SizedBox(height: 16),
+            VoucherDocsPanel(
+              voucherType: 'JV',
+              voucherId: _current!['id'] as String,
+              voucherNumber: _current!['entry_number'] as String? ?? '-',
+              bucket: 'jv-documents',
+              orgId: _orgId ?? '',
+              userId: ref.read(currentUserProvider)?.id,
+              canWrite: canWrite,
+            ),
+          ],
         ]))),
       ])),
     ]));
