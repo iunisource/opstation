@@ -21,6 +21,9 @@ class VoucherDocsPanel extends StatefulWidget {
   final String orgId;
   final String? userId;
   final bool canWrite;
+  /// Optional audit hook — fired after a successful add/remove of a document.
+  /// action is 'document_added' | 'document_removed'; fileName is the doc name.
+  final void Function(String action, String fileName)? onAudit;
 
   const VoucherDocsPanel({
     super.key,
@@ -31,6 +34,7 @@ class VoucherDocsPanel extends StatefulWidget {
     required this.orgId,
     required this.userId,
     required this.canWrite,
+    this.onAudit,
   });
 
   @override
@@ -145,6 +149,7 @@ class _VoucherDocsPanelState extends State<VoucherDocsPanel> {
         'uploaded_by': widget.userId,
       });
       await _load();
+      widget.onAudit?.call('document_added', fname);
       _snack('Document uploaded');
     } catch (e) {
       _snack('Upload failed: $e');
@@ -168,6 +173,7 @@ class _VoucherDocsPanelState extends State<VoucherDocsPanel> {
       try { await client.storage.from(d['bucket'] as String? ?? widget.bucket).remove([d['path'] as String]); } catch (_) {}
       await client.from('voucher_documents').delete().eq('id', d['id'] as String);
       await _load();
+      widget.onAudit?.call('document_removed', (d['name'] as String?) ?? 'document');
     } catch (e) { _snack('Remove failed: $e'); }
   }
 

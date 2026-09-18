@@ -511,7 +511,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 return ListTile(
                   dense: true,
                   leading: Icon(_auditIcon(e['action'] as String? ?? ''), size: 18, color: _auditColor(e['action'] as String? ?? '')),
-                  title: Text((e['action'] as String? ?? '').toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  title: Text((e['action'] as String? ?? '').replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
                   subtitle: Text('$who  •  $at${notes.isNotEmpty ? '\n$notes' : ''}', style: const TextStyle(fontSize: 11)),
                   isThreeLine: notes.isNotEmpty,
                 );
@@ -525,12 +525,16 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     if (action == 'created') return Icons.add_circle_outline;
     if (action == 'posted') return Icons.lock_outline;
     if (action == 'unlocked') return Icons.lock_open_outlined;
+    if (action == 'document_added') return Icons.attach_file;
+    if (action == 'document_removed') return Icons.delete_outline;
     return Icons.info_outline;
   }
   Color _auditColor(String action) {
     if (action == 'created') return Colors.blue;
     if (action == 'posted') return Colors.green;
     if (action == 'unlocked') return Colors.orange;
+    if (action == 'document_added') return Colors.teal;
+    if (action == 'document_removed') return Colors.red;
     return Colors.grey;
   }
 
@@ -541,12 +545,29 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     final postedInfo = rawPostedAt != null
         ? rawPostedAt.replaceAll('T', ' ').substring(0, rawPostedAt.length > 16 ? 16 : rawPostedAt.length)
         : '_______________';
+    // Posted-by footprint: latest 'posted' entry in the audit trail.
+    String postedBy = '';
+    for (final e in _auditTrail) {
+      if ((e['action'] as String? ?? '') == 'posted') {
+        final n = (e['performed_by_name'] as String? ?? '').trim();
+        if (n.isNotEmpty) { postedBy = n; break; }
+      }
+    }
+    final postedLine = rawPostedAt != null
+        ? 'Posted by: ${postedBy.isNotEmpty ? postedBy : '—'}<br><span style="color:#888;font-weight:400">$postedInfo</span>'
+        : 'Posted: _______________';
     final htmlStr = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Journal Voucher</title><style>@page{margin:0}
-      body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db;margin-bottom:4px}
-      table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #ddd;padding:8px;text-align:left}
-      th{background:#f0f4ff;font-weight:600}.total{font-weight:700}.num{text-align:right}
+      body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:20px;color:#2d3748}
+      h2{text-align:center;color:#1a56db;margin-bottom:4px;letter-spacing:.5px}
+      table.grid{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}
+      table.grid th,table.grid td{padding:9px 10px;text-align:left}
+      table.grid thead th{background:#1a56db;color:#fff;font-weight:600;border:none}
+      table.grid tbody td{border-bottom:1px solid #e2e8f0}
+      table.grid tbody tr:nth-child(even) td{background:#f8fafc}
+      table.grid tfoot td{border-top:2px solid #1a56db;background:#f0f4ff}
+      .total{font-weight:700}.num{text-align:right}
       .meta td{border:none;font-size:11px;padding:1px 10px 1px 0}
-      .footer{margin-top:40px;display:flex;justify-content:space-between;font-size:12px}
+      .footer{margin-top:40px;display:flex;justify-content:space-between;font-size:12px;line-height:1.5}
       @media print{.no-print{display:none}@page{margin:0}body{padding:15mm 20mm}}
     </style></head><body>
     <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">Print</button></div>
@@ -556,10 +577,10 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       <td><b>Date:</b> ${DateFormat('dd MMM yyyy').format(_date)}</td>
       <td><b>Status:</b> ${_status.toUpperCase()}</td>
     </tr><tr><td colspan="3"><b>Narration:</b> ${_narCtrl.text}</td></tr></table>
-    <table><thead><tr><th style="width:30px">#</th><th>Account</th><th>Description</th><th class="num" style="width:120px">Debit</th><th class="num" style="width:120px">Credit</th></tr></thead><tbody>
+    <table class="grid"><thead><tr><th style="width:30px">#</th><th>Account</th><th>Description</th><th class="num" style="width:120px">Debit</th><th class="num" style="width:120px">Credit</th></tr></thead><tbody>
     ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td class="num">${e.value.debit > 0 ? money(e.value.debit) : ''}</td><td class="num">${e.value.credit > 0 ? money(e.value.credit) : ''}</td></tr>').join()}
     </tbody><tfoot><tr><td colspan="3" class="total num">Total:</td><td class="total num">${money(_totalDr)}</td><td class="total num">${money(_totalCr)}</td></tr></tfoot></table>
-    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Posted: $postedInfo</div></div>
+    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>$postedLine</div></div>
     </body></html>''';
     final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
@@ -779,6 +800,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 orgId: _orgId ?? '',
                 userId: ref.read(currentUserProvider)?.id,
                 canWrite: canWrite,
+                onAudit: (action, fileName) => _logAudit(action, notes: fileName),
               )
             else
               // A JV has no record (and no id to attach files to) until it's saved
