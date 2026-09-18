@@ -268,6 +268,37 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     final ctrl = TextEditingController(text: emails);
     await showDialog(context: context, builder: (ctx) {
       bool en = enabled;
+      bool testing = false;
+
+      String cleanEmails() => ctrl.text.split(RegExp(r'[,\n;]')).map((e) => e.trim()).where((e) => e.isNotEmpty).join(', ');
+
+      // Manual "Send test now": persist the current recipients, then invoke the
+      // attendance-summary edge function scoped to this org so it emails right
+      // away (independent of the twice-daily schedule) to verify the pipeline.
+      Future<void> sendTest(void Function(void Function()) setLocal) async {
+        final cleaned = cleanEmails();
+        if (cleaned.isEmpty) { _snack('Add at least one recipient email first'); return; }
+        setLocal(() => testing = true);
+        try {
+          await client.from('app_config').upsert(
+              {'key': 'org.attendance_summary_emails', 'value': cleaned, 'org_id': orgId, 'branch_id': ''},
+              onConflict: 'key,org_id,branch_id');
+          final res = await client.functions.invoke('attendance-summary', body: {'org': orgId});
+          final data = res.data;
+          final int sent = (data is Map && data['sent'] is int) ? data['sent'] as int : 0;
+          final int recips = (data is Map && data['recipients'] is int) ? data['recipients'] as int : 0;
+          final String err = (data is Map && data['error'] != null) ? '${data['error']}' : '';
+          if (err.isNotEmpty) {
+            _snack('Test failed: $err');
+          } else if (sent > 0) {
+            _snack('Test summary sent to $recips recipient${recips == 1 ? '' : 's'} — check the inbox (and spam).');
+          } else {
+            _snack('Nothing sent — make sure a recipient email is saved for this org.');
+          }
+        } catch (e) { _snack('Test failed: $e'); }
+        if (ctx.mounted) setLocal(() => testing = false);
+      }
+
       return StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
         title: const Text('Attendance summary emails'),
         content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -283,11 +314,28 @@ class _State extends ConsumerState<HrAttendanceScreen> {
                   border: OutlineInputBorder(), isDense: true)),
           const SizedBox(height: 6),
           const Text('Separate multiple addresses with commas or new lines.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+            child: Row(children: [
+              const Expanded(child: Text('Not receiving it? Send a test now to the recipients above (uses the current time’s slot).',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                icon: testing
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.send_outlined, size: 15),
+                label: Text(testing ? 'Sending…' : 'Send test now', style: const TextStyle(fontSize: 12)),
+                onPressed: testing ? null : () => sendTest(setLocal),
+              ),
+            ]),
+          ),
         ])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(onPressed: () async {
-            final cleaned = ctrl.text.split(RegExp(r'[,\n;]')).map((e) => e.trim()).where((e) => e.isNotEmpty).join(', ');
+            final cleaned = cleanEmails();
             try {
               await client.from('app_config').upsert(
                   {'key': 'org.attendance_summary', 'value': en ? 'true' : 'false', 'org_id': orgId, 'branch_id': ''},

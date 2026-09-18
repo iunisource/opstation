@@ -63,18 +63,48 @@ function pktNow() {
 type Emp = { id: string; full_name: string; employee_code?: string; branch_id?: string; shift_id?: string };
 
 Deno.serve(async (req) => {
-  if (CRON_SECRET && req.headers.get("x-cron-secret") !== CRON_SECRET) {
+  const url = new URL(req.url);
+  // Params come from the query string (cron) OR a JSON body (manual invoke()).
+  let body: any = {};
+  try { body = await req.json(); } catch (_) { /* GET / no body */ }
+  const manualOrg = (url.searchParams.get("org") || body.org || "").trim() || null;
+  const slotParam = String(url.searchParams.get("slot") || body.slot || "").toLowerCase();
+
+  // Auth. Cron carries the shared secret. A manual "Send test now" from the app
+  // instead carries the caller's Supabase JWT — accept it if it resolves to a
+  // real user, and scope that run to the one org they passed.
+  const cronOk = CRON_SECRET !== "" && req.headers.get("x-cron-secret") === CRON_SECRET;
+  let manualOk = false;
+  const authHeader = req.headers.get("Authorization") || "";
+  if (!cronOk && manualOrg && authHeader.toLowerCase().startsWith("bearer ")) {
+    try {
+      const ur = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { apikey: SERVICE_KEY, Authorization: authHeader },
+      });
+      manualOk = ur.ok;
+    } catch (_) { manualOk = false; }
+  }
+  // When no CRON_SECRET is configured, the cron path stays open as before.
+  if (CRON_SECRET !== "" && !cronOk && !manualOk) {
     return new Response("forbidden", { status: 403 });
   }
+  const isManual = !cronOk && manualOk;
 
-  const url = new URL(req.url);
-  const slot = (url.searchParams.get("slot") || "morning").toLowerCase() === "evening"
-    ? "evening"
-    : "morning";
-  const { date, weekday } = pktNow();
+  const { date, weekday, nowMin } = pktNow();
+  // Manual test picks the slot from the current PKT time unless one is given.
+  const slot = (slotParam === "evening" || slotParam === "morning")
+    ? slotParam
+    : (isManual ? (nowMin >= 13 * 60 + 30 ? "evening" : "morning") : "morning");
 
-  const toggles = await rest(`app_config?key=eq.org.attendance_summary&select=org_id,value`);
-  const orgs = toggles.filter((t) => ENABLED(t.value)).map((t) => t.org_id as string);
+  let orgs: string[];
+  if (manualOrg) {
+    // Manual test: just this org, and don't require the toggle to be on so it
+    // can be verified before enabling the schedule.
+    orgs = [manualOrg];
+  } else {
+    const toggles = await rest(`app_config?key=eq.org.attendance_summary&select=org_id,value`);
+    orgs = toggles.filter((t) => ENABLED(t.value)).map((t) => t.org_id as string);
+  }
   if (!orgs.length) {
     return new Response(JSON.stringify({ slot, orgs: 0, sent: 0 }), {
       headers: { "content-type": "application/json" },
@@ -91,6 +121,8 @@ Deno.serve(async (req) => {
   });
 
   let sent = 0;
+  let recipients = 0;   // for the manual test response
+  let sendError = "";   // for the manual test response
   try {
     for (const org of orgs) {
       const [em] = await rest(
@@ -99,6 +131,7 @@ Deno.serve(async (req) => {
       const emails = String(em?.value ?? "")
         .split(/[,\n;]/).map((s) => s.trim()).filter(Boolean);
       if (!emails.length) continue;
+      recipients = emails.length;
 
       const [rd] = await rest(
         `app_config?key=eq.org.weekly_rest_day&org_id=eq.${enc(org)}&select=value&limit=1`,
@@ -236,20 +269,26 @@ Deno.serve(async (req) => {
         chips.map(([l, n]) => `${l}: ${n}`).join("  ·  ") + "\n" +
         bodyText;
 
-      await client.send({
-        from: GMAIL_USER,
-        to: emails,
-        subject,
-        content: text,
-        html,
-      });
-      sent++;
+      try {
+        await client.send({
+          from: GMAIL_USER,
+          to: emails,
+          subject,
+          content: text,
+          html,
+        });
+        sent++;
+      } catch (e) {
+        sendError = String(e);
+        if (!isManual) throw e; // cron: preserve original fail-loud behaviour
+      }
     }
   } finally {
     await client.close();
   }
 
-  return new Response(JSON.stringify({ slot, orgs: orgs.length, sent }), {
-    headers: { "content-type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({ slot, orgs: orgs.length, sent, recipients, manual: isManual, error: sendError || undefined }),
+    { headers: { "content-type": "application/json" } },
+  );
 });
