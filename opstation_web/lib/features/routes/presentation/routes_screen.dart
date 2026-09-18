@@ -19,6 +19,8 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   List<_RouteRow> _routes = [];
   List<_RouteRow> _filtered = [];
   List<Map<String, dynamic>> _customers = [];
+  bool _customersLoaded = false;
+  Future<void>? _customersFuture; // de-dupes concurrent loads
   final _searchCtrl = TextEditingController();
   bool _loading = true;
   bool _targetsEnabled = false;
@@ -48,25 +50,21 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     setState(() => _loading = true);
     try {
       final client = Supabase.instance.client;
-      final routes = await client
-          .from('sales_routes')
-          .select()
-          .eq('org_id', orgId)
-          .order('name');
-      final stops = await client
-          .from('route_stops')
-          .select('route_id, customer_id, position');
-      // Route -> salesperson assignment. route_assignments maps a route to
-      // the user who runs it; users gives us the display name.
-      final assignments = await client
-          .from('route_assignments')
-          .select('route_id, user_id');
-      final teamUsers = await client
-          .from('users')
-          .select('id, name')
-          .eq('org_id', orgId);
+      // The routes LIST needs only routes/stops/assignees — not the (often
+      // thousands of) customers — so fetch just those, in parallel, and load the
+      // full customer list lazily when a route editor or the stop picker opens.
+      final res = await Future.wait([
+        client.from('sales_routes').select().eq('org_id', orgId).order('name'),
+        client.from('route_stops').select('route_id, customer_id, position').eq('org_id', orgId),
+        client.from('route_assignments').select('route_id, user_id'),
+        client.from('users').select('id, name').eq('org_id', orgId),
+      ]);
+      final routes = res[0] as List;
+      final stops = res[1] as List;
+      final assignments = res[2] as List;
+      final teamUsers = res[3] as List;
       final userNameById = <String, String>{
-        for (final u in (teamUsers as List))
+        for (final u in teamUsers)
           (u as Map)['id'] as String: ((u)['name'] as String? ?? '').trim(),
       };
       _routeAssignee.clear();
@@ -78,25 +76,6 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
         final nm = userNameById[uid];
         if (nm != null && nm.isNotEmpty) _routeAssignee[rid] = nm;
       }
-      // Paginate past PostgREST's 1000-row default cap
-      final List<Map<String, dynamic>> customers = [];
-      {
-        const pageSize = 1000;
-        var offset = 0;
-        while (true) {
-          final page = await client
-              .from('customers')
-              .select('id, shop_name, code')
-              .eq('org_id', orgId)
-              .eq('is_active', true)
-              .order('shop_name')
-              .range(offset, offset + pageSize - 1);
-          customers.addAll(List<Map<String, dynamic>>.from(page));
-          if (page.length < pageSize) break;
-          offset += pageSize;
-        }
-      }
-
       // Group stops by route
       final byRoute = <String, List<Map<String, dynamic>>>{};
       for (final s in (stops as List)) {
@@ -116,7 +95,10 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
             stops: byRoute[(r as Map)['id'] as String] ?? const [],
           )
       ];
-      _customers = customers;
+
+      // Warm the customer list in the background so it's usually ready by the
+      // time a route editor / stop picker is opened — without blocking the list.
+      _ensureCustomers();
 
       // Sales-targets overlay (gated). Read the org toggle; if ON, pull
       // accumulated route target/achievement in a single RPC call. This is
@@ -153,6 +135,37 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     } catch (_) {
       setState(() => _loading = false);
     }
+  }
+
+  // Lazily loads the full active-customer list once (paginated past the 1000-row
+  // cap), caching it. Concurrent callers share the same in-flight future.
+  Future<void> _ensureCustomers() {
+    if (_customersLoaded) return Future.value();
+    return _customersFuture ??= () async {
+      final orgId = ref.read(currentUserProvider)?.orgId;
+      if (orgId == null) return;
+      try {
+        final client = Supabase.instance.client;
+        final out = <Map<String, dynamic>>[];
+        const pageSize = 1000;
+        var offset = 0;
+        while (true) {
+          final page = await client
+              .from('customers')
+              .select('id, shop_name, code')
+              .eq('org_id', orgId)
+              .eq('is_active', true)
+              .order('shop_name')
+              .range(offset, offset + pageSize - 1);
+          out.addAll(List<Map<String, dynamic>>.from(page));
+          if (page.length < pageSize) break;
+          offset += pageSize;
+        }
+        if (mounted) setState(() { _customers = out; _customersLoaded = true; });
+      } catch (_) {
+        _customersFuture = null; // allow a retry on the next open
+      }
+    }();
   }
 
   void _filter() {
@@ -466,6 +479,8 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   }
 
   Future<void> _showReorderDialog(BuildContext context, _RouteRow row) async {
+    await _ensureCustomers(); // resolve stop names in the editor
+    if (!mounted) return;
     // Snapshot the current stops sorted by position; user reorders this list
     // and on save we delete + re-insert with new positions (same pattern as edit).
     final stops = List<Map<String, dynamic>>.from(row.stops)
@@ -615,7 +630,9 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
 
   /// Add or edit a route. Edits replace the stops list wholesale —
   /// simpler than diffing, fine for our scale.
-  void _showDialog(BuildContext context, _RouteRow? route) {
+  Future<void> _showDialog(BuildContext context, _RouteRow? route) async {
+    await _ensureCustomers(); // the picker needs the full customer list
+    if (!mounted) return;
     final nameCtrl = TextEditingController(text: route?.data['name'] ?? '');
     String kind = route?.data['kind'] ?? 'recurring';
     // Selected customer ids in stop order. For new routes, empty.
