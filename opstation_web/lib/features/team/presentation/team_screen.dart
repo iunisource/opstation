@@ -17,6 +17,18 @@ class TeamScreen extends ConsumerStatefulWidget {
 class _TeamScreenState extends ConsumerState<TeamScreen> {
   List<Map<String, dynamic>> _users = [];
   bool _loading = true;
+  String _search = '';
+
+  List<Map<String, dynamic>> get _filteredUsers {
+    final q = _search.trim().toLowerCase();
+    if (q.isEmpty) return _users;
+    return _users.where((u) {
+      final hay = [
+        u['name'], u['email'], u['role'], u['phone'],
+      ].map((v) => (v as String? ?? '').toLowerCase()).join(' ');
+      return hay.contains(q);
+    }).toList();
+  }
 
   @override
   void initState() {
@@ -144,9 +156,18 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
             const Text('Team', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           ]),
           const SizedBox(height: 8),
-          Text('${_users.length} members · Create new members from the mobile app',
+          Text('${_filteredUsers.length} of ${_users.length} members · Create new members from the mobile app',
               style: const TextStyle(color: AppTheme.textSecondary)),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+          TextField(
+            decoration: const InputDecoration(
+              hintText: 'Search by name, email, role or phone…',
+              prefixIcon: Icon(Icons.search),
+              isDense: true,
+            ),
+            onChanged: (v) => setState(() => _search = v),
+          ),
+          const SizedBox(height: 16),
           if (_loading)
             const Center(child: CircularProgressIndicator())
           else
@@ -176,11 +197,13 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                     ),
                     const Divider(height: 1),
                     Expanded(
-                      child: ListView.separated(
-                        itemCount: _users.length,
+                      child: Builder(builder: (_) {
+                        final list = _filteredUsers;
+                        return ListView.separated(
+                        itemCount: list.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (_, i) {
-                          final u = _users[i];
+                          final u = list[i];
                           final role = u['role'] as String? ?? '';
                           final isActive = u['is_active'] as bool? ?? true;
                           final canEdit = _canEdit(viewerRole, u, viewerId);
@@ -260,7 +283,8 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                             ]),
                           );
                         },
-                      ),
+                        );
+                      }),
                     ),
                   ],
                 ),
