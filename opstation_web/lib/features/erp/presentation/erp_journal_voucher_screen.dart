@@ -71,8 +71,16 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
-  Future<void> _loadJvFlag() async {
-    final orgId = _orgId; if (orgId == null) return;
+  Future<void> _loadJvFlag([int tries = 0]) async {
+    final orgId = _orgId;
+    // On a cold load the user/org can populate a beat after mount. Retry a few
+    // times instead of silently leaving the flags off (which hid the panel).
+    if (orgId == null) {
+      if (tries >= 10) return;
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (mounted) _loadJvFlag(tries + 1);
+      return;
+    }
     try {
       final rows = await Supabase.instance.client.from('app_config').select('key,value')
           .eq('org_id', orgId).inFilter('key', ['org.jv_supervise_flow', 'org.jv_approve_flow']);
@@ -322,6 +330,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d);
         _narCtrl.text = v['description'] as String? ?? ''; });
       _loadAudit(v['id'] as String);
+      if (!_jvSuperviseFlow && !_jvApproveFlow) _loadJvFlag(); // ensure flags are set when a voucher opens
     } catch (e) { _snack('Load error: $e'); }
   }
 
