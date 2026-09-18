@@ -52,6 +52,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   String? _addProductId;
   String? _addUomId;
   final _addQtyCtrl = TextEditingController(text: '1');
+  final _remarksCtrl = TextEditingController();
+  bool _copyRemarks = false;
   final _addQtyFocus = FocusNode();
   final Map<String, TextEditingController> _lineQtyCtrls = {};
   final Map<String, TextEditingController> _lineRateCtrls = {};
@@ -120,6 +122,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     for (final c in _lineRateCtrls.values) { c.dispose(); }
     for (final c in _lineDescCtrls.values) { c.dispose(); }
     _addQtyCtrl.dispose();
+    _remarksCtrl.dispose();
     _addQtyFocus.dispose();
     super.dispose();
   }
@@ -245,6 +248,51 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       // different organization than the one you're signed into. Handle that
       // gracefully instead of surfacing a raw database error.
       if (po == null) {
+        // A deep link (PO-arrival email) can point at a PO in another org this
+        // user is a member of. RLS hides it, so we can't see its org directly;
+        // ask the DB (SECURITY DEFINER, member-checked) which org owns it. If
+        // the user belongs to that org, offer to switch and open it in place.
+        String? ownerOrg;
+        String ownerName = 'another organization';
+        try {
+          final res = await client.rpc('rpc_po_org_for_member', params: {'p_po_id': id});
+          final list = List<Map<String, dynamic>>.from(res as List? ?? const []);
+          if (list.isNotEmpty) {
+            ownerOrg = list.first['org_id'] as String?;
+            ownerName = (list.first['org_name'] as String?) ?? ownerName;
+          }
+        } catch (_) {}
+        if (ownerOrg != null && ownerOrg != _orgId && mounted) {
+          final go = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Switch organization?'),
+              content: Text('This purchase order belongs to $ownerName. '
+                  'Switch to that organization to open it?'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Switch & open')),
+              ],
+            ),
+          );
+          if (go == true) {
+            try {
+              await ref.read(authControllerProvider.notifier).switchOrg(ownerOrg);
+              if (mounted) {
+                // Reload the screen's data under the newly active org, then the PO.
+                _loadList();
+                _loadLookups();
+                _loadDetail(id);
+              }
+            } catch (e) {
+              if (mounted) {
+                _showSnack('Could not switch organization: $e');
+                setState(() { _detailLoading = false; _selectedId = null; });
+              }
+            }
+            return;
+          }
+        }
         if (mounted) {
           _showSnack('That purchase order isn\'t available under this login — it '
               'belongs to a different organization. Sign in to the organization '
@@ -356,6 +404,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         _approvalRequired = approvalReq; _showStockConsumption = showSC; _showFgStock = showFg;
         _lineMetrics = metrics; _datesEditable = datesEd;
         _hasGrn = hasGrn;
+        _remarksCtrl.text = (po['remarks'] as String?) ?? '';
+        _copyRemarks = po['copy_remarks'] == true;
         _syncLineCtrls();
         _detailLoading = false; });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
@@ -788,6 +838,20 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     return (base == null || base.isEmpty) ? line : '$base\n$line';
   }
 
+  Future<void> _saveRemarks() async {
+    final id = _detail['id'] as String?;
+    if (id == null) return;
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
+        'copy_remarks': _copyRemarks,
+      }).eq('id', id);
+      _detail['remarks'] = _remarksCtrl.text.trim();
+      _detail['copy_remarks'] = _copyRemarks;
+      if (mounted) _showSnack('Remarks saved');
+    } catch (e) { _showSnack(friendlyError('Could not save remarks', e)); }
+  }
+
   Future<void> _print() async {
     final user = ref.read(currentUserProvider);
     final showRates = _showRates;
@@ -818,6 +882,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
       lines: lines,
       grandTotal: (showRates && !_isDraft) ? _grandTotal : null,
+      remarks: (_detail['remarks'] as String?)?.trim().isNotEmpty == true ? _detail['remarks'] as String? : null,
       preparedBy: _meta.preparedBy,
       createdAt: _detail['created_at'] != null
           ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
@@ -1158,6 +1223,32 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           ])),
         const SizedBox(height: 8),
         Align(alignment: Alignment.centerRight, child: Text('${_items.length} item(s)', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.sticky_note_2_outlined, size: 16, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              const Text('Remarks', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              const Spacer(),
+              TextButton.icon(onPressed: _isVoided ? null : _saveRemarks, icon: const Icon(Icons.save_outlined, size: 15), label: const Text('Save', style: TextStyle(fontSize: 12))),
+            ]),
+            TextField(
+              controller: _remarksCtrl,
+              readOnly: _isVoided,
+              minLines: 1, maxLines: 3,
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), hintText: 'Remarks (shown on the printed PO)'),
+            ),
+            const SizedBox(height: 4),
+            Row(children: [
+              Checkbox(value: _copyRemarks, visualDensity: VisualDensity.compact,
+                  onChanged: _isVoided ? null : (v) => setState(() => _copyRemarks = v ?? false)),
+              const Expanded(child: Text('Copy to next vouchers (GRN & PI). Leave off to keep their remarks blank.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+            ]),
+          ]),
+        ),
         const SizedBox(height: 16),
         _PoAuditTrail(key: ValueKey('audit_${_selectedId}_$_auditRefresh'), voucherId: _selectedId ?? ''),
       ]))),

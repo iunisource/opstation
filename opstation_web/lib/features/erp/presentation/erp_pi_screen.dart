@@ -58,6 +58,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   // reader nothing they cannot already see in the Voucher column.
   final TextEditingController _vendorNoCtrl = TextEditingController();
   final TextEditingController _descCtrl = TextEditingController();
+  final TextEditingController _remarksCtrl = TextEditingController();
   bool _listLoading = true;
   bool _detailLoading = false;
   bool _datesEditable = false;
@@ -71,7 +72,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   @override
   void initState() { super.initState(); _loadList(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
   @override
-  void dispose() { for (final c in _costCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); _vendorNoCtrl.dispose(); _descCtrl.dispose(); super.dispose(); }
+  void dispose() { for (final c in _costCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); _vendorNoCtrl.dispose(); _descCtrl.dispose(); _remarksCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -171,6 +172,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         _detail = Map<String, dynamic>.from(inv); _items = List<Map<String, dynamic>>.from(items);
         _vendorNoCtrl.text = (inv['vendor_invoice_no'] as String?) ?? '';
         _descCtrl.text = (inv['description'] as String?) ?? '';
+        _remarksCtrl.text = (inv['remarks'] as String?) ?? '';
         _meta = meta; _detailLoading = false; _datesEditable = datesEd; _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _initCtrls();
       });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
@@ -212,7 +214,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     if (orgId == null || branchId == null) { _showSnack('Select a branch first'); return; }
     try {
       final grns = await Supabase.instance.client.from('purchase_grns')
-          .select('id,voucher_number,voucher_date,supplier_id,po_id,suppliers(name),purchase_orders(voucher_number)')
+          .select('id,voucher_number,voucher_date,supplier_id,po_id,remarks,copy_remarks,suppliers(name),purchase_orders(voucher_number)')
           .eq('org_id', orgId).eq('branch_id', branchId).inFilter('status', ['received', 'partially_received', 'saved']).eq('is_locked', true)
           .order('voucher_date', ascending: false);
       if ((grns as List).isEmpty) { _showSnack('No confirmed GRNs available. Confirm a GRN first.'); return; }
@@ -242,6 +244,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         'voucher_number': vNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'grn_id': grn['id'], 'po_id': grn['po_id'], 'supplier_id': grn['supplier_id'],
         'subtotal': 0, 'discount_total': 0, 'grand_total': 0,
+        // Carry the GRN remark forward only when the chain opted in.
+        'remarks': (grn['copy_remarks'] == true) ? grn['remarks'] : null,
         'is_locked': false, 'created_by': ref.read(currentUserProvider)?.id,
       });
       // Prefill unit cost from each product's cost_price (still editable before save/lock)
@@ -445,6 +449,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       'is_locked': true, 'locked_by': userId, 'locked_at': now,
       'vendor_invoice_no': _vendorNoCtrl.text.trim().isEmpty ? null : _vendorNoCtrl.text.trim(),
       'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
+      'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
       'updated_at': now,
     };
     if (approved) {
@@ -504,6 +509,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         'review_status': 'pending',
         'vendor_invoice_no': _vendorNoCtrl.text.trim().isEmpty ? null : _vendorNoCtrl.text.trim(),
         'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
+      'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
         'updated_at': now,
       }).eq('id', piId);
       setState(() => _detail['review_status'] = 'pending');
@@ -908,17 +914,33 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
               ),
               style: const TextStyle(fontSize: 13),
             );
+            final remarksField = TextField(
+              controller: _remarksCtrl,
+              decoration: InputDecoration(
+                labelText: 'Remarks (optional)',
+                hintText: 'Carried from the PO when enabled; shown in the supplier ledger',
+                isDense: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              style: const TextStyle(fontSize: 13),
+            );
             if (context.isMobile) {
               return Column(children: [
                 vendorField,
                 const SizedBox(height: 12),
                 descField,
+                const SizedBox(height: 12),
+                remarksField,
               ]);
             }
-            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 220, child: vendorField),
-              const SizedBox(width: 12),
-              Expanded(child: descField),
+            return Column(children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                SizedBox(width: 220, child: vendorField),
+                const SizedBox(width: 12),
+                Expanded(child: descField),
+              ]),
+              const SizedBox(height: 12),
+              remarksField,
             ]);
           }),
         if (_isDraft) const SizedBox(height: 12),
@@ -936,6 +958,21 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
               const SizedBox(width: 8),
               Expanded(child: Text(_detail['description'] as String,
                   style: const TextStyle(fontSize: 12.5))),
+            ]),
+          ),
+        if (_isLocked && (_detail['remarks'] as String?)?.isNotEmpty == true)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppTheme.background,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Row(children: [
+              const Icon(Icons.sticky_note_2_outlined, size: 15, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Remarks: ${_detail['remarks']}', style: const TextStyle(fontSize: 12.5))),
             ]),
           ),
         const SizedBox(height: 4),

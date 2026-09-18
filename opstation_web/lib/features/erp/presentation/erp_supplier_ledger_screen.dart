@@ -185,9 +185,11 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             // the reader nothing; the vendor's number is what reconciles against
             // their statement.
             'description': () {
+              final rem = (si['remarks'] as String?)?.trim() ?? '';
               final d = (si['description'] as String?)?.trim() ?? '';
               final ven = (si['vendor_invoice_no'] as String?)?.trim() ?? '';
               final parts = <String>[
+                if (rem.isNotEmpty) rem,
                 if (d.isNotEmpty) d,
                 if (ven.isNotEmpty) 'Vendor Inv #' + ven,
               ];

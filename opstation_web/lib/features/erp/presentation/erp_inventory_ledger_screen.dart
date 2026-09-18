@@ -44,6 +44,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
   // Per stock-transfer: {from_branch_id, to_branch_id, notes} — for the ledger
   // description "Transferred X to <branch>" / "Received X from <branch>".
   Map<String, Map<String, dynamic>> _transferInfo = {};
+  Map<String, String> _grnRemarks = {}; // grn id -> remarks (for the Received line)
   // Per production voucher: {name (finished good), output_qty} — for the ledger
   // description "Produced X units of <finished good>".
   Map<String, Map<String, dynamic>> _productionInfo = {};
@@ -251,7 +252,11 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (t.contains('pos')) return 'Sold $qtyStr $unit$at';
     if (t.contains('sale')) return 'Sold $qtyStr $unit$at';
     if (t.contains('purchase') && t.contains('return')) return 'Purchase return $qtyStr $unit$at';
-    if (t.contains('purchase') || t.contains('grn') || t.contains('goods_received')) return 'Received $qtyStr $unit$at';
+    if (t.contains('purchase') || t.contains('grn') || t.contains('goods_received')) {
+      final refId = m['reference_id'] as String?;
+      final rem = refId != null ? _grnRemarks[refId] : null;
+      return 'Received $qtyStr $unit$at${(rem != null && rem.isNotEmpty) ? ' — $rem' : ''}';
+    }
     if (t.contains('damage')) return 'Damaged $qtyStr $unit$at';
     if (t.contains('transfer')) {
       final refId = m['reference_id'] as String?;
@@ -328,6 +333,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     }
     final vMap = <String, String>{};
     final transferInfo = <String, Map<String, dynamic>>{};
+    final grnRemarks = <String, String>{};
     final productionInfo = <String, Map<String, dynamic>>{};
     for (final entry in byTable.entries) {
       final tbl = entry.key;
@@ -353,6 +359,10 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
               'to_branch_id': r['to_branch_id'],
               'notes': r['notes'],
             };
+          }
+          if (tbl == 'purchase_grns') {
+            final rem = (r['remarks'] as String?)?.trim();
+            if (rem != null && rem.isNotEmpty) grnRemarks[id] = rem;
           }
           if (tbl == 'production_vouchers') {
             productionInfo[id] = {
@@ -384,6 +394,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       _voucherNumbers = vMap;
       _voucherSourceTables = idToTable;
       _transferInfo = transferInfo;
+      _grnRemarks = grnRemarks;
       _productionInfo = productionInfo;
     });
   }

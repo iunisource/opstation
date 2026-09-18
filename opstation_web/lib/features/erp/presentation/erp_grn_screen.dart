@@ -36,6 +36,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool _adjustMode = false;  // editing a posted (received) GRN after unlock
   bool _adjustBusy = false;
   List<Map<String, dynamic>> _items = [];
+  final _remarksCtrl = TextEditingController();
   Map<String, TextEditingController> _receivedCtrl = {};
   // Autosave for draft received-qty edits — previously the value only saved on
   // Enter, so a typed 0 was silently lost on blur/navigation and the line
@@ -70,6 +71,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   void dispose() {
     for (final t in _qtySaveDebounce.values) t.cancel();
     for (final c in _receivedCtrl.values) c.dispose();
+    _remarksCtrl.dispose();
     super.dispose();
   }
 
@@ -167,9 +169,22 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _meta = meta; _detailLoading = false; _datesEditable = datesEd;
         _superviseEnabled = superviseEn;
         _linkedPis = pis;
+        _remarksCtrl.text = (grn['remarks'] as String?) ?? '';
         _initReceivedCtrls();
       });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+  }
+
+  Future<void> _saveRemarks() async {
+    final id = _detail['id'] as String?;
+    if (id == null) return;
+    try {
+      await Supabase.instance.client.from('purchase_grns').update({
+        'remarks': _remarksCtrl.text.trim().isEmpty ? null : _remarksCtrl.text.trim(),
+      }).eq('id', id);
+      _detail['remarks'] = _remarksCtrl.text.trim();
+      if (mounted) _showSnack('Remarks saved');
+    } catch (e) { _showSnack(friendlyError('Could not save remarks', e)); }
   }
 
   Future<void> _logAudit(String id, String action, String? details) async {
@@ -196,7 +211,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     try {
       final approvalRequired = await _isPoApprovalRequired(orgId);
       var poQuery = Supabase.instance.client.from('purchase_orders')
-          .select('id,voucher_number,voucher_date,supplier_id,suppliers(name)')
+          .select('id,voucher_number,voucher_date,supplier_id,remarks,copy_remarks,suppliers(name)')
           .eq('org_id', orgId).eq('branch_id', branchId)
           .inFilter('status', ['ordered', 'partially_received'])
           .filter('voided_at', 'is', null);
@@ -245,6 +260,10 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         'voucher_number': vNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'po_id': poId, 'supplier_id': po['supplier_id'],
         'status': 'draft', 'is_locked': false,
+        // Carry the PO remark forward only when the PO opted in; the flag rides
+        // along so the PI can decide the same way.
+        'remarks': (po['copy_remarks'] == true) ? po['remarks'] : null,
+        'copy_remarks': po['copy_remarks'] == true,
         'created_by': ref.read(currentUserProvider)?.id,
       });
       final grniRows = <Map<String, dynamic>>[];
@@ -745,6 +764,26 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           decoration: BoxDecoration(color: Colors.purple.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.purple.withOpacity(0.25))),
           child: const Row(children: [Icon(Icons.info_outline, size: 15, color: Colors.purple), SizedBox(width: 8),
             Expanded(child: Text('This GRN is invoiced, so quantities are locked to keep GRNI and payables balanced. Adjust or delete the linked invoice first to edit the received quantities.', style: TextStyle(fontSize: 12, color: Colors.purple)))])),
+        const SizedBox(height: 16),
+        // Remarks (carried from the PO when it opted in; editable)
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.sticky_note_2_outlined, size: 16, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              const Text('Remarks', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              const Spacer(),
+              TextButton.icon(onPressed: _saveRemarks, icon: const Icon(Icons.save_outlined, size: 15), label: const Text('Save', style: TextStyle(fontSize: 12))),
+            ]),
+            TextField(
+              controller: _remarksCtrl,
+              minLines: 1, maxLines: 3,
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), hintText: 'Remarks (shown in the Inventory Ledger)'),
+            ),
+          ]),
+        ),
         const SizedBox(height: 16),
         // Items table
         Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
