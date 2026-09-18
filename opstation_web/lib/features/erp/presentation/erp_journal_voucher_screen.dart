@@ -45,6 +45,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   List<Map<String,dynamic>> _auditTrail = [];
   bool _loadingMaster = true, _saving = false;
   bool _jvSuperviseFlow = false; // org.jv_supervise_flow: docs + non-blocking supervise
+  bool _jvApproveFlow = false;   // org.jv_approve_flow: BLOCKING approval before posting
   bool _superviseBusy = false;
   String? _pendingFocusId;
   int _auditSeq = 0;
@@ -73,10 +74,21 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   Future<void> _loadJvFlag() async {
     final orgId = _orgId; if (orgId == null) return;
     try {
-      final c = await Supabase.instance.client.from('app_config').select('value')
-          .eq('org_id', orgId).eq('key', 'org.jv_supervise_flow').maybeSingle();
-      if (mounted) setState(() => _jvSuperviseFlow = (c?['value'] as String?) == 'true');
+      final rows = await Supabase.instance.client.from('app_config').select('key,value')
+          .eq('org_id', orgId).inFilter('key', ['org.jv_supervise_flow', 'org.jv_approve_flow']);
+      final m = {for (final r in (rows as List)) r['key'] as String: r['value'] as String?};
+      if (mounted) setState(() {
+        _jvSuperviseFlow = m['org.jv_supervise_flow'] == 'true';
+        _jvApproveFlow = m['org.jv_approve_flow'] == 'true';
+      });
     } catch (_) {}
+  }
+
+  // Blocking approval (org.jv_approve_flow): a non-admin can't post to the GL —
+  // they submit the JV for approval; an admin then posts it.
+  Future<void> _submitForApproval() async {
+    if (!_canPost) { _snack('Debits must equal credits before submitting'); return; }
+    await _save(post: false, submitForApproval: true);
   }
 
   // Non-blocking supervise mark on a JV (org.jv_supervise_flow). The JV posts to
@@ -313,7 +325,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     } catch (e) { _snack('Load error: $e'); }
   }
 
-  Future<void> _save({bool post = false}) async {
+  Future<void> _save({bool post = false, bool submitForApproval = false}) async {
+    // Guard: with the blocking approval flow on, only an admin may post to the GL.
+    if (post && _jvApproveFlow && !_isAdmin) { _snack('This JV must be approved by an admin before posting.'); return; }
     final valid = _lines.where((l) => l.accountId != null && (l.debit + l.credit) > 0).toList();
     if (valid.isEmpty) { _snack('Add at least one account line'); return; }
     // A line with an amount but no account is counted in the on-screen Dr/Cr
@@ -338,6 +352,16 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       final newSt   = post ? 'posted' : 'draft';
       final nar     = _narCtrl.text.trim();
       final wasNew  = _current == null;
+      final userName = ref.read(currentUserProvider)?.name;
+      final nowIso = DateTime.now().toIso8601String();
+      // Approval bookkeeping (only meaningful when org.jv_approve_flow is on):
+      // posting stamps approved; submitting stamps pending; a plain draft clears it.
+      final Map<String, dynamic> approvalFields = !_jvApproveFlow ? {} : {
+        'approval_status': post ? 'approved' : (submitForApproval ? 'pending' : null),
+        if (post) 'approved_by': userId,
+        if (post) 'approved_by_name': userName,
+        if (post) 'approved_at': nowIso,
+      };
       String eId, eNum;
       if (wasNew) {
         final yr = DateTime.now().year.toString();
@@ -359,12 +383,14 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
           'status': newSt, 'is_system_generated': false, 'created_by': userId,
           'created_at': DateTime.now().toIso8601String(),
           if (post) 'posted_at': DateTime.now().toIso8601String(),
+          ...approvalFields,
         });
       } else {
         eId  = _current!['id'] as String; eNum = _current!['entry_number'] as String? ?? '';
         await client.from('journal_entries').update({
           'entry_date': dateStr, 'description': nar.isEmpty ? eNum : nar,
           'status': newSt, if (post) 'posted_at': DateTime.now().toIso8601String(),
+          ...approvalFields,
         }).eq('id', eId);
       }
       await client.from('journal_lines').delete().eq('entry_id', eId);
@@ -602,11 +628,18 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             if (!_isLocked && canWrite) ...[
               OutlinedButton(onPressed: _saving ? null : () => _save(post: false), child: const Text('Save Draft', style: TextStyle(fontSize: 12))),
               const SizedBox(width: 8),
-              ElevatedButton.icon(
-                icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle_outline, size: 16),
-                label: const Text('Post'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-                onPressed: (_canPost && !_saving) ? () => _save(post: true) : null),
+              if (_jvApproveFlow && !_isAdmin)
+                ElevatedButton.icon(
+                  icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.send_outlined, size: 16),
+                  label: const Text('Submit for approval'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                  onPressed: (_canPost && !_saving) ? _submitForApproval : null)
+              else
+                ElevatedButton.icon(
+                  icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle_outline, size: 16),
+                  label: Text((_jvApproveFlow && _current?['approval_status'] == 'pending') ? 'Approve & Post' : 'Post'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+                  onPressed: (_canPost && !_saving) ? () => _save(post: true) : null),
             ],
             if (_isLocked) Row(mainAxisSize: MainAxisSize.min, children: [
               Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.3))),
@@ -705,9 +738,28 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 Text('Difference: ' + fmt.format((_totalDr - _totalCr).abs()) + ' — must be 0 to post',
                   style: TextStyle(fontSize: 12, color: Colors.red.shade700, fontWeight: FontWeight.w600)),
               ]))),
+          if (_jvApproveFlow && _current != null && _current?['approval_status'] == 'pending' && !_isLocked) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+              child: Row(children: [
+                Icon(Icons.hourglass_top, size: 16, color: Colors.orange.shade800),
+                const SizedBox(width: 8),
+                Expanded(child: Text(
+                  _isAdmin
+                      ? 'Submitted for approval — review the lines, then "Approve & Post" to post it to the ledger.'
+                      : 'Awaiting admin approval — this JV has not posted to the ledger yet.',
+                  style: TextStyle(fontSize: 12, color: Colors.orange.shade900, fontWeight: FontWeight.w600))),
+              ]),
+            ),
+          ],
           if (_jvSuperviseFlow && _current != null) ...[
             const SizedBox(height: 20),
             _jvSuperviseBlock(),
+          ],
+          // Support documents show under EITHER review flow (supervision or approval).
+          if ((_jvSuperviseFlow || _jvApproveFlow) && _current != null) ...[
             const SizedBox(height: 16),
             VoucherDocsPanel(
               voucherType: 'JV',

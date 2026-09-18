@@ -4196,7 +4196,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                     style: TextStyle(fontSize: 12, color: _detail['supervised_at'] != null ? AppTheme.success : Colors.orange))),
                 ])),
             ],
-            if (_reviewFlow) ...[
+            if (_reviewFlow || _superviseFlow) ...[
               if (_isPendingReview)
                 Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(color: Colors.blue.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.3))),

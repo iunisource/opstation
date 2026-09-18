@@ -448,6 +448,16 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.jv_approve_flow',
+    'Approval required to post Journal Vouchers',
+    'When ON, a non-admin cannot post a JV to the general ledger — they "Submit for '
+        'approval" and an admin then "Approve & Post". This is BLOCKING: the JV stays '
+        'out of the ledger until an admin posts it. Admins can post directly. This is '
+        'independent of Supervision — you can run either or both. When OFF, JVs post '
+        'exactly as today.',
+  ),
+
+  _AdminToggle(
     'org.si_supervise_flow',
     'Supervision for Sales Invoices',
     'When ON, admins get a "Supervise" action on each Sales Invoice as an extra '
@@ -594,6 +604,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Financials', Icons.account_balance_outlined, [
     'org.jv_supervise_flow',
+    'org.jv_approve_flow',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
     'org.show_org_name_sales',
@@ -611,6 +622,23 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.schemes_enabled',
   ]),
 ];
+
+/// Mutually-exclusive toggle pairs: a voucher can have a Supervision flow OR an
+/// Approval/review flow, never both. Turning one on prompts to turn the other
+/// off. Symmetric — each key lists its partner.
+const Map<String, String> _exclusiveToggles = {
+  'org.jv_supervise_flow': 'org.jv_approve_flow',
+  'org.jv_approve_flow': 'org.jv_supervise_flow',
+  'org.si_supervise_flow': 'org.doc_review_flow_si',
+  'org.doc_review_flow_si': 'org.si_supervise_flow',
+  'org.pi_supervise_flow': 'org.doc_review_flow_pi',
+  'org.doc_review_flow_pi': 'org.pi_supervise_flow',
+};
+
+String _toggleTitle(String key) {
+  for (final t in _toggles) { if (t.key == key) return t.title; }
+  return key;
+}
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
   const ErpAdminSettingsScreen({super.key});
@@ -920,6 +948,30 @@ class _ErpAdminSettingsScreenState
   }
 
   Future<void> _setToggle(String key, bool val) async {
+    // Mutual exclusion: a voucher's Supervision and Approval/review flows can't
+    // both be on. Turning one on prompts to turn its partner off.
+    final partner = _exclusiveToggles[key];
+    if (val && partner != null && (_values[partner] ?? false)) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Switch review mode?'),
+          content: Text(
+              '“${_toggleTitle(key)}” and “${_toggleTitle(partner)}” can’t both be on '
+              '— they are two versions of the same review workflow. Turning this on '
+              'will turn OFF “${_toggleTitle(partner)}”. Continue?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true), child: const Text('Turn on & switch')),
+          ],
+        ),
+      );
+      if (ok != true) { if (mounted) setState(() {}); return; } // leave switch off
+      // Turn the partner off first.
+      setState(() { _values[partner] = false; _saving.add(partner); });
+      try { await _persist(partner, 'false'); } catch (_) {}
+      finally { if (mounted) setState(() => _saving.remove(partner)); }
+    }
     setState(() {
       _values[key] = val;
       _saving.add(key);

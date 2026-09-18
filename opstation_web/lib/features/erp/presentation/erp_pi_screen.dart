@@ -1036,7 +1036,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
             _piTotalRow('Grand Total', _isDraft ? _liveTotals()[2] : (_detail['grand_total'] as num?)?.toDouble() ?? 0, bold: true),
           ]))),
         const SizedBox(height: 16),
-        if (_reviewFlow) ...[
+        if (_reviewFlow || _superviseFlow) ...[
           if (_isPendingReview)
             Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(color: Colors.blue.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.3))),
