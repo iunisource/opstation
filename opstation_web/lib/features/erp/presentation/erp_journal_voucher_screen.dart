@@ -768,17 +768,38 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             _jvSuperviseBlock(),
           ],
           // Support documents show under EITHER review flow (supervision or approval).
-          if ((_jvSuperviseFlow || _jvApproveFlow) && _current != null) ...[
+          if (_jvSuperviseFlow || _jvApproveFlow) ...[
             const SizedBox(height: 16),
-            VoucherDocsPanel(
-              voucherType: 'JV',
-              voucherId: _current!['id'] as String,
-              voucherNumber: _current!['entry_number'] as String? ?? '-',
-              bucket: 'jv-documents',
-              orgId: _orgId ?? '',
-              userId: ref.read(currentUserProvider)?.id,
-              canWrite: canWrite,
-            ),
+            if (_current != null)
+              VoucherDocsPanel(
+                voucherType: 'JV',
+                voucherId: _current!['id'] as String,
+                voucherNumber: _current!['entry_number'] as String? ?? '-',
+                bucket: 'jv-documents',
+                orgId: _orgId ?? '',
+                userId: ref.read(currentUserProvider)?.id,
+                canWrite: canWrite,
+              )
+            else
+              // A JV has no record (and no id to attach files to) until it's saved
+              // once. Show the panel up front with a one-tap save so attachments
+              // feel available from the start, like the other vouchers.
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+                child: Row(children: [
+                  const Icon(Icons.attach_file, size: 18, color: AppTheme.textSecondary),
+                  const SizedBox(width: 10),
+                  const Expanded(child: Text('Support Documents — save the JV as a draft to start attaching files.', style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary))),
+                  if (canWrite)
+                    ElevatedButton.icon(
+                      onPressed: _saving ? null : () => _save(post: false),
+                      icon: const Icon(Icons.save_outlined, size: 15),
+                      label: const Text('Save draft', style: TextStyle(fontSize: 12)),
+                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+                    ),
+                ]),
+              ),
           ],
         ]))),
       ])),
