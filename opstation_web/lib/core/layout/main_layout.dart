@@ -27,6 +27,19 @@ import 'erp_global_search.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
 
+/// Live SOS kill-switch state for the current org, over Supabase realtime (one
+/// silent socket per client until the flag flips — no polling). Emits the
+/// org_sos row {enabled, active, ...} or null.
+final orgSosProvider = StreamProvider<Map<String, dynamic>?>((ref) {
+  final orgId = ref.watch(currentUserProvider)?.orgId;
+  if (orgId == null) return Stream.value(null);
+  return Supabase.instance.client
+      .from('org_sos')
+      .stream(primaryKey: ['org_id'])
+      .eq('org_id', orgId)
+      .map((rows) => rows.isEmpty ? null : rows.first);
+});
+
 final orgModulesProvider = FutureProvider<Set<String>>((ref) async {
   // Await full auth resolution so the restored session's JWT is attached before
   // querying; otherwise a cold-start refresh races and returns empty modules,
@@ -711,6 +724,20 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
     }
     final user = auth.valueOrNull;
 
+    // SOS kill switch: the moment lockdown goes active, drop every session that
+    // isn't a master/super admin. Realtime-driven, so this fires within a second.
+    ref.listen<AsyncValue<Map<String, dynamic>?>>(orgSosProvider, (prev, next) {
+      final sos = next.valueOrNull;
+      if (sos == null || sos['active'] != true) return;
+      final r = user?.role;
+      final exempt = r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+      if (!exempt) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          ref.read(authControllerProvider.notifier).signOut();
+        });
+      }
+    });
+
     // In browser full-screen, drop the app chrome (top bar / sidebar) entirely
     // so a wall display (e.g. the Attendance Board) shows only its own content.
     if (_fullscreen) {
@@ -1382,6 +1409,9 @@ Widget _userMenu(BuildContext context, WidgetRef ref, WebUser? user, Offset offs
             if (v == 'logout') ref.read(authControllerProvider.notifier).signOut();
             if (v == 'tour') ref.read(tourReplayProvider.notifier).state++;
             if (v == 'change_password' && user != null) showSelfPasswordChangeDialog(context, user);
+            if (v == 'sos_trigger') _sosTrigger(context, ref);
+            if (v == 'sos_cancel') _sosCancel(context, ref);
+            if (v == 'sos_toggle') _sosToggleFeature(context, ref);
           },
           itemBuilder: (_) => [
             PopupMenuItem(
@@ -1406,6 +1436,7 @@ Widget _userMenu(BuildContext context, WidgetRef ref, WebUser? user, Offset offs
                 Text('Change password', style: TextStyle(color: Colors.white70, fontSize: 13)),
               ]),
             ),
+            ..._sosMenuItems(ref, user),
             const PopupMenuItem(
               value: 'tour',
               child: Row(children: [
@@ -1444,6 +1475,135 @@ Widget _userMenu(BuildContext context, WidgetRef ref, WebUser? user, Offset offs
             ]),
           ),
         );
+}
+
+// ─── SOS kill switch (in the user dropdown) ─────────────────────────────────
+// A master-admin availability toggle (org_sos.enabled). When enabled, ANY
+// logged-in user can trigger a lockdown that logs everyone out and blocks login
+// until a master admin cancels it.
+List<PopupMenuEntry<String>> _sosMenuItems(WidgetRef ref, WebUser? user) {
+  final sos = ref.read(orgSosProvider).valueOrNull;
+  final active = sos?['active'] == true;
+  final enabled = sos?['enabled'] == true;
+  final isMaster = user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.superAdmin;
+  final items = <PopupMenuEntry<String>>[];
+  // Nothing to show unless the feature is on, or you're a master admin (who can
+  // turn it on) or a lockdown is currently active.
+  if (!enabled && !isMaster && !active) return items;
+  items.add(const PopupMenuDivider());
+  if (active && isMaster) {
+    items.add(const PopupMenuItem(
+      value: 'sos_cancel',
+      child: Row(children: [
+        Icon(Icons.lock_open, size: 15, color: Color(0xFF34D399)),
+        SizedBox(width: 8),
+        Text('Cancel SOS lockdown', style: TextStyle(color: Color(0xFF34D399), fontSize: 13, fontWeight: FontWeight.w700)),
+      ]),
+    ));
+  }
+  if (enabled && !active) {
+    items.add(const PopupMenuItem(
+      value: 'sos_trigger',
+      child: Row(children: [
+        Icon(Icons.sos, size: 16, color: Color(0xFFF87171)),
+        SizedBox(width: 8),
+        Text('Trigger SOS lockdown', style: TextStyle(color: Color(0xFFF87171), fontSize: 13, fontWeight: FontWeight.w700)),
+      ]),
+    ));
+  }
+  if (isMaster) {
+    items.add(PopupMenuItem(
+      value: 'sos_toggle',
+      child: Row(children: [
+        Icon(enabled ? Icons.toggle_on : Icons.toggle_off, size: 17, color: AppTheme.sidebarText),
+        const SizedBox(width: 8),
+        Text(enabled ? 'Disable SOS kill switch' : 'Enable SOS kill switch',
+            style: const TextStyle(color: Colors.white70, fontSize: 13)),
+      ]),
+    ));
+  }
+  return items;
+}
+
+Future<void> _writeSos(WidgetRef ref, {bool? active, bool? enabled}) async {
+  final user = ref.read(currentUserProvider);
+  final orgId = user?.orgId;
+  if (orgId == null) return;
+  final now = DateTime.now().toUtc().toIso8601String();
+  final payload = <String, dynamic>{'org_id': orgId, 'updated_at': now};
+  if (active != null) {
+    payload['active'] = active;
+    if (active) {
+      payload['triggered_by'] = user?.id;
+      payload['triggered_by_name'] = user?.name;
+      payload['triggered_at'] = now;
+    } else {
+      payload['cancelled_by'] = user?.id;
+      payload['cancelled_at'] = now;
+    }
+  }
+  if (enabled != null) payload['enabled'] = enabled;
+  await Supabase.instance.client.from('org_sos').upsert(payload, onConflict: 'org_id');
+}
+
+Future<void> _sosTrigger(BuildContext context, WidgetRef ref) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Row(children: [
+        Icon(Icons.sos, color: AppTheme.danger), SizedBox(width: 8), Text('Trigger SOS lockdown?'),
+      ]),
+      content: const Text(
+          'This immediately signs out EVERY user in your organization and blocks '
+          'all logins — only the master admin can sign in. It stays locked until '
+          'a master admin cancels it. Use only in an emergency.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white),
+          onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true),
+          child: const Text('Lock down now'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  try {
+    await _writeSos(ref, active: true);
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not trigger SOS: $e')));
+    }
+  }
+}
+
+Future<void> _sosCancel(BuildContext context, WidgetRef ref) async {
+  try {
+    await _writeSos(ref, active: false);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('SOS lockdown cancelled — users can sign in again.')));
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not cancel SOS: $e')));
+    }
+  }
+}
+
+Future<void> _sosToggleFeature(BuildContext context, WidgetRef ref) async {
+  final current = ref.read(orgSosProvider).valueOrNull?['enabled'] == true;
+  try {
+    await _writeSos(ref, enabled: !current);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(current ? 'SOS kill switch disabled.' : 'SOS kill switch enabled.')));
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not update: $e')));
+    }
+  }
 }
 
 // ─── Top Navigation Bar ────────────────────────────────────────

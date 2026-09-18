@@ -344,6 +344,21 @@ class AuthController extends AsyncNotifier<WebUser?> {
       throw Exception('Access denied. Only admins can use the web panel.');
     }
 
+    // SOS kill-switch gate: while an org is in SOS lockdown only the master
+    // admin (and super admin) may sign in — to cancel it. Everyone else is
+    // blocked. Fails open if the table is missing, so it never breaks login.
+    if (orgId != null && roleStr != 'masterAdmin' && roleStr != 'superAdmin') {
+      Map<String, dynamic>? sos;
+      try {
+        sos = await client.from('org_sos').select('active').eq('org_id', orgId).maybeSingle();
+      } catch (_) { sos = null; }
+      if (sos != null && sos['active'] == true) {
+        await client.auth.signOut();
+        throw Exception(
+            'Your organization is in SOS lockdown. Only the master admin can sign in until it is cancelled.');
+      }
+    }
+
     return WebUser(
       id: (m['user_id'] as String?) ?? '',
       name: (m['user_name'] as String?) ?? '',
