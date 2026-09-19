@@ -60,7 +60,7 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
     }
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
-      return app.AuthUser(
+      final restored = app.AuthUser(
         id: map['id'] as String,
         name: map['name'] as String,
         email: map['email'] as String,
@@ -68,6 +68,15 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
         organizationId: map['organizationId'] as String?,
         organizationName: map['organizationName'] as String?,
       );
+      // Re-arm push on every warm start, not just on explicit login: this
+      // registers the foreground FCM listener and re-saves the token. Without
+      // it a remembered session never heard a foreground push at all.
+      Future.microtask(() async {
+        try {
+          await ref.read(notificationServiceProvider).initialize(restored.id);
+        } catch (_) {}
+      });
+      return restored;
     } catch (_) {
       await prefs.remove(_kSessionKey);
       return null;

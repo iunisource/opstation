@@ -28,6 +28,9 @@ class NotificationService {
     importance: Importance.high,
   );
   static bool _localInitialized = false;
+  // FCM listeners are process-wide; guard so repeated initialize() calls
+  // (login, then session restore) never double-subscribe.
+  static bool _fcmListening = false;
 
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final SupabaseClient _supabase;
@@ -36,8 +39,15 @@ class NotificationService {
 
   NotificationService(this._supabase, this._db, this._ref);
 
-  /// Call after login — requests permission and saves FCM token.
+  /// Call after login AND after a remembered-session restore — registers the
+  /// FCM listeners, requests permission and saves the FCM token.
+  ///
+  /// The listeners are attached FIRST and unconditionally: previously they
+  /// were only reached after permission + token + a Supabase write, so any
+  /// early return or thrown error (offline, permission denied) meant the app
+  /// silently never heard a foreground push at all.
   Future<void> initialize(String userId) async {
+    _attachFcmListeners();
     try {
       // Initialize the local notifications plugin once (and register the
       // Android channel) before the FCM listener starts firing.
@@ -87,25 +97,48 @@ class NotificationService {
             .eq('id', userId);
       });
 
-      // Handle foreground messages
-      FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
-
     } catch (_) {}
+  }
+
+  void _attachFcmListeners() {
+    if (_fcmListening) return;
+    _fcmListening = true;
+    // App in foreground: we get the message directly (no OS banner).
+    FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
+    // App in background: the OS showed the banner; when the driver taps it
+    // the job must already be local, so pull now.
+    FirebaseMessaging.onMessageOpenedApp.listen(_handleOpenedFromNotification);
+    // App was terminated and launched by tapping the banner.
+    FirebaseMessaging.instance.getInitialMessage().then((m) {
+      if (m != null) _handleOpenedFromNotification(m);
+    });
+  }
+
+  bool _isJobAlert(RemoteMessage m) {
+    final t = m.data['type'];
+    return t == 'delivery_assigned' || t == 'pickup_assigned';
+  }
+
+  /// Pull this org's data so a newly-assigned job lands in local Drift and
+  /// the driver-home stream refreshes on its own. Fire-and-forget.
+  void pullOrgNow() {
+    final orgId = _ref.read(authControllerProvider).valueOrNull?.organizationId;
+    if (orgId == null || orgId.isEmpty) return;
+    _ref.read(supabasePullServiceProvider).pullOrgData(orgId).catchError((_) {});
+  }
+
+  void _handleOpenedFromNotification(RemoteMessage message) {
+    if (_isJobAlert(message)) pullOrgNow();
   }
 
   void _handleForegroundMessage(RemoteMessage message) {
     // Delivery assignment: sound the alarm and pull the new job into local
     // Drift so the driver-home stream refreshes automatically. Done before the
     // banner so the alert is immediate even if the pull is slow.
-    final msgType = message.data['type'];
-    if (msgType == 'delivery_assigned' || msgType == 'pickup_assigned') {
+    if (_isJobAlert(message)) {
       AlarmSound.instance.play();
-      final orgId =
-          _ref.read(authControllerProvider).valueOrNull?.organizationId;
-      if (orgId != null && orgId.isNotEmpty) {
-        // Fire-and-forget; the Drift .watch() in driver_home reacts when rows land.
-        _ref.read(supabasePullServiceProvider).pullOrgData(orgId).catchError((_) {});
-      }
+      // Fire-and-forget; the Drift .watch() in driver_home reacts when rows land.
+      pullOrgNow();
     }
     final notification = message.notification;
     if (notification == null) return;

@@ -67,10 +67,19 @@ class DriverHomeScreen extends ConsumerStatefulWidget {
   ConsumerState<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
-class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
+class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
+    with WidgetsBindingObserver {
+  // Throttle resume pulls: the OS can fire resumed several times in a row.
+  DateTime? _lastResumePull;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Catch up on anything assigned while the screen was not mounted (e.g.
+    // the push arrived while the app was closed and the driver opened it
+    // from the launcher instead of the banner).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pullOnResume());
     // Proactively ask for GPS permission on first login as a driver,
     // so the mid-delivery permission prompt (on first Mark delivered /
     // Mark failed tap) doesn't interrupt the driver's workflow.
@@ -139,6 +148,33 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
         // have coords attached.
       }
     }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Phone unlocked / app brought back to the foreground: pull the org so a
+  /// job assigned while we were in the background appears without a manual
+  /// swipe-to-refresh. The Drift stream repaints the list when rows land.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _pullOnResume();
+  }
+
+  void _pullOnResume() {
+    final now = DateTime.now();
+    if (_lastResumePull != null &&
+        now.difference(_lastResumePull!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastResumePull = now;
+    final orgId =
+        ref.read(authControllerProvider).valueOrNull?.organizationId;
+    if (orgId == null || orgId.isEmpty) return;
+    ref.read(supabasePullServiceProvider).pullOrgData(orgId).catchError((_) {});
   }
 
   Future<_DriverHomeData> _load() async {
