@@ -1187,6 +1187,18 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending),
+      // Logistics — Deliveries (incl. supplier pickups) + Dispatch Orders.
+      // Permission-scoped via the registry, so any user granted either item
+      // sees this menu — not only admin-tier or the dispatch-manager role.
+      if (show('/deliveries') || show('/dispatch-orders'))
+        _navMenu(context, 'Logistics', Icons.local_shipping_outlined, location,
+          ['/deliveries', '/dispatch-orders'],
+          [
+            if (show('/deliveries'))
+              _menuItem(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
+            if (show('/dispatch-orders'))
+              _menuItem(context, 'Dispatch Orders', Icons.assignment_outlined, '/dispatch-orders', location),
+          ]),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
       if (show('/assets') || show('/facility'))

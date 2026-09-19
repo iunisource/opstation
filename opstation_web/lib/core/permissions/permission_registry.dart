@@ -171,6 +171,14 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('facility', 'Facility', Icons.cleaning_services_outlined, [
     PermItem('facility', 'Facility Maintenance', PermKind.doc, '/facility'),
   ]),
+  // Logistics — driver jobs (Deliveries, incl. supplier pickups) and the
+  // dispatcher's queue of approved Delivery Orders (Dispatch Orders). Not tied
+  // to an org module; permission-scoped only, so any user granted these sees
+  // the Logistics menu — not just admins / the dispatch-manager role.
+  PermModule('logistics', 'Logistics', Icons.local_shipping_outlined, [
+    PermItem('deliveries', 'Deliveries', PermKind.doc, '/deliveries'),
+    PermItem('dispatch_orders', 'Dispatch Orders', PermKind.doc, '/dispatch-orders'),
+  ], moduleGated: false),
   // CRM is licensable in app_modules.dart but had no registry entry, so none
   // of its routes appeared in kRouteToModule and the menu showed for every
   // org whether or not the module was switched on.

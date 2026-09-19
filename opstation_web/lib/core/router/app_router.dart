@@ -249,7 +249,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // is a granted report; allow just this exact route, not the whole
             // /intelligence/ prefix.
             final permScopedReportBuilder = loc == '/intelligence/report-builder';
-            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder) return false;
+            // Logistics (Deliveries + Dispatch Orders) is registry-gated and
+            // lives outside the /erp/ prefix — let it through to the check.
+            final permScopedLogistics = loc == '/deliveries' ||
+                loc.startsWith('/deliveries/') ||
+                loc == '/dispatch-orders';
+            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/ai-connector') return false; // admin-tier only
             // Always-available to every ERP user regardless of grants: their
@@ -259,7 +264,9 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc == '/erp/home' ||
                 loc == '/erp/onboarding') return true;
             if (access == null) return true;
-            final permLoc = loc;
+            // A delivery detail page (/deliveries/<id>) is covered by the
+            // Deliveries grant rather than needing its own registry entry.
+            final permLoc = loc.startsWith('/deliveries/') ? '/deliveries' : loc;
             final it = kRouteToPerm[permLoc];
             // Unregistered ERP-area route => no access. Was `return true`, the
             // fail-open leak that let one grant expose whole unrelated menus.
