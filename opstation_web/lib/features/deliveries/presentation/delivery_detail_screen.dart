@@ -107,21 +107,131 @@ class _DeliveryDetailScreenState
     }
   }
 
+  /// PDF-safe time: the base PDF font can't render the em dash "—" (it
+  /// showed as a box), so use a plain hyphen for "not yet".
+  String _pdfTime(dynamic v) => v == null ? '-' : _fmtTime(v);
+
+  bool get _isPickup => (_delivery?['job_type'] as String?) == 'pickup';
+  String get _noun => _isPickup ? 'Pickup' : 'Delivery';
+
+  /// "CODE · Name" for customers; suppliers have no code, so just the name
+  /// (avoids the stray leading "·").
+  static String partyLabel(Map<String, dynamic> s) {
+    final code = (s['customer_code'] as String? ?? '').trim();
+    final name = (s['customer_name'] as String? ?? '').trim();
+    return code.isEmpty ? name : '$code · $name';
+  }
+
+  static String payLabel(String? pt) {
+    switch (pt) {
+      case 'cash':
+        return 'Cash';
+      case 'credit':
+        return 'Credit';
+      case 'not_required':
+        return 'Not required';
+      default:
+        return pt ?? '';
+    }
+  }
+
+  /// Location validation outcome, with the measured distance when outside.
+  static String verLabel(Map<String, dynamic> s) {
+    final v = s['verification'] as String? ?? 'pending';
+    final dist = s['distance_meters'] as int?;
+    switch (v) {
+      case 'verified':
+        return dist != null ? 'Verified (${dist}m)' : 'Verified';
+      case 'outside':
+        return dist != null ? 'Outside (${dist}m)' : 'Outside';
+      case 'no_location':
+        return 'No GPS';
+      case 'pending':
+      default:
+        return 'Pending';
+    }
+  }
+
   Future<void> _printDelivery() async {
     final d = _delivery;
     if (d == null) return;
+    final isPickup = _isPickup;
+    final noun = _noun;
     int totalAmount = 0, totalCash = 0, totalCredit = 0;
     for (final s in _stops) {
       final amt = (s['amount'] as int?) ?? 0;
       totalAmount += amt;
       if (s['payment_type'] == 'cash') {
         totalCash += amt;
-      } else {
+      } else if (s['payment_type'] == 'credit') {
         totalCredit += amt;
       }
     }
     final muted = PdfColor.fromInt(0xFF6B7280);
     final border = PdfColor.fromInt(0xFFE5E7EB);
+
+    // Column set differs by job type. Pickups have no DO / payment / amount;
+    // they show Remarks instead. Both show the stop time + location check.
+    final headers = isPickup
+        ? ['#', 'Supplier', 'Remarks', 'Status', 'Time', 'Location']
+        : ['#', 'Customer', 'DO# / Note', 'Payment', 'Amount', 'Status', 'Time', 'Location'];
+    final widths = isPickup
+        ? <int, pw.TableColumnWidth>{
+            0: const pw.FixedColumnWidth(22),
+            1: const pw.FlexColumnWidth(2.2),
+            2: const pw.FlexColumnWidth(2.4),
+            3: const pw.FlexColumnWidth(1),
+            4: const pw.FlexColumnWidth(1.3),
+            5: const pw.FlexColumnWidth(1.3),
+          }
+        : <int, pw.TableColumnWidth>{
+            0: const pw.FixedColumnWidth(22),
+            1: const pw.FlexColumnWidth(2.0),
+            2: const pw.FlexColumnWidth(1.5),
+            3: const pw.FlexColumnWidth(0.9),
+            4: const pw.FlexColumnWidth(0.9),
+            5: const pw.FlexColumnWidth(1),
+            6: const pw.FlexColumnWidth(1.3),
+            7: const pw.FlexColumnWidth(1.3),
+          };
+
+    List<pw.Widget> rowFor(Map<String, dynamic> s) {
+      final remarks = [
+        if ((s['item_description'] as String?)?.trim().isNotEmpty == true)
+          s['item_description'] as String,
+        if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
+          'Note: ${s['driver_note']}',
+      ].join('\n');
+      final doNote = [
+        if ((s['so_invoice_number'] as String?)?.trim().isNotEmpty == true)
+          'DO# ${s['so_invoice_number']}',
+        if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
+          'Note: ${s['driver_note']}',
+      ].join('\n');
+      final status = (s['status'] as String? ?? '').toUpperCase();
+      final time = _pdfTime(s['delivered_at']);
+      final loc = verLabel(s);
+      if (isPickup) {
+        return [
+          _pdfCell('${s['sequence'] ?? ''}'),
+          _pdfCell(partyLabel(s)),
+          _pdfCell(remarks),
+          _pdfCell(status),
+          _pdfCell(time),
+          _pdfCell(loc),
+        ];
+      }
+      return [
+        _pdfCell('${s['sequence'] ?? ''}'),
+        _pdfCell(partyLabel(s)),
+        _pdfCell(doNote),
+        _pdfCell(payLabel(s['payment_type'] as String?)),
+        _pdfCell('Rs ${(s['amount'] as int?) ?? 0}'),
+        _pdfCell(status),
+        _pdfCell(time),
+        _pdfCell(loc),
+      ];
+    }
 
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
@@ -133,12 +243,12 @@ class _DeliveryDetailScreenState
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
             pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text('Delivery',
+              pw.Text(noun,
                   style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
               pw.SizedBox(height: 2),
-              pw.Text('Driver: ${d['driver_name'] ?? '—'}',
+              pw.Text('Driver: ${d['driver_name'] ?? '-'}',
                   style: const pw.TextStyle(fontSize: 12)),
-              pw.Text('Created ${_fmtTime(d['created_at'])} by ${d['created_by_name'] ?? '—'}',
+              pw.Text('Created ${_pdfTime(d['created_at'])} by ${d['created_by_name'] ?? '-'}',
                   style: pw.TextStyle(fontSize: 9, color: muted)),
             ]),
             pw.Container(
@@ -153,60 +263,35 @@ class _DeliveryDetailScreenState
         ),
         pw.SizedBox(height: 6),
         pw.Row(children: [
-          pw.Text('Started ${_fmtTime(d['started_at'])}',
+          pw.Text('Started ${_pdfTime(d['started_at'])}',
               style: pw.TextStyle(fontSize: 9, color: muted)),
           pw.SizedBox(width: 16),
-          pw.Text('Completed ${_fmtTime(d['completed_at'])}',
+          pw.Text('Completed ${_pdfTime(d['completed_at'])}',
               style: pw.TextStyle(fontSize: 9, color: muted)),
           pw.SizedBox(width: 16),
           pw.Text('Stops ${_stops.length}',
               style: pw.TextStyle(fontSize: 9, color: muted)),
         ]),
-        pw.SizedBox(height: 4),
-        pw.Text('Total Rs $totalAmount   ·   Cash Rs $totalCash   ·   Credit Rs $totalCredit',
-            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        if (!isPickup) ...[
+          pw.SizedBox(height: 4),
+          pw.Text('Total Rs $totalAmount   ·   Cash Rs $totalCash   ·   Credit Rs $totalCredit',
+              style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        ],
         pw.SizedBox(height: 14),
         pw.Table(
           border: pw.TableBorder.all(color: border, width: 0.5),
-          columnWidths: {
-            0: const pw.FixedColumnWidth(24),
-            1: const pw.FlexColumnWidth(2.4),
-            2: const pw.FlexColumnWidth(1.6),
-            3: const pw.FlexColumnWidth(1),
-            4: const pw.FlexColumnWidth(1),
-            5: const pw.FlexColumnWidth(1.2),
-          },
+          columnWidths: widths,
           children: [
             pw.TableRow(
               decoration: pw.BoxDecoration(color: PdfColor.fromInt(0xFFF3F4F6)),
-              children: [
-                _pdfCell('#', bold: true),
-                _pdfCell('Customer', bold: true),
-                _pdfCell('DO# / Note', bold: true),
-                _pdfCell('Payment', bold: true),
-                _pdfCell('Amount', bold: true),
-                _pdfCell('Status', bold: true),
-              ],
+              children: [for (final h in headers) _pdfCell(h, bold: true)],
             ),
-            for (final s in _stops)
-              pw.TableRow(children: [
-                _pdfCell('${s['sequence'] ?? ''}'),
-                _pdfCell('${s['customer_code'] ?? ''} · ${s['customer_name'] ?? ''}'),
-                _pdfCell([
-                  if ((s['so_invoice_number'] as String?)?.trim().isNotEmpty == true)
-                    'DO# ${s['so_invoice_number']}',
-                  if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
-                    'Note: ${s['driver_note']}',
-                ].join('\n')),
-                _pdfCell((s['payment_type'] == 'cash') ? 'Cash' : 'Credit'),
-                _pdfCell('Rs ${(s['amount'] as int?) ?? 0}'),
-                _pdfCell((s['status'] as String? ?? '').toUpperCase()),
-              ]),
+            for (final s in _stops) pw.TableRow(children: rowFor(s)),
           ],
         ),
         if ((d['notes'] as String?)?.trim().isNotEmpty == true) ...[
           pw.SizedBox(height: 12),
-          pw.Text('Delivery notes: ${d['notes']}', style: const pw.TextStyle(fontSize: 10)),
+          pw.Text('$noun notes: ${d['notes']}', style: const pw.TextStyle(fontSize: 10)),
         ],
       ],
     ));
@@ -235,8 +320,8 @@ class _DeliveryDetailScreenState
                 onPressed: () => context.pop(),
               ),
               const SizedBox(width: 8),
-              const Text('Delivery Details',
-                  style: TextStyle(
+              Text('$_noun Details',
+                  style: const TextStyle(
                       fontSize: 28, fontWeight: FontWeight.w800)),
               const Spacer(),
               if (!_loading && _error == null && _delivery != null)
@@ -289,7 +374,7 @@ class _DeliveryDetailScreenState
       totalAmount += amt;
       if (s['payment_type'] == 'cash') {
         totalCash += amt;
-      } else {
+      } else if (s['payment_type'] == 'credit') {
         totalCredit += amt;
       }
     }
@@ -361,34 +446,36 @@ class _DeliveryDetailScreenState
               const SizedBox(height: 4),
               Text(notes, style: const TextStyle(fontSize: 13)),
             ],
-            const SizedBox(height: 16),
-            const Divider(height: 1),
-            const SizedBox(height: 16),
-            // Totals
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(8)),
-              child: Row(children: [
-                Expanded(
-                    child: _totalCell(
-                        'Rs $totalAmount', 'TOTAL')),
-                Container(
-                    width: 1,
-                    height: 32,
-                    color: AppTheme.border),
-                Expanded(
-                    child: _totalCell('Rs $totalCash', 'CASH')),
-                Container(
-                    width: 1,
-                    height: 32,
-                    color: AppTheme.border),
-                Expanded(
-                    child:
-                        _totalCell('Rs $totalCredit', 'CREDIT')),
-              ]),
-            ),
+            // Totals — money only applies to deliveries; pickups collect goods.
+            if (!_isPickup) ...[
+              const SizedBox(height: 16),
+              const Divider(height: 1),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(8)),
+                child: Row(children: [
+                  Expanded(
+                      child: _totalCell(
+                          'Rs $totalAmount', 'TOTAL')),
+                  Container(
+                      width: 1,
+                      height: 32,
+                      color: AppTheme.border),
+                  Expanded(
+                      child: _totalCell('Rs $totalCash', 'CASH')),
+                  Container(
+                      width: 1,
+                      height: 32,
+                      color: AppTheme.border),
+                  Expanded(
+                      child:
+                          _totalCell('Rs $totalCredit', 'CREDIT')),
+                ]),
+              ),
+            ],
           ]),
     );
   }
@@ -431,9 +518,9 @@ class _DeliveryDetailScreenState
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppTheme.border)),
-        child: const Center(
-            child: Text('No stops on this delivery.',
-                style: TextStyle(
+        child: Center(
+            child: Text('No stops on this ${_noun.toLowerCase()}.',
+                style: const TextStyle(
                     color: AppTheme.textSecondary,
                     fontStyle: FontStyle.italic))),
       );
@@ -460,7 +547,7 @@ class _DeliveryDetailScreenState
         const Divider(height: 1),
         for (int i = 0; i < _stops.length; i++) ...[
           if (i > 0) const Divider(height: 1),
-          _StopRow(stop: _stops[i], statusColor: _statusColor),
+          _StopRow(stop: _stops[i], statusColor: _statusColor, isPickup: _isPickup),
         ],
       ]),
     );
@@ -470,7 +557,8 @@ class _DeliveryDetailScreenState
 class _StopRow extends StatelessWidget {
   final Map<String, dynamic> stop;
   final Color Function(String) statusColor;
-  const _StopRow({required this.stop, required this.statusColor});
+  final bool isPickup;
+  const _StopRow({required this.stop, required this.statusColor, this.isPickup = false});
 
   String _fmtTime(dynamic v) {
     if (v == null) return '—';
@@ -488,8 +576,6 @@ class _StopRow extends StatelessWidget {
     final paymentType = stop['payment_type'] as String? ?? 'cash';
     final amount = (stop['amount'] as int?) ?? 0;
     final cashReceived = stop['cash_received'] as int?;
-    final verification =
-        stop['verification'] as String? ?? 'pending';
     final failureReason = stop['failure_reason'] as String?;
     final doRef = (stop['so_invoice_number'] as String?)?.trim();
     final driverNote = (stop['driver_note'] as String?)?.trim();
@@ -515,7 +601,7 @@ class _StopRow extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                     Text(
-                        '${stop['customer_code']} · ${stop['customer_name']}',
+                        _DeliveryDetailScreenState.partyLabel(stop),
                         style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w700)),
@@ -549,22 +635,26 @@ class _StopRow extends StatelessWidget {
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.only(left: 40),
-              child: Row(children: [
-                _miniKV('Payment',
-                    paymentType == 'cash' ? 'Cash' : 'Credit'),
-                const SizedBox(width: 24),
-                _miniKV('Amount', 'Rs $amount'),
-                if (cashReceived != null) ...[
-                  const SizedBox(width: 24),
-                  _miniKV('Received', 'Rs $cashReceived'),
+              child: Wrap(spacing: 24, runSpacing: 8, children: [
+                // Money only applies to deliveries.
+                if (!isPickup) ...[
+                  _miniKV('Payment',
+                      _DeliveryDetailScreenState.payLabel(paymentType)),
+                  if (paymentType != 'not_required')
+                    _miniKV('Amount', 'Rs $amount'),
+                  if (cashReceived != null)
+                    _miniKV('Received', 'Rs $cashReceived'),
                 ],
-                const SizedBox(width: 24),
-                _miniKV('Verification', verification),
-                if (stop['delivered_at'] != null) ...[
-                  const SizedBox(width: 24),
-                  _miniKV('Delivered',
-                      _fmtTime(stop['delivered_at'])),
-                ],
+                // Timestamp + location validation — shown for every stop
+                // (pending ones read "—" / "Pending") so the audit is complete.
+                _miniKV(isPickup ? 'Picked up' : 'Delivered',
+                    _fmtTime(stop['delivered_at'])),
+                _miniKV('Location check',
+                    _DeliveryDetailScreenState.verLabel(stop)),
+                if (stop['captured_lat'] != null && stop['captured_lng'] != null)
+                  _miniKV('GPS',
+                      '${(stop['captured_lat'] as num).toStringAsFixed(5)}, '
+                      '${(stop['captured_lng'] as num).toStringAsFixed(5)}'),
               ]),
             ),
             if (driverNote != null && driverNote.isNotEmpty) ...[
