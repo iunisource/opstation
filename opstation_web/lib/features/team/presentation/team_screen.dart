@@ -79,10 +79,29 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
 
   // ---- Authorization helpers ------------------------------------------
   //
-  // Web is now an edit/manage surface only — user creation lives on
-  // mobile (so password hashes and Drift state are always written
-  // correctly together). Web can still edit existing users, deactivate
-  // them, delete them (masterAdmin only), and assign routes.
+  // Team is the single place to manage org members: create (through the
+  // `create-team-user` edge function, which provisions the real Supabase
+  // Auth login), edit, reset password, deactivate, delete (masterAdmin
+  // only) and assign routes. Creation used to live on mobile, but that
+  // path never created an auth credential — the web function does.
+
+  /// Roles the viewer may assign when creating or re-roling a member.
+  /// Mirrors the mobile `assignableRolesFor` hierarchy and the server-side
+  /// check in `create-team-user`: admins may only manage field roles;
+  /// masterAdmins may also make admins; superAdmins may also make masters.
+  List<String> _assignableRoles(String? viewerRole) {
+    const field = ['salesperson', 'driver', 'surveyor', 'dispatchManager', 'accountant'];
+    switch (viewerRole) {
+      case 'superAdmin':
+        return ['masterAdmin', 'admin', ...field];
+      case 'masterAdmin':
+        return ['admin', ...field];
+      case 'admin':
+        return field;
+      default:
+        return const [];
+    }
+  }
 
   bool _canEdit(String? viewerRole, Map<String, dynamic> target, String? viewerId) {
     final targetRole = target['role'] as String? ?? '';
@@ -154,9 +173,16 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
         children: [
           Row(children: [
             const Text('Team', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            const Spacer(),
+            if (_assignableRoles(viewerRole).isNotEmpty)
+              ElevatedButton.icon(
+                onPressed: () => _showCreateMember(context, viewerRole),
+                icon: const Icon(Icons.person_add_alt_1, size: 18),
+                label: const Text('Add Member'),
+              ),
           ]),
           const SizedBox(height: 8),
-          Text('${_filteredUsers.length} of ${_users.length} members · Create new members from the mobile app',
+          Text('${_filteredUsers.length} of ${_users.length} members',
               style: const TextStyle(color: AppTheme.textSecondary)),
           const SizedBox(height: 16),
           TextField(
@@ -247,7 +273,9 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                   tooltip: 'Profile',
                                 ),
                                 if (canEdit)
-                                  IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showEditUser(context, u), tooltip: 'Edit'),
+                                  IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showEditUser(context, u, viewerRole), tooltip: 'Edit'),
+                                if (canEdit)
+                                  IconButton(icon: const Icon(Icons.lock_reset, size: 18), onPressed: () => _resetPassword(u), tooltip: 'Reset password'),
                                 if (role == 'salesperson') ...[
                                   IconButton(
                                     icon: const Icon(Icons.history, size: 18, color: AppTheme.success),
@@ -342,10 +370,165 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
     }
   }
 
-  void _showEditUser(BuildContext context, Map<String, dynamic> user) {
+  /// Enforce the org's max_users cap (same rule the superadmin flow uses).
+  /// Returns true when another member may be added. Never blocks on a read
+  /// failure — the edge function is the final gate anyway.
+  Future<bool> _withinUserLimit(String orgId) async {
+    try {
+      final client = Supabase.instance.client;
+      final org = await client.from('orgs').select('max_users').eq('id', orgId).maybeSingle();
+      final max = (org?['max_users'] as num?)?.toInt();
+      if (max == null || max <= 0) return true;
+      final rows = await client.from('users').select('id').eq('org_id', orgId);
+      return (rows as List).length < max;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  String? _friendlyError(dynamic code) {
+    switch (code) {
+      case 'email_exists': return 'That email is already in use.';
+      case 'weak_password': return 'Password must be at least 6 characters.';
+      case 'forbidden':
+      case 'forbidden_role': return 'You do not have permission to create this member.';
+      case 'missing_fields': return 'Please fill in all required fields.';
+      case null: return null;
+      default: return code.toString();
+    }
+  }
+
+  /// Create a member. Provisions the real Supabase Auth login via the
+  /// `create-team-user` edge function (which also writes the users row),
+  /// so the person can sign in on mobile or web straight away. They are
+  /// forced to set a new password on first login.
+  Future<void> _showCreateMember(BuildContext context, String? viewerRole) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) { _showSnack('Not authenticated'); return; }
+    final roles = _assignableRoles(viewerRole);
+    if (roles.isEmpty) return;
+
+    final nameCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    String role = roles.contains('salesperson') ? 'salesperson' : roles.first;
+
+    await showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        title: const Text('Add Member'),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Full Name *')),
+              const SizedBox(height: 12),
+              TextField(
+                controller: emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(labelText: 'Email *', helperText: 'Used to log in on the app'),
+              ),
+              const SizedBox(height: 12),
+              TextField(controller: phoneCtrl, keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(labelText: 'Phone')),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: role,
+                decoration: const InputDecoration(labelText: 'Role *'),
+                items: roles.map((r) => DropdownMenuItem(value: r, child: Text(_roleLabel(r)))).toList(),
+                onChanged: (v) => setS(() => role = v ?? role),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Starting password *',
+                  helperText: 'At least 6 characters. They must change it at first login.',
+                ),
+              ),
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final name = nameCtrl.text.trim();
+              final email = emailCtrl.text.trim().toLowerCase();
+              if (name.isEmpty) { _showSnack('Name is required'); return; }
+              if (email.isEmpty || !email.contains('@')) { _showSnack('A valid email is required'); return; }
+              if (passCtrl.text.length < 6) { _showSnack('Password must be at least 6 characters'); return; }
+              if (!await _withinUserLimit(orgId)) {
+                _showSnack('User limit reached for this organization. Deactivate someone or contact your administrator.');
+                return;
+              }
+              try {
+                final res = await Supabase.instance.client.functions.invoke('create-team-user', body: {
+                  'name': name,
+                  'email': email,
+                  'phone': phoneCtrl.text.trim(),
+                  'password': passCtrl.text,
+                  'role': role,
+                  'orgId': orgId,
+                });
+                final data = res.data as Map<String, dynamic>?;
+                if (data == null || data['userId'] == null) {
+                  throw Exception(_friendlyError(data?['error']) ?? 'Failed to create member');
+                }
+                if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+                _showSnack('Member added');
+                _load();
+              } catch (e) {
+                _showSnack('Failed: ${e.toString().split('\n').first}');
+              }
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      )),
+    );
+  }
+
+  /// Reset a member's password through the admin-API edge function so it
+  /// lands in auth.users (the login source of truth for web and mobile).
+  Future<void> _resetPassword(Map<String, dynamic> u) async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Reset password — ${u['name'] ?? ''}'),
+        content: SizedBox(
+          width: 380,
+          child: TextField(controller: ctrl,
+              decoration: const InputDecoration(labelText: 'New password', hintText: 'At least 6 characters')),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true), child: const Text('Reset')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (ctrl.text.length < 6) { _showSnack('Password must be at least 6 characters'); return; }
+    try {
+      final rp = await Supabase.instance.client.functions.invoke('reset-team-user-password',
+          body: {'email': u['email'], 'newPassword': ctrl.text});
+      final rd = rp.data as Map<String, dynamic>?;
+      if (rd == null || rd['ok'] != true) throw Exception(rd?['error'] ?? 'Password reset failed');
+      _showSnack('Password reset');
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
+  void _showEditUser(BuildContext context, Map<String, dynamic> user, String? viewerRole) {
     final nameCtrl = TextEditingController(text: user['name'] ?? '');
     final phoneCtrl = TextEditingController(text: user['phone'] ?? '');
     String role = user['role'] ?? 'salesperson';
+    // Only offer roles the viewer may assign, but always keep the member's
+    // current role selectable so the dropdown value stays valid.
+    final roleOptions = <String>{..._assignableRoles(viewerRole), role}.toList();
 
     showDialog(
       context: context,
@@ -358,9 +541,9 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Full Name')),
                 const SizedBox(height: 12),
-                // Email is the auth identity — not editable from web. To
-                // change someone's email, recreate the user on mobile
-                // with the new email and delete the old row here.
+                // Email is the auth identity — not editable here. To change
+                // someone's email, add them again with the new email and
+                // delete the old row.
                 TextField(
                   controller: TextEditingController(text: user['email'] ?? ''),
                   decoration: const InputDecoration(
@@ -375,14 +558,9 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                 DropdownButtonFormField<String>(
                   value: role,
                   decoration: const InputDecoration(labelText: 'Role'),
-                  items: const [
-                    DropdownMenuItem(value: 'admin', child: Text('Admin')),
-                    DropdownMenuItem(value: 'salesperson', child: Text('Salesperson')),
-                    DropdownMenuItem(value: 'driver', child: Text('Driver')),
-                    DropdownMenuItem(value: 'dispatchManager', child: Text('Dispatch Manager')),
-                    DropdownMenuItem(value: 'surveyor', child: Text('Surveyor')),
-                    DropdownMenuItem(value: 'accountant', child: Text('Accountant')),
-                  ],
+                  items: roleOptions
+                      .map((r) => DropdownMenuItem(value: r, child: Text(_roleLabel(r))))
+                      .toList(),
                   onChanged: (v) => setS(() => role = v!),
                 ),
               ]),

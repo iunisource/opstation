@@ -18,7 +18,14 @@ interface Payload {
   password: string
   role: string
   orgId: string
+  phone?: string
 }
+
+// Roles an org admin (not master/super) is allowed to create — the mobile
+// "app user" roles. Admins cannot mint other admins/masters/supers here.
+const ADMIN_CREATABLE_ROLES = [
+  'salesperson', 'driver', 'surveyor', 'dispatchManager', 'accountant',
+]
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -39,7 +46,8 @@ serve(async (req) => {
 
     const isSuperAdmin = callerRow?.role === 'superAdmin'
     const isMasterAdmin = callerRow?.role === 'masterAdmin'
-    if (!isSuperAdmin && !isMasterAdmin) return json({ error: 'forbidden' }, 403)
+    const isAdmin = callerRow?.role === 'admin'
+    if (!isSuperAdmin && !isMasterAdmin && !isAdmin) return json({ error: 'forbidden' }, 403)
 
     let p: Payload
     try { p = await req.json() } catch { return json({ error: 'bad_json' }, 400) }
@@ -47,9 +55,15 @@ serve(async (req) => {
       return json({ error: 'missing_fields' }, 400)
     if (p.password.length < 6) return json({ error: 'weak_password' }, 400)
 
-    // masterAdmin can only create users in their own org
-    if (isMasterAdmin && callerRow?.org_id !== p.orgId)
+    // admin and masterAdmin can only create users in their own org
+    if ((isMasterAdmin || isAdmin) && callerRow?.org_id !== p.orgId)
       return json({ error: 'forbidden' }, 403)
+
+    // Nobody mints a superAdmin through this endpoint; org admins are further
+    // limited to the mobile "app user" roles (no admin/master/erpUser).
+    if (p.role === 'superAdmin') return json({ error: 'forbidden_role' }, 403)
+    if (isAdmin && !ADMIN_CREATABLE_ROLES.includes(p.role))
+      return json({ error: 'forbidden_role' }, 403)
 
     // Check email uniqueness
     const { data: existing } = await admin.from('users').select('id').ilike('email', p.email).limit(1)
@@ -71,7 +85,7 @@ serve(async (req) => {
         id: userId,
         name: p.name,
         email: p.email,
-        phone: '',
+        phone: (p.phone ?? '').toString().trim(),
         role: p.role,
         is_active: true,
         password_hash: '',
