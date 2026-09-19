@@ -479,6 +479,10 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                 if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                 _showSnack('Member added');
                 _load();
+              } on FunctionException catch (e) {
+                // invoke() throws on any non-2xx; the body carries our error code.
+                final code = (e.details is Map) ? (e.details as Map)['error'] : null;
+                _showSnack(_friendlyError(code) ?? 'Failed (${e.status})');
               } catch (e) {
                 _showSnack('Failed: ${e.toString().split('\n').first}');
               }
@@ -517,6 +521,9 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       final rd = rp.data as Map<String, dynamic>?;
       if (rd == null || rd['ok'] != true) throw Exception(rd?['error'] ?? 'Password reset failed');
       _showSnack('Password reset');
+    } on FunctionException catch (e) {
+      final code = (e.details is Map) ? (e.details as Map)['error'] : null;
+      _showSnack(_friendlyError(code) ?? 'Password reset failed (${e.status})');
     } catch (e) {
       _showSnack('Failed: ${e.toString().split('\n').first}');
     }

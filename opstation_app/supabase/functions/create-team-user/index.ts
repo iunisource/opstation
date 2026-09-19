@@ -69,15 +69,33 @@ serve(async (req) => {
     const { data: existing } = await admin.from('users').select('id').ilike('email', p.email).limit(1)
     if ((existing ?? []).length > 0) return json({ error: 'email_exists' }, 409)
 
-    // Create auth user
+    // Create the auth user. If an auth account for this email already exists
+    // (typically a member who was deleted from `users` — Team's Delete leaves
+    // the auth row behind), reuse it and set the new password instead of
+    // failing, so the email stays re-usable.
+    let authUserId: string
+    let reusedAuth = false
     const { data: authData, error: authErr } = await admin.auth.admin.createUser({
       email: p.email,
       password: p.password,
       email_confirm: true,
     })
-    if (authErr || !authData?.user) return json({ error: 'auth_create_failed', detail: authErr?.message }, 500)
+    if (authData?.user) {
+      authUserId = authData.user.id
+    } else {
+      const { data: existingAuthId } = await admin.rpc('auth_id_for_email', { p_email: p.email })
+      if (!existingAuthId) {
+        return json({ error: 'auth_create_failed', detail: authErr?.message }, 500)
+      }
+      const { error: updErr } = await admin.auth.admin.updateUserById(existingAuthId as string, {
+        password: p.password,
+        email_confirm: true,
+      })
+      if (updErr) return json({ error: 'auth_update_failed', detail: updErr.message }, 500)
+      authUserId = existingAuthId as string
+      reusedAuth = true
+    }
 
-    const authUserId = authData.user.id
     const userId = `user_${Date.now()}`
 
     try {
@@ -95,9 +113,11 @@ serve(async (req) => {
         created_at: new Date().toISOString(),
       })
       if (userErr) throw new Error(userErr.message)
-      return json({ userId, authUserId })
+      return json({ userId, authUserId, reusedAuth })
     } catch (e) {
-      await admin.auth.admin.deleteUser(authUserId).catch(() => {})
+      // Only roll back an auth account we created in this call — never
+      // delete a pre-existing one we reused.
+      if (!reusedAuth) await admin.auth.admin.deleteUser(authUserId).catch(() => {})
       return json({ error: 'insert_failed', detail: e instanceof Error ? e.message : String(e) }, 500)
     }
   } catch (e) {
