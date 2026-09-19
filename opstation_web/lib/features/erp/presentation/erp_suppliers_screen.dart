@@ -374,6 +374,8 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     final contactPersonCtrl = TextEditingController(text: supplier?['contact_person'] ?? '');
     final contactNumberCtrl = TextEditingController(text: supplier?['contact_number'] ?? '');
     final ntnCtrl = TextEditingController(text: supplier?['ntn'] ?? '');
+    final latCtrl = TextEditingController(text: supplier?['latitude']?.toString() ?? '');
+    final lngCtrl = TextEditingController(text: supplier?['longitude']?.toString() ?? '');
     final termsCtrl = TextEditingController(text: supplier?['payment_terms_days']?.toString() ?? '30');
     final creditCtrl = TextEditingController(text: supplier?['credit_limit']?.toString() ?? '');
 
@@ -466,6 +468,25 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
               TextField(controller: addressCtrl,
                   decoration: const InputDecoration(labelText: 'Address'),
                   maxLines: 2),
+              const SizedBox(height: 12),
+              // Geo-coordinates — used to validate a driver's location when a
+              // pickup is assigned from this supplier (same geofence check as
+              // customer deliveries).
+              Row(children: [
+                Expanded(child: TextField(controller: latCtrl,
+                    decoration: const InputDecoration(
+                        labelText: 'Latitude',
+                        hintText: 'e.g. 31.5204'),
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true, signed: true))),
+                const SizedBox(width: 12),
+                Expanded(child: TextField(controller: lngCtrl,
+                    decoration: const InputDecoration(
+                        labelText: 'Longitude',
+                        hintText: 'e.g. 74.3587'),
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true, signed: true))),
+              ]),
               const SizedBox(height: 16),
               StatefulBuilder(builder: (ctx2, setSB) => Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -525,6 +546,8 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                 'contact_person': contactPersonCtrl.text.trim().isEmpty ? null : contactPersonCtrl.text.trim(),
                 'contact_number': contactNumberCtrl.text.trim().isEmpty ? null : contactNumberCtrl.text.trim(),
                 'ntn': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
+                'latitude': latCtrl.text.trim().isEmpty ? null : double.tryParse(latCtrl.text.trim()),
+                'longitude': lngCtrl.text.trim().isEmpty ? null : double.tryParse(lngCtrl.text.trim()),
                 'category_id': selectedCategoryId,
                 'payment_terms_days': int.tryParse(termsCtrl.text.trim()) ?? 30,
                 'credit_limit': creditCtrl.text.trim().isEmpty ? null : double.tryParse(creditCtrl.text.trim()),

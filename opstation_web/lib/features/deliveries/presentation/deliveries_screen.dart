@@ -25,11 +25,14 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
   List<_DeliveryRow> _filtered = [];
   List<Map<String, dynamic>> _drivers = [];
   List<Map<String, dynamic>> _customers = [];
+  List<Map<String, dynamic>> _suppliers = [];
   bool _loading = true;
 
   // Filter state
   final _searchCtrl = TextEditingController();
   _StatusFilter _statusFilter = _StatusFilter.all;
+  // null = all types, 'delivery' or 'pickup'
+  String? _typeFilter;
   DateTime? _dateFrom;
   DateTime? _dateTo;
 
@@ -81,11 +84,29 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
         while (true) {
           final page = await client
               .from('customers')
-              .select('id, shop_name, code')
+              .select('id, shop_name, code, latitude, longitude')
               .eq('org_id', orgId)
               .order('shop_name')
               .range(offset, offset + pageSize - 1);
           customers.addAll(List<Map<String, dynamic>>.from(page));
+          if (page.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      // Suppliers (for the Create Pickups modal). Paginated the same way.
+      final List<Map<String, dynamic>> suppliers = [];
+      {
+        const pageSize = 1000;
+        var offset = 0;
+        while (true) {
+          final page = await client
+              .from('suppliers')
+              .select('id, name, latitude, longitude')
+              .eq('org_id', orgId)
+              .order('name')
+              .range(offset, offset + pageSize - 1);
+          suppliers.addAll(List<Map<String, dynamic>>.from(page));
           if (page.length < pageSize) break;
           offset += pageSize;
         }
@@ -101,6 +122,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
         ];
         _drivers = List<Map<String, dynamic>>.from(drivers);
         _customers = customers;
+        _suppliers = suppliers;
         _loading = false;
       });
       _filter();
@@ -119,6 +141,11 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           final name =
               (d['driver_name'] as String? ?? '').toLowerCase();
           if (!name.contains(q)) return false;
+        }
+        // Type filter (delivery vs pickup)
+        if (_typeFilter != null) {
+          final jt = (d['job_type'] as String?) ?? 'delivery';
+          if (jt != _typeFilter) return false;
         }
         // Status filter
         final status = d['status'] as String? ?? 'draft';
@@ -199,9 +226,15 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           const Text('Deliveries',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const Spacer(),
+          OutlinedButton.icon(
+              onPressed: () => _showDeliveryDialog(context,
+                  existing: null, jobType: 'pickup'),
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: const Text('Create Pickup')),
+          const SizedBox(width: 10),
           ElevatedButton.icon(
-              onPressed: () =>
-                  _showDeliveryDialog(context, existing: null),
+              onPressed: () => _showDeliveryDialog(context,
+                  existing: null, jobType: 'delivery'),
               icon: const Icon(Icons.add, size: 18),
               label: const Text('Create Delivery')),
         ]),
@@ -280,7 +313,40 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
         _statusPill('Completed', _StatusFilter.completed),
         _statusPill('Cancelled', _StatusFilter.cancelled),
       ]),
+      const SizedBox(height: 10),
+      // Row 3: job-type pills
+      Wrap(spacing: 8, children: [
+        _typePill('All types', null),
+        _typePill('Deliveries', 'delivery'),
+        _typePill('Pickups', 'pickup'),
+      ]),
     ]);
+  }
+
+  Widget _typePill(String label, String? t) {
+    final selected = _typeFilter == t;
+    return InkWell(
+      onTap: () => setState(() {
+        _typeFilter = t;
+        _filter();
+      }),
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+              color: selected ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Text(label,
+            style: TextStyle(
+              color: selected ? Colors.white : AppTheme.textPrimary,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            )),
+      ),
+    );
   }
 
   Widget _statusPill(String label, _StatusFilter f) {
@@ -377,6 +443,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                   itemBuilder: (_, i) {
                     final row = _filtered[i];
                     final d = row.data;
+                    final jt = (d['job_type'] as String?) ?? 'delivery';
+                    final isPickup = jt == 'pickup';
                     final status = d['status'] as String? ?? 'draft';
                     final canEdit =
                         status == 'draft' || status == 'assigned';
@@ -398,8 +466,35 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         child: Row(children: [
                           Expanded(
                               flex: 2,
-                              child: Text(createdAt,
-                                  style: const TextStyle(fontSize: 13))),
+                              child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(
+                                          color: (isPickup
+                                                  ? AppTheme.warning
+                                                  : AppTheme.primary)
+                                              .withOpacity(0.12),
+                                          borderRadius:
+                                              BorderRadius.circular(5)),
+                                      child: Text(
+                                          isPickup ? 'PICKUP' : 'DELIVERY',
+                                          style: TextStyle(
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 0.5,
+                                              color: isPickup
+                                                  ? AppTheme.warning
+                                                  : AppTheme.primary)),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(createdAt,
+                                        style:
+                                            const TextStyle(fontSize: 13)),
+                                  ])),
                           Expanded(
                               flex: 2,
                               child: Text(
@@ -596,7 +691,13 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
   /// UPDATE instead of INSERT, and stops are replaced wholesale on
   /// save (matching the mobile wizard's pattern).
   void _showDeliveryDialog(BuildContext context,
-      {required _DeliveryRow? existing}) async {
+      {required _DeliveryRow? existing, String jobType = 'delivery'}) async {
+    // For edits, the job type comes from the row; for new, from the button.
+    final String jt =
+        (existing?.data['job_type'] as String?) ?? jobType;
+    final bool isPickup = jt == 'pickup';
+    final String noun = isPickup ? 'Pickup' : 'Delivery';
+    final parties = isPickup ? _suppliers : _customers;
     String? driverId = existing?.data['driver_id'] as String?;
     String? driverName = existing?.data['driver_name'] as String?;
     final notesCtrl =
@@ -622,6 +723,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           draft.amountCtrl.text = '${m['amount'] ?? 0}';
           draft.paymentType =
               m['payment_type'] as String? ?? 'cash';
+          draft.targetLat = (m['target_lat'] as num?)?.toDouble();
+          draft.targetLng = (m['target_lng'] as num?)?.toDouble();
           stops.add(draft);
         }
       } catch (e) {
@@ -641,9 +744,10 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
         for (final s in stops) {
           if (s.paymentType == 'cash') {
             totalCash += s.amount;
-          } else {
+          } else if (s.paymentType == 'credit') {
             totalCredit += s.amount;
           }
+          // 'not_required' contributes to neither.
         }
         final total = totalCash + totalCredit;
 
@@ -652,7 +756,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
             existing?.data['status'] as String? ?? 'draft';
 
         return AlertDialog(
-          title: Text(isEdit ? 'Edit Delivery' : 'Create Delivery'),
+          title: Text('${isEdit ? 'Edit' : 'Create'} $noun'),
           content: SizedBox(
             width: 720,
             child: SingleChildScrollView(
@@ -718,8 +822,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                             color: AppTheme.background,
                             borderRadius: BorderRadius.vertical(
                                 top: Radius.circular(8))),
-                        child: const Row(children: [
-                          SizedBox(
+                        child: Row(children: [
+                          const SizedBox(
                               width: 32,
                               child: Text('#',
                                   style: TextStyle(
@@ -728,33 +832,35 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                                       color: AppTheme.textSecondary))),
                           Expanded(
                               flex: 3,
-                              child: Text('Customer',
-                                  style: TextStyle(
+                              child: Text(isPickup ? 'Supplier' : 'Customer',
+                                  style: const TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w700,
                                       color: AppTheme.textSecondary))),
-                          Expanded(
+                          const Expanded(
                               flex: 3,
                               child: Text('Item (optional)',
                                   style: TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w700,
                                       color: AppTheme.textSecondary))),
-                          Expanded(
-                              flex: 2,
-                              child: Text('Payment',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.textSecondary))),
-                          Expanded(
-                              flex: 2,
-                              child: Text('Amount',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.textSecondary))),
-                          SizedBox(width: 32),
+                          if (!isPickup) ...const [
+                            Expanded(
+                                flex: 2,
+                                child: Text('Payment',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppTheme.textSecondary))),
+                            Expanded(
+                                flex: 2,
+                                child: Text('Amount',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppTheme.textSecondary))),
+                          ],
+                          const SizedBox(width: 32),
                         ]),
                       ),
                       const Divider(height: 1),
@@ -762,7 +868,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         _StopEditorRow(
                           index: i,
                           draft: stops[i],
-                          customers: _customers,
+                          parties: parties,
+                          isPickup: isPickup,
                           onChanged: () => setS(() {}),
                           onRemove: () =>
                               setS(() => stops.removeAt(i)),
@@ -779,25 +886,27 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         setS(() => stops.add(_StopDraft())),
                   ),
                 ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                      color: AppTheme.primary.withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Row(children: [
-                    Expanded(child: _totalCell('Rs $total', 'TOTAL')),
-                    Container(
-                        width: 1, height: 32, color: AppTheme.border),
-                    Expanded(
-                        child: _totalCell('Rs $totalCash', 'CASH')),
-                    Container(
-                        width: 1, height: 32, color: AppTheme.border),
-                    Expanded(
-                        child: _totalCell(
-                            'Rs $totalCredit', 'CREDIT')),
-                  ]),
-                ),
+                if (!isPickup) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                        color: AppTheme.primary.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Row(children: [
+                      Expanded(child: _totalCell('Rs $total', 'TOTAL')),
+                      Container(
+                          width: 1, height: 32, color: AppTheme.border),
+                      Expanded(
+                          child: _totalCell('Rs $totalCash', 'CASH')),
+                      Container(
+                          width: 1, height: 32, color: AppTheme.border),
+                      Expanded(
+                          child: _totalCell(
+                              'Rs $totalCredit', 'CREDIT')),
+                    ]),
+                  ),
+                ],
               ]),
             ),
           ),
@@ -819,6 +928,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         driverName: driverName,
                         notes: notesCtrl.text.trim(),
                         targetStatus: 'draft',
+                        jobType: jt,
                       ),
                   child: const Text('Save Draft')),
             ElevatedButton(
@@ -830,6 +940,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                       driverName: driverName,
                       notes: notesCtrl.text.trim(),
                       targetStatus: 'assigned',
+                      jobType: jt,
                     ),
                 child: Text(isEdit && currentStatus == 'assigned'
                     ? 'Save'
@@ -867,7 +978,9 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
     required String? driverName,
     required String notes,
     required String targetStatus,
+    String jobType = 'delivery',
   }) async {
+    final bool isPickup = jobType == 'pickup';
     // Validate
     if (stops.isEmpty) {
       ScaffoldMessenger.of(ctx).showSnackBar(
@@ -878,7 +991,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
       final s = stops[i];
       if (s.customerId == null) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-            SnackBar(content: Text('Stop ${i + 1}: pick a customer.')));
+            SnackBar(content: Text('Stop ${i + 1}: pick a '
+                '${isPickup ? 'supplier' : 'customer'}.')));
         return;
       }
       if (s.amount < 0) {
@@ -957,11 +1071,15 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           'status': targetStatus,
           'notes': notes.isEmpty ? null : notes,
           'org_id': orgId,
+          'job_type': jobType,
           'created_at': now.toIso8601String(),
         });
       }
 
-      // Insert (or re-insert) stops
+      // Insert (or re-insert) stops. For pickups there is no payment/amount,
+      // so payment_type is stored as 'not_required' and amount 0. The
+      // supplier/customer geo-coordinates are snapshotted onto the stop so
+      // the driver app can validate location without a local party lookup.
       final stopRows = [
         for (int i = 0; i < stops.length; i++)
           {
@@ -973,13 +1091,16 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
             'sequence': i + 1,
             'item_description':
                 stops[i].descriptionCtrl.text.trim(), // empty allowed
-            'amount': stops[i].paymentType == 'credit'
+            'amount': isPickup
                 ? 0
-                : stops[i].amount,
-            'payment_type': stops[i].paymentType,
+                : (stops[i].paymentType == 'credit' ? 0 : stops[i].amount),
+            'payment_type':
+                isPickup ? 'not_required' : stops[i].paymentType,
             'status': 'pending',
             'verification': 'pending',
             'photo_paths_json': '[]',
+            'target_lat': stops[i].targetLat,
+            'target_lng': stops[i].targetLng,
           }
       ];
       await client.from('delivery_stops').insert(stopRows);
@@ -1000,12 +1121,15 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
             'send-notification',
             body: {
               'userId': driverId,
-              'title': 'New Delivery Assigned',
+              'title': isPickup
+                  ? 'New Pickup Assigned'
+                  : 'New Delivery Assigned',
               'body':
-                  '${stops.length} stop${stops.length == 1 ? '' : 's'} assigned to you',
+                  '${stops.length} ${isPickup ? 'pickup' : 'stop'}${stops.length == 1 ? '' : 's'} assigned to you',
               'data': {
                 'deliveryId': deliveryId,
-                'type': 'delivery_assigned',
+                'type': isPickup ? 'pickup_assigned' : 'delivery_assigned',
+                'jobType': jobType,
               },
             },
           );
@@ -1080,16 +1204,23 @@ class _DatePickerField extends StatelessWidget {
 class _StopEditorRow extends StatelessWidget {
   final int index;
   final _StopDraft draft;
-  final List<Map<String, dynamic>> customers;
+  final List<Map<String, dynamic>> parties;
+  final bool isPickup;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
   const _StopEditorRow({
     required this.index,
     required this.draft,
-    required this.customers,
+    required this.parties,
+    required this.isPickup,
     required this.onChanged,
     required this.onRemove,
   });
+
+  // Suppliers have `name` and no `code`; customers have `shop_name` + `code`.
+  String _label(Map<String, dynamic> p) => isPickup
+      ? (p['name'] as String? ?? '')
+      : '${p['code'] ?? ''} · ${p['shop_name'] ?? ''}';
 
   @override
   Widget build(BuildContext context) {
@@ -1100,37 +1231,43 @@ class _StopEditorRow extends StatelessWidget {
         Expanded(
           flex: 3,
           child: Autocomplete<Map<String, dynamic>>(
-            displayStringForOption: (c) =>
-                '${c['code']} · ${c['shop_name']}',
+            displayStringForOption: _label,
             optionsBuilder: (TextEditingValue v) {
               final q = v.text.toLowerCase().trim();
-              if (q.isEmpty) return customers;
-              return customers.where((c) {
-                final code =
-                    (c['code'] as String? ?? '').toLowerCase();
-                final name =
-                    (c['shop_name'] as String? ?? '').toLowerCase();
+              if (q.isEmpty) return parties;
+              return parties.where((p) {
+                final code = (p['code'] as String? ?? '').toLowerCase();
+                final name = ((isPickup ? p['name'] : p['shop_name'])
+                            as String? ??
+                        '')
+                    .toLowerCase();
                 return code.contains(q) || name.contains(q);
               });
             },
             initialValue: TextEditingValue(
                 text: draft.customerName == null
                     ? ''
-                    : '${draft.customerCode ?? ''} · ${draft.customerName}'),
-            onSelected: (c) {
-              draft.customerId = c['id'] as String;
-              draft.customerCode = c['code'] as String;
-              draft.customerName = c['shop_name'] as String;
+                    : (isPickup
+                        ? draft.customerName!
+                        : '${draft.customerCode ?? ''} · ${draft.customerName}')),
+            onSelected: (p) {
+              draft.customerId = p['id'] as String;
+              draft.customerCode =
+                  isPickup ? '' : (p['code'] as String? ?? '');
+              draft.customerName =
+                  (isPickup ? p['name'] : p['shop_name']) as String? ?? '';
+              draft.targetLat = (p['latitude'] as num?)?.toDouble();
+              draft.targetLng = (p['longitude'] as num?)?.toDouble();
               onChanged();
             },
             fieldViewBuilder: (ctx, ctrl, focus, onFieldSubmitted) {
               return TextField(
                 controller: ctrl,
                 focusNode: focus,
-                decoration: const InputDecoration(
-                  hintText: 'Search code or name',
+                decoration: InputDecoration(
+                  hintText: isPickup ? 'Search supplier' : 'Search code or name',
                   isDense: true,
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                 ),
               );
             },
@@ -1148,42 +1285,46 @@ class _StopEditorRow extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 2,
-          child: DropdownButtonFormField<String>(
-            value: draft.paymentType,
-            isDense: true,
-            decoration: const InputDecoration(
+        if (!isPickup) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: DropdownButtonFormField<String>(
+              value: draft.paymentType,
               isDense: true,
-              border: OutlineInputBorder(),
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'cash', child: Text('Cash')),
+                DropdownMenuItem(value: 'credit', child: Text('Credit')),
+                DropdownMenuItem(
+                    value: 'not_required', child: Text('Not Required')),
+              ],
+              onChanged: (v) {
+                draft.paymentType = v ?? 'cash';
+                onChanged();
+              },
             ),
-            items: const [
-              DropdownMenuItem(value: 'cash', child: Text('Cash')),
-              DropdownMenuItem(value: 'credit', child: Text('Credit')),
-            ],
-            onChanged: (v) {
-              draft.paymentType = v ?? 'cash';
-              onChanged();
-            },
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 2,
-          child: TextField(
-            controller: draft.amountCtrl,
-            enabled: draft.paymentType == 'cash',
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              hintText: '0',
-              prefixText: 'Rs ',
-              isDense: true,
-              border: OutlineInputBorder(),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: TextField(
+              controller: draft.amountCtrl,
+              enabled: draft.paymentType == 'cash',
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                hintText: '0',
+                prefixText: 'Rs ',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (_) => onChanged(),
             ),
-            onChanged: (_) => onChanged(),
           ),
-        ),
+        ],
         const SizedBox(width: 8),
         SizedBox(
           width: 32,
@@ -1206,6 +1347,8 @@ class _StopDraft {
   String? customerCode;
   String? customerName;
   String paymentType = 'cash';
+  double? targetLat;
+  double? targetLng;
   final TextEditingController descriptionCtrl = TextEditingController();
   final TextEditingController amountCtrl = TextEditingController();
 
