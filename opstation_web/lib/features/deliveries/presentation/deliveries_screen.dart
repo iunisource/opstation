@@ -562,7 +562,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                                           size: 18,
                                           color: AppTheme.success),
                                       onPressed: () =>
-                                          _assign(d['id'] as String),
+                                          _assign(row),
                                       tooltip: 'Assign'),
                                 if (canComplete)
                                   IconButton(
@@ -593,12 +593,80 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
     );
   }
 
-  Future<void> _assign(String id) async {
+  /// Push the "new job" alert to the driver's phone via the send-notification
+  /// edge function. The app rings, pulls the job into local storage and shows
+  /// a banner. Never fails the caller, but DOES surface a failure to the
+  /// dispatcher (stale/missing FCM token is the usual cause) so it isn't a
+  /// silent mystery why a driver "didn't get it".
+  ///
+  /// `type` is always 'delivery_assigned' — that's the one value every app
+  /// build reacts to (ring + auto-pull). `jobType` carries pickup vs delivery
+  /// for builds that want to differentiate.
+  Future<void> _notifyDriver({
+    required String deliveryId,
+    required String driverId,
+    required String jobType,
+    required int stopCount,
+  }) async {
+    final isPickup = jobType == 'pickup';
+    try {
+      debugPrint('FCM: invoking send-notification for driver $driverId');
+      final res = await Supabase.instance.client.functions.invoke(
+        'send-notification',
+        body: {
+          'userId': driverId,
+          'title': isPickup ? 'New Pickup Assigned' : 'New Delivery Assigned',
+          'body':
+              '$stopCount ${isPickup ? 'pickup' : 'stop'}${stopCount == 1 ? '' : 's'} assigned to you',
+          'data': {
+            'deliveryId': deliveryId,
+            'type': 'delivery_assigned',
+            'jobType': jobType,
+          },
+        },
+      );
+      // The function returns 200 even when FCM itself rejects the token, so
+      // inspect the body for an FCM error and tell the dispatcher.
+      final data = res.data;
+      final fcmErr = (data is Map && data['error'] != null)
+          ? (data['error'] is Map
+              ? (data['error']['message'] ?? data['error']['status'])
+              : data['error'])
+          : null;
+      if (fcmErr != null) {
+        _showSnack('Assigned, but the driver push failed: $fcmErr');
+      }
+    } on FunctionException catch (e) {
+      final detail = (e.details is Map) ? (e.details as Map)['error'] : null;
+      _showSnack('Assigned, but the driver push failed: ${detail ?? e.status}');
+    } catch (e, st) {
+      debugPrint('FCM notify failed: $e\n$st');
+      _showSnack('Assigned, but the driver push failed.');
+    }
+  }
+
+  /// Draft -> assigned from the list. Previously this only flipped the status
+  /// and never notified the driver, so the phone stayed silent and the job
+  /// only appeared after a manual refresh.
+  Future<void> _assign(_DeliveryRow row) async {
+    final d = row.data;
+    final id = d['id'] as String;
+    final driverId = d['driver_id'] as String?;
+    if (driverId == null) {
+      _showSnack('Pick a driver first (edit the job), then assign.');
+      return;
+    }
     try {
       await Supabase.instance.client
           .from('deliveries')
           .update({'status': 'assigned'}).eq('id', id);
-      _showSnack('Delivery assigned');
+      _showSnack(((d['job_type'] as String?) == 'pickup' ? 'Pickup' : 'Delivery') + ' assigned');
+      await _notifyDriver(
+        deliveryId: id,
+        driverId: driverId,
+        jobType: (d['job_type'] as String?) ?? 'delivery',
+        stopCount: row.stopCount,
+      );
       _load();
     } catch (e) {
       _showSnack('Failed: ${e.toString().split('\n').first}');
@@ -1115,27 +1183,12 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
               (driverId != (existing!.data['driver_id'] as String?) ||
                   (existing.data['status'] as String? ?? 'draft') != 'assigned'));
       if (wasNewlyAssigned) {
-        try {
-          debugPrint('FCM: invoking send-notification for driver $driverId');
-          await client.functions.invoke(
-            'send-notification',
-            body: {
-              'userId': driverId,
-              'title': isPickup
-                  ? 'New Pickup Assigned'
-                  : 'New Delivery Assigned',
-              'body':
-                  '${stops.length} ${isPickup ? 'pickup' : 'stop'}${stops.length == 1 ? '' : 's'} assigned to you',
-              'data': {
-                'deliveryId': deliveryId,
-                'type': isPickup ? 'pickup_assigned' : 'delivery_assigned',
-                'jobType': jobType,
-              },
-            },
-          );
-        } catch (e, st) {
-          debugPrint('FCM notify failed: $e\n$st');
-        }
+        await _notifyDriver(
+          deliveryId: deliveryId,
+          driverId: driverId!,
+          jobType: jobType,
+          stopCount: stops.length,
+        );
       }
 
       if (ctx.mounted) {
