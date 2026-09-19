@@ -111,8 +111,13 @@ class _DeliveryDetailScreenState
   /// showed as a box), so use a plain hyphen for "not yet".
   String _pdfTime(dynamic v) => v == null ? '-' : _fmtTime(v);
 
-  bool get _isPickup => (_delivery?['job_type'] as String?) == 'pickup';
-  String get _noun => _isPickup ? 'Pickup' : 'Delivery';
+  // A job can mix stop types; behaviour is decided per stop.
+  static bool isPickupStop(Map<String, dynamic> s) =>
+      (s['stop_type'] as String?) == 'pickup';
+  List<Map<String, dynamic>> get _deliveryStops =>
+      _stops.where((s) => !isPickupStop(s)).toList();
+  List<Map<String, dynamic>> get _pickupStops =>
+      _stops.where(isPickupStop).toList();
 
   /// "CODE · Name" for customers; suppliers have no code, so just the name
   /// (avoids the stray leading "·").
@@ -155,10 +160,10 @@ class _DeliveryDetailScreenState
   Future<void> _printDelivery() async {
     final d = _delivery;
     if (d == null) return;
-    final isPickup = _isPickup;
-    final noun = _noun;
+    final dels = _deliveryStops;
+    final picks = _pickupStops;
     int totalAmount = 0, totalCash = 0, totalCredit = 0;
-    for (final s in _stops) {
+    for (final s in dels) {
       final amt = (s['amount'] as int?) ?? 0;
       totalAmount += amt;
       if (s['payment_type'] == 'cash') {
@@ -170,21 +175,16 @@ class _DeliveryDetailScreenState
     final muted = PdfColor.fromInt(0xFF6B7280);
     final border = PdfColor.fromInt(0xFFE5E7EB);
 
-    // Column set differs by job type. Pickups have no DO / payment / amount;
-    // they show Remarks instead. Both show the stop time + location check.
-    final headers = isPickup
-        ? ['#', 'Supplier', 'Remarks', 'Status', 'Time', 'Location']
-        : ['#', 'Customer', 'DO# / Note', 'Payment', 'Amount', 'Status', 'Time', 'Location'];
-    final widths = isPickup
-        ? <int, pw.TableColumnWidth>{
-            0: const pw.FixedColumnWidth(22),
-            1: const pw.FlexColumnWidth(2.2),
-            2: const pw.FlexColumnWidth(2.4),
-            3: const pw.FlexColumnWidth(1),
-            4: const pw.FlexColumnWidth(1.3),
-            5: const pw.FlexColumnWidth(1.3),
-          }
-        : <int, pw.TableColumnWidth>{
+    pw.Widget sectionTitle(String t) => pw.Padding(
+          padding: const pw.EdgeInsets.only(top: 12, bottom: 5),
+          child: pw.Text(t,
+              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+        );
+
+    // Deliveries: customer, DO/note, payment, amount, status, time, location.
+    pw.Widget deliveriesTable() => pw.Table(
+          border: pw.TableBorder.all(color: border, width: 0.5),
+          columnWidths: {
             0: const pw.FixedColumnWidth(22),
             1: const pw.FlexColumnWidth(2.0),
             2: const pw.FlexColumnWidth(1.5),
@@ -193,45 +193,69 @@ class _DeliveryDetailScreenState
             5: const pw.FlexColumnWidth(1),
             6: const pw.FlexColumnWidth(1.3),
             7: const pw.FlexColumnWidth(1.3),
-          };
+          },
+          children: [
+            pw.TableRow(
+              decoration: pw.BoxDecoration(color: PdfColor.fromInt(0xFFF3F4F6)),
+              children: [
+                for (final h in ['#', 'Customer', 'DO# / Note', 'Payment', 'Amount', 'Status', 'Time', 'Location'])
+                  _pdfCell(h, bold: true),
+              ],
+            ),
+            for (final s in dels)
+              pw.TableRow(children: [
+                _pdfCell('${s['sequence'] ?? ''}'),
+                _pdfCell(partyLabel(s)),
+                _pdfCell([
+                  if ((s['so_invoice_number'] as String?)?.trim().isNotEmpty == true)
+                    'DO# ${s['so_invoice_number']}',
+                  if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
+                    'Note: ${s['driver_note']}',
+                ].join('\n')),
+                _pdfCell(payLabel(s['payment_type'] as String?)),
+                _pdfCell('Rs ${(s['amount'] as int?) ?? 0}'),
+                _pdfCell((s['status'] as String? ?? '').toUpperCase()),
+                _pdfCell(_pdfTime(s['delivered_at'])),
+                _pdfCell(verLabel(s)),
+              ]),
+          ],
+        );
 
-    List<pw.Widget> rowFor(Map<String, dynamic> s) {
-      final remarks = [
-        if ((s['item_description'] as String?)?.trim().isNotEmpty == true)
-          s['item_description'] as String,
-        if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
-          'Note: ${s['driver_note']}',
-      ].join('\n');
-      final doNote = [
-        if ((s['so_invoice_number'] as String?)?.trim().isNotEmpty == true)
-          'DO# ${s['so_invoice_number']}',
-        if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
-          'Note: ${s['driver_note']}',
-      ].join('\n');
-      final status = (s['status'] as String? ?? '').toUpperCase();
-      final time = _pdfTime(s['delivered_at']);
-      final loc = verLabel(s);
-      if (isPickup) {
-        return [
-          _pdfCell('${s['sequence'] ?? ''}'),
-          _pdfCell(partyLabel(s)),
-          _pdfCell(remarks),
-          _pdfCell(status),
-          _pdfCell(time),
-          _pdfCell(loc),
-        ];
-      }
-      return [
-        _pdfCell('${s['sequence'] ?? ''}'),
-        _pdfCell(partyLabel(s)),
-        _pdfCell(doNote),
-        _pdfCell(payLabel(s['payment_type'] as String?)),
-        _pdfCell('Rs ${(s['amount'] as int?) ?? 0}'),
-        _pdfCell(status),
-        _pdfCell(time),
-        _pdfCell(loc),
-      ];
-    }
+    // Pickups: supplier, remarks, status, time, location — no money columns.
+    pw.Widget pickupsTable() => pw.Table(
+          border: pw.TableBorder.all(color: border, width: 0.5),
+          columnWidths: {
+            0: const pw.FixedColumnWidth(22),
+            1: const pw.FlexColumnWidth(2.2),
+            2: const pw.FlexColumnWidth(2.4),
+            3: const pw.FlexColumnWidth(1),
+            4: const pw.FlexColumnWidth(1.3),
+            5: const pw.FlexColumnWidth(1.3),
+          },
+          children: [
+            pw.TableRow(
+              decoration: pw.BoxDecoration(color: PdfColor.fromInt(0xFFF3F4F6)),
+              children: [
+                for (final h in ['#', 'Supplier', 'Remarks', 'Status', 'Time', 'Location'])
+                  _pdfCell(h, bold: true),
+              ],
+            ),
+            for (final s in picks)
+              pw.TableRow(children: [
+                _pdfCell('${s['sequence'] ?? ''}'),
+                _pdfCell(partyLabel(s)),
+                _pdfCell([
+                  if ((s['item_description'] as String?)?.trim().isNotEmpty == true)
+                    s['item_description'] as String,
+                  if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
+                    'Note: ${s['driver_note']}',
+                ].join('\n')),
+                _pdfCell((s['status'] as String? ?? '').toUpperCase()),
+                _pdfCell(_pdfTime(s['delivered_at'])),
+                _pdfCell(verLabel(s)),
+              ]),
+          ],
+        );
 
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
@@ -243,7 +267,7 @@ class _DeliveryDetailScreenState
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
             pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text(noun,
+              pw.Text('Job Sheet',
                   style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
               pw.SizedBox(height: 2),
               pw.Text('Driver: ${d['driver_name'] ?? '-'}',
@@ -269,29 +293,25 @@ class _DeliveryDetailScreenState
           pw.Text('Completed ${_pdfTime(d['completed_at'])}',
               style: pw.TextStyle(fontSize: 9, color: muted)),
           pw.SizedBox(width: 16),
-          pw.Text('Stops ${_stops.length}',
+          pw.Text('Deliveries ${dels.length}   Pickups ${picks.length}',
               style: pw.TextStyle(fontSize: 9, color: muted)),
         ]),
-        if (!isPickup) ...[
+        if (dels.isNotEmpty) ...[
           pw.SizedBox(height: 4),
           pw.Text('Total Rs $totalAmount   ·   Cash Rs $totalCash   ·   Credit Rs $totalCredit',
               style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
         ],
-        pw.SizedBox(height: 14),
-        pw.Table(
-          border: pw.TableBorder.all(color: border, width: 0.5),
-          columnWidths: widths,
-          children: [
-            pw.TableRow(
-              decoration: pw.BoxDecoration(color: PdfColor.fromInt(0xFFF3F4F6)),
-              children: [for (final h in headers) _pdfCell(h, bold: true)],
-            ),
-            for (final s in _stops) pw.TableRow(children: rowFor(s)),
-          ],
-        ),
+        if (dels.isNotEmpty) ...[
+          sectionTitle('Deliveries (${dels.length})'),
+          deliveriesTable(),
+        ],
+        if (picks.isNotEmpty) ...[
+          sectionTitle('Pickups (${picks.length})'),
+          pickupsTable(),
+        ],
         if ((d['notes'] as String?)?.trim().isNotEmpty == true) ...[
           pw.SizedBox(height: 12),
-          pw.Text('$noun notes: ${d['notes']}', style: const pw.TextStyle(fontSize: 10)),
+          pw.Text('Job notes: ${d['notes']}', style: const pw.TextStyle(fontSize: 10)),
         ],
       ],
     ));
@@ -320,8 +340,8 @@ class _DeliveryDetailScreenState
                 onPressed: () => context.pop(),
               ),
               const SizedBox(width: 8),
-              Text('$_noun Details',
-                  style: const TextStyle(
+              const Text('Job Details',
+                  style: TextStyle(
                       fontSize: 28, fontWeight: FontWeight.w800)),
               const Spacer(),
               if (!_loading && _error == null && _delivery != null)
@@ -447,7 +467,7 @@ class _DeliveryDetailScreenState
               Text(notes, style: const TextStyle(fontSize: 13)),
             ],
             // Totals — money only applies to deliveries; pickups collect goods.
-            if (!_isPickup) ...[
+            if (_deliveryStops.isNotEmpty) ...[
               const SizedBox(height: 16),
               const Divider(height: 1),
               const SizedBox(height: 16),
@@ -518,13 +538,26 @@ class _DeliveryDetailScreenState
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppTheme.border)),
-        child: Center(
-            child: Text('No stops on this ${_noun.toLowerCase()}.',
-                style: const TextStyle(
+        child: const Center(
+            child: Text('No stops on this job.',
+                style: TextStyle(
                     color: AppTheme.textSecondary,
                     fontStyle: FontStyle.italic))),
       );
     }
+    // Bifurcated: deliveries first, then pickups, each in its own card.
+    final dels = _deliveryStops;
+    final picks = _pickupStops;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (dels.isNotEmpty) _stopSection('Deliveries', dels, isPickup: false),
+      if (dels.isNotEmpty && picks.isNotEmpty) const SizedBox(height: 20),
+      if (picks.isNotEmpty) _stopSection('Pickups', picks, isPickup: true),
+    ]);
+  }
+
+  Widget _stopSection(String title, List<Map<String, dynamic>> stops,
+      {required bool isPickup}) {
+    final color = isPickup ? AppTheme.warning : AppTheme.primary;
     return Container(
       decoration: BoxDecoration(
           color: Colors.white,
@@ -539,15 +572,20 @@ class _DeliveryDetailScreenState
               borderRadius: BorderRadius.vertical(
                   top: Radius.circular(12))),
           child: Row(children: [
-            Text('Stops (${_stops.length})',
+            Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 8),
+            Text('$title (${stops.length})',
                 style: const TextStyle(
                     fontWeight: FontWeight.w700, fontSize: 13)),
           ]),
         ),
         const Divider(height: 1),
-        for (int i = 0; i < _stops.length; i++) ...[
+        for (int i = 0; i < stops.length; i++) ...[
           if (i > 0) const Divider(height: 1),
-          _StopRow(stop: _stops[i], statusColor: _statusColor, isPickup: _isPickup),
+          _StopRow(stop: stops[i], statusColor: _statusColor, isPickup: isPickup),
         ],
       ]),
     );

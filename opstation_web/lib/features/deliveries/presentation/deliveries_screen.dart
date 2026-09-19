@@ -63,12 +63,22 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
 
       final stops = await client
           .from('delivery_stops')
-          .select('delivery_id');
+          .select('delivery_id, stop_type');
 
+      // Per-job composition: total stops plus how many are deliveries vs
+      // pickups (a job can mix both).
       final countByDelivery = <String, int>{};
+      final delByDelivery = <String, int>{};
+      final pickByDelivery = <String, int>{};
       for (final s in (stops as List)) {
-        final id = (s as Map)['delivery_id'] as String;
+        final m = s as Map;
+        final id = m['delivery_id'] as String;
         countByDelivery[id] = (countByDelivery[id] ?? 0) + 1;
+        if ((m['stop_type'] as String?) == 'pickup') {
+          pickByDelivery[id] = (pickByDelivery[id] ?? 0) + 1;
+        } else {
+          delByDelivery[id] = (delByDelivery[id] ?? 0) + 1;
+        }
       }
 
       final drivers = await client
@@ -118,6 +128,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
             _DeliveryRow(
               data: Map<String, dynamic>.from(d as Map),
               stopCount: countByDelivery[(d as Map)['id'] as String] ?? 0,
+              deliveryCount: delByDelivery[(d as Map)['id'] as String] ?? 0,
+              pickupCount: pickByDelivery[(d as Map)['id'] as String] ?? 0,
             )
         ];
         _drivers = List<Map<String, dynamic>>.from(drivers);
@@ -142,11 +154,9 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
               (d['driver_name'] as String? ?? '').toLowerCase();
           if (!name.contains(q)) return false;
         }
-        // Type filter (delivery vs pickup)
-        if (_typeFilter != null) {
-          final jt = (d['job_type'] as String?) ?? 'delivery';
-          if (jt != _typeFilter) return false;
-        }
+        // Type filter: jobs that CONTAIN deliveries / pickups (a job can mix).
+        if (_typeFilter == 'delivery' && row.deliveryCount == 0) return false;
+        if (_typeFilter == 'pickup' && row.pickupCount == 0) return false;
         // Status filter
         final status = d['status'] as String? ?? 'draft';
         switch (_statusFilter) {
@@ -226,17 +236,10 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           const Text('Deliveries',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const Spacer(),
-          OutlinedButton.icon(
-              onPressed: () => _showDeliveryDialog(context,
-                  existing: null, jobType: 'pickup'),
-              icon: const Icon(Icons.download_outlined, size: 18),
-              label: const Text('Create Pickup')),
-          const SizedBox(width: 10),
           ElevatedButton.icon(
-              onPressed: () => _showDeliveryDialog(context,
-                  existing: null, jobType: 'delivery'),
+              onPressed: () => _showDeliveryDialog(context, existing: null),
               icon: const Icon(Icons.add, size: 18),
-              label: const Text('Create Delivery')),
+              label: const Text('Create Job')),
         ]),
         const SizedBox(height: 8),
         Text('${_filtered.length} of ${_all.length} deliveries',
@@ -316,12 +319,25 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
       const SizedBox(height: 10),
       // Row 3: job-type pills
       Wrap(spacing: 8, children: [
-        _typePill('All types', null),
-        _typePill('Deliveries', 'delivery'),
-        _typePill('Pickups', 'pickup'),
+        _typePill('All jobs', null),
+        _typePill('With deliveries', 'delivery'),
+        _typePill('With pickups', 'pickup'),
       ]),
     ]);
   }
+
+  Widget _typeTag(String text, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(5)),
+        child: Text(text,
+            style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.4,
+                color: color)),
+      );
 
   Widget _typePill(String label, String? t) {
     final selected = _typeFilter == t;
@@ -443,8 +459,6 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                   itemBuilder: (_, i) {
                     final row = _filtered[i];
                     final d = row.data;
-                    final jt = (d['job_type'] as String?) ?? 'delivery';
-                    final isPickup = jt == 'pickup';
                     final status = d['status'] as String? ?? 'draft';
                     final canEdit =
                         status == 'draft' || status == 'assigned';
@@ -470,30 +484,22 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                                   crossAxisAlignment:
                                       CrossAxisAlignment.start,
                                   children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 7, vertical: 2),
-                                      decoration: BoxDecoration(
-                                          color: (isPickup
-                                                  ? AppTheme.warning
-                                                  : AppTheme.primary)
-                                              .withOpacity(0.12),
-                                          borderRadius:
-                                              BorderRadius.circular(5)),
-                                      child: Text(
-                                          isPickup ? 'PICKUP' : 'DELIVERY',
-                                          style: TextStyle(
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.w800,
-                                              letterSpacing: 0.5,
-                                              color: isPickup
-                                                  ? AppTheme.warning
-                                                  : AppTheme.primary)),
-                                    ),
-                                    const SizedBox(height: 3),
                                     Text(createdAt,
                                         style:
                                             const TextStyle(fontSize: 13)),
+                                    const SizedBox(height: 3),
+                                    // Composition tags: a job can mix
+                                    // deliveries (blue) and pickups (amber).
+                                    Wrap(spacing: 4, children: [
+                                      if (row.deliveryCount > 0)
+                                        _typeTag(
+                                            '${row.deliveryCount} DEL',
+                                            AppTheme.primary),
+                                      if (row.pickupCount > 0)
+                                        _typeTag(
+                                            '${row.pickupCount} PICK',
+                                            AppTheme.warning),
+                                    ]),
                                   ])),
                           Expanded(
                               flex: 2,
@@ -593,6 +599,22 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
     );
   }
 
+  /// Informational job_type for the deliveries row, derived from its stops.
+  static String _jobSummary(List<_StopDraft> stops) {
+    final hasPick = stops.any((s) => s.isPickup);
+    final hasDel = stops.any((s) => !s.isPickup);
+    if (hasPick && hasDel) return 'mixed';
+    return hasPick ? 'pickup' : 'delivery';
+  }
+
+  static String _describe(int deliveryCount, int pickupCount) {
+    final parts = <String>[
+      if (deliveryCount > 0) '$deliveryCount ${deliveryCount == 1 ? 'delivery' : 'deliveries'}',
+      if (pickupCount > 0) '$pickupCount ${pickupCount == 1 ? 'pickup' : 'pickups'}',
+    ];
+    return parts.isEmpty ? 'a job' : parts.join(' and ');
+  }
+
   /// Push the "new job" alert to the driver's phone via the send-notification
   /// edge function. The app rings, pulls the job into local storage and shows
   /// a banner. Never fails the caller, but DOES surface a failure to the
@@ -600,28 +622,27 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
   /// silent mystery why a driver "didn't get it".
   ///
   /// `type` is always 'delivery_assigned' — that's the one value every app
-  /// build reacts to (ring + auto-pull). `jobType` carries pickup vs delivery
-  /// for builds that want to differentiate.
+  /// build reacts to (ring + auto-pull). The delivery/pickup counts ride
+  /// along in the data payload.
   Future<void> _notifyDriver({
     required String deliveryId,
     required String driverId,
-    required String jobType,
-    required int stopCount,
+    required int deliveryCount,
+    required int pickupCount,
   }) async {
-    final isPickup = jobType == 'pickup';
     try {
       debugPrint('FCM: invoking send-notification for driver $driverId');
       final res = await Supabase.instance.client.functions.invoke(
         'send-notification',
         body: {
           'userId': driverId,
-          'title': isPickup ? 'New Pickup Assigned' : 'New Delivery Assigned',
-          'body':
-              '$stopCount ${isPickup ? 'pickup' : 'stop'}${stopCount == 1 ? '' : 's'} assigned to you',
+          'title': 'New Job Assigned',
+          'body': '${_describe(deliveryCount, pickupCount)} assigned to you',
           'data': {
             'deliveryId': deliveryId,
             'type': 'delivery_assigned',
-            'jobType': jobType,
+            'deliveries': '$deliveryCount',
+            'pickups': '$pickupCount',
           },
         },
       );
@@ -660,12 +681,12 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
       await Supabase.instance.client
           .from('deliveries')
           .update({'status': 'assigned'}).eq('id', id);
-      _showSnack(((d['job_type'] as String?) == 'pickup' ? 'Pickup' : 'Delivery') + ' assigned');
+      _showSnack('Job assigned');
       await _notifyDriver(
         deliveryId: id,
         driverId: driverId,
-        jobType: (d['job_type'] as String?) ?? 'delivery',
-        stopCount: row.stopCount,
+        deliveryCount: row.deliveryCount,
+        pickupCount: row.pickupCount,
       );
       _load();
     } catch (e) {
@@ -759,13 +780,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
   /// UPDATE instead of INSERT, and stops are replaced wholesale on
   /// save (matching the mobile wizard's pattern).
   void _showDeliveryDialog(BuildContext context,
-      {required _DeliveryRow? existing, String jobType = 'delivery'}) async {
-    // For edits, the job type comes from the row; for new, from the button.
-    final String jt =
-        (existing?.data['job_type'] as String?) ?? jobType;
-    final bool isPickup = jt == 'pickup';
-    final String noun = isPickup ? 'Pickup' : 'Delivery';
-    final parties = isPickup ? _suppliers : _customers;
+      {required _DeliveryRow? existing}) async {
     String? driverId = existing?.data['driver_id'] as String?;
     String? driverName = existing?.data['driver_name'] as String?;
     final notesCtrl =
@@ -791,6 +806,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           draft.amountCtrl.text = '${m['amount'] ?? 0}';
           draft.paymentType =
               m['payment_type'] as String? ?? 'cash';
+          draft.stopType = m['stop_type'] as String? ?? 'delivery';
           draft.targetLat = (m['target_lat'] as num?)?.toDouble();
           draft.targetLng = (m['target_lng'] as num?)?.toDouble();
           stops.add(draft);
@@ -807,9 +823,11 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setS) {
+        // Money only comes from delivery stops; pickups collect goods.
         int totalCash = 0;
         int totalCredit = 0;
         for (final s in stops) {
+          if (s.isPickup) continue;
           if (s.paymentType == 'cash') {
             totalCash += s.amount;
           } else if (s.paymentType == 'credit') {
@@ -818,13 +836,14 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           // 'not_required' contributes to neither.
         }
         final total = totalCash + totalCredit;
+        final hasDeliveries = stops.any((s) => !s.isPickup);
 
         final isEdit = existing != null;
         final currentStatus =
             existing?.data['status'] as String? ?? 'draft';
 
         return AlertDialog(
-          title: Text('${isEdit ? 'Edit' : 'Create'} $noun'),
+          title: Text(isEdit ? 'Edit Job' : 'Create Job'),
           content: SizedBox(
             width: 720,
             child: SingleChildScrollView(
@@ -890,45 +909,50 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                             color: AppTheme.background,
                             borderRadius: BorderRadius.vertical(
                                 top: Radius.circular(8))),
-                        child: Row(children: [
-                          const SizedBox(
+                        child: const Row(children: [
+                          SizedBox(
                               width: 32,
                               child: Text('#',
                                   style: TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w700,
                                       color: AppTheme.textSecondary))),
-                          Expanded(
-                              flex: 3,
-                              child: Text(isPickup ? 'Supplier' : 'Customer',
-                                  style: const TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.textSecondary))),
-                          const Expanded(
-                              flex: 3,
-                              child: Text('Item (optional)',
+                          SizedBox(
+                              width: 118,
+                              child: Text('Type',
                                   style: TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w700,
                                       color: AppTheme.textSecondary))),
-                          if (!isPickup) ...const [
-                            Expanded(
-                                flex: 2,
-                                child: Text('Payment',
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppTheme.textSecondary))),
-                            Expanded(
-                                flex: 2,
-                                child: Text('Amount',
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppTheme.textSecondary))),
-                          ],
-                          const SizedBox(width: 32),
+                          Expanded(
+                              flex: 3,
+                              child: Text('Customer / Supplier',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.textSecondary))),
+                          Expanded(
+                              flex: 3,
+                              child: Text('Item / Remarks',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.textSecondary))),
+                          Expanded(
+                              flex: 2,
+                              child: Text('Payment',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.textSecondary))),
+                          Expanded(
+                              flex: 2,
+                              child: Text('Amount',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.textSecondary))),
+                          SizedBox(width: 32),
                         ]),
                       ),
                       const Divider(height: 1),
@@ -936,8 +960,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         _StopEditorRow(
                           index: i,
                           draft: stops[i],
-                          parties: parties,
-                          isPickup: isPickup,
+                          customers: _customers,
+                          suppliers: _suppliers,
                           onChanged: () => setS(() {}),
                           onRemove: () =>
                               setS(() => stops.removeAt(i)),
@@ -954,7 +978,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         setS(() => stops.add(_StopDraft())),
                   ),
                 ),
-                if (!isPickup) ...[
+                if (hasDeliveries) ...[
                   const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(14),
@@ -996,7 +1020,6 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                         driverName: driverName,
                         notes: notesCtrl.text.trim(),
                         targetStatus: 'draft',
-                        jobType: jt,
                       ),
                   child: const Text('Save Draft')),
             ElevatedButton(
@@ -1008,7 +1031,6 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                       driverName: driverName,
                       notes: notesCtrl.text.trim(),
                       targetStatus: 'assigned',
-                      jobType: jt,
                     ),
                 child: Text(isEdit && currentStatus == 'assigned'
                     ? 'Save'
@@ -1046,9 +1068,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
     required String? driverName,
     required String notes,
     required String targetStatus,
-    String jobType = 'delivery',
   }) async {
-    final bool isPickup = jobType == 'pickup';
     // Validate
     if (stops.isEmpty) {
       ScaffoldMessenger.of(ctx).showSnackBar(
@@ -1060,7 +1080,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
       if (s.customerId == null) {
         ScaffoldMessenger.of(ctx).showSnackBar(
             SnackBar(content: Text('Stop ${i + 1}: pick a '
-                '${isPickup ? 'supplier' : 'customer'}.')));
+                '${s.isPickup ? 'supplier' : 'customer'}.')));
         return;
       }
       if (s.amount < 0) {
@@ -1139,31 +1159,33 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           'status': targetStatus,
           'notes': notes.isEmpty ? null : notes,
           'org_id': orgId,
-          'job_type': jobType,
+          // Informational summary only — behaviour is driven per stop.
+          'job_type': _jobSummary(stops),
           'created_at': now.toIso8601String(),
         });
       }
 
-      // Insert (or re-insert) stops. For pickups there is no payment/amount,
-      // so payment_type is stored as 'not_required' and amount 0. The
-      // supplier/customer geo-coordinates are snapshotted onto the stop so
-      // the driver app can validate location without a local party lookup.
+      // Insert (or re-insert) stops. Each stop carries its own type. Pickups
+      // have no payment/amount (stored as 'not_required' / 0). The party's
+      // geo-coordinates are snapshotted onto the stop so the driver app can
+      // validate location without a local supplier lookup.
       final stopRows = [
         for (int i = 0; i < stops.length; i++)
           {
             'id': 'stp_${now.millisecondsSinceEpoch}_$i',
             'delivery_id': deliveryId,
+            'stop_type': stops[i].stopType,
             'customer_id': stops[i].customerId,
             'customer_code': stops[i].customerCode,
             'customer_name': stops[i].customerName,
             'sequence': i + 1,
             'item_description':
                 stops[i].descriptionCtrl.text.trim(), // empty allowed
-            'amount': isPickup
+            'amount': stops[i].isPickup
                 ? 0
                 : (stops[i].paymentType == 'credit' ? 0 : stops[i].amount),
             'payment_type':
-                isPickup ? 'not_required' : stops[i].paymentType,
+                stops[i].isPickup ? 'not_required' : stops[i].paymentType,
             'status': 'pending',
             'verification': 'pending',
             'photo_paths_json': '[]',
@@ -1186,8 +1208,8 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
         await _notifyDriver(
           deliveryId: deliveryId,
           driverId: driverId!,
-          jobType: jobType,
-          stopCount: stops.length,
+          deliveryCount: stops.where((s) => !s.isPickup).length,
+          pickupCount: stops.where((s) => s.isPickup).length,
         );
       }
 
@@ -1257,21 +1279,24 @@ class _DatePickerField extends StatelessWidget {
 class _StopEditorRow extends StatelessWidget {
   final int index;
   final _StopDraft draft;
-  final List<Map<String, dynamic>> parties;
-  final bool isPickup;
+  final List<Map<String, dynamic>> customers;
+  final List<Map<String, dynamic>> suppliers;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
   const _StopEditorRow({
     required this.index,
     required this.draft,
-    required this.parties,
-    required this.isPickup,
+    required this.customers,
+    required this.suppliers,
     required this.onChanged,
     required this.onRemove,
   });
 
+  bool get _isPickup => draft.isPickup;
+  List<Map<String, dynamic>> get _parties => _isPickup ? suppliers : customers;
+
   // Suppliers have `name` and no `code`; customers have `shop_name` + `code`.
-  String _label(Map<String, dynamic> p) => isPickup
+  String _label(Map<String, dynamic> p) => _isPickup
       ? (p['name'] as String? ?? '')
       : '${p['code'] ?? ''} · ${p['shop_name'] ?? ''}';
 
@@ -1281,16 +1306,53 @@ class _StopEditorRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         SizedBox(width: 32, child: Text('${index + 1}')),
+        // Per-stop type. Switching clears the chosen party (it belongs to
+        // the other list) and resets payment for pickups.
+        SizedBox(
+          width: 110,
+          child: DropdownButtonFormField<String>(
+            value: draft.stopType,
+            isDense: true,
+            decoration: const InputDecoration(
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(value: 'delivery', child: Text('Delivery')),
+              DropdownMenuItem(value: 'pickup', child: Text('Pickup')),
+            ],
+            onChanged: (v) {
+              if (v == null || v == draft.stopType) return;
+              draft.stopType = v;
+              draft.customerId = null;
+              draft.customerCode = null;
+              draft.customerName = null;
+              draft.targetLat = null;
+              draft.targetLng = null;
+              if (draft.isPickup) {
+                draft.paymentType = 'not_required';
+                draft.amountCtrl.clear();
+              } else {
+                draft.paymentType = 'cash';
+              }
+              onChanged();
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
         Expanded(
           flex: 3,
           child: Autocomplete<Map<String, dynamic>>(
+            // Keyed on type so the field rebuilds (and clears) when the type
+            // flips between customer and supplier lists.
+            key: ValueKey('party-${draft.stopType}-$index'),
             displayStringForOption: _label,
             optionsBuilder: (TextEditingValue v) {
               final q = v.text.toLowerCase().trim();
-              if (q.isEmpty) return parties;
-              return parties.where((p) {
+              if (q.isEmpty) return _parties;
+              return _parties.where((p) {
                 final code = (p['code'] as String? ?? '').toLowerCase();
-                final name = ((isPickup ? p['name'] : p['shop_name'])
+                final name = ((_isPickup ? p['name'] : p['shop_name'])
                             as String? ??
                         '')
                     .toLowerCase();
@@ -1300,15 +1362,15 @@ class _StopEditorRow extends StatelessWidget {
             initialValue: TextEditingValue(
                 text: draft.customerName == null
                     ? ''
-                    : (isPickup
+                    : (_isPickup
                         ? draft.customerName!
                         : '${draft.customerCode ?? ''} · ${draft.customerName}')),
             onSelected: (p) {
               draft.customerId = p['id'] as String;
               draft.customerCode =
-                  isPickup ? '' : (p['code'] as String? ?? '');
+                  _isPickup ? '' : (p['code'] as String? ?? '');
               draft.customerName =
-                  (isPickup ? p['name'] : p['shop_name']) as String? ?? '';
+                  (_isPickup ? p['name'] : p['shop_name']) as String? ?? '';
               draft.targetLat = (p['latitude'] as num?)?.toDouble();
               draft.targetLng = (p['longitude'] as num?)?.toDouble();
               onChanged();
@@ -1318,7 +1380,7 @@ class _StopEditorRow extends StatelessWidget {
                 controller: ctrl,
                 focusNode: focus,
                 decoration: InputDecoration(
-                  hintText: isPickup ? 'Search supplier' : 'Search code or name',
+                  hintText: _isPickup ? 'Search supplier' : 'Search code or name',
                   isDense: true,
                   border: const OutlineInputBorder(),
                 ),
@@ -1331,53 +1393,57 @@ class _StopEditorRow extends StatelessWidget {
           flex: 3,
           child: TextField(
             controller: draft.descriptionCtrl,
-            decoration: const InputDecoration(
-              hintText: 'optional',
+            decoration: InputDecoration(
+              hintText: _isPickup ? 'what to pick up' : 'optional',
               isDense: true,
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
             ),
           ),
         ),
-        if (!isPickup) ...[
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
-            child: DropdownButtonFormField<String>(
-              value: draft.paymentType,
-              isDense: true,
-              decoration: const InputDecoration(
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-              items: const [
-                DropdownMenuItem(value: 'cash', child: Text('Cash')),
-                DropdownMenuItem(value: 'credit', child: Text('Credit')),
-                DropdownMenuItem(
-                    value: 'not_required', child: Text('Not Required')),
-              ],
-              onChanged: (v) {
-                draft.paymentType = v ?? 'cash';
-                onChanged();
-              },
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
-            child: TextField(
-              controller: draft.amountCtrl,
-              enabled: draft.paymentType == 'cash',
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                hintText: '0',
-                prefixText: 'Rs ',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (_) => onChanged(),
-            ),
-          ),
-        ],
+        const SizedBox(width: 8),
+        // Payment + Amount: only meaningful for deliveries. For pickups the
+        // cells stay in the grid (so columns line up) but read "—".
+        Expanded(
+          flex: 2,
+          child: _isPickup
+              ? const _DashCell()
+              : DropdownButtonFormField<String>(
+                  value: draft.paymentType,
+                  isDense: true,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'cash', child: Text('Cash')),
+                    DropdownMenuItem(value: 'credit', child: Text('Credit')),
+                    DropdownMenuItem(
+                        value: 'not_required', child: Text('Not Required')),
+                  ],
+                  onChanged: (v) {
+                    draft.paymentType = v ?? 'cash';
+                    onChanged();
+                  },
+                ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 2,
+          child: _isPickup
+              ? const _DashCell()
+              : TextField(
+                  controller: draft.amountCtrl,
+                  enabled: draft.paymentType == 'cash',
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    hintText: '0',
+                    prefixText: 'Rs ',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => onChanged(),
+                ),
+        ),
         const SizedBox(width: 8),
         SizedBox(
           width: 32,
@@ -1395,7 +1461,16 @@ class _StopEditorRow extends StatelessWidget {
   }
 }
 
+/// Placeholder cell for columns that don't apply to a pickup stop.
+class _DashCell extends StatelessWidget {
+  const _DashCell();
+  @override
+  Widget build(BuildContext context) => const Center(
+      child: Text('—', style: TextStyle(color: AppTheme.textSecondary)));
+}
+
 class _StopDraft {
+  String stopType = 'delivery'; // 'delivery' | 'pickup'
   String? customerId;
   String? customerCode;
   String? customerName;
@@ -1405,11 +1480,28 @@ class _StopDraft {
   final TextEditingController descriptionCtrl = TextEditingController();
   final TextEditingController amountCtrl = TextEditingController();
 
+  bool get isPickup => stopType == 'pickup';
   int get amount => int.tryParse(amountCtrl.text.trim()) ?? 0;
 }
 
 class _DeliveryRow {
   final Map<String, dynamic> data;
   final int stopCount;
-  const _DeliveryRow({required this.data, required this.stopCount});
+  final int deliveryCount;
+  final int pickupCount;
+  const _DeliveryRow({
+    required this.data,
+    required this.stopCount,
+    this.deliveryCount = 0,
+    this.pickupCount = 0,
+  });
+
+  /// "2 deliveries · 1 pickup" style summary of the job's composition.
+  String get composition {
+    final parts = <String>[
+      if (deliveryCount > 0) '$deliveryCount ${deliveryCount == 1 ? 'delivery' : 'deliveries'}',
+      if (pickupCount > 0) '$pickupCount ${pickupCount == 1 ? 'pickup' : 'pickups'}',
+    ];
+    return parts.isEmpty ? '$stopCount stops' : parts.join(' · ');
+  }
 }
