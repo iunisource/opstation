@@ -50,6 +50,22 @@ const hhmm = (min: number) =>
 const ENABLED = (v: unknown) =>
   ["true", "1", "on", "yes"].includes(String(v).toLowerCase());
 
+// Read the `role` claim from a JWT payload WITHOUT verifying its signature —
+// safe here because the gateway (verify_jwt) has already validated it. Returns
+// "service_role" / "anon" for the platform keys, "authenticated" for a user.
+function jwtRole(token: string): string {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return "";
+    let b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    b64 += "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(atob(b64));
+    return String(payload.role ?? "");
+  } catch (_) {
+    return "";
+  }
+}
+
 // Today in PKT (UTC+5): its date, weekday (Sun=0..Sat=6), and minutes-of-day.
 function pktNow() {
   const shifted = new Date(Date.now() + 5 * 60 * 60000);
@@ -82,13 +98,24 @@ Deno.serve(async (req) => {
   const manualOrg = (url.searchParams.get("org") || body.org || "").trim() || null;
   const slotParam = String(url.searchParams.get("slot") || body.slot || "").toLowerCase();
 
-  // Auth. Cron carries the shared secret. A manual "Send test now" from the app
-  // instead carries the caller's Supabase JWT — accept it if it resolves to a
-  // real user, and scope that run to the one org they passed.
-  const cronOk = CRON_SECRET !== "" && req.headers.get("x-cron-secret") === CRON_SECRET;
-  let manualOk = false;
+  // Auth. The scheduled (all-org) sweep is authorized by EITHER a Bearer
+  // service-role key (how the other reminder crons call in) OR the shared
+  // x-cron-secret. A manual "Send test now" from the app instead carries the
+  // caller's Supabase JWT — accept it if it resolves to a real user, and scope
+  // that run to the one org they passed.
   const authHeader = req.headers.get("Authorization") || "";
-  if (!cronOk && manualOrg && authHeader.toLowerCase().startsWith("bearer ")) {
+  const bearer = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  // The gateway (verify_jwt) has already authenticated whoever got this far, so
+  // the only thing we decide here is scope. A real end-user's token decodes to
+  // role "authenticated" — that's the manual, single-org "Send test now". Any
+  // other authorized caller (the cron's service / anon / secret key, whatever
+  // its format) runs the full scheduled sweep. The shared x-cron-secret is also
+  // accepted as a cron path for setups that use it.
+  const isUser = jwtRole(bearer) === "authenticated";
+  const cronOk = (bearer !== "" && !isUser) ||
+                 (CRON_SECRET !== "" && req.headers.get("x-cron-secret") === CRON_SECRET);
+  let manualOk = false;
+  if (!cronOk && manualOrg && bearer !== "") {
     try {
       const ur = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
         headers: { apikey: SERVICE_KEY, Authorization: authHeader },
@@ -96,8 +123,7 @@ Deno.serve(async (req) => {
       manualOk = ur.ok;
     } catch (_) { manualOk = false; }
   }
-  // When no CRON_SECRET is configured, the cron path stays open as before.
-  if (CRON_SECRET !== "" && !cronOk && !manualOk) {
+  if (!cronOk && !manualOk) {
     return new Response("forbidden", { status: 403, headers: CORS });
   }
   const isManual = !cronOk && manualOk;
