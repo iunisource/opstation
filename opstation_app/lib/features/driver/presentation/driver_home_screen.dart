@@ -251,11 +251,11 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
                   _EmptyCard(
                     icon: Icons.local_shipping_outlined,
                     title: data.inProgress == null
-                        ? 'No assigned deliveries'
+                        ? 'No assigned jobs'
                         : 'Nothing queued',
                     subtitle: data.inProgress == null
-                        ? 'Your dispatch manager will assign deliveries here.'
-                        : 'Complete the active delivery; more will appear here as they\'re assigned.',
+                        ? 'Your dispatch manager will assign deliveries and pickups here.'
+                        : 'Complete the active job; more will appear here as they\'re assigned.',
                   )
                 else
                   for (final d in data.assigned)
@@ -466,12 +466,16 @@ class _ActiveDeliveryCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Icon(Icons.local_shipping,
-                    color: Colors.white, size: 22),
+                Icon(
+                    delivery.isPickup
+                        ? Icons.download
+                        : Icons.local_shipping,
+                    color: Colors.white,
+                    size: 22),
                 const SizedBox(width: 8),
-                const Text(
-                  'Tap to resume',
-                  style: TextStyle(
+                Text(
+                  'Tap to resume · ${delivery.jobNoun}',
+                  style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
@@ -591,11 +595,40 @@ class _AssignedDeliveryCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '${delivery.stops.length} ${delivery.stops.length == 1 ? "stop" : "stops"} · Rs ${delivery.cashAmount} to collect',
-                        style: const TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w700),
-                      ),
+                      Row(children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: (delivery.isPickup
+                                    ? AppColors.warning
+                                    : AppColors.primary)
+                                .withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            delivery.jobNoun.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.4,
+                              color: delivery.isPickup
+                                  ? AppColors.warningDark
+                                  : AppColors.primary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            delivery.isPickup
+                                ? '${delivery.stops.length} ${delivery.stops.length == 1 ? "pickup" : "pickups"}'
+                                : '${delivery.stops.length} ${delivery.stops.length == 1 ? "stop" : "stops"} · Rs ${delivery.cashAmount} to collect',
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ]),
                       const SizedBox(height: 2),
                       Text(
                         'Assigned ${DateFormat('d MMM · HH:mm').format(delivery.createdAt)}',

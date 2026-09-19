@@ -321,6 +321,11 @@ class Deliveries extends Table {
   TextColumn get notes => text().nullable()();
   TextColumn get orgId => text().nullable()();
 
+  /// 'delivery' (drop to a customer) or 'pickup' (collect from a supplier).
+  /// The whole job flow is identical; only the party and labels differ.
+  TextColumn get jobType =>
+      text().withDefault(const Constant('delivery'))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -407,6 +412,12 @@ class DeliveryStops extends Table {
   /// DO (the dispatch DO-picking flow). Null for manually-created stops.
   TextColumn get doId => text().nullable()();
 
+  /// Snapshot of the target party's saved coordinates (customer for a
+  /// delivery, supplier for a pickup). Used for the geofence check without
+  /// needing a local supplier table. Null falls back to a customer lookup.
+  RealColumn get targetLat => real().nullable()();
+  RealColumn get targetLng => real().nullable()();
+
   /// Proof-of-delivery photos captured by the driver, stored as JSON
   /// array of absolute local file paths. Mirrors the pattern used by
   /// the salesperson visits table (photoPathsJson). The actual files
@@ -442,11 +453,16 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
   @override
-  int get schemaVersion => 21;
+  int get schemaVersion => 22;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
+          if (from < 22) {
+            await m.addColumn(deliveries, deliveries.jobType);
+            await m.addColumn(deliveryStops, deliveryStops.targetLat);
+            await m.addColumn(deliveryStops, deliveryStops.targetLng);
+          }
           if (from < 21) {
             await m.createTable(catalogProducts);
             await m.createTable(fieldOrders);

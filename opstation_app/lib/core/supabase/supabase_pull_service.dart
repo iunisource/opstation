@@ -466,6 +466,7 @@ class SupabasePullService {
           status: Value(r['status'] as String? ?? 'draft'),
           notes: Value(r['notes'] as String?),
           orgId: Value(r['org_id'] as String?),
+          jobType: Value(r['job_type'] as String? ?? 'delivery'),
         ));
       } catch (_) {}
     }
@@ -496,6 +497,8 @@ class SupabasePullService {
           photoPathsJson: Value(r['photo_paths_json'] as String? ?? '[]'),
           driverNote: Value(r['driver_note'] as String?),
           soInvoiceNumber: Value(r['so_invoice_number'] as String?),
+          targetLat: Value((r['target_lat'] as num?)?.toDouble()),
+          targetLng: Value((r['target_lng'] as num?)?.toDouble()),
         ));
       } catch (_) {}
     }

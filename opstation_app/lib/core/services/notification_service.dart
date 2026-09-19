@@ -97,7 +97,8 @@ class NotificationService {
     // Delivery assignment: sound the alarm and pull the new job into local
     // Drift so the driver-home stream refreshes automatically. Done before the
     // banner so the alert is immediate even if the pull is slow.
-    if (message.data['type'] == 'delivery_assigned') {
+    final msgType = message.data['type'];
+    if (msgType == 'delivery_assigned' || msgType == 'pickup_assigned') {
       AlarmSound.instance.play();
       final orgId =
           _ref.read(authControllerProvider).valueOrNull?.organizationId;

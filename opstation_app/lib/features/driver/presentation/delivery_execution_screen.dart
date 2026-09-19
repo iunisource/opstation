@@ -172,17 +172,15 @@ class _DeliveryExecutionScreenState
       builder: (_) => _MarkDeliveredSheet(
         stop: stop,
         deliveryId: widget.deliveryId,
+        isPickup: _delivery?.isPickup ?? false,
       ),
     );
     if (result == null) return;
 
     final fix = await _tryGps();
-    final customer = await _customerFor(stop.customerId);
-    final dist = (fix != null && customer != null &&
-            customer.latitude != null &&
-            customer.longitude != null)
-        ? _distanceMeters(fix.lat, fix.lng, customer.latitude!,
-            customer.longitude!)
+    final tgt = _targetLatLng(stop);
+    final dist = (fix != null && tgt != null)
+        ? _distanceMeters(fix.lat, fix.lng, tgt[0], tgt[1])
         : null;
 
     // Compute cloud paths up front. The row stores remote paths (so
@@ -257,12 +255,9 @@ class _DeliveryExecutionScreenState
     if (result == null || result.reason.isEmpty) return;
 
     final fix = await _tryGps();
-    final customer = await _customerFor(stop.customerId);
-    final dist = (fix != null && customer != null &&
-            customer.latitude != null &&
-            customer.longitude != null)
-        ? _distanceMeters(fix.lat, fix.lng, customer.latitude!,
-            customer.longitude!)
+    final tgt = _targetLatLng(stop);
+    final dist = (fix != null && tgt != null)
+        ? _distanceMeters(fix.lat, fix.lng, tgt[0], tgt[1])
         : null;
 
     // Same pattern as _handleMarkDelivered — cloud paths to the row,
@@ -358,6 +353,21 @@ class _DeliveryExecutionScreenState
 
   Customer? _customerFor(String id) => _customerIndex[id];
 
+  /// Target coordinates for a stop's geofence check: the snapshot stored on
+  /// the stop (customer for a delivery, supplier for a pickup) if present,
+  /// otherwise a live customer lookup for older rows. Returns [lat, lng] or
+  /// null when no location is known.
+  List<double>? _targetLatLng(DeliveryStop stop) {
+    if (stop.targetLat != null && stop.targetLng != null) {
+      return [stop.targetLat!, stop.targetLng!];
+    }
+    final c = _customerFor(stop.customerId);
+    if (c != null && c.latitude != null && c.longitude != null) {
+      return [c.latitude!, c.longitude!];
+    }
+    return null;
+  }
+
   int _distanceMeters(double aLat, double aLng, double bLat, double bLng) {
     // Haversine, returns meters. Small angle math keeps it reasonable
     // over the ~100m distances that matter at customer stops.
@@ -392,8 +402,8 @@ class _DeliveryExecutionScreenState
     return Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
-        title: const Text('Delivery',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        title: Text(d.jobNoun,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         actions: [
           if (d.status == DeliveryStatus.completed)
             IconButton(
@@ -452,6 +462,7 @@ class _DeliveryExecutionScreenState
                 stop: s,
                 customer: _customerIndex[s.customerId],
                 canAct: d.status == DeliveryStatus.inProgress,
+                isPickup: d.isPickup,
                 onMarkDelivered: () => _handleMarkDelivered(s),
                 onMarkFailed: () => _handleMarkFailed(s),
               ),
@@ -481,7 +492,9 @@ class _DeliveryExecutionScreenState
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: SlideToConfirm(
-            label: _starting ? 'Starting...' : 'Slide to start delivery',
+            label: _starting
+                ? 'Starting...'
+                : 'Slide to start ${d.jobNounLower}',
             icon: Icons.local_shipping_outlined,
             color: AppColors.primary,
             onConfirmed: _handleStart,
@@ -654,6 +667,7 @@ class _StopCard extends StatelessWidget {
   final DeliveryStop stop;
   final Customer? customer;
   final bool canAct;
+  final bool isPickup;
   final VoidCallback onMarkDelivered;
   final VoidCallback onMarkFailed;
 
@@ -661,6 +675,7 @@ class _StopCard extends StatelessWidget {
     required this.stop,
     required this.customer,
     required this.canAct,
+    this.isPickup = false,
     required this.onMarkDelivered,
     required this.onMarkFailed,
   });
@@ -670,20 +685,29 @@ class _StopCard extends StatelessWidget {
   /// search by address text. Uses externalApplication mode so the OS
   /// route-chooser appears (Google Maps vs Apple Maps vs Waze).
   Future<void> _openInMaps(BuildContext context) async {
-    if (customer == null) return;
     Uri? uri;
-    if (customer!.latitude != null && customer!.longitude != null) {
+    // Prefer the snapshotted target coords (works for supplier pickups too,
+    // where there is no local customer record).
+    if (stop.targetLat != null && stop.targetLng != null) {
+      uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=${stop.targetLat},${stop.targetLng}',
+      );
+    } else if (customer != null &&
+        customer!.latitude != null &&
+        customer!.longitude != null) {
       uri = Uri.parse(
         'https://www.google.com/maps/search/?api=1&query=${customer!.latitude},${customer!.longitude}',
       );
-    } else if (customer!.address.trim().isNotEmpty) {
+    } else if (customer != null && customer!.address.trim().isNotEmpty) {
       final q = Uri.encodeComponent(customer!.address);
       uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$q');
     }
     if (uri == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No location or address saved for this customer.'),
+        SnackBar(
+          content: Text(isPickup
+              ? 'No location saved for this supplier.'
+              : 'No location or address saved for this customer.'),
         ),
       );
       return;
@@ -880,19 +904,23 @@ class _StopCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Text(
-                          'Rs ${stop.amount}',
-                          style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(width: 6),
+                        if (stop.paymentType != PaymentType.notRequired) ...[
+                          Text(
+                            'Rs ${stop.amount}',
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 6, vertical: 1),
                           decoration: BoxDecoration(
                             color: stop.paymentType == PaymentType.cash
                                 ? AppColors.successLight
-                                : AppColors.warningLight,
+                                : (stop.paymentType == PaymentType.notRequired
+                                    ? AppColors.borderLight.withOpacity(0.5)
+                                    : AppColors.warningLight),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -902,7 +930,10 @@ class _StopCard extends StatelessWidget {
                               fontWeight: FontWeight.w700,
                               color: stop.paymentType == PaymentType.cash
                                   ? AppColors.successDark
-                                  : AppColors.warningDark,
+                                  : (stop.paymentType ==
+                                          PaymentType.notRequired
+                                      ? AppColors.textSecondaryLight
+                                      : AppColors.warningDark),
                             ),
                           ),
                         ),
@@ -1031,7 +1062,7 @@ class _StopCard extends StatelessWidget {
                   child: ElevatedButton.icon(
                     onPressed: onMarkDelivered,
                     icon: const Icon(Icons.check, size: 16),
-                    label: const Text('Mark delivered'),
+                    label: Text(isPickup ? 'Mark picked up' : 'Mark delivered'),
                     style: ElevatedButton.styleFrom(
                       minimumSize: const Size(0, 40),
                       backgroundColor: AppColors.success,
@@ -1156,9 +1187,11 @@ class _FailedResult {
 class _MarkDeliveredSheet extends ConsumerStatefulWidget {
   final DeliveryStop stop;
   final String deliveryId;
+  final bool isPickup;
   const _MarkDeliveredSheet({
     required this.stop,
     required this.deliveryId,
+    this.isPickup = false,
   });
 
   @override
@@ -1206,6 +1239,8 @@ class _MarkDeliveredSheetState extends ConsumerState<_MarkDeliveredSheet> {
   @override
   Widget build(BuildContext context) {
     final isCredit = widget.stop.paymentType == PaymentType.credit;
+    final isNotRequired =
+        widget.stop.paymentType == PaymentType.notRequired;
     return AnimatedPadding(
       duration: const Duration(milliseconds: 150),
       padding:
@@ -1229,10 +1264,10 @@ class _MarkDeliveredSheetState extends ConsumerState<_MarkDeliveredSheet> {
                 ),
               ),
               const SizedBox(height: 20),
-              const Text(
-                'Mark delivered',
-                style:
-                    TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              Text(
+                widget.isPickup ? 'Mark picked up' : 'Mark delivered',
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 4),
               Text(
@@ -1243,7 +1278,31 @@ class _MarkDeliveredSheetState extends ConsumerState<_MarkDeliveredSheet> {
                 ),
               ),
               const SizedBox(height: 20),
-              if (isCredit)
+              if (isNotRequired)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.borderLight.withOpacity(0.4),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.info_outline,
+                          size: 18, color: AppColors.textSecondaryLight),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'No payment required at this stop.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textSecondaryLight,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (isCredit)
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -1335,7 +1394,7 @@ class _MarkDeliveredSheetState extends ConsumerState<_MarkDeliveredSheet> {
                     child: ElevatedButton(
                       onPressed: () {
                         int? cash;
-                        if (!isCredit) {
+                        if (!isCredit && !isNotRequired) {
                           cash = int.tryParse(_cashCtrl.text.trim());
                           if (cash == null || cash < 0) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -1359,7 +1418,9 @@ class _MarkDeliveredSheetState extends ConsumerState<_MarkDeliveredSheet> {
                         backgroundColor: AppColors.success,
                         foregroundColor: Colors.white,
                       ),
-                      child: const Text('Confirm delivered'),
+                      child: Text(widget.isPickup
+                          ? 'Confirm picked up'
+                          : 'Confirm delivered'),
                     ),
                   ),
                 ],

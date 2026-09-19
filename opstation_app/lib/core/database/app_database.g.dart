@@ -5467,6 +5467,14 @@ class $DeliveriesTable extends Deliveries
   late final GeneratedColumn<String> orgId = GeneratedColumn<String>(
       'org_id', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _jobTypeMeta =
+      const VerificationMeta('jobType');
+  @override
+  late final GeneratedColumn<String> jobType = GeneratedColumn<String>(
+      'job_type', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('delivery'));
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -5481,7 +5489,8 @@ class $DeliveriesTable extends Deliveries
         completedAt,
         status,
         notes,
-        orgId
+        orgId,
+        jobType
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -5560,6 +5569,10 @@ class $DeliveriesTable extends Deliveries
       context.handle(
           _orgIdMeta, orgId.isAcceptableOrUnknown(data['org_id']!, _orgIdMeta));
     }
+    if (data.containsKey('job_type')) {
+      context.handle(_jobTypeMeta,
+          jobType.isAcceptableOrUnknown(data['job_type']!, _jobTypeMeta));
+    }
     return context;
   }
 
@@ -5595,6 +5608,8 @@ class $DeliveriesTable extends Deliveries
           .read(DriftSqlType.string, data['${effectivePrefix}notes']),
       orgId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}org_id']),
+      jobType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}job_type'])!,
     );
   }
 
@@ -5623,6 +5638,10 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
   final String status;
   final String? notes;
   final String? orgId;
+
+  /// 'delivery' (drop to a customer) or 'pickup' (collect from a supplier).
+  /// The whole job flow is identical; only the party and labels differ.
+  final String jobType;
   const DeliveriesData(
       {required this.id,
       this.driverId,
@@ -5636,7 +5655,8 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
       this.completedAt,
       required this.status,
       this.notes,
-      this.orgId});
+      this.orgId,
+      required this.jobType});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -5667,6 +5687,7 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
     if (!nullToAbsent || orgId != null) {
       map['org_id'] = Variable<String>(orgId);
     }
+    map['job_type'] = Variable<String>(jobType);
     return map;
   }
 
@@ -5697,6 +5718,7 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
           notes == null && nullToAbsent ? const Value.absent() : Value(notes),
       orgId:
           orgId == null && nullToAbsent ? const Value.absent() : Value(orgId),
+      jobType: Value(jobType),
     );
   }
 
@@ -5717,6 +5739,7 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
       status: serializer.fromJson<String>(json['status']),
       notes: serializer.fromJson<String?>(json['notes']),
       orgId: serializer.fromJson<String?>(json['orgId']),
+      jobType: serializer.fromJson<String>(json['jobType']),
     );
   }
   @override
@@ -5736,6 +5759,7 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
       'status': serializer.toJson<String>(status),
       'notes': serializer.toJson<String?>(notes),
       'orgId': serializer.toJson<String?>(orgId),
+      'jobType': serializer.toJson<String>(jobType),
     };
   }
 
@@ -5752,7 +5776,8 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
           Value<DateTime?> completedAt = const Value.absent(),
           String? status,
           Value<String?> notes = const Value.absent(),
-          Value<String?> orgId = const Value.absent()}) =>
+          Value<String?> orgId = const Value.absent(),
+          String? jobType}) =>
       DeliveriesData(
         id: id ?? this.id,
         driverId: driverId.present ? driverId.value : this.driverId,
@@ -5767,6 +5792,7 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
         status: status ?? this.status,
         notes: notes.present ? notes.value : this.notes,
         orgId: orgId.present ? orgId.value : this.orgId,
+        jobType: jobType ?? this.jobType,
       );
   DeliveriesData copyWithCompanion(DeliveriesCompanion data) {
     return DeliveriesData(
@@ -5790,6 +5816,7 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
       status: data.status.present ? data.status.value : this.status,
       notes: data.notes.present ? data.notes.value : this.notes,
       orgId: data.orgId.present ? data.orgId.value : this.orgId,
+      jobType: data.jobType.present ? data.jobType.value : this.jobType,
     );
   }
 
@@ -5808,7 +5835,8 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
           ..write('completedAt: $completedAt, ')
           ..write('status: $status, ')
           ..write('notes: $notes, ')
-          ..write('orgId: $orgId')
+          ..write('orgId: $orgId, ')
+          ..write('jobType: $jobType')
           ..write(')'))
         .toString();
   }
@@ -5827,7 +5855,8 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
       completedAt,
       status,
       notes,
-      orgId);
+      orgId,
+      jobType);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -5844,7 +5873,8 @@ class DeliveriesData extends DataClass implements Insertable<DeliveriesData> {
           other.completedAt == this.completedAt &&
           other.status == this.status &&
           other.notes == this.notes &&
-          other.orgId == this.orgId);
+          other.orgId == this.orgId &&
+          other.jobType == this.jobType);
 }
 
 class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
@@ -5861,6 +5891,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
   final Value<String> status;
   final Value<String?> notes;
   final Value<String?> orgId;
+  final Value<String> jobType;
   final Value<int> rowid;
   const DeliveriesCompanion({
     this.id = const Value.absent(),
@@ -5876,6 +5907,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
     this.status = const Value.absent(),
     this.notes = const Value.absent(),
     this.orgId = const Value.absent(),
+    this.jobType = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   DeliveriesCompanion.insert({
@@ -5892,6 +5924,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
     this.status = const Value.absent(),
     this.notes = const Value.absent(),
     this.orgId = const Value.absent(),
+    this.jobType = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         createdBy = Value(createdBy),
@@ -5910,6 +5943,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
     Expression<String>? status,
     Expression<String>? notes,
     Expression<String>? orgId,
+    Expression<String>? jobType,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -5926,6 +5960,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
       if (status != null) 'status': status,
       if (notes != null) 'notes': notes,
       if (orgId != null) 'org_id': orgId,
+      if (jobType != null) 'job_type': jobType,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -5944,6 +5979,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
       Value<String>? status,
       Value<String?>? notes,
       Value<String?>? orgId,
+      Value<String>? jobType,
       Value<int>? rowid}) {
     return DeliveriesCompanion(
       id: id ?? this.id,
@@ -5959,6 +5995,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
       status: status ?? this.status,
       notes: notes ?? this.notes,
       orgId: orgId ?? this.orgId,
+      jobType: jobType ?? this.jobType,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -6005,6 +6042,9 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
     if (orgId.present) {
       map['org_id'] = Variable<String>(orgId.value);
     }
+    if (jobType.present) {
+      map['job_type'] = Variable<String>(jobType.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -6027,6 +6067,7 @@ class DeliveriesCompanion extends UpdateCompanion<DeliveriesData> {
           ..write('status: $status, ')
           ..write('notes: $notes, ')
           ..write('orgId: $orgId, ')
+          ..write('jobType: $jobType, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -6177,6 +6218,18 @@ class $DeliveryStopsTable extends DeliveryStops
   late final GeneratedColumn<String> doId = GeneratedColumn<String>(
       'do_id', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _targetLatMeta =
+      const VerificationMeta('targetLat');
+  @override
+  late final GeneratedColumn<double> targetLat = GeneratedColumn<double>(
+      'target_lat', aliasedName, true,
+      type: DriftSqlType.double, requiredDuringInsert: false);
+  static const VerificationMeta _targetLngMeta =
+      const VerificationMeta('targetLng');
+  @override
+  late final GeneratedColumn<double> targetLng = GeneratedColumn<double>(
+      'target_lng', aliasedName, true,
+      type: DriftSqlType.double, requiredDuringInsert: false);
   static const VerificationMeta _photoPathsJsonMeta =
       const VerificationMeta('photoPathsJson');
   @override
@@ -6208,6 +6261,8 @@ class $DeliveryStopsTable extends DeliveryStops
         driverNote,
         soInvoiceNumber,
         doId,
+        targetLat,
+        targetLng,
         photoPathsJson
       ];
   @override
@@ -6343,6 +6398,14 @@ class $DeliveryStopsTable extends DeliveryStops
       context.handle(
           _doIdMeta, doId.isAcceptableOrUnknown(data['do_id']!, _doIdMeta));
     }
+    if (data.containsKey('target_lat')) {
+      context.handle(_targetLatMeta,
+          targetLat.isAcceptableOrUnknown(data['target_lat']!, _targetLatMeta));
+    }
+    if (data.containsKey('target_lng')) {
+      context.handle(_targetLngMeta,
+          targetLng.isAcceptableOrUnknown(data['target_lng']!, _targetLngMeta));
+    }
     if (data.containsKey('photo_paths_json')) {
       context.handle(
           _photoPathsJsonMeta,
@@ -6400,6 +6463,10 @@ class $DeliveryStopsTable extends DeliveryStops
           DriftSqlType.string, data['${effectivePrefix}so_invoice_number']),
       doId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}do_id']),
+      targetLat: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}target_lat']),
+      targetLng: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}target_lng']),
       photoPathsJson: attachedDatabase.typeMapping.read(
           DriftSqlType.string, data['${effectivePrefix}photo_paths_json'])!,
     );
@@ -6481,6 +6548,12 @@ class DeliveryStopsData extends DataClass
   /// DO (the dispatch DO-picking flow). Null for manually-created stops.
   final String? doId;
 
+  /// Snapshot of the target party's saved coordinates (customer for a
+  /// delivery, supplier for a pickup). Used for the geofence check without
+  /// needing a local supplier table. Null falls back to a customer lookup.
+  final double? targetLat;
+  final double? targetLng;
+
   /// Proof-of-delivery photos captured by the driver, stored as JSON
   /// array of absolute local file paths. Mirrors the pattern used by
   /// the salesperson visits table (photoPathsJson). The actual files
@@ -6510,6 +6583,8 @@ class DeliveryStopsData extends DataClass
       this.driverNote,
       this.soInvoiceNumber,
       this.doId,
+      this.targetLat,
+      this.targetLng,
       required this.photoPathsJson});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -6552,6 +6627,12 @@ class DeliveryStopsData extends DataClass
     }
     if (!nullToAbsent || doId != null) {
       map['do_id'] = Variable<String>(doId);
+    }
+    if (!nullToAbsent || targetLat != null) {
+      map['target_lat'] = Variable<double>(targetLat);
+    }
+    if (!nullToAbsent || targetLng != null) {
+      map['target_lng'] = Variable<double>(targetLng);
     }
     map['photo_paths_json'] = Variable<String>(photoPathsJson);
     return map;
@@ -6596,6 +6677,12 @@ class DeliveryStopsData extends DataClass
           ? const Value.absent()
           : Value(soInvoiceNumber),
       doId: doId == null && nullToAbsent ? const Value.absent() : Value(doId),
+      targetLat: targetLat == null && nullToAbsent
+          ? const Value.absent()
+          : Value(targetLat),
+      targetLng: targetLng == null && nullToAbsent
+          ? const Value.absent()
+          : Value(targetLng),
       photoPathsJson: Value(photoPathsJson),
     );
   }
@@ -6625,6 +6712,8 @@ class DeliveryStopsData extends DataClass
       driverNote: serializer.fromJson<String?>(json['driverNote']),
       soInvoiceNumber: serializer.fromJson<String?>(json['soInvoiceNumber']),
       doId: serializer.fromJson<String?>(json['doId']),
+      targetLat: serializer.fromJson<double?>(json['targetLat']),
+      targetLng: serializer.fromJson<double?>(json['targetLng']),
       photoPathsJson: serializer.fromJson<String>(json['photoPathsJson']),
     );
   }
@@ -6653,6 +6742,8 @@ class DeliveryStopsData extends DataClass
       'driverNote': serializer.toJson<String?>(driverNote),
       'soInvoiceNumber': serializer.toJson<String?>(soInvoiceNumber),
       'doId': serializer.toJson<String?>(doId),
+      'targetLat': serializer.toJson<double?>(targetLat),
+      'targetLng': serializer.toJson<double?>(targetLng),
       'photoPathsJson': serializer.toJson<String>(photoPathsJson),
     };
   }
@@ -6679,6 +6770,8 @@ class DeliveryStopsData extends DataClass
           Value<String?> driverNote = const Value.absent(),
           Value<String?> soInvoiceNumber = const Value.absent(),
           Value<String?> doId = const Value.absent(),
+          Value<double?> targetLat = const Value.absent(),
+          Value<double?> targetLng = const Value.absent(),
           String? photoPathsJson}) =>
       DeliveryStopsData(
         id: id ?? this.id,
@@ -6707,6 +6800,8 @@ class DeliveryStopsData extends DataClass
             ? soInvoiceNumber.value
             : this.soInvoiceNumber,
         doId: doId.present ? doId.value : this.doId,
+        targetLat: targetLat.present ? targetLat.value : this.targetLat,
+        targetLng: targetLng.present ? targetLng.value : this.targetLng,
         photoPathsJson: photoPathsJson ?? this.photoPathsJson,
       );
   DeliveryStopsData copyWithCompanion(DeliveryStopsCompanion data) {
@@ -6756,6 +6851,8 @@ class DeliveryStopsData extends DataClass
           ? data.soInvoiceNumber.value
           : this.soInvoiceNumber,
       doId: data.doId.present ? data.doId.value : this.doId,
+      targetLat: data.targetLat.present ? data.targetLat.value : this.targetLat,
+      targetLng: data.targetLng.present ? data.targetLng.value : this.targetLng,
       photoPathsJson: data.photoPathsJson.present
           ? data.photoPathsJson.value
           : this.photoPathsJson,
@@ -6786,6 +6883,8 @@ class DeliveryStopsData extends DataClass
           ..write('driverNote: $driverNote, ')
           ..write('soInvoiceNumber: $soInvoiceNumber, ')
           ..write('doId: $doId, ')
+          ..write('targetLat: $targetLat, ')
+          ..write('targetLng: $targetLng, ')
           ..write('photoPathsJson: $photoPathsJson')
           ..write(')'))
         .toString();
@@ -6814,6 +6913,8 @@ class DeliveryStopsData extends DataClass
         driverNote,
         soInvoiceNumber,
         doId,
+        targetLat,
+        targetLng,
         photoPathsJson
       ]);
   @override
@@ -6841,6 +6942,8 @@ class DeliveryStopsData extends DataClass
           other.driverNote == this.driverNote &&
           other.soInvoiceNumber == this.soInvoiceNumber &&
           other.doId == this.doId &&
+          other.targetLat == this.targetLat &&
+          other.targetLng == this.targetLng &&
           other.photoPathsJson == this.photoPathsJson);
 }
 
@@ -6866,6 +6969,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
   final Value<String?> driverNote;
   final Value<String?> soInvoiceNumber;
   final Value<String?> doId;
+  final Value<double?> targetLat;
+  final Value<double?> targetLng;
   final Value<String> photoPathsJson;
   final Value<int> rowid;
   const DeliveryStopsCompanion({
@@ -6890,6 +6995,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     this.driverNote = const Value.absent(),
     this.soInvoiceNumber = const Value.absent(),
     this.doId = const Value.absent(),
+    this.targetLat = const Value.absent(),
+    this.targetLng = const Value.absent(),
     this.photoPathsJson = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -6915,6 +7022,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     this.driverNote = const Value.absent(),
     this.soInvoiceNumber = const Value.absent(),
     this.doId = const Value.absent(),
+    this.targetLat = const Value.absent(),
+    this.targetLng = const Value.absent(),
     this.photoPathsJson = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
@@ -6943,6 +7052,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     Expression<String>? driverNote,
     Expression<String>? soInvoiceNumber,
     Expression<String>? doId,
+    Expression<double>? targetLat,
+    Expression<double>? targetLng,
     Expression<String>? photoPathsJson,
     Expression<int>? rowid,
   }) {
@@ -6968,6 +7079,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
       if (driverNote != null) 'driver_note': driverNote,
       if (soInvoiceNumber != null) 'so_invoice_number': soInvoiceNumber,
       if (doId != null) 'do_id': doId,
+      if (targetLat != null) 'target_lat': targetLat,
+      if (targetLng != null) 'target_lng': targetLng,
       if (photoPathsJson != null) 'photo_paths_json': photoPathsJson,
       if (rowid != null) 'rowid': rowid,
     });
@@ -6995,6 +7108,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
       Value<String?>? driverNote,
       Value<String?>? soInvoiceNumber,
       Value<String?>? doId,
+      Value<double?>? targetLat,
+      Value<double?>? targetLng,
       Value<String>? photoPathsJson,
       Value<int>? rowid}) {
     return DeliveryStopsCompanion(
@@ -7019,6 +7134,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
       driverNote: driverNote ?? this.driverNote,
       soInvoiceNumber: soInvoiceNumber ?? this.soInvoiceNumber,
       doId: doId ?? this.doId,
+      targetLat: targetLat ?? this.targetLat,
+      targetLng: targetLng ?? this.targetLng,
       photoPathsJson: photoPathsJson ?? this.photoPathsJson,
       rowid: rowid ?? this.rowid,
     );
@@ -7090,6 +7207,12 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     if (doId.present) {
       map['do_id'] = Variable<String>(doId.value);
     }
+    if (targetLat.present) {
+      map['target_lat'] = Variable<double>(targetLat.value);
+    }
+    if (targetLng.present) {
+      map['target_lng'] = Variable<double>(targetLng.value);
+    }
     if (photoPathsJson.present) {
       map['photo_paths_json'] = Variable<String>(photoPathsJson.value);
     }
@@ -7123,6 +7246,8 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
           ..write('driverNote: $driverNote, ')
           ..write('soInvoiceNumber: $soInvoiceNumber, ')
           ..write('doId: $doId, ')
+          ..write('targetLat: $targetLat, ')
+          ..write('targetLng: $targetLng, ')
           ..write('photoPathsJson: $photoPathsJson, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -14352,6 +14477,7 @@ typedef $$DeliveriesTableCreateCompanionBuilder = DeliveriesCompanion Function({
   Value<String> status,
   Value<String?> notes,
   Value<String?> orgId,
+  Value<String> jobType,
   Value<int> rowid,
 });
 typedef $$DeliveriesTableUpdateCompanionBuilder = DeliveriesCompanion Function({
@@ -14368,6 +14494,7 @@ typedef $$DeliveriesTableUpdateCompanionBuilder = DeliveriesCompanion Function({
   Value<String> status,
   Value<String?> notes,
   Value<String?> orgId,
+  Value<String> jobType,
   Value<int> rowid,
 });
 
@@ -14418,6 +14545,9 @@ class $$DeliveriesTableFilterComposer
 
   ColumnFilters<String> get orgId => $composableBuilder(
       column: $table.orgId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get jobType => $composableBuilder(
+      column: $table.jobType, builder: (column) => ColumnFilters(column));
 }
 
 class $$DeliveriesTableOrderingComposer
@@ -14469,6 +14599,9 @@ class $$DeliveriesTableOrderingComposer
 
   ColumnOrderings<String> get orgId => $composableBuilder(
       column: $table.orgId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get jobType => $composableBuilder(
+      column: $table.jobType, builder: (column) => ColumnOrderings(column));
 }
 
 class $$DeliveriesTableAnnotationComposer
@@ -14518,6 +14651,9 @@ class $$DeliveriesTableAnnotationComposer
 
   GeneratedColumn<String> get orgId =>
       $composableBuilder(column: $table.orgId, builder: (column) => column);
+
+  GeneratedColumn<String> get jobType =>
+      $composableBuilder(column: $table.jobType, builder: (column) => column);
 }
 
 class $$DeliveriesTableTableManager extends RootTableManager<
@@ -14559,6 +14695,7 @@ class $$DeliveriesTableTableManager extends RootTableManager<
             Value<String> status = const Value.absent(),
             Value<String?> notes = const Value.absent(),
             Value<String?> orgId = const Value.absent(),
+            Value<String> jobType = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               DeliveriesCompanion(
@@ -14575,6 +14712,7 @@ class $$DeliveriesTableTableManager extends RootTableManager<
             status: status,
             notes: notes,
             orgId: orgId,
+            jobType: jobType,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -14591,6 +14729,7 @@ class $$DeliveriesTableTableManager extends RootTableManager<
             Value<String> status = const Value.absent(),
             Value<String?> notes = const Value.absent(),
             Value<String?> orgId = const Value.absent(),
+            Value<String> jobType = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               DeliveriesCompanion.insert(
@@ -14607,6 +14746,7 @@ class $$DeliveriesTableTableManager extends RootTableManager<
             status: status,
             notes: notes,
             orgId: orgId,
+            jobType: jobType,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -14654,6 +14794,8 @@ typedef $$DeliveryStopsTableCreateCompanionBuilder = DeliveryStopsCompanion
   Value<String?> driverNote,
   Value<String?> soInvoiceNumber,
   Value<String?> doId,
+  Value<double?> targetLat,
+  Value<double?> targetLng,
   Value<String> photoPathsJson,
   Value<int> rowid,
 });
@@ -14680,6 +14822,8 @@ typedef $$DeliveryStopsTableUpdateCompanionBuilder = DeliveryStopsCompanion
   Value<String?> driverNote,
   Value<String?> soInvoiceNumber,
   Value<String?> doId,
+  Value<double?> targetLat,
+  Value<double?> targetLng,
   Value<String> photoPathsJson,
   Value<int> rowid,
 });
@@ -14758,6 +14902,12 @@ class $$DeliveryStopsTableFilterComposer
 
   ColumnFilters<String> get doId => $composableBuilder(
       column: $table.doId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get targetLat => $composableBuilder(
+      column: $table.targetLat, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get targetLng => $composableBuilder(
+      column: $table.targetLng, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get photoPathsJson => $composableBuilder(
       column: $table.photoPathsJson,
@@ -14844,6 +14994,12 @@ class $$DeliveryStopsTableOrderingComposer
   ColumnOrderings<String> get doId => $composableBuilder(
       column: $table.doId, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<double> get targetLat => $composableBuilder(
+      column: $table.targetLat, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<double> get targetLng => $composableBuilder(
+      column: $table.targetLng, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get photoPathsJson => $composableBuilder(
       column: $table.photoPathsJson,
       builder: (column) => ColumnOrderings(column));
@@ -14921,6 +15077,12 @@ class $$DeliveryStopsTableAnnotationComposer
   GeneratedColumn<String> get doId =>
       $composableBuilder(column: $table.doId, builder: (column) => column);
 
+  GeneratedColumn<double> get targetLat =>
+      $composableBuilder(column: $table.targetLat, builder: (column) => column);
+
+  GeneratedColumn<double> get targetLng =>
+      $composableBuilder(column: $table.targetLng, builder: (column) => column);
+
   GeneratedColumn<String> get photoPathsJson => $composableBuilder(
       column: $table.photoPathsJson, builder: (column) => column);
 }
@@ -14972,6 +15134,8 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             Value<String?> driverNote = const Value.absent(),
             Value<String?> soInvoiceNumber = const Value.absent(),
             Value<String?> doId = const Value.absent(),
+            Value<double?> targetLat = const Value.absent(),
+            Value<double?> targetLng = const Value.absent(),
             Value<String> photoPathsJson = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -14997,6 +15161,8 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             driverNote: driverNote,
             soInvoiceNumber: soInvoiceNumber,
             doId: doId,
+            targetLat: targetLat,
+            targetLng: targetLng,
             photoPathsJson: photoPathsJson,
             rowid: rowid,
           ),
@@ -15022,6 +15188,8 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             Value<String?> driverNote = const Value.absent(),
             Value<String?> soInvoiceNumber = const Value.absent(),
             Value<String?> doId = const Value.absent(),
+            Value<double?> targetLat = const Value.absent(),
+            Value<double?> targetLng = const Value.absent(),
             Value<String> photoPathsJson = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -15047,6 +15215,8 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             driverNote: driverNote,
             soInvoiceNumber: soInvoiceNumber,
             doId: doId,
+            targetLat: targetLat,
+            targetLng: targetLng,
             photoPathsJson: photoPathsJson,
             rowid: rowid,
           ),

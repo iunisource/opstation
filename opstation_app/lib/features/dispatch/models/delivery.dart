@@ -106,8 +106,9 @@ extension DeliveryStopStatusX on DeliveryStopStatus {
 
 /// Payment arrangement for a stop. 'credit' means the customer is on
 /// account — driver delivers without collecting at drop; amount is
-/// tracked as owed elsewhere.
-enum PaymentType { cash, credit }
+/// tracked as owed elsewhere. 'not_required' means no money changes hands
+/// at this stop (used for pickups and no-charge deliveries).
+enum PaymentType { cash, credit, notRequired }
 
 extension PaymentTypeX on PaymentType {
   String get wire {
@@ -116,6 +117,8 @@ extension PaymentTypeX on PaymentType {
         return 'cash';
       case PaymentType.credit:
         return 'credit';
+      case PaymentType.notRequired:
+        return 'not_required';
     }
   }
 
@@ -125,6 +128,8 @@ extension PaymentTypeX on PaymentType {
         return 'Cash';
       case PaymentType.credit:
         return 'Credit';
+      case PaymentType.notRequired:
+        return 'Not required';
     }
   }
 
@@ -132,6 +137,8 @@ extension PaymentTypeX on PaymentType {
     switch (s) {
       case 'credit':
         return PaymentType.credit;
+      case 'not_required':
+        return PaymentType.notRequired;
       case 'cash':
       default:
         return PaymentType.cash;
@@ -214,6 +221,10 @@ class DeliveryStop {
   final String? driverNote;
   final String? soInvoiceNumber;
   final String? doId;
+  // Snapshot of the party's (customer or supplier) saved coordinates, used
+  // for the geofence check. Falls back to a live customer lookup when null.
+  final double? targetLat;
+  final double? targetLng;
   final List<String> photoPaths;
 
   const DeliveryStop({
@@ -237,6 +248,8 @@ class DeliveryStop {
     this.driverNote,
     this.soInvoiceNumber,
     this.doId,
+    this.targetLat,
+    this.targetLng,
     this.photoPaths = const [],
   });
 
@@ -271,6 +284,8 @@ class DeliveryStop {
       driverNote: r.driverNote,
       soInvoiceNumber: r.soInvoiceNumber,
       doId: r.doId,
+      targetLat: r.targetLat,
+      targetLng: r.targetLng,
       photoPaths: paths,
     );
   }
@@ -289,6 +304,7 @@ class Delivery {
   final DateTime? completedAt;
   final DeliveryStatus status;
   final String? notes;
+  final String jobType; // 'delivery' | 'pickup'
   final List<DeliveryStop> stops;
 
   const Delivery({
@@ -304,6 +320,7 @@ class Delivery {
     required this.completedAt,
     required this.status,
     required this.notes,
+    this.jobType = 'delivery',
     required this.stops,
   });
 
@@ -321,9 +338,25 @@ class Delivery {
       completedAt: r.completedAt,
       status: DeliveryStatusX.fromWire(r.status),
       notes: r.notes,
+      jobType: r.jobType,
       stops: stops,
     );
   }
+
+  /// True when this job is a supplier pickup rather than a customer delivery.
+  bool get isPickup => jobType == 'pickup';
+
+  /// Capitalised job noun for headings/buttons ("Delivery" / "Pickup").
+  String get jobNoun => isPickup ? 'Pickup' : 'Delivery';
+
+  /// Lowercase job noun for inline sentences ("delivery" / "pickup").
+  String get jobNounLower => isPickup ? 'pickup' : 'delivery';
+
+  /// Past-tense completion verb ("Delivered" / "Picked up").
+  String get doneVerb => isPickup ? 'Picked up' : 'Delivered';
+
+  /// Lowercase completion verb ("delivered" / "picked up").
+  String get doneVerbLower => isPickup ? 'picked up' : 'delivered';
 
   /// Convenience: sum of all stop amounts.
   int get totalAmount =>
