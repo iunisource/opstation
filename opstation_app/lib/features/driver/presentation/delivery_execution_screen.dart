@@ -172,7 +172,7 @@ class _DeliveryExecutionScreenState
       builder: (_) => _MarkDeliveredSheet(
         stop: stop,
         deliveryId: widget.deliveryId,
-        isPickup: _delivery?.isPickup ?? false,
+        isPickup: stop.isPickup,
       ),
     );
     if (result == null) return;
@@ -462,7 +462,7 @@ class _DeliveryExecutionScreenState
                 stop: s,
                 customer: _customerIndex[s.customerId],
                 canAct: d.status == DeliveryStatus.inProgress,
-                isPickup: d.isPickup,
+                isPickup: s.isPickup,
                 onMarkDelivered: () => _handleMarkDelivered(s),
                 onMarkFailed: () => _handleMarkFailed(s),
               ),
@@ -492,6 +492,9 @@ class _DeliveryExecutionScreenState
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: SlideToConfirm(
+            // Distinct key: otherwise the "complete" slider that replaces
+            // this one inherits its already-fired state and ignores drags.
+            key: const ValueKey('slide-start'),
             label: _starting
                 ? 'Starting...'
                 : 'Slide to start ${d.jobNounLower}',
@@ -509,6 +512,7 @@ class _DeliveryExecutionScreenState
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: SlideToConfirm(
+            key: const ValueKey('slide-complete'),
             label: 'Slide to complete (${d.pendingCount} remaining)',
             icon: Icons.flag_outlined,
             color: AppColors.danger,
@@ -570,7 +574,7 @@ class _HeaderStats extends StatelessWidget {
               Expanded(
                 child: _stat(
                   '${delivery.deliveredCount}/${delivery.stops.length}',
-                  'DELIVERED',
+                  'DONE',
                 ),
               ),
               Expanded(
@@ -579,11 +583,12 @@ class _HeaderStats extends StatelessWidget {
                   'FAILED',
                 ),
               ),
+              // Cash only exists on delivery stops; a pickup-only job shows
+              // its composition here instead of a meaningless "Rs 0".
               Expanded(
-                child: _stat(
-                  'Rs ${delivery.cashCollected}',
-                  'COLLECTED',
-                ),
+                child: delivery.hasDeliveries
+                    ? _stat('Rs ${delivery.cashCollected}', 'COLLECTED')
+                    : _stat('${delivery.pickupCount}', 'PICKUPS'),
               ),
             ],
           ),
@@ -768,20 +773,50 @@ class _StopCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      stop.customerName,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      stop.customerCode,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textSecondaryLight,
+                    Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Expanded(
+                        child: Text(
+                          stop.customerName,
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w700),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 6),
+                      // Per-stop type chip — a job can mix pickups and
+                      // deliveries, so the driver sees which is which.
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: (isPickup
+                                  ? AppColors.warning
+                                  : AppColors.primary)
+                              .withOpacity(0.14),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          isPickup ? 'PICKUP' : 'DELIVERY',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.4,
+                            color: isPickup
+                                ? AppColors.warningDark
+                                : AppColors.primary,
+                          ),
+                        ),
+                      ),
+                    ]),
+                    if (stop.customerCode.trim().isNotEmpty)
+                      Text(
+                        stop.customerCode,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textSecondaryLight,
+                        ),
+                      ),
                     if (customer != null &&
                         customer!.address.trim().isNotEmpty) ...[
                       const SizedBox(height: 4),
@@ -901,6 +936,7 @@ class _StopCard extends StatelessWidget {
                         ],
                       ),
                     ],
+                    if (!isPickup) ...[
                     const SizedBox(height: 4),
                     Row(
                       children: [
@@ -939,6 +975,7 @@ class _StopCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                    ],
                   ],
                 ),
               ),
@@ -1098,7 +1135,8 @@ class _StopCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        s.label,
+        // A settled pickup reads "Picked up" rather than "Delivered".
+        (isPickup && s == DeliveryStopStatus.delivered) ? 'Picked up' : s.label,
         style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w700,

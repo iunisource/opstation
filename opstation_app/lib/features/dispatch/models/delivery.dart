@@ -225,6 +225,9 @@ class DeliveryStop {
   // for the geofence check. Falls back to a live customer lookup when null.
   final double? targetLat;
   final double? targetLng;
+  /// 'delivery' (customer drop) or 'pickup' (supplier collection). A job can
+  /// mix both; this decides the stop's labels, payment UI and mark-sheet.
+  final String stopType;
   final List<String> photoPaths;
 
   const DeliveryStop({
@@ -250,8 +253,11 @@ class DeliveryStop {
     this.doId,
     this.targetLat,
     this.targetLng,
+    this.stopType = 'delivery',
     this.photoPaths = const [],
   });
+
+  bool get isPickup => stopType == 'pickup';
 
   factory DeliveryStop.fromRow(DeliveryStopsData r) {
     List<String> paths;
@@ -286,6 +292,7 @@ class DeliveryStop {
       doId: r.doId,
       targetLat: r.targetLat,
       targetLng: r.targetLng,
+      stopType: r.stopType,
       photoPaths: paths,
     );
   }
@@ -343,20 +350,32 @@ class Delivery {
     );
   }
 
-  /// True when this job is a supplier pickup rather than a customer delivery.
-  bool get isPickup => jobType == 'pickup';
+  // ---- Composition (derived from stops; a job can mix both types) ------
 
-  /// Capitalised job noun for headings/buttons ("Delivery" / "Pickup").
-  String get jobNoun => isPickup ? 'Pickup' : 'Delivery';
+  int get pickupCount => stops.where((s) => s.isPickup).length;
+  int get deliveryCount => stops.where((s) => !s.isPickup).length;
+  bool get hasPickups => pickupCount > 0;
+  bool get hasDeliveries => deliveryCount > 0;
 
-  /// Lowercase job noun for inline sentences ("delivery" / "pickup").
-  String get jobNounLower => isPickup ? 'pickup' : 'delivery';
+  /// True only when EVERY stop is a pickup (kept for callers that want a
+  /// single-type check; most UI should look at each stop's own type).
+  bool get isPickup => stops.isNotEmpty && !hasDeliveries;
 
-  /// Past-tense completion verb ("Delivered" / "Picked up").
-  String get doneVerb => isPickup ? 'Picked up' : 'Delivered';
+  /// Heading noun. A job is just a "Job"; the per-stop chips say which
+  /// stops are pickups vs deliveries.
+  String get jobNoun => 'Job';
+  String get jobNounLower => 'job';
 
-  /// Lowercase completion verb ("delivered" / "picked up").
-  String get doneVerbLower => isPickup ? 'picked up' : 'delivered';
+  /// "2 deliveries · 1 pickup" — for cards and push bodies.
+  String get composition {
+    final parts = <String>[
+      if (deliveryCount > 0)
+        '$deliveryCount ${deliveryCount == 1 ? 'delivery' : 'deliveries'}',
+      if (pickupCount > 0)
+        '$pickupCount ${pickupCount == 1 ? 'pickup' : 'pickups'}',
+    ];
+    return parts.isEmpty ? '${stops.length} stops' : parts.join(' · ');
+  }
 
   /// Convenience: sum of all stop amounts.
   int get totalAmount =>

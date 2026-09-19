@@ -466,15 +466,11 @@ class _ActiveDeliveryCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(
-                    delivery.isPickup
-                        ? Icons.download
-                        : Icons.local_shipping,
-                    color: Colors.white,
-                    size: 22),
+                const Icon(Icons.local_shipping,
+                    color: Colors.white, size: 22),
                 const SizedBox(width: 8),
                 Text(
-                  'Tap to resume · ${delivery.jobNoun}',
+                  'Tap to resume · ${delivery.composition}',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
@@ -498,8 +494,9 @@ class _ActiveDeliveryCard extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: _stat(
-                      'Rs ${delivery.cashCollected}', 'COLLECTED'),
+                  child: delivery.hasDeliveries
+                      ? _stat('Rs ${delivery.cashCollected}', 'COLLECTED')
+                      : _stat('${delivery.pickupCount}', 'PICKUPS'),
                 ),
               ],
             ),
@@ -555,6 +552,20 @@ class _AssignedDeliveryCard extends StatelessWidget {
     required this.onTap,
   });
 
+  Widget _tag(String text, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(text,
+            style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.4,
+                color: color)),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -595,39 +606,20 @@ class _AssignedDeliveryCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: (delivery.isPickup
-                                    ? AppColors.warning
-                                    : AppColors.primary)
-                                .withOpacity(0.14),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            delivery.jobNoun.toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.4,
-                              color: delivery.isPickup
-                                  ? AppColors.warningDark
-                                  : AppColors.primary,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            delivery.isPickup
-                                ? '${delivery.stops.length} ${delivery.stops.length == 1 ? "pickup" : "pickups"}'
-                                : '${delivery.stops.length} ${delivery.stops.length == 1 ? "stop" : "stops"} · Rs ${delivery.cashAmount} to collect',
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w700),
-                          ),
-                        ),
+                      Text(
+                        delivery.hasDeliveries
+                            ? '${delivery.composition} · Rs ${delivery.cashAmount} to collect'
+                            : delivery.composition,
+                        style: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 3),
+                      // Composition tags: blue = deliveries, amber = pickups.
+                      Wrap(spacing: 4, children: [
+                        if (delivery.deliveryCount > 0)
+                          _tag('${delivery.deliveryCount} DEL', AppColors.primary),
+                        if (delivery.pickupCount > 0)
+                          _tag('${delivery.pickupCount} PICK', AppColors.warningDark),
                       ]),
                       const SizedBox(height: 2),
                       Text(

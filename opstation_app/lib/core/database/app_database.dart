@@ -348,6 +348,11 @@ class DeliveryStops extends Table {
   TextColumn get customerCode => text().withDefault(const Constant(''))();
   TextColumn get customerName => text().withDefault(const Constant(''))();
 
+  /// 'delivery' (drop to a customer) or 'pickup' (collect from a supplier).
+  /// A single job can mix both; labels, payment and the mark-sheet are
+  /// decided per stop from this.
+  TextColumn get stopType => text().withDefault(const Constant('delivery'))();
+
   IntColumn get sequence => integer()();
   TextColumn get itemDescription => text().withDefault(const Constant(''))();
 
@@ -453,11 +458,14 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
   @override
-  int get schemaVersion => 22;
+  int get schemaVersion => 23;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
+          if (from < 23) {
+            await m.addColumn(deliveryStops, deliveryStops.stopType);
+          }
           if (from < 22) {
             await m.addColumn(deliveries, deliveries.jobType);
             await m.addColumn(deliveryStops, deliveryStops.targetLat);

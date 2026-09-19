@@ -6113,6 +6113,14 @@ class $DeliveryStopsTable extends DeliveryStops
       type: DriftSqlType.string,
       requiredDuringInsert: false,
       defaultValue: const Constant(''));
+  static const VerificationMeta _stopTypeMeta =
+      const VerificationMeta('stopType');
+  @override
+  late final GeneratedColumn<String> stopType = GeneratedColumn<String>(
+      'stop_type', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('delivery'));
   static const VerificationMeta _sequenceMeta =
       const VerificationMeta('sequence');
   @override
@@ -6245,6 +6253,7 @@ class $DeliveryStopsTable extends DeliveryStops
         customerId,
         customerCode,
         customerName,
+        stopType,
         sequence,
         itemDescription,
         amount,
@@ -6307,6 +6316,10 @@ class $DeliveryStopsTable extends DeliveryStops
           _customerNameMeta,
           customerName.isAcceptableOrUnknown(
               data['customer_name']!, _customerNameMeta));
+    }
+    if (data.containsKey('stop_type')) {
+      context.handle(_stopTypeMeta,
+          stopType.isAcceptableOrUnknown(data['stop_type']!, _stopTypeMeta));
     }
     if (data.containsKey('sequence')) {
       context.handle(_sequenceMeta,
@@ -6431,6 +6444,8 @@ class $DeliveryStopsTable extends DeliveryStops
           .read(DriftSqlType.string, data['${effectivePrefix}customer_code'])!,
       customerName: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}customer_name'])!,
+      stopType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}stop_type'])!,
       sequence: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}sequence'])!,
       itemDescription: attachedDatabase.typeMapping.read(
@@ -6488,6 +6503,11 @@ class DeliveryStopsData extends DataClass
   final String customerId;
   final String customerCode;
   final String customerName;
+
+  /// 'delivery' (drop to a customer) or 'pickup' (collect from a supplier).
+  /// A single job can mix both; labels, payment and the mark-sheet are
+  /// decided per stop from this.
+  final String stopType;
   final int sequence;
   final String itemDescription;
 
@@ -6567,6 +6587,7 @@ class DeliveryStopsData extends DataClass
       required this.customerId,
       required this.customerCode,
       required this.customerName,
+      required this.stopType,
       required this.sequence,
       required this.itemDescription,
       required this.amount,
@@ -6594,6 +6615,7 @@ class DeliveryStopsData extends DataClass
     map['customer_id'] = Variable<String>(customerId);
     map['customer_code'] = Variable<String>(customerCode);
     map['customer_name'] = Variable<String>(customerName);
+    map['stop_type'] = Variable<String>(stopType);
     map['sequence'] = Variable<int>(sequence);
     map['item_description'] = Variable<String>(itemDescription);
     map['amount'] = Variable<int>(amount);
@@ -6645,6 +6667,7 @@ class DeliveryStopsData extends DataClass
       customerId: Value(customerId),
       customerCode: Value(customerCode),
       customerName: Value(customerName),
+      stopType: Value(stopType),
       sequence: Value(sequence),
       itemDescription: Value(itemDescription),
       amount: Value(amount),
@@ -6696,6 +6719,7 @@ class DeliveryStopsData extends DataClass
       customerId: serializer.fromJson<String>(json['customerId']),
       customerCode: serializer.fromJson<String>(json['customerCode']),
       customerName: serializer.fromJson<String>(json['customerName']),
+      stopType: serializer.fromJson<String>(json['stopType']),
       sequence: serializer.fromJson<int>(json['sequence']),
       itemDescription: serializer.fromJson<String>(json['itemDescription']),
       amount: serializer.fromJson<int>(json['amount']),
@@ -6726,6 +6750,7 @@ class DeliveryStopsData extends DataClass
       'customerId': serializer.toJson<String>(customerId),
       'customerCode': serializer.toJson<String>(customerCode),
       'customerName': serializer.toJson<String>(customerName),
+      'stopType': serializer.toJson<String>(stopType),
       'sequence': serializer.toJson<int>(sequence),
       'itemDescription': serializer.toJson<String>(itemDescription),
       'amount': serializer.toJson<int>(amount),
@@ -6754,6 +6779,7 @@ class DeliveryStopsData extends DataClass
           String? customerId,
           String? customerCode,
           String? customerName,
+          String? stopType,
           int? sequence,
           String? itemDescription,
           int? amount,
@@ -6779,6 +6805,7 @@ class DeliveryStopsData extends DataClass
         customerId: customerId ?? this.customerId,
         customerCode: customerCode ?? this.customerCode,
         customerName: customerName ?? this.customerName,
+        stopType: stopType ?? this.stopType,
         sequence: sequence ?? this.sequence,
         itemDescription: itemDescription ?? this.itemDescription,
         amount: amount ?? this.amount,
@@ -6817,6 +6844,7 @@ class DeliveryStopsData extends DataClass
       customerName: data.customerName.present
           ? data.customerName.value
           : this.customerName,
+      stopType: data.stopType.present ? data.stopType.value : this.stopType,
       sequence: data.sequence.present ? data.sequence.value : this.sequence,
       itemDescription: data.itemDescription.present
           ? data.itemDescription.value
@@ -6867,6 +6895,7 @@ class DeliveryStopsData extends DataClass
           ..write('customerId: $customerId, ')
           ..write('customerCode: $customerCode, ')
           ..write('customerName: $customerName, ')
+          ..write('stopType: $stopType, ')
           ..write('sequence: $sequence, ')
           ..write('itemDescription: $itemDescription, ')
           ..write('amount: $amount, ')
@@ -6897,6 +6926,7 @@ class DeliveryStopsData extends DataClass
         customerId,
         customerCode,
         customerName,
+        stopType,
         sequence,
         itemDescription,
         amount,
@@ -6926,6 +6956,7 @@ class DeliveryStopsData extends DataClass
           other.customerId == this.customerId &&
           other.customerCode == this.customerCode &&
           other.customerName == this.customerName &&
+          other.stopType == this.stopType &&
           other.sequence == this.sequence &&
           other.itemDescription == this.itemDescription &&
           other.amount == this.amount &&
@@ -6953,6 +6984,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
   final Value<String> customerId;
   final Value<String> customerCode;
   final Value<String> customerName;
+  final Value<String> stopType;
   final Value<int> sequence;
   final Value<String> itemDescription;
   final Value<int> amount;
@@ -6979,6 +7011,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     this.customerId = const Value.absent(),
     this.customerCode = const Value.absent(),
     this.customerName = const Value.absent(),
+    this.stopType = const Value.absent(),
     this.sequence = const Value.absent(),
     this.itemDescription = const Value.absent(),
     this.amount = const Value.absent(),
@@ -7006,6 +7039,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     required String customerId,
     this.customerCode = const Value.absent(),
     this.customerName = const Value.absent(),
+    this.stopType = const Value.absent(),
     required int sequence,
     this.itemDescription = const Value.absent(),
     this.amount = const Value.absent(),
@@ -7036,6 +7070,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     Expression<String>? customerId,
     Expression<String>? customerCode,
     Expression<String>? customerName,
+    Expression<String>? stopType,
     Expression<int>? sequence,
     Expression<String>? itemDescription,
     Expression<int>? amount,
@@ -7063,6 +7098,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
       if (customerId != null) 'customer_id': customerId,
       if (customerCode != null) 'customer_code': customerCode,
       if (customerName != null) 'customer_name': customerName,
+      if (stopType != null) 'stop_type': stopType,
       if (sequence != null) 'sequence': sequence,
       if (itemDescription != null) 'item_description': itemDescription,
       if (amount != null) 'amount': amount,
@@ -7092,6 +7128,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
       Value<String>? customerId,
       Value<String>? customerCode,
       Value<String>? customerName,
+      Value<String>? stopType,
       Value<int>? sequence,
       Value<String>? itemDescription,
       Value<int>? amount,
@@ -7118,6 +7155,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
       customerId: customerId ?? this.customerId,
       customerCode: customerCode ?? this.customerCode,
       customerName: customerName ?? this.customerName,
+      stopType: stopType ?? this.stopType,
       sequence: sequence ?? this.sequence,
       itemDescription: itemDescription ?? this.itemDescription,
       amount: amount ?? this.amount,
@@ -7158,6 +7196,9 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
     }
     if (customerName.present) {
       map['customer_name'] = Variable<String>(customerName.value);
+    }
+    if (stopType.present) {
+      map['stop_type'] = Variable<String>(stopType.value);
     }
     if (sequence.present) {
       map['sequence'] = Variable<int>(sequence.value);
@@ -7230,6 +7271,7 @@ class DeliveryStopsCompanion extends UpdateCompanion<DeliveryStopsData> {
           ..write('customerId: $customerId, ')
           ..write('customerCode: $customerCode, ')
           ..write('customerName: $customerName, ')
+          ..write('stopType: $stopType, ')
           ..write('sequence: $sequence, ')
           ..write('itemDescription: $itemDescription, ')
           ..write('amount: $amount, ')
@@ -14778,6 +14820,7 @@ typedef $$DeliveryStopsTableCreateCompanionBuilder = DeliveryStopsCompanion
   required String customerId,
   Value<String> customerCode,
   Value<String> customerName,
+  Value<String> stopType,
   required int sequence,
   Value<String> itemDescription,
   Value<int> amount,
@@ -14806,6 +14849,7 @@ typedef $$DeliveryStopsTableUpdateCompanionBuilder = DeliveryStopsCompanion
   Value<String> customerId,
   Value<String> customerCode,
   Value<String> customerName,
+  Value<String> stopType,
   Value<int> sequence,
   Value<String> itemDescription,
   Value<int> amount,
@@ -14851,6 +14895,9 @@ class $$DeliveryStopsTableFilterComposer
 
   ColumnFilters<String> get customerName => $composableBuilder(
       column: $table.customerName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get stopType => $composableBuilder(
+      column: $table.stopType, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<int> get sequence => $composableBuilder(
       column: $table.sequence, builder: (column) => ColumnFilters(column));
@@ -14939,6 +14986,9 @@ class $$DeliveryStopsTableOrderingComposer
   ColumnOrderings<String> get customerName => $composableBuilder(
       column: $table.customerName,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get stopType => $composableBuilder(
+      column: $table.stopType, builder: (column) => ColumnOrderings(column));
 
   ColumnOrderings<int> get sequence => $composableBuilder(
       column: $table.sequence, builder: (column) => ColumnOrderings(column));
@@ -15029,6 +15079,9 @@ class $$DeliveryStopsTableAnnotationComposer
   GeneratedColumn<String> get customerName => $composableBuilder(
       column: $table.customerName, builder: (column) => column);
 
+  GeneratedColumn<String> get stopType =>
+      $composableBuilder(column: $table.stopType, builder: (column) => column);
+
   GeneratedColumn<int> get sequence =>
       $composableBuilder(column: $table.sequence, builder: (column) => column);
 
@@ -15118,6 +15171,7 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             Value<String> customerId = const Value.absent(),
             Value<String> customerCode = const Value.absent(),
             Value<String> customerName = const Value.absent(),
+            Value<String> stopType = const Value.absent(),
             Value<int> sequence = const Value.absent(),
             Value<String> itemDescription = const Value.absent(),
             Value<int> amount = const Value.absent(),
@@ -15145,6 +15199,7 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             customerId: customerId,
             customerCode: customerCode,
             customerName: customerName,
+            stopType: stopType,
             sequence: sequence,
             itemDescription: itemDescription,
             amount: amount,
@@ -15172,6 +15227,7 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             required String customerId,
             Value<String> customerCode = const Value.absent(),
             Value<String> customerName = const Value.absent(),
+            Value<String> stopType = const Value.absent(),
             required int sequence,
             Value<String> itemDescription = const Value.absent(),
             Value<int> amount = const Value.absent(),
@@ -15199,6 +15255,7 @@ class $$DeliveryStopsTableTableManager extends RootTableManager<
             customerId: customerId,
             customerCode: customerCode,
             customerName: customerName,
+            stopType: stopType,
             sequence: sequence,
             itemDescription: itemDescription,
             amount: amount,

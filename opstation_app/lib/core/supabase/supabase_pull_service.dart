@@ -499,6 +499,7 @@ class SupabasePullService {
           soInvoiceNumber: Value(r['so_invoice_number'] as String?),
           targetLat: Value((r['target_lat'] as num?)?.toDouble()),
           targetLng: Value((r['target_lng'] as num?)?.toDouble()),
+          stopType: Value(r['stop_type'] as String? ?? 'delivery'),
         ));
       } catch (_) {}
     }
