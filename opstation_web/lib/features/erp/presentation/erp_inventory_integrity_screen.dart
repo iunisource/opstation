@@ -39,12 +39,21 @@ class ErpInventoryIntegrityScreen extends ConsumerStatefulWidget {
 
 class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+  late final TabController _tabs = TabController(length: 3, vsync: this);
 
   bool _loading = true;
   List<Map<String, dynamic>> _rows = [];
   String _filter = 'ALL';
   String _search = '';
+
+  // Watchdog tab — the same ledger sanity checks the nightly costing-watchdog
+  // email runs, on demand: invoices with no COGS, zero-cost DO postings,
+  // unbalanced journal entries.
+  bool _wdLoading = true;
+  List<Map<String, dynamic>> _wdMissing = [];
+  List<Map<String, dynamic>> _wdZeroDos = [];
+  List<Map<String, dynamic>> _wdUnbalanced = [];
+  int get _wdCount => _wdMissing.length + _wdZeroDos.length + _wdUnbalanced.length;
 
   // Documents tab
   bool _docLoading = true;
@@ -59,6 +68,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _load();
       _loadDocs();
+      _loadWatchdog();
     });
   }
 
@@ -95,6 +105,29 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
       setState(() => _docLoading = false);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Reconciliation error: $e')));
+    }
+  }
+
+  Future<void> _loadWatchdog() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    setState(() => _wdLoading = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('rpc_costing_watchdog', params: {'p_org': orgId});
+      final m = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      setState(() {
+        _wdMissing = List<Map<String, dynamic>>.from(m['missing_cogs'] as List? ?? []);
+        _wdZeroDos = List<Map<String, dynamic>>.from(m['zero_cost_dos'] as List? ?? []);
+        _wdUnbalanced = List<Map<String, dynamic>>.from(m['unbalanced'] as List? ?? []);
+        _wdLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _wdLoading = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Watchdog error: $e')));
     }
   }
 
@@ -272,6 +305,11 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
   // button previously always printed Products, so the Documents tab's print
   // preview showed the wrong section.
   void _printActive() {
+    if (_tabs.index == 2) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('The Watchdog tab is live-only — its nightly email is the record')));
+      return;
+    }
     if (_tabs.index == 1) {
       if (_docRows.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -744,7 +782,7 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
           ])),
           IconButton(icon: const Icon(Icons.print_outlined), tooltip: 'Print / PDF',
               onPressed: _printActive),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: () { _load(); _loadDocs(); }),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: () { _load(); _loadDocs(); _loadWatchdog(); }),
         ])),
       Container(
         color: Colors.white,
@@ -774,6 +812,22 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                 ],
               ]),
             ),
+            Tab(
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Text('Watchdog'),
+                if (_wdCount > 0) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                        color: AppTheme.danger, borderRadius: BorderRadius.circular(8)),
+                    child: Text('$_wdCount',
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.white, fontWeight: FontWeight.w800)),
+                  ),
+                ],
+              ]),
+            ),
           ],
         ),
       ),
@@ -782,9 +836,149 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
         child: TabBarView(controller: _tabs, children: [
           _productsTab(),
           _documentsTab(),
+          _watchdogTab(),
         ]),
       ),
     ]);
+  }
+
+  // ── Tab 3: the nightly costing watchdog, on demand. Same checks the 7am
+  // email runs — a locked invoice with revenue but no COGS, a delivery order
+  // posted at zero cost despite delivered quantities, and any journal entry
+  // whose debits and credits disagree. Green here means the email stays silent.
+  Widget _watchdogTab() {
+    if (_wdLoading) return const Center(child: CircularProgressIndicator());
+
+    Widget section(String title, String explain, List<Map<String, dynamic>> rows,
+        List<String> cols, List<Widget> Function(Map<String, dynamic>) cells) {
+      if (rows.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('$title (${rows.length})',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 2),
+          Text(explain, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+          HScrollOnNarrow(
+            minWidth: 640,
+            child: Container(
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.border)),
+              child: Column(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: const BoxDecoration(color: Color(0xFFF8F9FA)),
+                  child: Row(children: [
+                    for (final c in cols) Expanded(child: Text(c, style: _h)),
+                  ]),
+                ),
+                const Divider(height: 1),
+                ...rows.map((r) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                      child: Row(children: cells(r)),
+                    )),
+              ]),
+            ),
+          ),
+        ]),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_wdCount == 0)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withOpacity(0.30)),
+            ),
+            child: const Row(children: [
+              Icon(Icons.verified_outlined, color: Colors.green),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Costing watchdog: all clear',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                  SizedBox(height: 2),
+                  Text(
+                      'Every posted invoice carries its cost of goods, no delivery order '
+                      'posted at zero cost, and every journal entry balances. The nightly '
+                      'watchdog email stays silent while this is green.',
+                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+              ),
+            ]),
+          )
+        else ...[
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppTheme.danger.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.danger.withOpacity(0.40)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.error_outline, color: AppTheme.danger, size: 26),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                    '$_wdCount costing issue${_wdCount == 1 ? '' : 's'} need attention — '
+                    'profit figures are unreliable until these are resolved',
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w800, color: AppTheme.danger)),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 16),
+          section(
+            'Invoices with no cost of goods',
+            'Locked invoices carrying revenue but no COGS entry — profit is overstated by their full cost. Usually the delivery order behind them posted at zero cost; re-post it, then the invoice.',
+            _wdMissing,
+            const ['Invoice', 'Date', 'Amount (Rs.)'],
+            (r) => [
+              Expanded(child: Text('${r['invoice'] ?? '-'}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+              Expanded(child: Text('${r['date'] ?? '-'}',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+              Expanded(child: Text(_fmt(r['total'] as num?),
+                  style: const TextStyle(fontSize: 13))),
+            ],
+          ),
+          section(
+            'Delivery orders posted at zero cost',
+            'These booked no inventory cost although their items carry delivered quantities — the invoice that follows them will get zero COGS.',
+            _wdZeroDos,
+            const ['DO', 'Date'],
+            (r) => [
+              Expanded(child: Text('${r['do'] ?? '-'}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+              Expanded(child: Text('${r['date'] ?? '-'}',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+            ],
+          ),
+          section(
+            'Unbalanced journal entries',
+            'Debits and credits disagree — a posting was interrupted half-way. The trial balance is off by each difference shown.',
+            _wdUnbalanced,
+            const ['Entry', 'Debits − Credits (Rs.)'],
+            (r) => [
+              Expanded(child: Text('${r['entry'] ?? '-'}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+              Expanded(child: Text(_fmt(r['diff'] as num?),
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.danger))),
+            ],
+          ),
+        ],
+        const SizedBox(height: 24),
+      ]),
+    );
   }
 
   // ── Tab 2: does the GL agree with the inventory ledger, document by document?
