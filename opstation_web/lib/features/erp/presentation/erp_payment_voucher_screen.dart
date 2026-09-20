@@ -226,8 +226,20 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       // on its success means a bad line leaves a draft, never a posted ghost.
       String vid; String? vNum;
       if (_currentVoucher == null) {
-        final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
-        vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+        // Number from the HIGHEST existing suffix, not the row count. Count+1
+        // reuses numbers after any delete (delete #0009 → count drops → the
+        // next voucher is numbered 0009 again), which is how five distinct
+        // vouchers all ended up named CPV-2026-0009 in production.
+        final existingNums = await client.from('cpv_vouchers').select('voucher_number').eq('org_id', orgId!);
+        var maxSeq = 0;
+        for (final r in (existingNums as List)) {
+          final m = RegExp(r'(\d+)$').firstMatch((r['voucher_number'] as String?) ?? '');
+          if (m != null) {
+            final v = int.tryParse(m.group(1)!) ?? 0;
+            if (v > maxSeq) maxSeq = v;
+          }
+        }
+        vNum = 'CPV-${DateTime.now().year}-${(maxSeq + 1).toString().padLeft(4, '0')}';
         vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
         await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': 'draft', 'total_amount': total, 'created_by': userId});
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
