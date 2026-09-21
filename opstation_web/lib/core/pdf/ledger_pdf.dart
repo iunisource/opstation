@@ -68,11 +68,34 @@ const _accent = PdfColor.fromInt(0xFF1976D2); // debit blue
 const _green = PdfColor.fromInt(0xFF2E7D32); // credit green
 const _danger = PdfColor.fromInt(0xFFC62828);
 
+/// Load a Unicode-capable theme so the ledger renders non-Latin text correctly:
+/// Noto Sans as the base (covers dashes / bullets / symbols that default
+/// Helvetica shows as tofu boxes) with Noto Naskh Arabic as a fallback for
+/// Urdu / Arabic footer notes and descriptions. Falls back to the default font
+/// if the web fonts can't be fetched — text still prints, just Latin-only.
+Future<pw.ThemeData?> _loadLedgerTheme() async {
+  try {
+    final base = await PdfGoogleFonts.notoSansRegular();
+    final bold = await PdfGoogleFonts.notoSansBold();
+    final fallback = <pw.Font>[];
+    try {
+      fallback.add(await PdfGoogleFonts.notoNaskhArabicRegular());
+      fallback.add(await PdfGoogleFonts.notoNaskhArabicBold());
+    } catch (_) {/* Arabic script fallback unavailable — Latin still works */}
+    return pw.ThemeData.withFont(
+        base: base, bold: bold, fontFallback: fallback.isEmpty ? null : fallback);
+  } catch (_) {
+    return null; // never let a font fetch break ledger generation
+  }
+}
+
 /// Build the ledger PDF bytes from a [LedgerDoc]. This is the single source of
 /// truth for the ledger's appearance — both Share and Print call it, so what a
 /// party receives via WhatsApp is identical to the printed / saved PDF.
 Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
-  final doc = pw.Document(title: d.fileBase, creator: 'Opstation ERP');
+  final theme = await _loadLedgerTheme();
+  final doc = pw.Document(
+      title: d.fileBase, creator: 'Opstation ERP', theme: theme);
 
   final hStyle = pw.TextStyle(
       fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700);
