@@ -80,16 +80,20 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
-  // Custom ledger footer message (ERP admin settings, toggle + text).
+  // Custom ledger footer message + company-name toggle (ERP admin settings).
   String _footerMsg = '';
+  bool _showOrgName = true; // org.ledger_show_name_customer (default show)
   Future<void> _loadFooterMsg() async {
     final orgId = _orgId; if (orgId == null) return;
     try {
       final rows = await Supabase.instance.client.from('app_config').select('key, value')
-          .eq('org_id', orgId).inFilter('key', ['org.ledger_msg_customer_enabled', 'org.ledger_msg_customer_text']);
+          .eq('org_id', orgId).inFilter('key', ['org.ledger_msg_customer_enabled', 'org.ledger_msg_customer_text', 'org.ledger_show_name_customer']);
       final cfg = <String, String>{}; for (final r in rows as List) { cfg[r['key'] as String] = r['value'] as String? ?? ''; }
       final on = (cfg['org.ledger_msg_customer_enabled'] ?? 'false') == 'true';
-      if (mounted) setState(() => _footerMsg = on ? (cfg['org.ledger_msg_customer_text'] ?? '') : '');
+      if (mounted) setState(() {
+        _footerMsg = on ? (cfg['org.ledger_msg_customer_text'] ?? '') : '';
+        _showOrgName = (cfg['org.ledger_show_name_customer'] ?? 'true') != 'false';
+      });
     } catch (_) {}
   }
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -1425,7 +1429,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     final fileBase = (customerName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
         .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
     return LedgerDoc(
-      docTitle: 'Customer Ledger', orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      docTitle: 'Customer Ledger', orgName: _showOrgName ? (ref.read(currentUserProvider)?.orgName ?? 'Opstation') : '',
       partyName: customerName, partyCode: customerCode, branchName: branchName,
       period: period, genTime: genTime, lines: lines,
       totalDebit: money(td), totalCredit: money(tc),

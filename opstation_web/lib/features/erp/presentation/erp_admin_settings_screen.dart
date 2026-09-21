@@ -2529,6 +2529,7 @@ class _LedgerMessagesPanelState extends State<_LedgerMessagesPanel> {
   final _custCtrl = TextEditingController();
   final _supCtrl = TextEditingController();
   bool _custOn = false, _supOn = false;
+  bool _custShowName = true, _supShowName = true; // default: show company name
   bool _loading = true;
 
   @override
@@ -2548,6 +2549,8 @@ class _LedgerMessagesPanelState extends State<_LedgerMessagesPanel> {
         _supCtrl.text = cfg['org.ledger_msg_supplier_text'] ?? '';
         _custOn = (cfg['org.ledger_msg_customer_enabled'] ?? 'false') == 'true';
         _supOn = (cfg['org.ledger_msg_supplier_enabled'] ?? 'false') == 'true';
+        _custShowName = (cfg['org.ledger_show_name_customer'] ?? 'true') != 'false';
+        _supShowName = (cfg['org.ledger_show_name_supplier'] ?? 'true') != 'false';
         _loading = false;
       });
     } catch (_) { if (mounted) setState(() => _loading = false); }
@@ -2561,6 +2564,19 @@ class _LedgerMessagesPanelState extends State<_LedgerMessagesPanel> {
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
     }
+  }
+
+  Widget _toggleRow(String title, String subtitle, bool on, ValueChanged<bool> onToggle) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+          Text(subtitle, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary, height: 1.3)),
+        ])),
+        Switch(value: on, onChanged: onToggle),
+      ]),
+    );
   }
 
   Widget _row(String title, bool on, ValueChanged<bool> onToggle, TextEditingController ctrl, VoidCallback onSave) {
@@ -2599,6 +2615,15 @@ class _LedgerMessagesPanelState extends State<_LedgerMessagesPanel> {
         const SizedBox(height: 14),
         if (_loading) const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Center(child: CircularProgressIndicator()))
         else ...[
+          _toggleRow('Show company name — Customer ledger',
+            'When on, the company name prints at the top of the customer ledger PDF / print.',
+            _custShowName,
+            (v) { setState(() => _custShowName = v); _set('org.ledger_show_name_customer', v ? 'true' : 'false'); }),
+          _toggleRow('Show company name — Supplier ledger',
+            'When on, the company name prints at the top of the supplier ledger PDF / print.',
+            _supShowName,
+            (v) { setState(() => _supShowName = v); _set('org.ledger_show_name_supplier', v ? 'true' : 'false'); }),
+          const Divider(height: 20),
           _row('Customer ledger message', _custOn,
             (v) { setState(() => _custOn = v); _set('org.ledger_msg_customer_enabled', v ? 'true' : 'false'); },
             _custCtrl, () => _set('org.ledger_msg_customer_text', _custCtrl.text.trim())),

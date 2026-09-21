@@ -128,11 +128,15 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
             pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text(d.orgName,
-                  style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-              pw.SizedBox(height: 2),
-              pw.Text(d.docTitle,
-                  style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
+              if (d.orgName.trim().isNotEmpty) ...[
+                pw.Text(d.orgName,
+                    style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 2),
+                pw.Text(d.docTitle,
+                    style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
+              ] else
+                pw.Text(d.docTitle,
+                    style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
             ]),
             pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
               pw.Text(d.partyName + (d.partyCode.isNotEmpty ? '  (${d.partyCode})' : ''),
@@ -272,13 +276,28 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
           ),
       ],
 
-      // ── Custom footer message ──────────────────────────────────────────
+      // ── Custom footer message (boxed, centered note) ───────────────────
       if ((d.footerMessage ?? '').trim().isNotEmpty) ...[
-        pw.SizedBox(height: 16),
-        pw.Divider(color: PdfColors.grey400, thickness: 0.5),
-        pw.SizedBox(height: 6),
-        pw.Text(d.footerMessage!.trim(),
-            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey800)),
+        pw.SizedBox(height: 18),
+        pw.Container(
+          width: double.infinity,
+          padding: const pw.EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: pw.BoxDecoration(
+            color: PdfColors.grey100,
+            border: pw.Border.all(color: PdfColors.grey400, width: 0.7),
+            borderRadius: pw.BorderRadius.circular(5),
+          ),
+          child: pw.Text(
+            d.footerMessage!.trim(),
+            textAlign: pw.TextAlign.center,
+            style: pw.TextStyle(
+              fontSize: 9.5,
+              color: PdfColors.grey900,
+              fontWeight: pw.FontWeight.bold,
+              lineSpacing: 2,
+            ),
+          ),
+        ),
       ],
     ],
   ));
