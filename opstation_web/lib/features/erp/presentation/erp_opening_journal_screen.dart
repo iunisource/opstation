@@ -31,6 +31,7 @@ class ErpOpeningJournalScreen extends ConsumerStatefulWidget {
 
 class _State extends ConsumerState<ErpOpeningJournalScreen> {
   List<Map<String,dynamic>> _vouchers = []; bool _drawerOpen = true, _loadingList = true;
+  final Map<String, String> _branchNames = {};
   String _listSearch = ''; OverlayEntry? _ctxOverlay;
   Map<String,dynamic>? _current; DateTime _date = DateTime.now();
   final _dateCtrl = TextEditingController(); final _narCtrl = TextEditingController();
@@ -131,9 +132,19 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _loadingList = true);
     try {
-      var q = Supabase.instance.client.from('journal_entries').select().eq('org_id', orgId).eq('reference_type', 'opening_jv');
-      final bid = _branchId; if (bid != null) q = q.eq('branch_id', bid);
-      final rows = await q.order('created_at', ascending: false).limit(200);
+      // ALL branches, deliberately. Opening journals are a handful of one-time
+      // entries; scoping the list to the selected branch made JVs entered under
+      // another branch (e.g. Central Warehouse) look like they didn't exist.
+      // Each row shows its branch tag instead.
+      final rows = await Supabase.instance.client.from('journal_entries').select()
+          .eq('org_id', orgId).eq('reference_type', 'opening_jv')
+          .order('created_at', ascending: false).limit(200);
+      if (_branchNames.isEmpty) {
+        try {
+          final brs = await Supabase.instance.client.from('branches').select('id, name').eq('org_id', orgId);
+          for (final b in (brs as List)) { _branchNames[b['id'] as String] = b['name'] as String? ?? ''; }
+        } catch (_) {}
+      }
       if (mounted) setState(() { _vouchers = List<Map<String,dynamic>>.from(rows); _loadingList = false; });
     } catch (e) { if (mounted) setState(() => _loadingList = false); }
   }
@@ -472,7 +483,11 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
                           decoration: BoxDecoration(color: (posted ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
                           child: Text(posted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, color: posted ? Colors.green : Colors.orange, fontWeight: FontWeight.w700))),
                       ]),
-                      Text(v['entry_date'] as String? ?? '', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                      Text([
+                        v['entry_date'] as String? ?? '',
+                        _branchNames[v['branch_id'] as String? ?? ''] ?? '',
+                      ].where((s) => s.isNotEmpty).join('  ·  '),
+                          style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                       Text(v['description'] as String? ?? '', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
                     ]),
                   )));

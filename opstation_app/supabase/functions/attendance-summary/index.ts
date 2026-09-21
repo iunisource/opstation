@@ -202,6 +202,7 @@ Deno.serve(async (req) => {
       const notInList: Emp[] = [];
       const absentList: Emp[] = [];
       const notOutList: Emp[] = [];
+      const presentList: Emp[] = []; // everyone who worked — the evening register
 
       for (const e of emps) {
         const a = byEmp[e.id];
@@ -217,6 +218,7 @@ Deno.serve(async (req) => {
 
         if (worked) {
           present++;
+          presentList.push(e);
           const threshold = shiftStart[e.shift_id ?? ""] ?? 570; // fallback 9:30
           if (cin! > threshold) { late++; lateList.push({ e, cin: cin!, mins: cin! - threshold }); }
           if (!a?.check_out) { notOut++; notOutList.push(e); }
@@ -253,6 +255,9 @@ Deno.serve(async (req) => {
         sections = [
           ["Absent", absentList, false],
           ["Still not checked out", notOutList, false],
+          // Full register: everyone who worked today, with their actual times —
+          // the evening email is the day's record, not just its exceptions.
+          ["Day register", presentList, false],
         ];
       }
 
