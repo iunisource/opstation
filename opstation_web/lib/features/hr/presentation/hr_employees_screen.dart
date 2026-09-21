@@ -304,8 +304,14 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       String id;
       if (_current == null) {
         if (code.isEmpty) {
-          final cnt = await client.from('hr_employees').select('id').eq('org_id', orgId);
-          code = 'EMP-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+          final ex = await client.from('hr_employees').select('employee_code').eq('org_id', orgId)
+              .like('employee_code', 'EMP-%');
+          int mx = 0;
+          for (final r in (ex as List)) {
+            final n = int.tryParse((r['employee_code'] as String? ?? '').split('-').last) ?? 0;
+            if (n > mx) mx = n;
+          }
+          code = 'EMP-' + (mx + 1).toString().padLeft(4, '0');
         }
         id = 'emp_' + DateTime.now().millisecondsSinceEpoch.toString();
       } else {

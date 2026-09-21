@@ -247,8 +247,14 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           setState(() => _saving = false);
           return;
         }
-        final cnt = await client.from('bom_headers').select('id').eq('org_id', orgId);
-        code = 'BOM-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+        final ex = await client.from('bom_headers').select('code').eq('org_id', orgId)
+            .like('code', 'BOM-%');
+        int mx = 0;
+        for (final r in (ex as List)) {
+          final n = int.tryParse((r['code'] as String? ?? '').split('-').last) ?? 0;
+          if (n > mx) mx = n;
+        }
+        code = 'BOM-' + (mx + 1).toString().padLeft(4, '0');
         bomId = 'bom_' + DateTime.now().millisecondsSinceEpoch.toString();
         await client.from('bom_headers').insert({
           'id': bomId, 'org_id': orgId, 'code': code,

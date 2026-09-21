@@ -2791,8 +2791,15 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     final cashAccId = 'coa_${orgId}_1110'; // POS reconciles against Cash in Hand
     final client = Supabase.instance.client;
     try {
-      final cnt = await client.from('cpv_vouchers').select('id').eq('org_id', orgId!);
-      final vNum = 'CPV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+      final _year = DateTime.now().year;
+      final ex = await client.from('cpv_vouchers').select('voucher_number').eq('org_id', orgId!)
+          .like('voucher_number', 'CPV-$_year-%');
+      int mx = 0;
+      for (final r in (ex as List)) {
+        final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0;
+        if (n > mx) mx = n;
+      }
+      final vNum = 'CPV-$_year-${(mx + 1).toString().padLeft(4, '0')}';
       final vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
       final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
       await client.from('cpv_vouchers').insert({
@@ -2919,8 +2926,15 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     final cashAccId = 'coa_${orgId}_1110';
     final client = Supabase.instance.client;
     try {
-      final cnt = await client.from('crv_vouchers').select('id').eq('org_id', orgId!);
-      final vNum = 'CRV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+      final _year = DateTime.now().year;
+      final ex = await client.from('crv_vouchers').select('voucher_number').eq('org_id', orgId!)
+          .like('voucher_number', 'CRV-$_year-%');
+      int mx = 0;
+      for (final r in (ex as List)) {
+        final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0;
+        if (n > mx) mx = n;
+      }
+      final vNum = 'CRV-$_year-${(mx + 1).toString().padLeft(4, '0')}';
       final vid = 'crv_${DateTime.now().millisecondsSinceEpoch}';
       final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
       await client.from('crv_vouchers').insert({

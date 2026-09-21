@@ -258,12 +258,19 @@ class _ErpBankReceiptVoucherScreenState
       final dateStr = DateFormat('yyyy-MM-dd').format(_voucherDate);
       String vid;
       if (_currentVoucher == null) {
-        final cnt = await client
+        final _year = DateTime.now().year;
+        final ex = await client
             .from('bank_receipt_vouchers')
-            .select('id')
-            .eq('org_id', orgId);
+            .select('voucher_number')
+            .eq('org_id', orgId)
+            .like('voucher_number', 'BRV-$_year-%');
+        int mx = 0;
+        for (final r in (ex as List)) {
+          final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0;
+          if (n > mx) mx = n;
+        }
         final vNum =
-            'BRV-${DateTime.now().year}-${((cnt as List).length + 1).toString().padLeft(4, '0')}';
+            'BRV-$_year-${(mx + 1).toString().padLeft(4, '0')}';
         vid = 'brv_${DateTime.now().millisecondsSinceEpoch}';
         await client.from('bank_receipt_vouchers').insert({
           'id': vid,

@@ -838,8 +838,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         // voucher/GL date comes from the user-chosen opening date, NOT now().
         final dateStr = '${openingDate.year.toString().padLeft(4, '0')}-${openingDate.month.toString().padLeft(2, '0')}-${openingDate.day.toString().padLeft(2, '0')}';
         final total = openingLines.fold(0.0, (s, l) => s + (l['quantity'] as double) * (l['unit_cost'] as double));
-        final cnt = await client.from('opening_stock_vouchers').select('id').eq('org_id', orgId);
-        final vnum = 'OPEN-${openingDate.year}-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+        final ex = await client.from('opening_stock_vouchers').select('voucher_number').eq('org_id', orgId)
+            .like('voucher_number', 'OPEN-${openingDate.year}-%');
+        int mx = 0;
+        for (final r in (ex as List)) {
+          final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0;
+          if (n > mx) mx = n;
+        }
+        final vnum = 'OPEN-${openingDate.year}-' + (mx + 1).toString().padLeft(4, '0');
         final vId = 'osv_' + now.millisecondsSinceEpoch.toString();
         await client.from('opening_stock_vouchers').insert({
           'id': vId, 'org_id': orgId, 'branch_id': openingBranchId, 'voucher_number': vnum,

@@ -213,8 +213,14 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
       final dateStr = DateFormat('yyyy-MM-dd').format(_date);
       final total = lines.fold(0.0, (s, l) => s + l.value);
       if (_current == null) {
-        final cnt = await client.from('opening_stock_vouchers').select('id').eq('org_id', orgId);
-        num = 'OPEN-${_date.year}-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+        final ex = await client.from('opening_stock_vouchers').select('voucher_number').eq('org_id', orgId)
+            .like('voucher_number', 'OPEN-${_date.year}-%');
+        int mx = 0;
+        for (final r in (ex as List)) {
+          final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0;
+          if (n > mx) mx = n;
+        }
+        num = 'OPEN-${_date.year}-' + (mx + 1).toString().padLeft(4, '0');
         vId = 'osv_' + DateTime.now().millisecondsSinceEpoch.toString();
         await client.from('opening_stock_vouchers').insert({
           'id': vId, 'org_id': orgId, 'branch_id': _branchId, 'voucher_number': num,
