@@ -347,8 +347,10 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     final roleName = ref.read(currentUserProvider)?.role.name;
     final canManage =
         roleName == 'superAdmin' || roleName == 'admin' || roleName == 'masterAdmin';
+    // Exclude processor / off-site virtual locations (branches.is_virtual) —
+    // the supplier branch selector is for physical branches only.
     final allBranches = await Supabase.instance.client
-        .from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name');
+        .from('branches').select().eq('org_id', orgId).eq('is_active', true).not('is_virtual', 'is', true).order('name');
     Set<String> selectedBranches = {};
     if (supplier != null) {
       final existing = await Supabase.instance.client

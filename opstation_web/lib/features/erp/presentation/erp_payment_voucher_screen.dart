@@ -211,6 +211,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     if (_cashAccountId == null) { _snack('Select a cash account first'); return; }
     final validLines = _lines.where((l) => l.accountId != null).toList();
     if (validLines.isEmpty) { _snack('Add at least one line item'); return; }
+    // No negative line amounts, and a positive total is required to post.
+    if (validLines.any((l) => (double.tryParse(l.amtCtrl.text) ?? 0) < 0)) { _snack('Line amounts cannot be negative'); return; }
+    if (post && validLines.fold<double>(0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0)) <= 0) { _snack('Voucher total must be greater than zero to post'); return; }
     final orgId = _orgId; final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id;
         final userName = ref.read(currentUserProvider)?.name ?? '';
     setState(() => _saving = true);

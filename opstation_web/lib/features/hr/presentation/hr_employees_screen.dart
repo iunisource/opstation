@@ -140,7 +140,9 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   Future<void> _loadBranches() async {
     final orgId = _orgId; if (orgId == null) return;
-    final rows = await Supabase.instance.client.from('branches').select('id, name').eq('org_id', orgId).order('name');
+    // Exclude processor / off-site virtual locations (branches.is_virtual) —
+    // an employee works at a physical branch, not a processor location.
+    final rows = await Supabase.instance.client.from('branches').select('id, name').eq('org_id', orgId).not('is_virtual', 'is', true).order('name');
     if (mounted) setState(() { _branches = List<Map<String, dynamic>>.from(rows); _branchName = {for (final b in _branches) b['id'] as String: b['name'] as String}; });
   }
 
