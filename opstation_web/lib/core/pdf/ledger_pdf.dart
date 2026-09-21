@@ -1,5 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -84,6 +86,78 @@ bool _hasArabicScript(String s) {
   return false;
 }
 
+/// Render a right-to-left note (Urdu/Arabic) to a PNG using the BROWSER's text
+/// engine, which does full contextual shaping (letter-joining) and bidi — things
+/// the Dart pdf package cannot do on its own, so pw.Text renders Urdu as
+/// disconnected, isolated letters. The result is embedded in the PDF as an image
+/// so the parties see properly joined script. Returns a ready pw.Image sized to
+/// [widthPt], or null if canvas rendering isn't available.
+Future<pw.Widget?> _rtlNoteImage(String text, double widthPt,
+    {double fontSizePt = 10}) async {
+  try {
+    const scale = 3.0; // render at 3x for crisp print
+    final widthPx = (widthPt * scale).round();
+    final fontPx = fontSizePt * scale;
+    final lineHeight = fontPx * 1.75;
+    final padY = fontPx * 0.6;
+    const fontStack =
+        '"Noto Nastaliq Urdu","Jameel Noori Nastaleeq","Noto Naskh Arabic","Geeza Pro","Arial",sans-serif';
+
+    // Best-effort: make sure a web Arabic font is ready before drawing. Falls
+    // back to the platform's own Arabic font (macOS/iOS/Android all ship one).
+    try {
+      final fonts = js_util.getProperty(html.document, 'fonts');
+      if (fonts != null) {
+        await js_util.promiseToFuture(
+            js_util.callMethod(fonts, 'load', ['bold ${fontPx}px "Noto Naskh Arabic"']));
+        await js_util.promiseToFuture(js_util.getProperty(fonts, 'ready'));
+      }
+    } catch (_) {/* system font fallback still shapes correctly */}
+
+    final canvas = html.CanvasElement(width: widthPx, height: 10);
+    final ctx = canvas.context2D;
+    final maxTextW = widthPx - fontPx; // small horizontal breathing room
+    ctx.font = 'bold ${fontPx}px $fontStack';
+
+    // Word-wrap in logical order (canvas re-orders visually for RTL).
+    final lines = <String>[];
+    for (final para in text.split('\n')) {
+      final words = para.trim().split(RegExp(r'\s+'));
+      var cur = '';
+      for (final w in words) {
+        final trial = cur.isEmpty ? w : '$cur $w';
+        final width = ctx.measureText(trial).width ?? 0;
+        if (width > maxTextW && cur.isNotEmpty) {
+          lines.add(cur);
+          cur = w;
+        } else {
+          cur = trial;
+        }
+      }
+      lines.add(cur);
+    }
+    if (lines.isEmpty) return null;
+
+    // Resizing the canvas resets the context, so set height then re-apply state.
+    canvas.height = (padY * 2 + lines.length * lineHeight).ceil();
+    ctx.font = 'bold ${fontPx}px $fontStack';
+    js_util.setProperty(ctx, 'direction', 'rtl');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#1f2937';
+    for (var i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], widthPx / 2, padY + lineHeight * (i + 0.5));
+    }
+
+    final dataUrl = canvas.toDataUrl('image/png');
+    final bytes = base64Decode(dataUrl.split(',').last);
+    final hPt = (canvas.height ?? 0) / scale;
+    return pw.Image(pw.MemoryImage(bytes), width: widthPt, height: hPt);
+  } catch (_) {
+    return null; // fall back to plain pw.Text
+  }
+}
+
 /// Load a Unicode-capable theme so the ledger renders non-Latin text correctly:
 /// Noto Sans as the base (covers dashes / bullets / symbols that default
 /// Helvetica shows as tofu boxes) with Noto Naskh Arabic as a fallback for
@@ -112,6 +186,14 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
   final theme = await _loadLedgerTheme();
   final doc = pw.Document(
       title: d.fileBase, creator: 'Opstation ERP', theme: theme);
+
+  // Pre-render a right-to-left footer note (Urdu/Arabic) to an image so the
+  // script is properly joined. Latin notes keep using plain text.
+  final footerNote = (d.footerMessage ?? '').trim();
+  pw.Widget? footerImg;
+  if (footerNote.isNotEmpty && _hasArabicScript(footerNote)) {
+    footerImg = await _rtlNoteImage(footerNote, 511);
+  }
 
   final hStyle = pw.TextStyle(
       fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700);
@@ -316,7 +398,7 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
       ],
 
       // ── Custom footer message (boxed, centered note) ───────────────────
-      if ((d.footerMessage ?? '').trim().isNotEmpty) ...[
+      if (footerNote.isNotEmpty) ...[
         pw.SizedBox(height: 18),
         pw.Container(
           width: double.infinity,
@@ -326,21 +408,19 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
             border: pw.Border.all(color: PdfColors.grey400, width: 0.7),
             borderRadius: pw.BorderRadius.circular(5),
           ),
-          child: pw.Text(
-            d.footerMessage!.trim(),
-            textAlign: pw.TextAlign.center,
-            // Urdu / Arabic notes are right-to-left: without this the letters
-            // shape but the word order comes out reversed.
-            textDirection: _hasArabicScript(d.footerMessage!)
-                ? pw.TextDirection.rtl
-                : pw.TextDirection.ltr,
-            style: pw.TextStyle(
-              fontSize: 9.5,
-              color: PdfColors.grey900,
-              fontWeight: pw.FontWeight.bold,
-              lineSpacing: 2,
-            ),
-          ),
+          // Urdu/Arabic notes render as a browser-shaped image; Latin notes
+          // stay as selectable text.
+          child: footerImg ??
+              pw.Text(
+                footerNote,
+                textAlign: pw.TextAlign.center,
+                style: pw.TextStyle(
+                  fontSize: 9.5,
+                  color: PdfColors.grey900,
+                  fontWeight: pw.FontWeight.bold,
+                  lineSpacing: 2,
+                ),
+              ),
         ),
       ],
     ],
