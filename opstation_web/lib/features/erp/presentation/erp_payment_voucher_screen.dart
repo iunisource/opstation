@@ -254,11 +254,21 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; });
       }
       if (post && orgId != null) {
-        // GL FIRST. _postCpvToGL now throws on any failure, so a bad line aborts
-        // here and the voucher is left as a saved draft (handled by catch below).
-        await _postCpvToGL(orgId!, bid, dateStr, validLines, total);
-        // GL is in — now, and only now, mark the voucher posted.
+        // Mark posted, then post the GL through the ATOMIC, balance-guarded
+        // server function post_cpv. It runs in one transaction: deletes any
+        // prior GL for this voucher, writes the entry + every line, and RAISES
+        // if debits != credits. A partial/unbalanced entry is therefore
+        // impossible. If it raises, we revert the voucher to draft so we never
+        // leave a posted-but-no-GL (or posted-but-unbalanced) voucher — the
+        // exact failure the old client-side line-by-line poster could produce.
         await client.from('cpv_vouchers').update({'status': 'posted', 'posted_by': userId, 'posted_at': DateTime.now().toIso8601String(), 'posted_by_name': userName}).eq('id', vid);
+        try {
+          await client.rpc('post_cpv', params: {'p_voucher_id': vid});
+        } catch (glErr) {
+          await client.from('cpv_vouchers').update({'status': 'draft', 'posted_by': null, 'posted_at': null, 'posted_by_name': null}).eq('id', vid);
+          setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; });
+          rethrow;
+        }
         setState(() { _status = 'posted'; _currentVoucher = {..._currentVoucher!, 'status': 'posted'}; });
         _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
         _snack('Voucher ${vNum ?? ''} posted ✓');
@@ -271,72 +281,6 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     setState(() => _saving = false);
   }
 
-
-  Future<void> _postCpvToGL(String orgId, String bid, String dateStr, List<_VLine> lines, double total) async {
-    final cashCoaId = _cashAccountId;
-    if (cashCoaId == null || cashCoaId.isEmpty) { _snack('GL error: no cash account'); return; }
-      final apId = 'coa_' + orgId + '_2110';
-      final arId  = 'coa_' + orgId + '_1210';
-      final commPayId = 'coa_' + orgId + '_2150';
-    final vid    = _currentVoucher?['id']            as String? ?? '';
-    final vNum   = _currentVoucher?['voucher_number'] as String? ?? '';
-    final eId    = 'je_cpv_' + vid;
-    final client = Supabase.instance.client;
-    try {
-      // Idempotent re-post. journal_entries has no UPDATE policy by design
-      // (GL entries are immutable), so we DELETE any prior GL for this voucher
-      // then INSERT fresh — never upsert. This makes re-posting fully replace
-      // the previous entry instead of erroring on the update branch or duplicating.
-      final prior = await client.from('journal_entries').select('id')
-          .eq('org_id', orgId).eq('reference_type', 'cpv').eq('reference_id', vid);
-      for (final e in (prior as List)) {
-        await client.from('journal_lines').delete().eq('entry_id', e['id'] as String);
-      }
-      await client.from('journal_lines').delete().eq('entry_id', eId);
-      await client.from('journal_entries').delete()
-          .eq('org_id', orgId).eq('reference_type', 'cpv').eq('reference_id', vid);
-      await client.from('journal_entries').delete().eq('id', eId);
-      await client.from('journal_entries').insert({
-        'id': eId, 'org_id': orgId, 'branch_id': bid,
-        'entry_number': 'CPV-' + vNum,
-        'entry_date': dateStr,
-        'description': 'Cash Payment: ' + vNum,
-        'reference_type': 'cpv', 'reference_id': vid,
-        'reference_number': vNum,
-        'status': 'posted', 'is_system_generated': true,
-        'created_at': DateTime.now().toIso8601String(),
-        'posted_at': DateTime.now().toIso8601String(),
-      });
-      await client.from('journal_lines').insert({
-        'id': eId + '_0', 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
-        'account_id': cashCoaId, 'debit': 0.0, 'credit': total, 'line_order': 0,
-      });
-      for (var i = 0; i < lines.length; i++) {
-        final l = lines[i];
-        final amt   = double.tryParse(l.amtCtrl.text) ?? 0.0;
-        if (amt == 0) continue;
-        final accId = l.accountType == 'supplier' ? apId : l.accountType == 'customer' ? arId : l.accountType == 'promoter' ? commPayId : (l.accountId ?? apId);
-        await client.from('journal_lines').insert({
-          'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
-          'account_id': accId, 'debit': amt, 'credit': 0.0, 'line_order': i + 1,
-          // Carry the per-line narration + account label onto the GL line so the
-          // P&L drill-down shows the description and real account name instead of
-          // a borrowed entry-level payee.
-          'description': l.descCtrl.text.trim(),
-          'account_name': l.accountName,
-          // Attribute the payable/party leg so it nets against the supplier
-          // (or customer) in the ledger & aging. GL-account lines stay null.
-          'party_id': (l.accountType == 'customer' || l.accountType == 'supplier' || l.accountType == 'promoter') ? l.accountId : null,
-        });
-      }
-    } catch (e) {
-      // Surface AND propagate: the caller (_save) must NOT mark the voucher
-      // posted if the GL didn't post cleanly. Swallowing here is what produced
-      // posted-but-no-cash vouchers.
-      _snack('GL error: ' + e.toString());
-      rethrow;
-    }
-  }
 
   Future<void> _delete() async {
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('Delete Voucher?'), content: const Text('This will reverse its GL posting and cannot be undone.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.red))]));
