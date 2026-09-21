@@ -123,8 +123,21 @@ class VoucherPdf {
   ///   • Mobile: the print preview cannot open, so DOWNLOAD the PDF directly —
   ///     sharePdf triggers the browser download / share sheet with the filename.
   static Future<void> _output(Uint8List bytes, String fileBase) async {
+    final ua = html.window.navigator.userAgent.toLowerCase();
     if (_isMobileWeb) {
       await Printing.sharePdf(bytes: bytes, filename: '$fileBase.pdf');
+    } else if (ua.contains('firefox')) {
+      // Firefox routes layoutPdf through its PDF.js viewer, which ignores the
+      // print-job name and defaults the saved file to "PDF.js viewer". Download
+      // the PDF directly with the proper filename instead.
+      final blob = html.Blob([bytes], 'application/pdf');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final a = html.AnchorElement(href: url)
+        ..download = '$fileBase.pdf'
+        ..style.display = 'none';
+      html.document.body!.append(a);
+      a.click();
+      Future.delayed(const Duration(seconds: 5), () { a.remove(); html.Url.revokeObjectUrl(url); });
     } else {
       await Printing.layoutPdf(
           onLayout: (PdfPageFormat format) async => bytes,

@@ -1162,12 +1162,15 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: AppTheme.border),
           ),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             SizedBox(width: 260, child: TextField(
               controller: _notesCtrl,
               decoration: _decLabel('Remarks (optional)'),
               style: const TextStyle(fontSize: 13),
-              maxLines: 1,
+              // Allow Enter to add new lines (multi-line remarks).
+              keyboardType: TextInputType.multiline,
+              minLines: 1,
+              maxLines: 4,
             )),
             const SizedBox(width: 18),
             Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
