@@ -2099,7 +2099,10 @@ class _DrawerNavMenuState extends State<_DrawerNavMenu> {
   @override
   void initState() {
     super.initState();
-    _open = widget.activePaths.any((p) => widget.location.startsWith(p));
+    // Start every section collapsed — the drawer opens tidy, and the user taps
+    // the section they want. (Previously the section holding the current route
+    // auto-expanded, so Operations was always open on the home screen.)
+    _open = false;
   }
 
   @override
