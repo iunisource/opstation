@@ -191,11 +191,16 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
   }
 
   Widget _panel() {
+    // Cap the panel to the viewport so it doesn't render wider than a phone
+    // screen (the fixed 380 ran off the left edge on mobile, making it unusable).
+    final sw = MediaQuery.of(context).size.width;
+    final panelW = sw < 420 ? (sw - 24).clamp(260.0, 380.0) : 380.0;
     return Material(
       color: Colors.transparent,
       child: Container(
-        width: 380,
-        constraints: const BoxConstraints(maxHeight: 460),
+        width: panelW.toDouble(),
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7 < 460
+            ? MediaQuery.of(context).size.height * 0.7 : 460),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),

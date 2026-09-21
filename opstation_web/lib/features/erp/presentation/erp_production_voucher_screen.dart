@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/permissions/access_control.dart';
@@ -527,25 +528,47 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
         Expanded(child: _loadingProducts
           ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Loading...', style: TextStyle(color: AppTheme.textSecondary))]))
           : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // header row
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 220, child: _labeled('Branch', _readonlyBox((ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—'))),
-              const SizedBox(width: 16),
-              SizedBox(width: 150, child: _labeled('Date', _dateField())),
-              const SizedBox(width: 16),
-              Expanded(child: _labeled('Bill of Materials *', _isDraft
+            // Header fields — responsive. On desktop, a fixed-width Row. On phone
+            // width the fixed columns (220+150+130 + gaps) overflowed and left the
+            // BOM picker zero-width (un-tappable), so there we stack full-width.
+            Builder(builder: (ctx) {
+              final branchF = _labeled('Branch', _readonlyBox((ref.watch(selectedBranchProvider)?['name'] as String?) ?? '—'));
+              final dateF = _labeled('Date', _dateField());
+              final bomF = _labeled('Bill of Materials *', _isDraft
                 ? _ProductField(key: ValueKey('bom_${_current?['id'] ?? 'new'}_$_bomId'), initialLabel: _bomLabel.isEmpty ? '' : (_bomLabel + (_fgLabel.isNotEmpty ? ' — $_fgLabel' : '')), filterFn: _filterBoms, onPick: (b) => _pickBom(b['id'] as String))
-                : _readonlyBox(_bomLabel.isEmpty ? '—' : _bomLabel))),
-              const SizedBox(width: 16),
-              SizedBox(width: 130, child: _labeled('Output Qty *', _outputQtyField())),
-            ]),
-            const SizedBox(height: 10),
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _labeled('Finished Product', _readonlyBox(_fgLabel.isEmpty ? 'Select a BOM' : _fgLabel, maxLines: 3))),
-              const SizedBox(width: 16),
-              Expanded(flex: 2, child: _labeled('Notes', TextField(controller: _notesCtrl, enabled: _isDraft,
-                decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))))),
-            ]),
+                : _readonlyBox(_bomLabel.isEmpty ? '—' : _bomLabel));
+              final outF = _labeled('Output Qty *', _outputQtyField());
+              final fgF = _labeled('Finished Product', _readonlyBox(_fgLabel.isEmpty ? 'Select a BOM' : _fgLabel, maxLines: 3));
+              final notesF = _labeled('Notes', TextField(controller: _notesCtrl, enabled: _isDraft,
+                decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))));
+              if (isNarrow(ctx)) {
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  branchF, const SizedBox(height: 10),
+                  dateF, const SizedBox(height: 10),
+                  bomF, const SizedBox(height: 10),
+                  outF, const SizedBox(height: 10),
+                  fgF, const SizedBox(height: 10),
+                  notesF,
+                ]);
+              }
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(width: 220, child: branchF),
+                  const SizedBox(width: 16),
+                  SizedBox(width: 150, child: dateF),
+                  const SizedBox(width: 16),
+                  Expanded(child: bomF),
+                  const SizedBox(width: 16),
+                  SizedBox(width: 130, child: outF),
+                ]),
+                const SizedBox(height: 10),
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Expanded(child: fgF),
+                  const SizedBox(width: 16),
+                  Expanded(flex: 2, child: notesF),
+                ]),
+              ]);
+            }),
             if (_canViewCost) ...[
               const SizedBox(height: 20),
               _summaryCard(),

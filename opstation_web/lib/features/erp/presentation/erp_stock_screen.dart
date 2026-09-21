@@ -19,6 +19,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
   bool _loading = true;
   final _searchCtrl = TextEditingController();
   final Set<String> _selectedBranches = {}; // empty => all branches
+  final Set<String> _expandedNames = {}; // productIds whose full name is expanded
 
   @override
   void initState() {
@@ -108,6 +109,37 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
     html.window.open('$origin/#/erp/inventory-ledger?focus=$productId', '_blank');
   }
 
+  void _printStock(List<Map<String, dynamic>> cols, List<_PivotRow> rows) {
+    final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final gen = '${two(now.day)}/${two(now.month)}/${now.year} ${two(now.hour)}:${two(now.minute)}';
+    String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final head = StringBuffer('<tr><th>Product</th><th>SKU</th>');
+    for (final b in cols) head.write('<th class="r">${esc(b['name'])}</th>');
+    head.write('<th class="r">Total</th></tr>');
+    final body = StringBuffer();
+    for (final r in rows) {
+      body.write('<tr><td>${esc(r.name)}</td><td>${esc(r.sku)}</td>');
+      for (final b in cols) body.write('<td class="r">${esc(_fmtQty(r.byBranch[b['id']], r.uom))}</td>');
+      body.write('<td class="r b">${esc(_fmtQty(r.total, r.uom))}</td></tr>');
+    }
+    final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Levels</title>'
+        '<style>@page{margin:0}body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px}'
+        'h1{font-size:18px;margin:0 0 2px}.muted{color:#666;font-size:12px;margin:2px 0}'
+        'table{border-collapse:collapse;width:100%;margin-top:14px;font-size:12px}'
+        'th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f4f5f7}'
+        '.r{text-align:right}.b{font-weight:700}</style></head><body>'
+        '<h1>${esc(orgName)} &mdash; Stock Levels</h1>'
+        '<div class="muted">Generated: $gen &middot; ${rows.length} products</div>'
+        '<table><thead>$head</thead><tbody>$body</tbody></table>'
+        '<script>window.onload=function(){window.print();}</script></body></html>';
+    final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.window.open(url, '_blank');
+    Future.delayed(const Duration(seconds: 4), () => html.Url.revokeObjectUrl(url));
+  }
+
   @override
   Widget build(BuildContext context) {
     final cols = _displayBranches;
@@ -127,7 +159,15 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Stock Levels', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+          Row(children: [
+            const Text('Stock Levels', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            const Spacer(),
+            OutlinedButton.icon(
+              onPressed: rows.isEmpty ? null : () => _printStock(cols, rows),
+              icon: const Icon(Icons.print_outlined, size: 18),
+              label: const Text('Print / PDF'),
+            ),
+          ]),
           const SizedBox(height: 8),
           Text('${rows.length} products', style: const TextStyle(color: AppTheme.textSecondary)),
           const SizedBox(height: 16),
@@ -168,7 +208,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
   }
 
   Widget _buildPivot(List<Map<String, dynamic>> cols, List<_PivotRow> rows) {
-    const wProd = 280.0, wSku = 90.0, wBranch = 150.0, wTotal = 170.0, pad = 20.0;
+    const wProd = 360.0, wSku = 90.0, wBranch = 150.0, wTotal = 170.0, pad = 20.0;
     final contentW = wProd + wSku + cols.length * wBranch + wTotal;
     final tableW = contentW + pad * 2; // account for the row's horizontal padding
 
@@ -223,18 +263,31 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
                           child: Row(children: [
                             SizedBox(
                               width: wProd,
-                              child: InkWell(
-                                onTap: () => _openLedger(r.productId),
-                                child: Row(children: [
-                                  Flexible(
+                              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                // Tap the name to expand/collapse the full text when
+                                // it's longer than the column; the icon opens the ledger.
+                                Expanded(
+                                  child: InkWell(
+                                    onTap: () => setState(() {
+                                      final k = r.productId ?? r.sku;
+                                      if (!_expandedNames.remove(k)) _expandedNames.add(k);
+                                    }),
                                     child: Text(r.name,
-                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: _expandedNames.contains(r.productId ?? r.sku) ? null : 1,
+                                        overflow: _expandedNames.contains(r.productId ?? r.sku)
+                                            ? TextOverflow.visible : TextOverflow.ellipsis,
                                         style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary)),
                                   ),
-                                  const SizedBox(width: 4),
-                                  const Icon(Icons.open_in_new, size: 13, color: AppTheme.textSecondary),
-                                ]),
-                              ),
+                                ),
+                                const SizedBox(width: 4),
+                                InkWell(
+                                  onTap: () => _openLedger(r.productId),
+                                  child: const Padding(
+                                    padding: EdgeInsets.only(top: 2),
+                                    child: Icon(Icons.open_in_new, size: 13, color: AppTheme.textSecondary),
+                                  ),
+                                ),
+                              ]),
                             ),
                             SizedBox(width: wSku, child: Text(r.sku, style: const TextStyle(color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
                             for (final b in cols)
