@@ -384,42 +384,39 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         final seq  = (mx + 1).toString().padLeft(4, '0');
         eNum = 'JV-$yr-$seq';
         eId  = 'jv_' + DateTime.now().millisecondsSinceEpoch.toString();
-        await client.from('journal_entries').insert({
-          'id': eId, 'org_id': orgId, 'branch_id': bid,
-          'entry_number': eNum, 'entry_date': dateStr,
-          'description': nar.isEmpty ? eNum : nar,
-          'reference_type': 'jv', 'reference_id': eId, 'reference_number': eNum,
-          'status': newSt, 'is_system_generated': false, 'created_by': userId,
-          'created_at': DateTime.now().toIso8601String(),
-          if (post) 'posted_at': DateTime.now().toIso8601String(),
-          ...approvalFields,
-        });
       } else {
         eId  = _current!['id'] as String; eNum = _current!['entry_number'] as String? ?? '';
-        await client.from('journal_entries').update({
-          'entry_date': dateStr, 'description': nar.isEmpty ? eNum : nar,
-          'status': newSt, if (post) 'posted_at': DateTime.now().toIso8601String(),
-          ...approvalFields,
-        }).eq('id', eId);
       }
-      await client.from('journal_lines').delete().eq('entry_id', eId);
+      // Build the entry header + resolved lines and persist through the ATOMIC,
+      // balance-guarded server writer save_journal_entry (one transaction:
+      // upsert header, replace lines, RAISE on post if debits != credits). The
+      // old path inserted the header then each line as separate calls, which
+      // could leave a half-written unbalanced entry on a mid-loop failure.
+      final entryJson = <String, dynamic>{
+        'id': eId, 'org_id': orgId, 'branch_id': bid,
+        'entry_number': eNum, 'entry_date': dateStr,
+        'description': nar.isEmpty ? eNum : nar,
+        'reference_type': 'jv', 'reference_id': eId, 'reference_number': eNum,
+        'status': newSt, 'is_system_generated': false, 'created_by': userId,
+        ...approvalFields,
+      };
+      final linesJson = <Map<String, dynamic>>[];
       for (var i = 0; i < valid.length; i++) {
         final l = valid[i];
         final isParty = l.accountType == 'supplier' || l.accountType == 'customer';
         final glAcc   = l.accountType == 'supplier' ? apId
                       : l.accountType == 'customer' ? arId
                       : l.accountId;
-        await client.from('journal_lines').insert({
-          'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
+        linesJson.add({
           'account_id': glAcc,
           'account_type': l.accountType,
           'account_name': l.accountName,
           'party_id': isParty ? l.accountId : null,
           'debit': l.debit, 'credit': l.credit,
-          'description': l.descCtrl.text.trim(), 'line_order': i+1,
-          'created_at': DateTime.now().toIso8601String(),
+          'description': l.descCtrl.text.trim(), 'line_order': i + 1,
         });
       }
+      await client.rpc('save_journal_entry', params: {'p_entry': entryJson, 'p_lines': linesJson});
       final updated = await client.from('journal_entries').select().eq('id', eId).single();
       if (mounted) setState(() { _current = updated; _status = newSt; });
       if (wasNew) _logAudit('created', notes: 'Total Dr: ' + money(_totalDr) + '  •  ' + valid.length.toString() + ' lines');

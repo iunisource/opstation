@@ -559,45 +559,17 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
         'line_order': 0,
       });
 
-      // 2) Post GL — mirrors _postCrvToGL in Receipt Vouchers.
-      final arId = 'coa_' + orgId + '_1210';
-      final eId = 'je_crv_' + crvId;
-      await client.from('journal_entries').insert({
-        'id': eId,
-        'org_id': orgId,
-        'branch_id': bid,
-        'entry_number': 'CRV-' + vNum,
-        'entry_date': dateStr,
-        'description': 'Cash Receipt: ' + vNum,
-        'reference_type': 'crv',
-        'reference_id': crvId,
-        'reference_number': vNum,
-        'status': 'posted',
-        'is_system_generated': true,
-        'created_at': DateTime.now().toIso8601String(),
-        'posted_at': DateTime.now().toIso8601String(),
-      });
-      await client.from('journal_lines').insert({
-        'id': eId + '_0',
-        'entry_id': eId,
-        'org_id': orgId,
-        'branch_id': bid,
-        'account_id': bankId,
-        'debit': amt,
-        'credit': 0.0,
-        'line_order': 0,
-      });
-      await client.from('journal_lines').insert({
-        'id': eId + '_1',
-        'entry_id': eId,
-        'org_id': orgId,
-        'branch_id': bid,
-        'account_id': arId,
-        'debit': 0.0,
-        'credit': amt,
-        'line_order': 1,
-        'party_id': line.customerId,
-      });
+      // 2) Post the spawned CRV's GL through the ATOMIC, balance-guarded post_crv
+      // RPC (one transaction, RAISES if unbalanced). If it fails, undo the CRV so
+      // a failed clearance never leaves a posted voucher with no ledger entry and
+      // the cheque stays uncleared (step 3 below is skipped by the rethrow).
+      try {
+        await client.rpc('post_crv', params: {'p_voucher_id': crvId});
+      } catch (glErr) {
+        await client.from('crv_voucher_lines').delete().eq('voucher_id', crvId);
+        await client.from('crv_vouchers').delete().eq('id', crvId);
+        rethrow;
+      }
 
       // 3) Mark the cheque line cleared + link the CRV.
       await client.from('pdc_voucher_lines').update({

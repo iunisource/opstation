@@ -253,44 +253,49 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
       final wasNew  = _current == null;
       String eId, eNum;
       if (wasNew) {
-        final cnt = await client.from('journal_entries').select('id').eq('org_id', orgId).eq('reference_type', 'opening_jv');
-        final seq  = ((cnt as List).length + 1).toString().padLeft(4, '0');
-        eNum = 'OJV-' + DateTime.now().year.toString() + '-' + seq;
+        // Number from the highest existing suffix, not the row count — count+1
+        // reuses a number after any delete.
+        final yr = DateTime.now().year.toString();
+        final ex = await client.from('journal_entries').select('entry_number')
+            .eq('org_id', orgId).eq('reference_type', 'opening_jv').like('entry_number', 'OJV-$yr-%');
+        int mx = 0;
+        for (final r in (ex as List)) {
+          final n = int.tryParse((r['entry_number'] as String? ?? '').split('-').last) ?? 0;
+          if (n > mx) mx = n;
+        }
+        eNum = 'OJV-$yr-${(mx + 1).toString().padLeft(4, '0')}';
         eId  = 'ojv_' + DateTime.now().millisecondsSinceEpoch.toString();
-        await client.from('journal_entries').insert({
-          'id': eId, 'org_id': orgId, 'branch_id': bid,
-          'entry_number': eNum, 'entry_date': dateStr,
-          'description': nar.isEmpty ? eNum : nar,
-          'reference_type': 'opening_jv', 'reference_id': eId, 'reference_number': eNum,
-          'status': newSt, 'is_system_generated': false, 'created_by': userId,
-          'created_at': DateTime.now().toIso8601String(),
-          if (post) 'posted_at': DateTime.now().toIso8601String(),
-        });
       } else {
         eId  = _current!['id'] as String; eNum = _current!['entry_number'] as String? ?? '';
-        await client.from('journal_entries').update({
-          'entry_date': dateStr, 'description': nar.isEmpty ? eNum : nar,
-          'status': newSt, if (post) 'posted_at': DateTime.now().toIso8601String(),
-        }).eq('id', eId);
       }
-      await client.from('journal_lines').delete().eq('entry_id', eId);
+      // Persist through the ATOMIC, balance-guarded server writer
+      // save_journal_entry (one transaction: upsert header, replace lines, RAISE
+      // on post if debits != credits). Replaces the old insert-header-then-
+      // insert-each-line loop that could half-write an unbalanced entry.
+      final entryJson = <String, dynamic>{
+        'id': eId, 'org_id': orgId, 'branch_id': bid,
+        'entry_number': eNum, 'entry_date': dateStr,
+        'description': nar.isEmpty ? eNum : nar,
+        'reference_type': 'opening_jv', 'reference_id': eId, 'reference_number': eNum,
+        'status': newSt, 'is_system_generated': false, 'created_by': userId,
+      };
+      final linesJson = <Map<String, dynamic>>[];
       for (var i = 0; i < valid.length; i++) {
         final l = valid[i];
         final isParty = l.accountType == 'supplier' || l.accountType == 'customer';
         final glAcc   = l.accountType == 'supplier' ? apId
                       : l.accountType == 'customer' ? arId
                       : l.accountId;
-        await client.from('journal_lines').insert({
-          'id': eId + '_' + (i+1).toString(), 'entry_id': eId, 'org_id': orgId, 'branch_id': bid,
+        linesJson.add({
           'account_id': glAcc,
           'account_type': l.accountType,
           'account_name': l.accountName,
           'party_id': isParty ? l.accountId : null,
           'debit': l.debit, 'credit': l.credit,
-          'description': l.descCtrl.text.trim(), 'line_order': i+1,
-          'created_at': DateTime.now().toIso8601String(),
+          'description': l.descCtrl.text.trim(), 'line_order': i + 1,
         });
       }
+      await client.rpc('save_journal_entry', params: {'p_entry': entryJson, 'p_lines': linesJson});
       final updated = await client.from('journal_entries').select().eq('id', eId).single();
       if (mounted) setState(() { _current = updated; _status = newSt; });
       if (wasNew) _logAudit('created', notes: 'Total Dr: ' + money(_totalDr) + '  •  ' + valid.length.toString() + ' lines');
