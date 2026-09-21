@@ -68,6 +68,22 @@ const _accent = PdfColor.fromInt(0xFF1976D2); // debit blue
 const _green = PdfColor.fromInt(0xFF2E7D32); // credit green
 const _danger = PdfColor.fromInt(0xFFC62828);
 
+/// True when the text contains any Arabic-script codepoint (covers Urdu, which
+/// uses the Arabic script). Used to switch the footer note to RTL so the words
+/// read in the correct order.
+bool _hasArabicScript(String s) {
+  for (final r in s.runes) {
+    if ((r >= 0x0600 && r <= 0x06FF) || // Arabic
+        (r >= 0x0750 && r <= 0x077F) || // Arabic Supplement
+        (r >= 0x08A0 && r <= 0x08FF) || // Arabic Extended-A
+        (r >= 0xFB50 && r <= 0xFDFF) || // Arabic Presentation Forms-A
+        (r >= 0xFE70 && r <= 0xFEFF)) { // Arabic Presentation Forms-B
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Load a Unicode-capable theme so the ledger renders non-Latin text correctly:
 /// Noto Sans as the base (covers dashes / bullets / symbols that default
 /// Helvetica shows as tofu boxes) with Noto Naskh Arabic as a fallback for
@@ -313,6 +329,11 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
           child: pw.Text(
             d.footerMessage!.trim(),
             textAlign: pw.TextAlign.center,
+            // Urdu / Arabic notes are right-to-left: without this the letters
+            // shape but the word order comes out reversed.
+            textDirection: _hasArabicScript(d.footerMessage!)
+                ? pw.TextDirection.rtl
+                : pw.TextDirection.ltr,
             style: pw.TextStyle(
               fontSize: 9.5,
               color: PdfColors.grey900,
