@@ -49,6 +49,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   void initState() {
     super.initState();
     _loadCustomers();
+    _loadFooterMsg();
     _searchCtrl.addListener(_onSearchChanged);
     _entrySearchCtrl.addListener(() => setState(() {}));
     _searchFocus.addListener(() { if (_searchFocus.hasFocus) setState(() { _showDropdown = true; if (_searchCtrl.text.isEmpty) _filteredCustomers = _customers; }); });
@@ -78,6 +79,19 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+
+  // Custom ledger footer message (ERP admin settings, toggle + text).
+  String _footerMsg = '';
+  Future<void> _loadFooterMsg() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('app_config').select('key, value')
+          .eq('org_id', orgId).inFilter('key', ['org.ledger_msg_customer_enabled', 'org.ledger_msg_customer_text']);
+      final cfg = <String, String>{}; for (final r in rows as List) { cfg[r['key'] as String] = r['value'] as String? ?? ''; }
+      final on = (cfg['org.ledger_msg_customer_enabled'] ?? 'false') == 'true';
+      if (mounted) setState(() => _footerMsg = on ? (cfg['org.ledger_msg_customer_text'] ?? '') : '');
+    } catch (_) {}
+  }
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
 
   Future<void> _loadCustomers() async {
@@ -1370,187 +1384,79 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
   // Build the ledger as a real PDF and hand it to the device's native share
   // sheet (WhatsApp, email, files…) — the shared item is the PDF file itself.
+  /// Single source of truth for the ledger document. Both the Share button and
+  /// the Print / Save-as-PDF button build from this, so the PDF a party receives
+  /// via WhatsApp is byte-for-byte identical to the printed / saved one.
+  LedgerDoc? _buildLedgerDoc() {
+    final display = _displayEntries;
+    if ((display.isEmpty && _pendingCheques.isEmpty) || _selectedCustomer == null) return null;
+    final branch = ref.read(selectedBranchProvider);
+    double td = 0, tc = 0;
+    for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
+    final netBal = td - tc;
+    final cust = _selectedCustomer!;
+    final customerName = (cust['shop_name'] as String?) ?? '';
+    final customerCode = (cust['code'] as String?) ?? '';
+    final branchName = (branch?['name'] as String?) ?? 'All Branches';
+    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final period = (_dateFrom != null || _dateTo != null)
+      ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
+      : '';
+    final lines = <LedgerLine>[];
+    for (final e in display) {
+      final dt = DateTime.tryParse(e['date'] as String? ?? '');
+      final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
+      final debit = e['debit'] as double; final credit = e['credit'] as double;
+      lines.add(LedgerLine(date, e['voucher'] as String? ?? '', e['description'] as String? ?? '', e['type'] as String? ?? '',
+        debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
+    }
+    final pdc = <LedgerPdc>[]; double pdcTotal = 0;
+    for (final ch in _pendingCheques) {
+      final amt = ch['amount'] as double; pdcTotal += amt;
+      final cd = ch['cheque_date'] as String?; final dtc = cd != null ? DateTime.tryParse(cd) : null;
+      final cdStr = dtc != null ? DateFormat('d MMM yy').format(dtc) : '-';
+      final detail = [
+        if ((ch['cheque_no'] as String? ?? '').isNotEmpty) 'Chq ' + (ch['cheque_no'] as String),
+        if ((ch['bank'] as String? ?? '').isNotEmpty) (ch['bank'] as String),
+        if ((ch['description'] as String? ?? '').isNotEmpty) (ch['description'] as String),
+      ].join(' • ');
+      pdc.add(LedgerPdc(ch['voucher_number'] as String? ?? '', cdStr, detail, money(amt)));
+    }
+    final fileBase = (customerName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
+        .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
+    return LedgerDoc(
+      docTitle: 'Customer Ledger', orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      partyName: customerName, partyCode: customerCode, branchName: branchName,
+      period: period, genTime: genTime, lines: lines,
+      totalDebit: money(td), totalCredit: money(tc),
+      netBalanceLabel: (netBal >= 0 ? 'Balance Receivable: Rs. ' : 'Advance / Credit: Rs. ') + money(netBal.abs()),
+      netBalanceValue: 'Rs. ' + money(netBal),
+      netIsDanger: netBal > 0, fileBase: fileBase,
+      pdc: pdc, pdcTotal: pdc.isEmpty ? null : ('Rs. ' + money(pdcTotal)),
+      footerMessage: _footerMsg,
+    );
+  }
+
   Future<void> _shareLedger() async {
     try {
-      final display = _displayEntries;
-      if ((display.isEmpty && _pendingCheques.isEmpty) || _selectedCustomer == null) return;
-      final branch = ref.read(selectedBranchProvider);
-      double td = 0, tc = 0;
-      for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
-      final netBal = td - tc;
-      final cust = _selectedCustomer!;
-      final customerName = (cust['shop_name'] as String?) ?? '';
-      final customerCode = (cust['code'] as String?) ?? '';
-      final branchName = (branch?['name'] as String?) ?? 'All Branches';
-      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
-      final period = (_dateFrom != null || _dateTo != null)
-        ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
-        : '';
-      final lines = <LedgerLine>[];
-      for (final e in display) {
-        final dt = DateTime.tryParse(e['date'] as String? ?? '');
-        final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
-        final debit = e['debit'] as double; final credit = e['credit'] as double;
-        lines.add(LedgerLine(date, e['voucher'] as String? ?? '', e['description'] as String? ?? '', e['type'] as String? ?? '',
-          debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
-      }
-      final pdc = <LedgerPdc>[]; double pdcTotal = 0;
-      for (final ch in _pendingCheques) {
-        final amt = ch['amount'] as double; pdcTotal += amt;
-        final cd = ch['cheque_date'] as String?; final dtc = cd != null ? DateTime.tryParse(cd) : null;
-        final cdStr = dtc != null ? DateFormat('d MMM yy').format(dtc) : '-';
-        final detail = [
-          if ((ch['cheque_no'] as String? ?? '').isNotEmpty) 'Chq ' + (ch['cheque_no'] as String),
-          if ((ch['bank'] as String? ?? '').isNotEmpty) (ch['bank'] as String),
-          if ((ch['description'] as String? ?? '').isNotEmpty) (ch['description'] as String),
-        ].join(' • ');
-        pdc.add(LedgerPdc(ch['voucher_number'] as String? ?? '', cdStr, detail, money(amt)));
-      }
-      final fileBase = (customerName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
-          .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
-      await shareLedgerPdf(
-        docTitle: 'Customer Ledger', orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
-        partyName: customerName, partyCode: customerCode, branchName: branchName,
-        period: period, genTime: genTime, lines: lines,
-        totalDebit: money(td), totalCredit: money(tc),
-        netBalanceLabel: (netBal >= 0 ? 'Balance Receivable: Rs. ' : 'Advance / Credit: Rs. ') + money(netBal.abs()),
-        netIsDanger: netBal > 0, fileBase: fileBase,
-        pdc: pdc, pdcTotal: pdc.isEmpty ? null : ('Rs. ' + money(pdcTotal)),
-      );
+      final d = _buildLedgerDoc();
+      if (d == null) return;
+      await shareLedgerPdf(d);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
     }
   }
 
-  void _printLedger() {
+  Future<void> _printLedger() async {
     try {
-      final display = _displayEntries;
-      if ((display.isEmpty && _pendingCheques.isEmpty) || _selectedCustomer == null) return;
-      final branch = ref.read(selectedBranchProvider);
-      double td = 0, tc = 0;
-      for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
-      final netBal = td - tc;
-      final cust = _selectedCustomer!;
-      final customerName = (cust['shop_name'] as String?) ?? '';
-      final customerCode = (cust['code'] as String?) ?? '';
-      final branchName = (branch?['name'] as String?) ?? 'All Branches';
-      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
-      final codeStr = customerCode.isNotEmpty ? ' (' + customerCode + ')' : '';
-      final periodStr = (_dateFrom != null || _dateTo != null)
-        ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
-        : '';
-      final balColor = netBal > 0 ? '#c62828' : '#2e7d32';
-
-      // Pending PDC cheques memo block (mirrors the on-screen yellow card).
-      String pdcBlock = '';
-      if (_pendingCheques.isNotEmpty) {
-        double pdcTotal = 0;
-        final pb = StringBuffer();
-        for (final c in _pendingCheques) {
-          final amt = c['amount'] as double;
-          pdcTotal += amt;
-          final cd = c['cheque_date'] as String?;
-          final dt = cd != null ? DateTime.tryParse(cd) : null;
-          final cdStr = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
-          final detail = [
-            if ((c['cheque_no'] as String? ?? '').isNotEmpty) 'Chq ' + (c['cheque_no'] as String),
-            if ((c['bank'] as String? ?? '').isNotEmpty) (c['bank'] as String),
-            if ((c['description'] as String? ?? '').isNotEmpty) (c['description'] as String),
-          ].join(' • ');
-          pb.write('<tr><td>' + (c['voucher_number'] as String) + '</td><td>' + cdStr + '</td><td>' + detail + '</td><td class="num">Rs. ' + money(amt) + '</td></tr>');
-        }
-        pdcBlock = '<div class="pdc"><div class="pdc-head"><span class="pdc-title">Pending Cheques (PDC)</span>'
-          '<span class="pdc-note">Memo only &mdash; not included in the balance or aging until cleared</span>'
-          '<span class="pdc-total">Rs. ' + money(pdcTotal) + '</span></div>'
-          '<table class="pdc-table"><thead><tr><th>Voucher</th><th>Cheque Date</th><th>Details</th><th class="num">Amount</th></tr></thead>'
-          '<tbody>' + pb.toString() + '</tbody></table></div>';
-      }
-
-      final rowsBuf = StringBuffer();
-      for (final e in display) {
-        final ds = e['date'] as String? ?? '';
-        final dt = DateTime.tryParse(ds);
-        final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
-        final debit = e['debit'] as double;
-        final credit = e['credit'] as double;
-        final bal = e['display_balance'] as double;
-        final dStr = debit > 0 ? 'Rs. ' + money(debit) : '-';
-        final cStr = credit > 0 ? 'Rs. ' + money(credit) : '-';
-        rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num">' + dStr + '</td><td class="num">' + cStr + '</td><td class="num bold">Rs. ' + money(bal) + '</td></tr>');
-      }
-
-      // Download/print filename: Party_Date_DocType (e.g. "Ali ES_1 Aug 2026_Ledger")
-      final fileBase = (customerName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
-          .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
-      final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + fileBase + '</title>'
-        '<style>@page{margin:0}'
-        '@page { margin:0; } '
-        '.no-print { margin-bottom: 10px; display: flex; gap: 8px; } '
-        '.no-print button { padding: 6px 14px; font-size: 13px; cursor: pointer; } '
-        '@media print { .no-print { display: none; } } '
-        'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; margin: 0; } '
-        '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
-        'h1 { font-size: 18px; margin: 0 0 4px 0; } '
-        '.info { font-size: 10px; margin: 2px 0; } '
-        '.stats { display: flex; gap: 10px; margin: 8px 0 12px 0; } '
-        '.stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; } '
-        '.stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; } '
-        '.stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; } '
-        '.debit { color: #1976d2; } .credit { color: #2e7d32; } '
-        '.bal { color: ' + balColor + '; } '
-        'table { width: 100%; border-collapse: collapse; } '
-        'th, td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; } '
-        'th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; } '
-        '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; } '
-        '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; } '
-        'tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; } '
-        '.pdc { border: 1px solid #f0c040; background: #fff8e1; border-radius: 6px; padding: 8px 10px; margin: 0 0 12px 0; } '
-        '.pdc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; } '
-        '.pdc-title { font-weight: 800; font-size: 11px; color: #b26a00; } '
-        '.pdc-note { flex: 1; font-size: 8.5px; color: #777; } '
-        '.pdc-total { font-weight: 800; font-size: 11px; color: #b26a00; } '
-        '.pdc-table th, .pdc-table td { border-bottom: 1px solid #f0e0b0; font-size: 9px; padding: 3px 6px; text-align: left; } '
-        '.pdc-table th { background: #fdf3d6; border-bottom: 1px solid #e0c060; } '
-        '</style></head><body>'
-        '<div class="no-print">'
-        '<button onclick="window.print()">&#x1F5A8; Print / Save as PDF</button>'
-        '<button onclick="dlHtml()">&#x2B07; Download</button>'
-        '</div>'
-        '<script>function dlHtml(){var b=new Blob(["<!DOCTYPE html>"+document.documentElement.outerHTML],{type:"text/html"});var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="' + fileBase + '.html";a.click();}</script>'
-        '<div class="header"><div><h1>Customer Ledger</h1>'
-        '<div class="info"><strong>Customer:</strong> ' + customerName + codeStr + '</div>'
-        '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
-        + (periodStr.isNotEmpty ? '<div class="info"><strong>Period:</strong> ' + periodStr + '</div>' : '') +
-        '</div><div style="text-align: right;"><div class="info">Generated: ' + genTime + '</div></div></div>'
-        '<div class="stats">'
-        '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + money(td) + '</div></div>'
-        '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + money(tc) + '</div></div>'
-        '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal">Rs. ' + money(netBal) + '</div></div>'
-        '</div>' + pdcBlock + '<table>'
-        '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
-        '<tbody>' + rowsBuf.toString() + '</tbody>'
-        '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + money(td) + '</td><td class="num credit">Rs. ' + money(tc) + '</td><td class="num bal">Rs. ' + money(netBal) + '</td></tr></tfoot>'
-        '</table></body></html>';
-
-      final blob = html.Blob([htmlDoc], 'text/html;charset=utf-8');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final ua = html.window.navigator.userAgent.toLowerCase();
-      final isMobile = ua.contains('android') || ua.contains('iphone') ||
-          ua.contains('ipad') || ua.contains('mobile');
-      if (isMobile) {
-        // Mobile browsers block the popup print tab — download the document
-        // instead (open it from Files/Downloads, then Print / Save as PDF).
-        final a = html.AnchorElement(href: url)..download = '$fileBase.html';
-        html.document.body!.append(a);
-        a.click();
-        a.remove();
-      } else {
-        html.window.open(url, '_blank');
-      }
+      final d = _buildLedgerDoc();
+      if (d == null) return;
+      await printLedgerPdf(d);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: ' + e.toString())));
     }
   }
+
 }
 
 class _Stat extends StatelessWidget {

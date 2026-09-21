@@ -1722,6 +1722,9 @@ class _ErpAdminSettingsScreenState
                   const SizedBox(height: 16),
                   _FooterNotesPanel(
                       orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                  const SizedBox(height: 16),
+                  _LedgerMessagesPanel(
+                      orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   if (_values['org.hide_main_groups_by_branch'] ?? false) ...[
                     const SizedBox(height: 16),
                     _HiddenGroupsPanel(
@@ -2505,6 +2508,105 @@ class _FooterNotesPanelState extends State<_FooterNotesPanel> {
               ),
         ],
       ),
+    );
+  }
+}
+
+
+/// Custom message printed at the bottom of the Customer / Supplier ledger PDF
+/// and print. Each has its own on/off toggle and message text, stored in
+/// app_config (org-scoped):
+///   Customer → org.ledger_msg_customer_enabled / org.ledger_msg_customer_text
+///   Supplier → org.ledger_msg_supplier_enabled / org.ledger_msg_supplier_text
+class _LedgerMessagesPanel extends StatefulWidget {
+  final String orgId;
+  const _LedgerMessagesPanel({required this.orgId});
+  @override
+  State<_LedgerMessagesPanel> createState() => _LedgerMessagesPanelState();
+}
+
+class _LedgerMessagesPanelState extends State<_LedgerMessagesPanel> {
+  final _custCtrl = TextEditingController();
+  final _supCtrl = TextEditingController();
+  bool _custOn = false, _supOn = false;
+  bool _loading = true;
+
+  @override
+  void initState() { super.initState(); _load(); }
+  @override
+  void dispose() { _custCtrl.dispose(); _supCtrl.dispose(); super.dispose(); }
+
+  Future<void> _load() async {
+    if (widget.orgId.isEmpty) { setState(() => _loading = false); return; }
+    try {
+      final rows = await Supabase.instance.client.from('app_config').select('key, value').eq('org_id', widget.orgId);
+      final cfg = <String, String>{};
+      for (final r in rows as List) { cfg[r['key'] as String] = r['value'] as String? ?? ''; }
+      if (!mounted) return;
+      setState(() {
+        _custCtrl.text = cfg['org.ledger_msg_customer_text'] ?? '';
+        _supCtrl.text = cfg['org.ledger_msg_supplier_text'] ?? '';
+        _custOn = (cfg['org.ledger_msg_customer_enabled'] ?? 'false') == 'true';
+        _supOn = (cfg['org.ledger_msg_supplier_enabled'] ?? 'false') == 'true';
+        _loading = false;
+      });
+    } catch (_) { if (mounted) setState(() => _loading = false); }
+  }
+
+  Future<void> _set(String key, String value) async {
+    if (widget.orgId.isEmpty) return;
+    try {
+      await Supabase.instance.client.from('app_config').upsert(
+        {'key': key, 'value': value, 'org_id': widget.orgId}, onConflict: 'key,org_id,branch_id');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+    }
+  }
+
+  Widget _row(String title, bool on, ValueChanged<bool> onToggle, TextEditingController ctrl, VoidCallback onSave) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(title, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppTheme.textSecondary))),
+          Switch(value: on, onChanged: onToggle),
+        ]),
+        if (on) ...[
+          const SizedBox(height: 4),
+          TextField(
+            controller: ctrl, maxLines: 3, style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(isDense: true, hintText: 'Message shown at the bottom of the ledger',
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
+            onSubmitted: (_) => onSave(),
+            onTapOutside: (_) { FocusManager.instance.primaryFocus?.unfocus(); onSave(); },
+          ),
+        ],
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Ledger messages', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        const Text('A custom note printed at the bottom of the customer / supplier ledger PDF and print. Toggle each on and type its message.',
+          style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
+        const SizedBox(height: 14),
+        if (_loading) const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Center(child: CircularProgressIndicator()))
+        else ...[
+          _row('Customer ledger message', _custOn,
+            (v) { setState(() => _custOn = v); _set('org.ledger_msg_customer_enabled', v ? 'true' : 'false'); },
+            _custCtrl, () => _set('org.ledger_msg_customer_text', _custCtrl.text.trim())),
+          _row('Supplier ledger message', _supOn,
+            (v) { setState(() => _supOn = v); _set('org.ledger_msg_supplier_enabled', v ? 'true' : 'false'); },
+            _supCtrl, () => _set('org.ledger_msg_supplier_text', _supCtrl.text.trim())),
+        ],
+      ]),
     );
   }
 }

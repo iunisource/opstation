@@ -48,6 +48,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   void initState() {
     super.initState();
     _loadSuppliers();
+    _loadFooterMsg();
     _searchCtrl.addListener(_onSearchChanged);
     _entrySearchCtrl.addListener(() => setState(() {}));
     _searchFocus.addListener(() { if (_searchFocus.hasFocus) setState(() { _showDropdown = true; if (_searchCtrl.text.isEmpty) _filteredSuppliers = _suppliers; }); });
@@ -75,6 +76,19 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+
+  // Custom ledger footer message (ERP admin settings, toggle + text).
+  String _footerMsg = '';
+  Future<void> _loadFooterMsg() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('app_config').select('key, value')
+          .eq('org_id', orgId).inFilter('key', ['org.ledger_msg_supplier_enabled', 'org.ledger_msg_supplier_text']);
+      final cfg = <String, String>{}; for (final r in rows as List) { cfg[r['key'] as String] = r['value'] as String? ?? ''; }
+      final on = (cfg['org.ledger_msg_supplier_enabled'] ?? 'false') == 'true';
+      if (mounted) setState(() => _footerMsg = on ? (cfg['org.ledger_msg_supplier_text'] ?? '') : '');
+    } catch (_) {}
+  }
 
   Future<void> _loadSuppliers() async {
     final orgId = _orgId; if (orgId == null) { setState(() => _loadingCustomers = false); return; }
@@ -959,137 +973,64 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
 
   // Build the ledger as a real PDF and open the device's native share sheet
   // (WhatsApp, email, files…) — the shared item is the PDF file itself.
+  /// Single source of truth for the ledger document. Both the Share button and
+  /// the Print / Save-as-PDF button build from this, so the PDF a party receives
+  /// via WhatsApp is byte-for-byte identical to the printed / saved one.
+  LedgerDoc? _buildLedgerDoc() {
+    final display = _displayEntries;
+    if (display.isEmpty || _selectedSupplier == null) return null;
+    double td = 0, tc = 0;
+    for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
+    final netBal = td - tc; // payable negative, advance positive
+    final sup = _selectedSupplier!;
+    final supplierName = (sup['name'] as String?) ?? '';
+    final supplierCode = (sup['code'] as String?) ?? '';
+    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final period = (_dateFrom != null || _dateTo != null)
+      ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
+      : '';
+    final lines = <LedgerLine>[];
+    for (final e in display) {
+      final dt = DateTime.tryParse(e['date'] as String? ?? '');
+      final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
+      final debit = e['debit'] as double; final credit = e['credit'] as double;
+      lines.add(LedgerLine(date, e['voucher'] as String? ?? '', e['description'] as String? ?? '', e['type'] as String? ?? '',
+        debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
+    }
+    final fileBase = (supplierName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
+        .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
+    return LedgerDoc(
+      docTitle: 'Supplier Ledger', orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      partyName: supplierName, partyCode: supplierCode, branchName: 'All Branches',
+      period: period, genTime: genTime, lines: lines,
+      totalDebit: money(td), totalCredit: money(tc),
+      netBalanceLabel: (netBal < 0 ? 'Net Payable: Rs. ' : 'Net Advance: Rs. ') + money(netBal.abs()),
+      netBalanceValue: 'Rs. ' + money(netBal),
+      netIsDanger: netBal < 0, fileBase: fileBase,
+      footerMessage: _footerMsg,
+    );
+  }
+
   Future<void> _shareLedger() async {
     try {
-      final display = _displayEntries;
-      if (display.isEmpty || _selectedSupplier == null) return;
-      double td = 0, tc = 0;
-      for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
-      final netBal = td - tc; // payable negative, advance positive
-      final sup = _selectedSupplier!;
-      final supplierName = (sup['name'] as String?) ?? '';
-      final supplierCode = (sup['code'] as String?) ?? '';
-      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
-      final period = (_dateFrom != null || _dateTo != null)
-        ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
-        : '';
-      final lines = <LedgerLine>[];
-      for (final e in display) {
-        final dt = DateTime.tryParse(e['date'] as String? ?? '');
-        final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
-        final debit = e['debit'] as double; final credit = e['credit'] as double;
-        lines.add(LedgerLine(date, e['voucher'] as String? ?? '', e['description'] as String? ?? '', e['type'] as String? ?? '',
-          debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
-      }
-      final fileBase = (supplierName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
-          .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
-      await shareLedgerPdf(
-        docTitle: 'Supplier Ledger', orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
-        partyName: supplierName, partyCode: supplierCode, branchName: 'All Branches',
-        period: period, genTime: genTime, lines: lines,
-        totalDebit: money(td), totalCredit: money(tc),
-        netBalanceLabel: (netBal < 0 ? 'Net Payable: Rs. ' : 'Net Advance: Rs. ') + money(netBal.abs()),
-        netIsDanger: netBal < 0, fileBase: fileBase,
-      );
+      final d = _buildLedgerDoc();
+      if (d == null) return;
+      await shareLedgerPdf(d);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
     }
   }
 
-  void _printLedger() {
+  Future<void> _printLedger() async {
     try {
-      final display = _displayEntries;
-      if (display.isEmpty || _selectedSupplier == null) return;
-      double td = 0, tc = 0;
-      for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
-      final netBal = td - tc; // payable negative, advance positive
-      final cust = _selectedSupplier!;
-      final supplierName = (cust['name'] as String?) ?? '';
-      final supplierCode = (cust['code'] as String?) ?? '';
-      const branchName = 'All Branches';
-      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
-      final codeStr = supplierCode.isNotEmpty ? ' (' + supplierCode + ')' : '';
-      final periodStr = (_dateFrom != null || _dateTo != null)
-        ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
-        : '';
-      final balColor = netBal < 0 ? '#c62828' : '#2e7d32';
-
-      final rowsBuf = StringBuffer();
-      for (final e in display) {
-        final ds = e['date'] as String? ?? '';
-        final dt = DateTime.tryParse(ds);
-        final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
-        final debit = e['debit'] as double;
-        final credit = e['credit'] as double;
-        final bal = e['display_balance'] as double;
-        final dStr = debit > 0 ? 'Rs. ' + money(debit) : '-';
-        final cStr = credit > 0 ? 'Rs. ' + money(credit) : '-';
-        rowsBuf.write('<tr><td>' + date + '</td><td>' + (e['voucher'] as String? ?? '') + '</td><td>' + (e['description'] as String) + '</td><td><span class="badge">' + (e['type'] as String) + '</span></td><td class="num">' + dStr + '</td><td class="num">' + cStr + '</td><td class="num bold">Rs. ' + money(bal) + '</td></tr>');
-      }
-
-      // Download/print filename: Party_Date_DocType (e.g. "Alfa Factory_1 Aug 2026_Ledger")
-      final fileBase = (supplierName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
-          .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
-      final htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + fileBase + '</title>'
-        '<style>@page{margin:0}'
-        '@page { margin:0; } '
-        '.no-print { margin-bottom: 10px; display: flex; gap: 8px; } '
-        '.no-print button { padding: 6px 14px; font-size: 13px; cursor: pointer; } '
-        '@media print { .no-print { display: none; } } '
-        'body { font-family: Arial, sans-serif; padding: 16px; font-size: 10px; color: #000; margin: 0; } '
-        '.header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; } '
-        'h1 { font-size: 18px; margin: 0 0 4px 0; } '
-        '.info { font-size: 10px; margin: 2px 0; } '
-        '.stats { display: flex; gap: 10px; margin: 8px 0 12px 0; } '
-        '.stat { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; } '
-        '.stat-label { font-size: 8px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; } '
-        '.stat-value { font-weight: 800; font-size: 12px; margin-top: 2px; } '
-        '.debit { color: #1976d2; } .credit { color: #2e7d32; } '
-        '.bal { color: ' + balColor + '; } '
-        'table { width: 100%; border-collapse: collapse; } '
-        'th, td { padding: 4px 6px; border-bottom: 1px solid #ddd; text-align: left; font-size: 9.5px; } '
-        'th { background: #f5f5f5; font-weight: 700; border-bottom: 1.5px solid #000; } '
-        '.num { text-align: right; white-space: nowrap; } .bold { font-weight: 800; } '
-        '.badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #eee; font-size: 8px; font-weight: 700; } '
-        'tfoot td { font-weight: 800; background: #f5f5f5; border-top: 2px solid #000; border-bottom: none; padding: 6px; } '
-        '</style></head><body>'
-        '<div class="no-print">'
-        '<button onclick="window.print()">&#x1F5A8; Print / Save as PDF</button>'
-        '<button onclick="dlHtml()">&#x2B07; Download</button>'
-        '</div>'
-        '<script>function dlHtml(){var b=new Blob(["<!DOCTYPE html>"+document.documentElement.outerHTML],{type:"text/html"});var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="' + fileBase + '.html";a.click();}</script>'
-        '<div class="header"><div><h1>Supplier Ledger</h1>'
-        '<div class="info"><strong>Supplier:</strong> ' + supplierName + codeStr + '</div>'
-        '<div class="info"><strong>Branch:</strong> ' + branchName + '</div>'
-        + (periodStr.isNotEmpty ? '<div class="info"><strong>Period:</strong> ' + periodStr + '</div>' : '') +
-        '</div><div style="text-align: right;"><div class="info">Generated: ' + genTime + '</div></div></div>'
-        '<div class="stats">'
-        '<div class="stat"><div class="stat-label">Total Debit</div><div class="stat-value debit">Rs. ' + money(td) + '</div></div>'
-        '<div class="stat"><div class="stat-label">Total Credit</div><div class="stat-value credit">Rs. ' + money(tc) + '</div></div>'
-        '<div class="stat"><div class="stat-label">Net Balance</div><div class="stat-value bal">Rs. ' + money(netBal) + '</div></div>'
-        '</div><table>'
-        '<thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Type</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
-        '<tbody>' + rowsBuf.toString() + '</tbody>'
-        '<tfoot><tr><td colspan="4">' + display.length.toString() + ' entries</td><td class="num debit">Rs. ' + money(td) + '</td><td class="num credit">Rs. ' + money(tc) + '</td><td class="num bal">Rs. ' + money(netBal) + '</td></tr></tfoot>'
-        '</table></body></html>';
-
-      final blob = html.Blob([htmlDoc], 'text/html;charset=utf-8');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final ua = html.window.navigator.userAgent.toLowerCase();
-      final isMobile = ua.contains('android') || ua.contains('iphone') ||
-          ua.contains('ipad') || ua.contains('mobile');
-      if (isMobile) {
-        final a = html.AnchorElement(href: url)..download = '$fileBase.html';
-        html.document.body!.append(a);
-        a.click();
-        a.remove();
-      } else {
-        html.window.open(url, '_blank');
-      }
+      final d = _buildLedgerDoc();
+      if (d == null) return;
+      await printLedgerPdf(d);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: ' + e.toString())));
     }
   }
+
 }
 
 class _Stat extends StatelessWidget {
