@@ -6,6 +6,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../../core/share/share_file.dart';
+import '../../../core/pdf/rtl_text_image.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Shared PDF generator for ERP vouchers (SO, DO, SI, PO, GRN, PI, etc.)
@@ -502,6 +503,38 @@ class VoucherPdf {
       try { checkedStampImg = await networkImage(checkedByStampUrl); } catch (_) {}
     }
 
+    // Pre-render any Urdu/Arabic lines in the remarks and terms/footer as
+    // browser-shaped images (the pdf package can't join Arabic script, so
+    // pw.Text shows tofu boxes). Latin lines stay as selectable text.
+    pw.Widget? remarksImg;
+    if (remarks != null && remarks.isNotEmpty && hasArabicScript(remarks)) {
+      remarksImg = await rtlNoteImage(remarks, 531,
+          fontSizePt: 11, colorHex: '#000000', align: 'right', bold: false);
+    }
+    final footerLineWidgets = <pw.Widget>[];
+    if (residualFooter != null && residualFooter.isNotEmpty) {
+      for (final ln in residualFooter.split('\n')) {
+        final t = ln.trim();
+        if (t.isEmpty) continue;
+        if (hasArabicScript(t)) {
+          final img = await rtlNoteImage(t, 529,
+              fontSizePt: 9.5, colorHex: '#616161', align: 'right', bold: false);
+          footerLineWidgets.add(pw.Padding(
+            padding: const pw.EdgeInsets.only(bottom: 3),
+            child: img ??
+                pw.Text(t,
+                    style: pw.TextStyle(fontSize: 9.5, color: PdfColors.grey800, lineSpacing: 1.2)),
+          ));
+        } else {
+          footerLineWidgets.add(pw.Padding(
+            padding: const pw.EdgeInsets.only(bottom: 3),
+            child: pw.Text(t,
+                style: pw.TextStyle(fontSize: 9.5, color: PdfColors.grey800, lineSpacing: 1.2)),
+          ));
+        }
+      }
+    }
+
     doc.addPage(pw.MultiPage(
       pageTheme: pw.PageTheme(
         pageFormat: PdfPageFormat.a4,
@@ -664,7 +697,7 @@ class VoucherPdf {
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
               pw.Text('REMARKS', style: pw.TextStyle(fontSize: 8, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 0.8)),
               pw.SizedBox(height: 4),
-              pw.Text(remarks, style: pw.TextStyle(fontSize: 11)),
+              remarksImg ?? pw.Text(remarks, style: pw.TextStyle(fontSize: 11)),
             ]),
           ),
         ],
@@ -746,13 +779,7 @@ class VoucherPdf {
                     style: pw.TextStyle(fontSize: 8, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 0.8)),
               ]),
               pw.SizedBox(height: 7),
-              for (final ln in residualFooter.split('\n'))
-                if (ln.trim().isNotEmpty)
-                  pw.Padding(
-                    padding: const pw.EdgeInsets.only(bottom: 3),
-                    child: pw.Text(ln.trim(),
-                        style: pw.TextStyle(fontSize: 9.5, color: PdfColors.grey800, lineSpacing: 1.2)),
-                  ),
+              ...footerLineWidgets,
             ]),
           ),
         ],
