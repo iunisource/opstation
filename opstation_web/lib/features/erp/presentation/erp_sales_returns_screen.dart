@@ -32,6 +32,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   bool _listLoading = true;
   bool _detailLoading = false;
   bool _datesEditable = false;
+  bool _generating = false; // re-entrancy guard for SRI generation (block double-click)
   String _search = '';
   String? _addProductId;
   String? _addUomId;
@@ -267,9 +268,16 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Generate'))],
     ));
     if (confirm != true) return;
+    if (_generating) return; // block a rapid second click before the first finishes
+    setState(() => _generating = true);
     final srnId = _detail['id'] as String;
     final userId = ref.read(currentUserProvider)?.id;
     try {
+      // Re-check inside the guarded section: if an SRI was created between the
+      // first check and now, stop (the DB unique index is the final backstop).
+      final dupe = await Supabase.instance.client.from('sales_return_invoices')
+          .select('voucher_number').eq('srn_id', srnId).eq('is_voided', false);
+      if ((dupe as List).isNotEmpty) { _showSnack('Invoice ${dupe.first['voucher_number']} already exists'); return; }
       final year = DateTime.now().year;
       final nextNum = await Supabase.instance.client.rpc('next_voucher_number', params: {'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': 'SRI', 'p_year': year});
       final vNum = 'SRI-$year-${nextNum.toString().padLeft(4, '0')}';
@@ -302,6 +310,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       _showSnack('$vNum created — open Sales Return Invoices to review prices and issue');
       _loadDetail(srnId); _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    finally { if (mounted) setState(() => _generating = false); }
   }
 
   Future<void> _toggleLock() async {
