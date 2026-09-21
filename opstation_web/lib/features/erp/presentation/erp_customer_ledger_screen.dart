@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
+import '../../../core/pdf/ledger_pdf.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
@@ -649,6 +650,12 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
                   ),
                   OutlinedButton.icon(
+                    icon: Icon(Icons.share_outlined, size: 16, color: Colors.teal.shade700),
+                    label: Text('Share', style: TextStyle(fontSize: 12, color: Colors.teal.shade700)),
+                    onPressed: _shareLedger,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.teal.shade300)),
+                  ),
+                  OutlinedButton.icon(
                     icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
                     label: Text('Export Excel', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
                     onPressed: _exportCsv,
@@ -690,6 +697,12 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
                     onPressed: _printLedger,
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: Icon(Icons.share_outlined, size: 16, color: Colors.teal.shade700),
+                    label: Text('Share', style: TextStyle(fontSize: 12, color: Colors.teal.shade700)),
+                    onPressed: _shareLedger,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.teal.shade300)),
                   ),
                   OutlinedButton.icon(
                     icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
@@ -1353,6 +1366,60 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         );
       }),
     ]);
+  }
+
+  // Build the ledger as a real PDF and hand it to the device's native share
+  // sheet (WhatsApp, email, files…) — the shared item is the PDF file itself.
+  Future<void> _shareLedger() async {
+    try {
+      final display = _displayEntries;
+      if ((display.isEmpty && _pendingCheques.isEmpty) || _selectedCustomer == null) return;
+      final branch = ref.read(selectedBranchProvider);
+      double td = 0, tc = 0;
+      for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
+      final netBal = td - tc;
+      final cust = _selectedCustomer!;
+      final customerName = (cust['shop_name'] as String?) ?? '';
+      final customerCode = (cust['code'] as String?) ?? '';
+      final branchName = (branch?['name'] as String?) ?? 'All Branches';
+      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+      final period = (_dateFrom != null || _dateTo != null)
+        ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
+        : '';
+      final lines = <LedgerLine>[];
+      for (final e in display) {
+        final dt = DateTime.tryParse(e['date'] as String? ?? '');
+        final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
+        final debit = e['debit'] as double; final credit = e['credit'] as double;
+        lines.add(LedgerLine(date, e['voucher'] as String? ?? '', e['description'] as String? ?? '', e['type'] as String? ?? '',
+          debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
+      }
+      final pdc = <LedgerPdc>[]; double pdcTotal = 0;
+      for (final ch in _pendingCheques) {
+        final amt = ch['amount'] as double; pdcTotal += amt;
+        final cd = ch['cheque_date'] as String?; final dtc = cd != null ? DateTime.tryParse(cd) : null;
+        final cdStr = dtc != null ? DateFormat('d MMM yy').format(dtc) : '-';
+        final detail = [
+          if ((ch['cheque_no'] as String? ?? '').isNotEmpty) 'Chq ' + (ch['cheque_no'] as String),
+          if ((ch['bank'] as String? ?? '').isNotEmpty) (ch['bank'] as String),
+          if ((ch['description'] as String? ?? '').isNotEmpty) (ch['description'] as String),
+        ].join(' • ');
+        pdc.add(LedgerPdc(ch['voucher_number'] as String? ?? '', cdStr, detail, money(amt)));
+      }
+      final fileBase = (customerName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
+          .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
+      await shareLedgerPdf(
+        docTitle: 'Customer Ledger', orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+        partyName: customerName, partyCode: customerCode, branchName: branchName,
+        period: period, genTime: genTime, lines: lines,
+        totalDebit: money(td), totalCredit: money(tc),
+        netBalanceLabel: (netBal >= 0 ? 'Balance Receivable: Rs. ' : 'Advance / Credit: Rs. ') + money(netBal.abs()),
+        netIsDanger: netBal > 0, fileBase: fileBase,
+        pdc: pdc, pdcTotal: pdc.isEmpty ? null : ('Rs. ' + money(pdcTotal)),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
+    }
   }
 
   void _printLedger() {

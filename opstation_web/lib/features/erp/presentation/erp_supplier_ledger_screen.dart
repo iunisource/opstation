@@ -10,6 +10,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/format/money.dart';
+import '../../../core/pdf/ledger_pdf.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
@@ -365,6 +366,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
                   ),
                   OutlinedButton.icon(
+                    icon: Icon(Icons.share_outlined, size: 16, color: Colors.teal.shade700),
+                    label: Text('Share', style: TextStyle(fontSize: 12, color: Colors.teal.shade700)),
+                    onPressed: _shareLedger,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.teal.shade300)),
+                  ),
+                  OutlinedButton.icon(
                     icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
                     label: Text('Export Excel', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
                     onPressed: _exportCsv,
@@ -388,6 +395,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                     label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
                     onPressed: _printLedger,
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
+                    icon: Icon(Icons.share_outlined, size: 16, color: Colors.teal.shade700),
+                    label: Text('Share', style: TextStyle(fontSize: 12, color: Colors.teal.shade700)),
+                    onPressed: _shareLedger,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), side: BorderSide(color: Colors.teal.shade300)),
                   ),
                   OutlinedButton.icon(
                     icon: Icon(Icons.table_chart_outlined, size: 16, color: Colors.green.shade700),
@@ -942,6 +955,45 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         );
       }),
     ]);
+  }
+
+  // Build the ledger as a real PDF and open the device's native share sheet
+  // (WhatsApp, email, files…) — the shared item is the PDF file itself.
+  Future<void> _shareLedger() async {
+    try {
+      final display = _displayEntries;
+      if (display.isEmpty || _selectedSupplier == null) return;
+      double td = 0, tc = 0;
+      for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
+      final netBal = td - tc; // payable negative, advance positive
+      final sup = _selectedSupplier!;
+      final supplierName = (sup['name'] as String?) ?? '';
+      final supplierCode = (sup['code'] as String?) ?? '';
+      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+      final period = (_dateFrom != null || _dateTo != null)
+        ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
+        : '';
+      final lines = <LedgerLine>[];
+      for (final e in display) {
+        final dt = DateTime.tryParse(e['date'] as String? ?? '');
+        final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
+        final debit = e['debit'] as double; final credit = e['credit'] as double;
+        lines.add(LedgerLine(date, e['voucher'] as String? ?? '', e['description'] as String? ?? '', e['type'] as String? ?? '',
+          debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
+      }
+      final fileBase = (supplierName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
+          .replaceAll(RegExp(r'[^A-Za-z0-9 _,\-\.]'), '').trim();
+      await shareLedgerPdf(
+        docTitle: 'Supplier Ledger', orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+        partyName: supplierName, partyCode: supplierCode, branchName: 'All Branches',
+        period: period, genTime: genTime, lines: lines,
+        totalDebit: money(td), totalCredit: money(tc),
+        netBalanceLabel: (netBal < 0 ? 'Net Payable: Rs. ' : 'Net Advance: Rs. ') + money(netBal.abs()),
+        netIsDanger: netBal < 0, fileBase: fileBase,
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
+    }
   }
 
   void _printLedger() {
