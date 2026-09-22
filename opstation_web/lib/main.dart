@@ -13,25 +13,38 @@ const _sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');
 /// Dump a fatal error straight into the page DOM (bypassing Flutter's canvas),
 /// so it is visible even when the app has gone blank. Idempotent: replaces any
 /// earlier dump. Never throws.
+int _domFatalCount = 0;
 void _domFatal(Object error, StackTrace? stack) {
   try {
-    html.document.getElementById('opstation-fatal')?.remove();
-    final el = html.DivElement()
-      ..id = 'opstation-fatal'
-      ..style.position = 'fixed'
-      ..style.left = '0'
-      ..style.right = '0'
-      ..style.bottom = '0'
-      ..style.maxHeight = '55%'
-      ..style.overflow = 'auto'
-      ..style.zIndex = '2147483647'
-      ..style.background = '#7f0000'
-      ..style.color = '#ffffff'
-      ..style.font = '12px/1.45 monospace'
-      ..style.padding = '12px 14px'
-      ..style.whiteSpace = 'pre-wrap'
-      ..text = 'OPSTATION FATAL ERROR (copy this and send it)\n\n$error\n\n${stack ?? ''}';
-    html.document.body?.append(el);
+    _domFatalCount++;
+    var el = html.document.getElementById('opstation-fatal');
+    if (el == null) {
+      el = html.DivElement()
+        ..id = 'opstation-fatal'
+        ..style.position = 'fixed'
+        ..style.left = '0'
+        ..style.right = '0'
+        ..style.bottom = '0'
+        ..style.maxHeight = '55%'
+        ..style.overflow = 'auto'
+        ..style.zIndex = '2147483647'
+        ..style.background = '#7f0000'
+        ..style.color = '#ffffff'
+        ..style.font = '12px/1.45 monospace'
+        ..style.padding = '12px 14px'
+        ..style.whiteSpace = 'pre-wrap'
+        ..text = 'OPSTATION ERROR LOG (copy this and send it) — newest at top\n';
+      html.document.body?.append(el);
+    }
+    // Keep every error (newest first) so navigating away never loses the one
+    // that mattered. Only the first ~12 stack frames are kept per error.
+    final frames = (stack ?? StackTrace.empty).toString().split('\n').take(12).join('\n');
+    final entry = html.DivElement()
+      ..style.borderTop = '1px solid #ff8080'
+      ..style.margin = '8px 0 0'
+      ..style.padding = '8px 0 0'
+      ..text = '#$_domFatalCount  ${html.window.location.hash}\n$error\n$frames';
+    el.insertBefore(entry, el.firstChild?.nextNode);
   } catch (_) {}
 }
 
