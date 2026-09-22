@@ -230,7 +230,11 @@ class _ErpProcessorJobworkScreenState
     if (_procId == null || _homeId == null) { _snack('Pick the processor and home branch'); return null; }
     if (_inputs.isEmpty) { _snack('Add at least one input line'); return null; }
     if (_outputs.isEmpty) { _snack('Add at least one output line'); return null; }
+    // ignore: avoid_print
+    print('[jobwork] save: start (new=$_isNew inputs=${_inputs.length} outputs=${_outputs.length} heads=${_heads.length})');
     setState(() => _busy = true);
+    // ignore: avoid_print
+    print('[jobwork] save: busy=true rebuild requested');
     try {
       final client = Supabase.instance.client;
       final payload = {
@@ -248,17 +252,25 @@ class _ErpProcessorJobworkScreenState
       if (_isNew) {
         id = 'jw_${DateTime.now().millisecondsSinceEpoch}';
         final vno = await _nextVoucher();
+        // ignore: avoid_print
+        print('[jobwork] save: voucher=$vno, inserting header');
         await client.from('processor_jobwork').insert({
           'id': id, 'org_id': _orgId, 'voucher_number': vno,
           'status': 'draft', 'created_by': _userId, ...payload,
         });
+        // ignore: avoid_print
+        print('[jobwork] save: header inserted');
         _editing = {'id': id, 'voucher_number': vno};
       } else {
         id = _editing!['id'] as String;
         await client.from('processor_jobwork').update(payload).eq('id', id);
+        // ignore: avoid_print
+        print('[jobwork] save: header updated');
       }
       // Replace all lines (draft only).
       await client.from('processor_jobwork_lines').delete().eq('jobwork_id', id);
+      // ignore: avoid_print
+      print('[jobwork] save: old lines deleted');
       final rows = <Map<String, dynamic>>[];
       void addLines(List<Map<String, dynamic>> src, String dir) {
         for (var i = 0; i < src.length; i++) {
@@ -274,6 +286,8 @@ class _ErpProcessorJobworkScreenState
       addLines(_inputs, 'input');
       addLines(_outputs, 'output');
       if (rows.isNotEmpty) await client.from('processor_jobwork_lines').insert(rows);
+      // ignore: avoid_print
+      print('[jobwork] save: ${rows.length} lines inserted');
       // Replace all cost heads (processor fee + internal overhead/labor).
       try {
         await client.from('processor_jobwork_overheads').delete().eq('jobwork_id', id);
@@ -296,11 +310,20 @@ class _ErpProcessorJobworkScreenState
           await client.from('processor_jobwork_overheads').insert(headRows);
         }
       } catch (_) {/* overheads table may predate migration 261 — skip gracefully */}
+      // ignore: avoid_print
+      print('[jobwork] save: heads written; all DB writes done');
+      if (!mounted) return id;
       setState(() => _busy = false);
+      // ignore: avoid_print
+      print('[jobwork] save: busy=false rebuild requested');
       _snack('Saved');
+      // ignore: avoid_print
+      print('[jobwork] save: snackbar shown; done');
       return id;
-    } catch (e) {
-      setState(() => _busy = false);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[jobwork] save: FAILED $e\n$st');
+      if (mounted) setState(() => _busy = false);
       _snack(friendlyError('Could not save', e));
       return null;
     }
@@ -462,6 +485,9 @@ class _ErpProcessorJobworkScreenState
 
   @override
   Widget build(BuildContext context) {
+    // ignore: avoid_print
+    print('[jobwork] build: loading=$_loading editing=${_editing != null} isNew=$_isNew busy=$_busy '
+        'inputs=${_inputs.length} outputs=${_outputs.length} heads=${_heads.length}');
     return Container(
       color: AppTheme.background,
       padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
