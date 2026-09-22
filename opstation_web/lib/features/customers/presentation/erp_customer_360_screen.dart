@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/format/money.dart';
 import '../../../core/permissions/access_control.dart'; // accessSyncProvider (production module gate)
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
 import 'customer_history_screen.dart';
 
@@ -61,6 +62,11 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   bool _loadingComplaints = true;
   List<Map<String, dynamic>> _complaints = [];
 
+  // Per-customer price list (central record of agreed / suggested prices).
+  bool _loadingPrices = true;
+  List<Map<String, dynamic>> _prices = []; // {id, product_id, name, sku, price, note}
+  List<Map<String, dynamic>> _priceProducts = []; // product catalog for the picker
+
   // Manufacturing jobs — only shown when the Production module is enabled.
   bool _showJobs = false;
   bool _loadingJobs = true;
@@ -87,12 +93,13 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   void initState() {
     super.initState();
     _showJobs = ref.read(accessSyncProvider)?.hasModule('production') ?? false;
-    _tabs = TabController(length: _showJobs ? 7 : 6, vsync: this);
+    _tabs = TabController(length: _showJobs ? 8 : 7, vsync: this);
     _loadAr();
     _loadVisits();
     _loadIntel();
     _loadActivities();
     _loadComplaints();
+    _loadPrices();
     _loadTarget();
     _loadRoutes();
     if (_showJobs) _loadJobs();
@@ -280,6 +287,184 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   int get _openComplaints => _complaints
       .where((c) => (c['status'] as String?) == 'open' || (c['status'] as String?) == 'in_progress')
       .length;
+
+  // ── Per-customer price list ───────────────────────────────────────────────
+  Future<void> _loadPrices() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) { if (mounted) setState(() => _loadingPrices = false); return; }
+    if (mounted) setState(() => _loadingPrices = true);
+    try {
+      final client = Supabase.instance.client;
+      List rows = const [];
+      try {
+        rows = await client.from('customer_price_list')
+            .select('id, product_id, price, note, updated_at')
+            .eq('org_id', orgId).eq('customer_id', _customerId);
+      } catch (_) {/* table may predate migration 263 */}
+      // Product catalog (for names + the picker). Loaded once.
+      if (_priceProducts.isEmpty) {
+        final prods = await client.from('products')
+            .select('id, name, sku, base_uom_id').eq('org_id', orgId).eq('is_active', true).limit(5000);
+        _priceProducts = List<Map<String, dynamic>>.from(prods);
+      }
+      final pById = {for (final p in _priceProducts) p['id'] as String: p};
+      final list = <Map<String, dynamic>>[];
+      for (final r in rows) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final p = pById[m['product_id']];
+        list.add({
+          'id': m['id'],
+          'product_id': m['product_id'],
+          'name': (p?['name'] as String?) ?? (m['product_id'] as String? ?? '—'),
+          'sku': (p?['sku'] as String?) ?? '',
+          'price': (m['price'] as num?)?.toDouble() ?? 0,
+          'note': (m['note'] as String?) ?? '',
+        });
+      }
+      list.sort((a, b) => '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+      if (!mounted) return;
+      setState(() { _prices = list; _loadingPrices = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingPrices = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load price list: $e')));
+    }
+  }
+
+  Future<void> _savePrice({required String productId, required double price, required String note, String? existingId}) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final userId = ref.read(currentUserProvider)?.id;
+    final client = Supabase.instance.client;
+    try {
+      await client.from('customer_price_list').upsert({
+        'id': existingId ?? 'cpl_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': orgId, 'customer_id': _customerId, 'product_id': productId,
+        'price': price, 'note': note.isEmpty ? null : note,
+        'updated_at': DateTime.now().toUtc().toIso8601String(), 'updated_by': userId,
+      }, onConflict: 'org_id,customer_id,product_id');
+      await _loadPrices();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+    }
+  }
+
+  Future<void> _deletePrice(String id) async {
+    try {
+      await Supabase.instance.client.from('customer_price_list').delete().eq('id', id);
+      await _loadPrices();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+
+  Future<void> _priceDialog({Map<String, dynamic>? existing}) async {
+    String? productId = existing?['product_id'] as String?;
+    String productLabel = existing != null
+        ? '${existing['name']}${(existing['sku'] as String? ?? '').isNotEmpty ? '  (${existing['sku']})' : ''}'
+        : '';
+    final priceCtrl = TextEditingController(text: existing != null ? _fmtNum((existing['price'] as num?)?.toDouble() ?? 0) : '');
+    final noteCtrl = TextEditingController(text: (existing?['note'] as String?) ?? '');
+    final isEdit = existing != null;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        title: Text(isEdit ? 'Edit price' : 'Add price'),
+        content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          InkWell(
+            onTap: isEdit ? null : () async {
+              final p = await pickProduct(ctx, _priceProducts, title: 'Select product');
+              if (p == null || p.isEmpty) return;
+              setS(() { productId = p['id'] as String?; productLabel = '${p['name']}${(p['sku'] as String? ?? '').isNotEmpty ? '  (${p['sku']})' : ''}'; });
+            },
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: 'Product', isDense: true, border: const OutlineInputBorder(),
+                suffixIcon: isEdit ? null : const Icon(Icons.search, size: 18)),
+              child: Text(productLabel.isEmpty ? 'Select product' : productLabel,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: productLabel.isEmpty ? AppTheme.textSecondary : null)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: priceCtrl,
+            decoration: const InputDecoration(labelText: 'Suggested price', isDense: true, border: OutlineInputBorder(), prefixText: 'Rs '),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: noteCtrl,
+            decoration: const InputDecoration(labelText: 'Note (optional)', isDense: true, border: OutlineInputBorder()),
+          ),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (productId == null) { ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Pick a product'))); return; }
+              final price = double.tryParse(priceCtrl.text.trim()) ?? 0;
+              Navigator.pop(ctx);
+              _savePrice(productId: productId!, price: price, note: noteCtrl.text.trim(), existingId: existing?['id'] as String?);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      )),
+    );
+  }
+
+  String _fmtNum(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+  Widget _priceListTab() {
+    if (_loadingPrices) {
+      return const Center(child: Padding(padding: EdgeInsets.all(48), child: CircularProgressIndicator()));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Row(children: [
+          Expanded(child: Text('Agreed / suggested prices for $_shopName',
+              style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+          FilledButton.icon(
+            onPressed: () => _priceDialog(),
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Add price'),
+          ),
+        ]),
+      ),
+      const Divider(height: 1),
+      Expanded(
+        child: _prices.isEmpty
+            ? const Center(child: Text('No prices set for this customer yet.\nUse "Add price" to record agreed prices per product.',
+                textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary)))
+            : ListView.separated(
+                itemCount: _prices.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (_, i) {
+                  final r = _prices[i];
+                  final note = (r['note'] as String? ?? '');
+                  return ListTile(
+                    title: Text('${r['name']}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                    subtitle: Text([
+                      if ('${r['sku'] ?? ''}'.isNotEmpty) '${r['sku']}',
+                      if (note.isNotEmpty) note,
+                    ].join('  ·  '), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('Rs. ${money((r['price'] as num?)?.toDouble() ?? 0)}',
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppTheme.primary)),
+                      IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _priceDialog(existing: r)),
+                      IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                          onPressed: () => _deletePrice(r['id'] as String)),
+                    ]),
+                  );
+                },
+              ),
+      ),
+    ]);
+  }
 
   Widget _jobsTab() {
     if (_loadingJobs) {
@@ -848,6 +1033,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                       ],
                     ]),
                   ),
+                  const Tab(text: 'Price List'),
                   if (_showJobs) const Tab(text: 'Jobs'),
                 ],
               ),
@@ -863,6 +1049,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   _intelTab(),
                   _activitiesTab(),
                   _complaintsTab(),
+                  _priceListTab(),
                   if (_showJobs) _jobsTab(),
                 ],
               ),
