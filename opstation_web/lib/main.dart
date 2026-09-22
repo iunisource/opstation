@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,31 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
 
 const _sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');
+
+/// Dump a fatal error straight into the page DOM (bypassing Flutter's canvas),
+/// so it is visible even when the app has gone blank. Idempotent: replaces any
+/// earlier dump. Never throws.
+void _domFatal(Object error, StackTrace? stack) {
+  try {
+    html.document.getElementById('opstation-fatal')?.remove();
+    final el = html.DivElement()
+      ..id = 'opstation-fatal'
+      ..style.position = 'fixed'
+      ..style.left = '0'
+      ..style.right = '0'
+      ..style.bottom = '0'
+      ..style.maxHeight = '55%'
+      ..style.overflow = 'auto'
+      ..style.zIndex = '2147483647'
+      ..style.background = '#7f0000'
+      ..style.color = '#ffffff'
+      ..style.font = '12px/1.45 monospace'
+      ..style.padding = '12px 14px'
+      ..style.whiteSpace = 'pre-wrap'
+      ..text = 'OPSTATION FATAL ERROR (copy this and send it)\n\n$error\n\n${stack ?? ''}';
+    html.document.body?.append(el);
+  } catch (_) {}
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -62,7 +88,19 @@ Future<void> main() async {
         ),
       );
       html.document.addEventListener('contextmenu', (e) => e.preventDefault());
-      runApp(const ProviderScope(child: OpstationWebApp()));
+
+      // Surface every fatal error in the page DOM: framework (build/paint)
+      // errors via FlutterError.onError, and uncaught async errors via a
+      // guarded zone. Chains onto Sentry's existing handler.
+      final prevOnError = FlutterError.onError;
+      FlutterError.onError = (FlutterErrorDetails d) {
+        _domFatal(d.exception, d.stack);
+        prevOnError?.call(d);
+      };
+      runZonedGuarded(
+        () => runApp(const ProviderScope(child: OpstationWebApp())),
+        (Object e, StackTrace st) => _domFatal(e, st),
+      );
     },
   );
 }
