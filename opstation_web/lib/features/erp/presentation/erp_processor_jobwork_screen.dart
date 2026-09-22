@@ -617,7 +617,8 @@ class _ErpProcessorJobworkScreenState
             : _ro(_procName(_procId)))),
         _field('Home branch', SizedBox(width: 200, child: editable
             ? DropdownButtonFormField<String>(
-                value: _homeId, isExpanded: true,
+                value: _homes.any((b) => b['id'] == _homeId) ? _homeId : null,
+                isExpanded: true,
                 decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
                 hint: const Text('Select branch'),
                 items: [for (final b in _homes) DropdownMenuItem(value: b['id'] as String, child: Text('${b['name']}'))],
@@ -626,7 +627,8 @@ class _ErpProcessorJobworkScreenState
             : _ro(_homeName(_homeId)))),
         _field('Processor (supplier)', SizedBox(width: 220, child: editable
             ? DropdownButtonFormField<String>(
-                value: _supplierId, isExpanded: true,
+                value: _suppliers.any((s) => s['id'] == _supplierId) ? _supplierId : null,
+                isExpanded: true,
                 decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
                 hint: const Text('Fee payable to…'),
                 items: [for (final s in _suppliers) DropdownMenuItem(value: s['id'] as String, child: Text('${s['name']}'))],
