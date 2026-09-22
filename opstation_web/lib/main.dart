@@ -33,6 +33,16 @@ Future<void> main() async {
               const SizedBox(height: 14),
               SelectableText(details.exceptionAsString(),
                   style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
+              if (details.context != null) ...[
+                const SizedBox(height: 10),
+                SelectableText('Where: ${details.context}',
+                    style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              ],
+              if (details.library != null) ...[
+                const SizedBox(height: 4),
+                SelectableText('Library: ${details.library}',
+                    style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              ],
             ],
           ),
         ),
