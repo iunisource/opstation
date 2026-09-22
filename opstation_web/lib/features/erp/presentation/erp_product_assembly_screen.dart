@@ -9,6 +9,7 @@ import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'product_lifecycle_view.dart';
 
 class _BomLine {
   static int _seq = 0;
@@ -238,6 +239,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
+      final bool wasNew = _current == null;
       String bomId, code;
       if (_current == null) {
         // Enforce one-BOM-per-item at save (guards against a stale list).
@@ -297,6 +299,43 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           'amount': l.qty * (_rateById[l.rateId] ?? 0), 'line_order': i,
         });
       }
+      // Record a lifecycle snapshot of this save (best-effort; never blocks the
+      // save). Powers the product "Lifecycle" view. Table added in migration 267.
+      try {
+        final nameUsed = _nameCtrl.text.trim().isEmpty ? (_prodLabel[_fgId] ?? code) : _nameCtrl.text.trim();
+        final snapshot = <String, dynamic>{
+          'output_qty': outQty,
+          'status': _status,
+          'name': nameUsed,
+          'components': [
+            for (final l in comps)
+              {'product': _prodLabel[l.productId] ?? l.productId, 'qty': l.qty},
+          ],
+          'waste': [
+            for (final l in wastes)
+              {'product': _prodLabel[l.productId] ?? l.productId, 'qty': l.qty},
+          ],
+          'overheads': [
+            for (final l in ohs)
+              {
+                'type': l.costType,
+                'name': _nameById[l.rateId] ?? '',
+                'qty': l.qty,
+                'rate': _rateById[l.rateId] ?? 0,
+                'amount': l.qty * (_rateById[l.rateId] ?? 0),
+              },
+          ],
+        };
+        await client.from('product_lifecycle').insert({
+          'id': 'plc_${DateTime.now().microsecondsSinceEpoch}',
+          'org_id': orgId, 'product_id': _fgId, 'bom_id': bomId, 'code': code,
+          'event_type': wasNew ? 'created' : 'updated',
+          'snapshot': snapshot,
+          'changed_at': DateTime.now().toUtc().toIso8601String(),
+          'changed_by': userId,
+          'changed_by_name': ref.read(currentUserProvider)?.name,
+        });
+      } catch (_) {/* lifecycle table may predate migration 267 */}
       final updated = await client.from('bom_headers').select().eq('id', bomId).single();
       if (mounted) setState(() => _current = updated);
       _snack('BOM ' + code + ' saved');
@@ -504,6 +543,19 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
               const Text('Active', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               Switch(value: _isActive, onChanged: (v) => setState(() => _status = v ? 'active' : 'inactive')),
             ]),
+            if (_current != null && _fgId != null)
+              IconButton(
+                icon: const Icon(Icons.timeline, size: 20),
+                tooltip: 'Lifecycle — changes over time',
+                onPressed: () {
+                  final orgId = _orgId;
+                  if (orgId == null) return;
+                  showProductLifecycle(context,
+                      orgId: orgId,
+                      productId: _fgId!,
+                      title: (_current?['code'] as String? ?? _prodLabel[_fgId] ?? 'Product'));
+                },
+              ),
             if (_current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete'),
             if (_fgId != null) ...[
               const SizedBox(width: 8),
