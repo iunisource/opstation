@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,6 +19,59 @@ import '../widgets/voucher_remarks_panel.dart';
 import '../../../core/utils/friendly_error.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
+
+/// Default cap for how many recent vouchers a list loads at once. With high
+/// daily volume the full table can be huge, so lists load the most recent slice
+/// and rely on server-side search (below) to reach older records on demand.
+const int kSalesRecentCap = 500;
+
+/// Sanitize free-text search for use in PostgREST filters (strip characters that
+/// would break the filter grammar). Returns '' when nothing usable remains.
+String sanitizeSearch(String q) =>
+    q.trim().replaceAll(RegExp(r'[(),%*]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+/// Resolve customer ids whose shop name or code matches [q] (server-side), so a
+/// voucher list can find rows by customer even though the name lives in a joined
+/// table. Best-effort: returns [] on any error.
+Future<List<String>> matchCustomerIds(String orgId, String q) async {
+  final s = sanitizeSearch(q);
+  if (s.isEmpty) return const [];
+  try {
+    final rows = await Supabase.instance.client
+        .from('customers').select('id').eq('org_id', orgId)
+        .or('shop_name.ilike.%$s%,code.ilike.%$s%').limit(80);
+    return [for (final r in rows as List) r['id'] as String];
+  } catch (_) { return const []; }
+}
+
+/// Resolve sales_order ids whose voucher number matches [q] (server-side), so a
+/// DO/SI list can be searched by its parent SO number. Best-effort.
+Future<List<String>> matchSalesOrderIds(String orgId, String q) async {
+  final s = sanitizeSearch(q);
+  if (s.isEmpty) return const [];
+  try {
+    final rows = await Supabase.instance.client
+        .from('sales_orders').select('id').eq('org_id', orgId)
+        .ilike('voucher_number', '%$s%').limit(200);
+    return [for (final r in rows as List) r['id'] as String];
+  } catch (_) { return const []; }
+}
+
+/// Merge several result lists into one, de-duplicated by id, newest first,
+/// capped. created_at is ISO-8601 so string compare orders correctly.
+List<Map<String, dynamic>> mergeVouchersById(List<List> parts, {int cap = kSalesRecentCap}) {
+  final byId = <String, Map<String, dynamic>>{};
+  for (final part in parts) {
+    for (final r in part) {
+      final m = Map<String, dynamic>.from(r as Map);
+      final id = m['id'] as String?;
+      if (id != null) byId[id] = m;
+    }
+  }
+  final list = byId.values.toList()
+    ..sort((a, b) => '${b['created_at']}'.compareTo('${a['created_at']}'));
+  return list.length > cap ? list.sublist(0, cap) : list;
+}
 
 /// Timestamp for inventory movements: the VOUCHER's date (so the inventory
 /// ledger posts on the date the voucher carries, not the running date),
@@ -264,6 +318,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   String? _focProductId;
   String? _focUomId;
   final _focQtyCtrl = TextEditingController(text: '1');
+  Timer? _searchDebounce;
   bool _focEnabled = false;
   bool _schemesEnabled = false; // org.schemes_enabled — FOC schemes on the SO
   bool _schemeBusy = false;
@@ -279,6 +334,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _addQtyCtrl.dispose();
     _addQtyFocus.dispose();
     _focQtyCtrl.dispose();
@@ -355,48 +411,70 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   Future<void> _loadList() async {
     final orgId = _orgId; final branchId = _branchId;
     if (orgId == null) return;
+    const cols = '*, customers(shop_name, code)';
     try {
-      var q = Supabase.instance.client.from('sales_orders').select('*, customers(shop_name, code)').eq('org_id', orgId);
-      if (branchId != null) q = q.eq('branch_id', branchId);
-      final res = await q.order('created_at', ascending: false);
-      setState(() { _orders = List<Map<String,dynamic>>.from(res); _listLoading = false; });
-    } catch (_) { setState(() => _listLoading = false); }
+      final client = Supabase.instance.client;
+      final s = sanitizeSearch(_search);
+      List<Map<String, dynamic>> out;
+      if (s.isEmpty) {
+        // Default view: the most recent slice only (bounded, fast).
+        var q = client.from('sales_orders').select(cols).eq('org_id', orgId);
+        if (branchId != null) q = q.eq('branch_id', branchId);
+        final res = await q.order('created_at', ascending: false).limit(kSalesRecentCap);
+        out = List<Map<String, dynamic>>.from(res);
+      } else {
+        // Server-side search: voucher number OR matching customer, across the
+        // whole table (not just the loaded slice).
+        final custIds = await matchCustomerIds(orgId, s);
+        final futures = <Future<dynamic>>[];
+        var byNum = client.from('sales_orders').select(cols).eq('org_id', orgId);
+        if (branchId != null) byNum = byNum.eq('branch_id', branchId);
+        futures.add(byNum.ilike('voucher_number', '%$s%').order('created_at', ascending: false).limit(kSalesRecentCap));
+        if (custIds.isNotEmpty) {
+          var byCust = client.from('sales_orders').select(cols).eq('org_id', orgId);
+          if (branchId != null) byCust = byCust.eq('branch_id', branchId);
+          futures.add(byCust.inFilter('customer_id', custIds).order('created_at', ascending: false).limit(kSalesRecentCap));
+        }
+        final results = await Future.wait(futures);
+        out = mergeVouchersById([for (final r in results) r as List]);
+      }
+      if (!mounted) return;
+      setState(() { _orders = out; _listLoading = false; });
+    } catch (_) { if (mounted) setState(() => _listLoading = false); }
   }
 
   Future<void> _loadDetail(String id) async {
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
       final client = Supabase.instance.client;
-      final order = await client.from('sales_orders').select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', id).single();
-      final items = await client.from('sales_order_items').select('*, products(name, sku), uoms(name, abbreviation)').eq('sales_order_id', id);
+      final orgId = _orgId ?? '';
+      // Fire independent reads concurrently. The tolerant ones (config, linked
+      // DOs, schemes) swallow their own errors so they can never fail the open.
+      final orderF = client.from('sales_orders').select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', id).single();
+      final itemsF = client.from('sales_order_items').select('*, products(name, sku), uoms(name, abbreviation)').eq('sales_order_id', id);
+      final Future<dynamic> cfgF = client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.voucher_dates_editable').maybeSingle().then<dynamic>((v) => v).catchError((_) => null);
+      final Future<dynamic> doF = client.from('delivery_orders').select('id, voucher_number, is_voided, created_at').eq('so_id', id).order('created_at', ascending: false).then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
+      final Future<dynamic> schF = client.from('scheme_redemptions').select('scheme_name, benefit_type, meta').eq('voucher_id', id).eq('voucher_type', 'SO').order('applied_at', ascending: true).then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
+
+      final core = await Future.wait<dynamic>([orderF, itemsF]);
+      final order = core[0] as Map<String, dynamic>;
+      final items = core[1] as List;
       _qtyControllers.clear();
-      for (final item in items as List) {
+      for (final item in items) {
         _qtyControllers[item['id'] as String] = TextEditingController(text: _plain4((item['quantity'] as num?) ?? 1));
       }
       final meta = await VoucherMeta.fetch(
-        orgId: _orgId ?? '',
+        orgId: orgId,
         customerId: order['customer_id'] as String?,
         createdById: order['created_by'] as String?,
       );
-      bool datesEd = false;
-      try { final cc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (cc?['value'] as String?) == 'true'; } catch (_) {}
-      bool hasDo = false;
-      List<String> doRefs = [];
-      String? linkedDoId;
-      try {
-        final d = await client.from('delivery_orders').select('id, voucher_number, is_voided, created_at').eq('so_id', id).order('created_at', ascending: false);
-        final active = (d as List).where((x) => x['is_voided'] != true).toList();
-        doRefs = [for (final x in active) (x['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
-        hasDo = active.isNotEmpty;
-        if (active.isNotEmpty) linkedDoId = active.first['id'] as String?;
-      } catch (_) {}
-      List<Map<String, dynamic>> appliedSchemes = [];
-      try {
-        final rr = await client.from('scheme_redemptions')
-            .select('scheme_name, benefit_type, meta')
-            .eq('voucher_id', id).eq('voucher_type', 'SO').order('applied_at', ascending: true);
-        appliedSchemes = List<Map<String, dynamic>>.from(rr as List);
-      } catch (_) {}
+      final cc = await cfgF;
+      final bool datesEd = (cc?['value'] as String?) == 'true';
+      final active = ((await doF) as List).where((x) => x['is_voided'] != true).toList();
+      final doRefs = [for (final x in active) (x['voucher_number'] as String? ?? '').trim()].where((s) => s.isNotEmpty).toList();
+      final hasDo = active.isNotEmpty;
+      final String? linkedDoId = active.isNotEmpty ? active.first['id'] as String? : null;
+      final appliedSchemes = List<Map<String, dynamic>>.from((await schF) as List);
       setState(() {
         _detail = Map<String,dynamic>.from(order);
         _items = List<Map<String,dynamic>>.from(items);
@@ -1097,7 +1175,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 const SizedBox(height: 8),
                 TextField(
                   decoration: const InputDecoration(hintText: 'Search voucher or customer...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)),
-                  onChanged: (v) => setState(() => _search = v),
+                  onChanged: (v) {
+                    setState(() => _search = v);
+                    _searchDebounce?.cancel();
+                    _searchDebounce = Timer(const Duration(milliseconds: 350), () { if (mounted) _loadList(); });
+                  },
                 ),
                 const SizedBox(height: 8),
                 SizedBox(width: double.infinity, child: DropdownButtonFormField<String>(
@@ -1477,6 +1559,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   String _statusFilter = 'all';
   // inline delivery qty
   final Map<String, TextEditingController> _deliverQtyCtrl = {};
+  Timer? _searchDebounce;
   // collect-amount at DO approval (default off = non-collection delivery)
   bool _collectEnabled = false;
   num? _collectAmount;
@@ -1499,6 +1582,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     for (final c in _deliverQtyCtrl.values) c.dispose();
     super.dispose();
   }
@@ -1508,46 +1592,82 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   Future<void> _loadList() async {
     final orgId = _orgId; final branchId = _branchId; if (orgId == null) return;
+    const cols = '*, customers(shop_name), sales_orders(voucher_number)';
     try {
-      var q = Supabase.instance.client.from('delivery_orders')
-          .select('*, customers(shop_name), sales_orders(voucher_number)').eq('org_id', orgId);
-      if (branchId != null) q = q.eq('branch_id', branchId);
-      final res = await q.order('created_at', ascending: false);
+      final client = Supabase.instance.client;
+      final s = sanitizeSearch(_search);
+      // Supervision config fetched in parallel with the list rows.
+      final cfgFuture = client.from('app_config').select('key,value').eq('org_id', orgId)
+          .inFilter('key', ['org.do_supervise_flow', 'org.do_supervisor_users']);
+      List<Map<String, dynamic>> out;
+      if (s.isEmpty) {
+        var q = client.from('delivery_orders').select(cols).eq('org_id', orgId);
+        if (branchId != null) q = q.eq('branch_id', branchId);
+        final res = await q.order('created_at', ascending: false).limit(kSalesRecentCap);
+        out = List<Map<String, dynamic>>.from(res);
+      } else {
+        // Search by DO number, parent SO number, or customer — across the table.
+        final custIds = await matchCustomerIds(orgId, s);
+        final soIds = await matchSalesOrderIds(orgId, s);
+        final futures = <Future<dynamic>>[];
+        var byNum = client.from('delivery_orders').select(cols).eq('org_id', orgId);
+        if (branchId != null) byNum = byNum.eq('branch_id', branchId);
+        futures.add(byNum.ilike('voucher_number', '%$s%').order('created_at', ascending: false).limit(kSalesRecentCap));
+        if (custIds.isNotEmpty) {
+          var b = client.from('delivery_orders').select(cols).eq('org_id', orgId);
+          if (branchId != null) b = b.eq('branch_id', branchId);
+          futures.add(b.inFilter('customer_id', custIds).order('created_at', ascending: false).limit(kSalesRecentCap));
+        }
+        if (soIds.isNotEmpty) {
+          var b = client.from('delivery_orders').select(cols).eq('org_id', orgId);
+          if (branchId != null) b = b.eq('branch_id', branchId);
+          futures.add(b.inFilter('so_id', soIds).order('created_at', ascending: false).limit(kSalesRecentCap));
+        }
+        final results = await Future.wait(futures);
+        out = mergeVouchersById([for (final r in results) r as List]);
+      }
       bool supFlow = _doSuperviseFlow; bool canSup = _canSupervise;
       try {
-        final cfg = await Supabase.instance.client.from('app_config').select('key,value')
-            .eq('org_id', orgId)
-            .inFilter('key', ['org.do_supervise_flow', 'org.do_supervisor_users']);
+        final cfg = await cfgFuture;
         final m = {for (final r in cfg as List) r['key'] as String: (r['value'] as String? ?? '')};
         supFlow = m['org.do_supervise_flow'] == 'true';
         final role = ref.read(currentUserProvider)?.role;
         final uid = ref.read(currentUserProvider)?.id;
         final extraIds = (m['org.do_supervisor_users'] ?? '')
-            .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+            .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
         canSup = role == WebUserRole.masterAdmin || role == WebUserRole.admin ||
             (uid != null && extraIds.contains(uid));
       } catch (_) {}
-      setState(() { _orders = List<Map<String,dynamic>>.from(res); _doSuperviseFlow = supFlow; _canSupervise = canSup; _listLoading = false; });
-    } catch (_) { setState(() => _listLoading = false); }
+      if (!mounted) return;
+      setState(() { _orders = out; _doSuperviseFlow = supFlow; _canSupervise = canSup; _listLoading = false; });
+    } catch (_) { if (mounted) setState(() => _listLoading = false); }
   }
 
   Future<void> _loadDetail(String id) async {
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
       final client = Supabase.instance.client;
+      final orgId = _orgId ?? '';
+      // Linked-SI lookup overlaps the whole load; tolerant (never fails the open).
+      final Future<dynamic> sisF = client.from('sales_invoices')
+          .select('id, is_voided, created_at').eq('do_id', id).order('created_at', ascending: false)
+          .then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
       final do_ = await client.from('delivery_orders')
           .select('*, customers(shop_name), sales_orders(voucher_number, customer_id), branches(name)')
           .eq('id', id).single();
-      final items = await client.from('delivery_order_items')
-          .select('*, products(name, sku), uoms(abbreviation)').eq('delivery_order_id', id);
-      final soItems = await client.from('sales_order_items')
-          .select('*, products(name, sku), uoms(abbreviation)').eq('sales_order_id', do_['so_id'] as String);
-      // Load SO details
-      final so = await client.from('sales_orders')
-          .select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', do_['so_id'] as String).single();
+      final soId = do_['so_id'] as String;
+      // DO items, SO items and the SO header are independent — fetch together.
+      final core = await Future.wait<dynamic>([
+        client.from('delivery_order_items').select('*, products(name, sku), uoms(abbreviation)').eq('delivery_order_id', id),
+        client.from('sales_order_items').select('*, products(name, sku), uoms(abbreviation)').eq('sales_order_id', soId),
+        client.from('sales_orders').select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', soId).single(),
+      ]);
+      final items = core[0] as List;
+      final soItems = core[1] as List;
+      final so = core[2] as Map<String, dynamic>;
 
       // Fetch current branch stock for all SO products
-      final productIds = (soItems as List).map((i) => i['product_id'] as String).toSet().toList();
+      final productIds = soItems.map((i) => i['product_id'] as String).toSet().toList();
       final stockMap = <String, double>{};
       if (productIds.isNotEmpty) {
         final stocks = await client.from('inventory_stock')
@@ -1572,18 +1692,14 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       }
 
       final meta = await VoucherMeta.fetch(
-        orgId: _orgId ?? '',
+        orgId: orgId,
         customerId: so['customer_id'] as String?,
         createdById: do_['created_by'] as String?,
       );
 
       String? linkedSiId;
-      try {
-        final sis = await client.from('sales_invoices')
-            .select('id, is_voided, created_at').eq('do_id', id).order('created_at', ascending: false);
-        final live = (sis as List).where((s) => s['is_voided'] != true).toList();
-        if (live.isNotEmpty) linkedSiId = live.first['id'] as String?;
-      } catch (_) {}
+      final live = ((await sisF) as List).where((s) => s['is_voided'] != true).toList();
+      if (live.isNotEmpty) linkedSiId = live.first['id'] as String?;
 
       setState(() {
         _detail = Map<String,dynamic>.from(do_);
@@ -2489,7 +2605,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                 const SizedBox(height: 8),
                 TextField(
                   decoration: const InputDecoration(hintText: 'Search DO/SO/customer...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)),
-                  onChanged: (v) => setState(() => _search = v),
+                  onChanged: (v) {
+                    setState(() => _search = v);
+                    _searchDebounce?.cancel();
+                    _searchDebounce = Timer(const Duration(milliseconds: 350), () { if (mounted) _loadList(); });
+                  },
                 ),
                 const SizedBox(height: 8),
                 SizedBox(width: double.infinity, child: DropdownButtonFormField<String>(
@@ -2927,6 +3047,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _superviseFlow = false; // org.si_supervise_flow: non-blocking admin supervise mark
   bool _superviseBusy = false;
   final Set<String> _supSelected = {}; // invoice ids ticked for selected-bulk supervise
+  Timer? _searchDebounce;
   String _search = '';
   String _siStatusFilter = 'all'; // all | draft | under_review | rejected | posted | voided
   String _siSupFilter = 'all'; // supervision filter: all | yes | no (only when supervise flow on)
@@ -2953,6 +3074,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     for (final c in _discountCtrl.values) c.dispose();
     for (final c in _priceCtrl.values) c.dispose();
     _remarksCtrl.dispose();
@@ -2964,27 +3086,54 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
   Future<void> _loadList() async {
     final orgId = _orgId; final branchId = _branchId; if (orgId == null) return;
+    const cols = '*, customers(shop_name), sales_orders(voucher_number), delivery_orders(voucher_number)';
     try {
-      var q = Supabase.instance.client.from('sales_invoices')
-          .select('*, customers(shop_name), sales_orders(voucher_number), delivery_orders(voucher_number)')
-          .eq('org_id', orgId);
-      if (branchId != null) q = q.eq('branch_id', branchId);
-      final res = await q.order('created_at', ascending: false);
-      bool reviewFlow = _reviewFlow;
-      try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (c?['value'] as String?) == 'true'; } catch (_) {}
-      bool superviseFlow = _superviseFlow; bool canSup = _canSupervise;
+      final client = Supabase.instance.client;
+      final s = sanitizeSearch(_search);
+      // Both config groups in ONE round-trip, fetched in parallel with the list.
+      final cfgFuture = client.from('app_config').select('key,value').eq('org_id', orgId)
+          .inFilter('key', ['org.doc_review_flow_si', 'org.si_supervise_flow', 'org.si_supervisor_users']);
+      List<Map<String, dynamic>> out;
+      if (s.isEmpty) {
+        var q = client.from('sales_invoices').select(cols).eq('org_id', orgId);
+        if (branchId != null) q = q.eq('branch_id', branchId);
+        final res = await q.order('created_at', ascending: false).limit(kSalesRecentCap);
+        out = List<Map<String, dynamic>>.from(res);
+      } else {
+        // Search by SI number, parent SO number, or customer — across the table.
+        final custIds = await matchCustomerIds(orgId, s);
+        final soIds = await matchSalesOrderIds(orgId, s);
+        final futures = <Future<dynamic>>[];
+        var byNum = client.from('sales_invoices').select(cols).eq('org_id', orgId);
+        if (branchId != null) byNum = byNum.eq('branch_id', branchId);
+        futures.add(byNum.ilike('voucher_number', '%$s%').order('created_at', ascending: false).limit(kSalesRecentCap));
+        if (custIds.isNotEmpty) {
+          var b = client.from('sales_invoices').select(cols).eq('org_id', orgId);
+          if (branchId != null) b = b.eq('branch_id', branchId);
+          futures.add(b.inFilter('customer_id', custIds).order('created_at', ascending: false).limit(kSalesRecentCap));
+        }
+        if (soIds.isNotEmpty) {
+          var b = client.from('sales_invoices').select(cols).eq('org_id', orgId);
+          if (branchId != null) b = b.eq('branch_id', branchId);
+          futures.add(b.inFilter('so_id', soIds).order('created_at', ascending: false).limit(kSalesRecentCap));
+        }
+        final results = await Future.wait(futures);
+        out = mergeVouchersById([for (final r in results) r as List]);
+      }
+      bool reviewFlow = _reviewFlow; bool superviseFlow = _superviseFlow; bool canSup = _canSupervise;
       try {
-        final cfg = await Supabase.instance.client.from('app_config').select('key,value').eq('org_id', orgId)
-            .inFilter('key', ['org.si_supervise_flow', 'org.si_supervisor_users']);
+        final cfg = await cfgFuture;
         final m = {for (final r in cfg as List) r['key'] as String: (r['value'] as String? ?? '')};
+        reviewFlow = m['org.doc_review_flow_si'] == 'true';
         superviseFlow = m['org.si_supervise_flow'] == 'true';
         final uid = ref.read(currentUserProvider)?.id;
         final extraIds = (m['org.si_supervisor_users'] ?? '')
-            .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+            .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
         canSup = _isAdmin || (uid != null && extraIds.contains(uid));
       } catch (_) {}
-      setState(() { _invoices = List<Map<String,dynamic>>.from(res); _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _canSupervise = canSup; _listLoading = false; });
-    } catch (_) { setState(() => _listLoading = false); }
+      if (!mounted) return;
+      setState(() { _invoices = out; _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _canSupervise = canSup; _listLoading = false; });
+    } catch (_) { if (mounted) setState(() => _listLoading = false); }
   }
 
   /// Load the current invoice customer's price-list preference + agreed prices
@@ -3016,11 +3165,25 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
       final client = Supabase.instance.client;
-      final inv = await client.from('sales_invoices')
+      final orgId = _orgId ?? '';
+      // Fire the independent reads concurrently. All org config in ONE query;
+      // schemes tolerant so they never fail the open.
+      final invF = client.from('sales_invoices')
           .select('*, customers(shop_name, code, address, contact_person, phone), sales_orders(voucher_number, remarks, customer_id, customers(shop_name, code, address, contact_person, phone)), delivery_orders(voucher_number), branches(name)')
           .eq('id', id).single();
-      final items = await client.from('sales_invoice_items')
+      final itemsF = client.from('sales_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', id);
+      final Future<dynamic> cfgF = client.from('app_config').select('key,value').eq('org_id', orgId)
+          .inFilter('key', ['org.voucher_dates_editable', 'org.doc_review_flow_si', 'org.si_supervise_flow', 'org.si_supervisor_users', 'org.si_price_editable', 'org.schemes_enabled'])
+          .then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
+      final Future<dynamic> schF = client.from('scheme_redemptions')
+          .select('scheme_name, benefit_type, meta')
+          .eq('voucher_id', id).eq('voucher_type', 'SI').order('applied_at', ascending: true)
+          .then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
+
+      final core = await Future.wait<dynamic>([invF, itemsF]);
+      final inv = core[0] as Map<String, dynamic>;
+      final items = core[1] as List;
       // Resolve customer id (direct on SI or via SO)
       final custId = (inv['customer_id'] as String?) ?? (inv['sales_orders']?['customer_id'] as String?);
       // Pull the customer's agreed price list (if opted in) so any UNPRICED
@@ -3028,7 +3191,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       await _loadCustomerPricing(custId);
       _discountCtrl.clear();
       _priceCtrl.clear();
-      for (final item in items as List) {
+      for (final item in items) {
         _discountCtrl[item['id'] as String] = TextEditingController(text: _plain4(item['discount'] as num?));
         var unitPrice = (item['unit_price'] as num?)?.toDouble() ?? 0;
         final pid = item['product_id'] as String?;
@@ -3040,41 +3203,27 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         _priceCtrl[item['id'] as String] = TextEditingController(text: _plain4(unitPrice));
       }
       final meta = await VoucherMeta.fetch(
-        orgId: _orgId ?? '',
+        orgId: orgId,
         customerId: custId,
         createdById: inv['created_by'] as String?,
       );
       bool datesEd = false;
-      try { final cc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (cc?['value'] as String?) == 'true'; } catch (_) {}
       bool reviewFlow = _reviewFlow;
-      try { final rc = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.doc_review_flow_si').maybeSingle(); reviewFlow = (rc?['value'] as String?) == 'true'; } catch (_) {}
       bool superviseFlow = _superviseFlow; bool canSup = _canSupervise;
-      try {
-        final cfg2 = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
-            .inFilter('key', ['org.si_supervise_flow', 'org.si_supervisor_users']);
-        final m2 = {for (final r in cfg2 as List) r['key'] as String: (r['value'] as String? ?? '')};
-        superviseFlow = m2['org.si_supervise_flow'] == 'true';
-        final uid2 = ref.read(currentUserProvider)?.id;
-        final extraIds2 = (m2['org.si_supervisor_users'] ?? '')
-            .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
-        canSup = _isAdmin || (uid2 != null && extraIds2.contains(uid2));
-      } catch (_) {}
       bool priceEditable = _priceEditable; bool schemesOn = _schemesEnabled;
       try {
-        final pc = await client.from('app_config').select('key,value').eq('org_id', _orgId ?? '')
-            .inFilter('key', ['org.si_price_editable', 'org.schemes_enabled']);
-        for (final r in pc as List) {
-          if (r['key'] == 'org.si_price_editable') priceEditable = (r['value'] as String?) == 'true';
-          if (r['key'] == 'org.schemes_enabled') schemesOn = (r['value'] as String?) == 'true';
-        }
+        final m = {for (final r in (await cfgF) as List) r['key'] as String: (r['value'] as String? ?? '')};
+        datesEd = m['org.voucher_dates_editable'] == 'true';
+        reviewFlow = m['org.doc_review_flow_si'] == 'true';
+        superviseFlow = m['org.si_supervise_flow'] == 'true';
+        if (m.containsKey('org.si_price_editable')) priceEditable = m['org.si_price_editable'] == 'true';
+        if (m.containsKey('org.schemes_enabled')) schemesOn = m['org.schemes_enabled'] == 'true';
+        final uid2 = ref.read(currentUserProvider)?.id;
+        final extraIds2 = (m['org.si_supervisor_users'] ?? '')
+            .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+        canSup = _isAdmin || (uid2 != null && extraIds2.contains(uid2));
       } catch (_) {}
-      List<Map<String, dynamic>> appliedSchemes = [];
-      try {
-        final rr = await client.from('scheme_redemptions')
-            .select('scheme_name, benefit_type, meta')
-            .eq('voucher_id', id).eq('voucher_type', 'SI').order('applied_at', ascending: true);
-        appliedSchemes = List<Map<String, dynamic>>.from(rr as List);
-      } catch (_) {}
+      final appliedSchemes = List<Map<String, dynamic>>.from((await schF) as List);
       setState(() {
         _reviewFlow = reviewFlow;
         _superviseFlow = superviseFlow;
@@ -3841,7 +3990,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 const SizedBox(height: 8),
                 TextField(
                   decoration: const InputDecoration(hintText: 'Search SI/SO/customer...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)),
-                  onChanged: (v) => setState(() => _search = v),
+                  onChanged: (v) {
+                    setState(() => _search = v);
+                    _searchDebounce?.cancel();
+                    _searchDebounce = Timer(const Duration(milliseconds: 350), () { if (mounted) _loadList(); });
+                  },
                 ),
                 const SizedBox(height: 8),
                 // Status filter chips
