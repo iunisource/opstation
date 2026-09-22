@@ -42,7 +42,20 @@ class _ErpProcessorJobworkScreenState
   final _notesCtrl = TextEditingController();
   List<Map<String, dynamic>> _inputs = [];  // {product_id,name,sku,uom_id,qty}
   List<Map<String, dynamic>> _outputs = [];
+  // Cost heads: {label, rate (per output unit), is_fee}. is_fee → processor A/P;
+  // otherwise → internal overhead/labor (applied overhead account).
+  List<Map<String, dynamic>> _heads = [];
   String _status = 'draft';
+
+  // Per-unit heads are multiplied by the total output quantity.
+  double get _outQty =>
+      _outputs.fold(0.0, (s, l) => s + ((l['qty'] as num?)?.toDouble() ?? 0));
+  double get _feeTotal =>
+      _heads.where((h) => h['is_fee'] == true)
+          .fold(0.0, (s, h) => s + ((h['rate'] as num?)?.toDouble() ?? 0)) * _outQty;
+  double get _ohTotal =>
+      _heads.where((h) => h['is_fee'] != true)
+          .fold(0.0, (s, h) => s + ((h['rate'] as num?)?.toDouble() ?? 0)) * _outQty;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
@@ -136,6 +149,7 @@ class _ErpProcessorJobworkScreenState
       _notesCtrl.text = '';
       _inputs = [];
       _outputs = [];
+      _heads = [];
       _status = 'draft';
     });
   }
@@ -148,6 +162,17 @@ class _ErpProcessorJobworkScreenState
           .select('*')
           .eq('jobwork_id', h['id']);
       final ll = List<Map<String, dynamic>>.from(lines);
+      List<Map<String, dynamic>> heads = [];
+      try {
+        final hs = await Supabase.instance.client
+            .from('processor_jobwork_overheads')
+            .select('*').eq('jobwork_id', h['id']).order('line_order');
+        heads = [for (final o in hs as List) {
+          'label': (o['label'] as String?) ?? '',
+          'rate': (o['amount'] as num?)?.toDouble() ?? 0,
+          'is_fee': o['is_fee'] == true,
+        }];
+      } catch (_) {/* overheads table may predate migration 261 */}
       Map<String, dynamic> mapLine(Map<String, dynamic> l) {
         final p = _products.firstWhere((x) => x['id'] == l['product_id'], orElse: () => {});
         return {
@@ -170,6 +195,7 @@ class _ErpProcessorJobworkScreenState
         _status = (h['status'] as String?) ?? 'draft';
         _inputs = ll.where((l) => l['direction'] == 'input').map(mapLine).toList();
         _outputs = ll.where((l) => l['direction'] == 'output').map(mapLine).toList();
+        _heads = heads;
         _busy = false;
       });
     } catch (e) {
@@ -207,14 +233,14 @@ class _ErpProcessorJobworkScreenState
     setState(() => _busy = true);
     try {
       final client = Supabase.instance.client;
-      final fee = double.tryParse(_feeCtrl.text.trim()) ?? 0;
       final payload = {
         'processor_branch_id': _procId,
         'home_branch_id': _homeId,
         'supplier_id': _supplierId ??
             (_processors.firstWhere((p) => p['id'] == _procId, orElse: () => {})['supplier_id']),
         'jobwork_date': DateFormat('yyyy-MM-dd').format(_date),
-        'fee_amount': fee,
+        // Header fee is auto-calculated from the per-unit fee heads × output qty.
+        'fee_amount': _feeTotal,
         'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
@@ -248,6 +274,28 @@ class _ErpProcessorJobworkScreenState
       addLines(_inputs, 'input');
       addLines(_outputs, 'output');
       if (rows.isNotEmpty) await client.from('processor_jobwork_lines').insert(rows);
+      // Replace all cost heads (processor fee + internal overhead/labor).
+      try {
+        await client.from('processor_jobwork_overheads').delete().eq('jobwork_id', id);
+        final headRows = <Map<String, dynamic>>[];
+        for (var i = 0; i < _heads.length; i++) {
+          final hh = _heads[i];
+          final label = (hh['label'] as String?)?.trim() ?? '';
+          final rate = (hh['rate'] as num?)?.toDouble() ?? 0;
+          if (label.isEmpty && rate == 0) continue;
+          headRows.add({
+            'id': 'pjoh_${DateTime.now().microsecondsSinceEpoch}_$i',
+            'jobwork_id': id,
+            'label': label.isEmpty ? (hh['is_fee'] == true ? 'Processor fee' : 'Overhead') : label,
+            'amount': rate,
+            'is_fee': hh['is_fee'] == true,
+            'line_order': i,
+          });
+        }
+        if (headRows.isNotEmpty) {
+          await client.from('processor_jobwork_overheads').insert(headRows);
+        }
+      } catch (_) {/* overheads table may predate migration 261 — skip gracefully */}
       setState(() => _busy = false);
       _snack('Saved');
       return id;
@@ -493,7 +541,6 @@ class _ErpProcessorJobworkScreenState
   // ── Editor ──────────────────────────────────────────────────────────────
   Widget _editorView() {
     final editable = _isDraft;
-    final fee = double.tryParse(_feeCtrl.text.trim()) ?? 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         IconButton(onPressed: _busy ? null : _closeEditor, icon: const Icon(Icons.arrow_back)),
@@ -533,7 +580,9 @@ class _ErpProcessorJobworkScreenState
           _linesCard('Outputs (received at home)', _outputs, editable, isInput: false,
               onSuggest: _inputs.isEmpty ? null : _suggestOutputs),
           const SizedBox(height: 16),
-          _summaryCard(fee),
+          _headsCard(editable),
+          const SizedBox(height: 16),
+          _summaryCard(),
         ]),
       ),
     ]);
@@ -597,15 +646,9 @@ class _ErpProcessorJobworkScreenState
                 ),
               )
             : _ro(DateFormat('d MMM yyyy').format(_date)))),
-        _field('Processor fee (Rs)', SizedBox(width: 160, child: editable
-            ? TextField(
-                controller: _feeCtrl,
-                decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), prefixText: 'Rs '),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                onChanged: (_) => setState(() {}),
-              )
-            : _ro('Rs ${_feeCtrl.text}'))),
+        // Auto: sum of the "processor fee" cost heads × total output qty.
+        _field('Processor fee (auto)', SizedBox(width: 160,
+            child: _ro('Rs ${money(_feeTotal)}'))),
         _field('Notes', SizedBox(width: 260, child: editable
             ? TextField(controller: _notesCtrl,
                 decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()))
@@ -690,25 +733,124 @@ class _ErpProcessorJobworkScreenState
     );
   }
 
-  Widget _summaryCard(double fee) {
+  Widget _summaryCard() {
     final inputEst = _inputCostEstimate;
+    final fee = _feeTotal;
+    final oh = _ohTotal;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
           color: AppTheme.primary.withOpacity(0.05),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: AppTheme.primary.withOpacity(0.2))),
-      child: Row(children: [
+      child: Wrap(spacing: 28, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
         _sum('Input cost (est.)', 'Rs. ${money(inputEst)}'),
-        const SizedBox(width: 28),
         _sum('Processor fee', 'Rs. ${money(fee)}'),
-        const SizedBox(width: 28),
-        _sum('Output value', 'Rs. ${money(inputEst + fee)}', bold: true),
-        const Spacer(),
+        _sum('Internal overhead', 'Rs. ${money(oh)}'),
+        _sum('Output value', 'Rs. ${money(inputEst + fee + oh)}', bold: true),
         if (_isDraft)
-          const Flexible(
-            child: Text('Estimate uses product standard cost; posting values inputs at their actual FIFO cost.',
+          const SizedBox(
+            width: 280,
+            child: Text('Fee & overhead heads are per output unit × total output qty. Estimate uses product standard cost; posting values inputs at their actual FIFO cost.',
                 style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ),
+      ]),
+    );
+  }
+
+  // ── Cost heads: processor fee + internal overhead / labor ────────────────
+  void _addHead({required bool isFee}) {
+    setState(() => _heads.add({'label': '', 'rate': 0.0, 'is_fee': isFee}));
+  }
+
+  Widget _headsCard(bool editable) {
+    return Container(
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.border)),
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
+          child: Row(children: [
+            const Expanded(child: Text('Cost heads (processor fee + overhead / labor)',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15))),
+            if (editable) ...[
+              TextButton.icon(
+                onPressed: () => _addHead(isFee: true),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Processor fee'),
+              ),
+              TextButton.icon(
+                onPressed: () => _addHead(isFee: false),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Overhead / labor'),
+              ),
+            ],
+          ]),
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+          child: Text('Each head is a rate per output unit; the total below is the rate × total output qty (${_fmtQty(_outQty)}).',
+              style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+        ),
+        if (_heads.isEmpty)
+          const Padding(padding: EdgeInsets.all(18),
+              child: Text('No cost heads. Add the processor fee and any internal overhead / labor.',
+                  style: TextStyle(color: AppTheme.textSecondary)))
+        else
+          for (int i = 0; i < _heads.length; i++) ...[
+            if (i > 0) const Divider(height: 1),
+            _headRow(i, editable),
+          ],
+      ]),
+    );
+  }
+
+  Widget _headRow(int i, bool editable) {
+    final hh = _heads[i];
+    final isFee = hh['is_fee'] == true;
+    final rate = (hh['rate'] as num?)?.toDouble() ?? 0;
+    final lineTotal = rate * _outQty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+              color: (isFee ? AppTheme.primary : AppTheme.textSecondary).withOpacity(0.12),
+              borderRadius: BorderRadius.circular(6)),
+          child: Text(isFee ? 'Processor fee' : 'Overhead',
+              style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700,
+                  color: isFee ? AppTheme.primary : AppTheme.textSecondary)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(flex: 4, child: editable
+            ? TextFormField(
+                initialValue: '${hh['label'] ?? ''}',
+                decoration: InputDecoration(
+                    labelText: 'Head', hintText: isFee ? 'e.g. Stitching fee' : 'e.g. Labor, Electricity',
+                    isDense: true, border: const OutlineInputBorder()),
+                onChanged: (v) => hh['label'] = v,
+              )
+            : Text('${hh['label'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+        const SizedBox(width: 12),
+        SizedBox(width: 120, child: editable
+            ? TextFormField(
+                initialValue: _fmtQty(rate),
+                decoration: const InputDecoration(labelText: 'Rate / unit', isDense: true, border: OutlineInputBorder(), prefixText: 'Rs '),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                onChanged: (v) => setState(() => hh['rate'] = double.tryParse(v) ?? 0),
+              )
+            : Text('Rs ${money(rate)}', textAlign: TextAlign.right)),
+        const SizedBox(width: 12),
+        SizedBox(width: 110, child: Text('= Rs ${money(lineTotal)}',
+            textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700))),
+        if (editable)
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+            onPressed: () => setState(() => _heads.removeAt(i)),
           ),
       ]),
     );
