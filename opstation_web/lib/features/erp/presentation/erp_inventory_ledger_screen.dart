@@ -108,9 +108,23 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       final rows = await ref.read(userBranchesProvider.future);
       final list = rows
           .map((b) => {'id': b['id'], 'name': b['name']})
-          .toList()
-        ..sort((a, b) =>
-            (a['name'] as String? ?? '').compareTo(b['name'] as String? ?? ''));
+          .toList();
+      // Also include processor / off-site (virtual) locations, so stock consumed
+      // or produced there via job-work / transfers is visible in the ledger.
+      final have = {for (final b in list) b['id']};
+      try {
+        final orgId = _orgId;
+        if (orgId != null) {
+          final vrows = await Supabase.instance.client.from('branches')
+              .select('id, name').eq('org_id', orgId).eq('is_virtual', true);
+          for (final v in vrows as List) {
+            if (!have.contains(v['id'])) {
+              list.add({'id': v['id'], 'name': '${v['name']} (processor)'});
+            }
+          }
+        }
+      } catch (_) {/* virtual branches optional */}
+      list.sort((a, b) => (a['name'] as String? ?? '').compareTo(b['name'] as String? ?? ''));
       setState(() { _branches = List<Map<String, dynamic>>.from(list); });
     } catch (_) { }
   }
@@ -214,6 +228,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (r.startsWith('stock_adjustment')) return 'stock_adjustments';
     if (r == 'damage' || r.startsWith('damage')) return 'damage_vouchers';
     if (r.startsWith('production')) return 'production_vouchers';
+    if (r.startsWith('jobwork')) return 'processor_jobwork'; // job-work receipts
     if (r.startsWith('job')) return 'job_card_runs'; // job_run movements
     return refType;
   }
@@ -315,6 +330,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     if (r.startsWith('sales_invoice')) return 'Sales Invoice';
     if (r.startsWith('pos')) return 'POS';
     if (r.startsWith('production')) return 'Production Voucher';
+    if (r.startsWith('jobwork')) return 'Job-work';
     if (r.startsWith('job')) return 'Job Run';
     return r.split('_').map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
   }
