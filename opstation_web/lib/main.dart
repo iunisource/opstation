@@ -15,35 +15,26 @@ Future<void> main() async {
   // Render build/layout errors as readable on-screen text instead of a blank
   // white page, and keep the crash contained to the failing widget subtree so
   // the rest of the app stays usable. The message is shown so it can be reported.
+  // Crash-proof error widget. It depends on NOTHING above it (no Material,
+  // MediaQuery, Scrollable or DefaultTextStyle), so it renders even when the
+  // failing widget is at/above MaterialApp — otherwise the replacement itself
+  // double-faults and the page just goes blank.
   ErrorWidget.builder = (FlutterErrorDetails details) {
-    return Material(
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Something went wrong on this screen.',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFC62828))),
-              const SizedBox(height: 6),
-              const Text('Please screenshot this and send it over, then go back and try again.',
-                  style: TextStyle(fontSize: 13, color: Colors.black54)),
-              const SizedBox(height: 14),
-              SelectableText(details.exceptionAsString(),
-                  style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
-              if (details.context != null) ...[
-                const SizedBox(height: 10),
-                SelectableText('Where: ${details.context}',
-                    style: const TextStyle(fontSize: 12, color: Colors.black54)),
-              ],
-              if (details.library != null) ...[
-                const SizedBox(height: 4),
-                SelectableText('Library: ${details.library}',
-                    style: const TextStyle(fontSize: 12, color: Colors.black54)),
-              ],
-            ],
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: DefaultTextStyle(
+        style: const TextStyle(fontSize: 13, color: Color(0xFF222222), decoration: TextDecoration.none),
+        child: Container(
+          color: const Color(0xFFFFFFFF),
+          alignment: Alignment.topLeft,
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Something went wrong on this screen.\n'
+            'Please screenshot this and send it, then go back and try again.\n\n'
+            '${details.exceptionAsString()}\n\n'
+            'Where: ${details.context ?? '-'}\n'
+            'Library: ${details.library ?? '-'}',
+            style: const TextStyle(fontSize: 13, color: Color(0xFFC62828), decoration: TextDecoration.none),
           ),
         ),
       ),
