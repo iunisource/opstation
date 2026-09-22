@@ -1190,7 +1190,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       // Logistics — Deliveries (incl. supplier pickups) + Dispatch Orders.
       // Permission-scoped via the registry, so any user granted either item
       // sees this menu — not only admin-tier or the dispatch-manager role.
-      if (show('/deliveries') || show('/dispatch-orders'))
+      if (modules.contains('logistics') && (show('/deliveries') || show('/dispatch-orders')))
         _navMenu(context, 'Logistics', Icons.local_shipping_outlined, location,
           ['/deliveries', '/dispatch-orders'],
           [
