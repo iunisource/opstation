@@ -1245,6 +1245,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _navButton(context, 'Orders', Icons.receipt_long, '/orders', location),
 
         if (isAdminTier) ...[
+          if (modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
             ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/live-map', '/reports', '/compliance', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
             [
@@ -1275,6 +1276,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
             ],
             badge: crmOverdue + supplierPending,
           ),
+          if (modules.contains('intelligence'))
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
             ['/intelligence/dashboard', '/products', '/competitor-categories', '/competitor-brand-aliases', '/intelligence/placement', '/intelligence/competitors',
              if (targetsOn) '/intelligence/performance'],
