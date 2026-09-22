@@ -425,11 +425,13 @@ class _ErpProcessorJobworkScreenState
       ),
     );
     if (!mounted) return;
+    var posted = false;
     if (ok == true) {
       try {
         final msg = await Supabase.instance.client
             .rpc('post_processor_jobwork', params: {'p_id': id, 'p_user': _userId});
         _snack('$msg');
+        posted = true;
       } catch (e) {
         _snack(friendlyError('Could not post', e), error: true);
       }
@@ -437,6 +439,13 @@ class _ErpProcessorJobworkScreenState
     if (!mounted) return;
     _closeEditor();          // draft stays saved if cancelled or failed
     await _load();
+    if (!mounted) return;
+    // After a successful post, land on the posted receipt (read-only, with
+    // Void available) rather than the list, so the result is visible.
+    if (posted) {
+      final h = _list.firstWhere((r) => r['id'] == id, orElse: () => <String, dynamic>{});
+      if (h.isNotEmpty) await _openDoc(h);
+    }
   }
 
   Future<void> _void(Map<String, dynamic> h) async {
