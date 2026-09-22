@@ -2916,6 +2916,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   final Map<String, TextEditingController> _discountCtrl = {};
   final Map<String, TextEditingController> _priceCtrl = {};
   bool _priceEditable = false; // org.si_price_editable
+  // Per-customer price list linkage (Customer 360 → Price List tab toggle).
+  // When the current invoice's customer has "use on invoice" on, adding a
+  // product whose SKU is in their price list auto-fills the agreed price.
+  bool _custUsePriceList = false;
+  Map<String, double> _custPriceMap = {}; // product_id -> agreed price
   bool _schemesEnabled = false; // org.schemes_enabled — slab-discount schemes on the SI
   bool _schemeBusy = false;
   List<Map<String, dynamic>> _appliedSchemes = []; // scheme_redemptions on this SI
@@ -2964,6 +2969,31 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     } catch (_) { setState(() => _listLoading = false); }
   }
 
+  /// Load the current invoice customer's price-list preference + agreed prices
+  /// (Customer 360 → Price List tab toggle). Best-effort: no-ops if the customer
+  /// opted out or the price-list tables predate the migrations.
+  Future<void> _loadCustomerPricing(String? custId) async {
+    _custUsePriceList = false;
+    _custPriceMap = {};
+    final orgId = _orgId;
+    if (custId == null || orgId == null) return;
+    try {
+      final client = Supabase.instance.client;
+      final pref = await client.from('customer_price_prefs')
+          .select('use_on_invoice').eq('org_id', orgId).eq('customer_id', custId).maybeSingle();
+      _custUsePriceList = (pref?['use_on_invoice'] as bool?) ?? false;
+      if (_custUsePriceList) {
+        final rows = await client.from('customer_price_list')
+            .select('product_id, price').eq('org_id', orgId).eq('customer_id', custId);
+        final m = <String, double>{};
+        for (final r in rows) {
+          m[r['product_id'] as String] = (r['price'] as num?)?.toDouble() ?? 0;
+        }
+        _custPriceMap = m;
+      }
+    } catch (_) {/* price-list tables may predate migrations 263/266 */}
+  }
+
   Future<void> _loadDetail(String id) async {
     setState(() { _detailLoading = true; _selectedId = id; });
     try {
@@ -2973,14 +3003,24 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           .eq('id', id).single();
       final items = await client.from('sales_invoice_items')
           .select('*, products(name, sku), uoms(abbreviation)').eq('invoice_id', id);
+      // Resolve customer id (direct on SI or via SO)
+      final custId = (inv['customer_id'] as String?) ?? (inv['sales_orders']?['customer_id'] as String?);
+      // Pull the customer's agreed price list (if opted in) so any UNPRICED
+      // line auto-fills from it. The value stays editable on the invoice.
+      await _loadCustomerPricing(custId);
       _discountCtrl.clear();
       _priceCtrl.clear();
       for (final item in items as List) {
         _discountCtrl[item['id'] as String] = TextEditingController(text: _plain4(item['discount'] as num?));
-        _priceCtrl[item['id'] as String] = TextEditingController(text: _plain4(item['unit_price'] as num?));
+        var unitPrice = (item['unit_price'] as num?)?.toDouble() ?? 0;
+        final pid = item['product_id'] as String?;
+        if (_custUsePriceList && unitPrice == 0 && item['is_foc'] != true &&
+            pid != null && _custPriceMap.containsKey(pid)) {
+          unitPrice = _custPriceMap[pid]!;
+          item['unit_price'] = unitPrice; // reflect in totals + saves
+        }
+        _priceCtrl[item['id'] as String] = TextEditingController(text: _plain4(unitPrice));
       }
-      // Resolve customer id (direct on SI or via SO)
-      final custId = (inv['customer_id'] as String?) ?? (inv['sales_orders']?['customer_id'] as String?);
       final meta = await VoucherMeta.fetch(
         orgId: _orgId ?? '',
         customerId: custId,

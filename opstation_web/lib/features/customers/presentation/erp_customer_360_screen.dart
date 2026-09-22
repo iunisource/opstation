@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/format/money.dart';
+import '../../../core/pdf/price_list_pdf.dart';
 import '../../../core/permissions/access_control.dart'; // accessSyncProvider (production module gate)
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/product_picker.dart';
@@ -66,6 +67,9 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   bool _loadingPrices = true;
   List<Map<String, dynamic>> _prices = []; // {id, product_id, name, sku, price, note}
   List<Map<String, dynamic>> _priceProducts = []; // product catalog for the picker
+  final _priceSearchCtrl = TextEditingController();
+  String _priceQuery = '';
+  bool _useOnInvoice = false; // apply this price list to the customer's invoices
 
   // Manufacturing jobs — only shown when the Production module is enabled.
   bool _showJobs = false;
@@ -108,6 +112,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   @override
   void dispose() {
     _tabs.dispose();
+    _priceSearchCtrl.dispose();
     super.dispose();
   }
 
@@ -301,6 +306,11 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
             .select('id, product_id, price, note, updated_at')
             .eq('org_id', orgId).eq('customer_id', _customerId);
       } catch (_) {/* table may predate migration 263 */}
+      try {
+        final pref = await client.from('customer_price_prefs')
+            .select('use_on_invoice').eq('org_id', orgId).eq('customer_id', _customerId).maybeSingle();
+        _useOnInvoice = (pref?['use_on_invoice'] as bool?) ?? false;
+      } catch (_) {/* prefs table may predate migration 266 */}
       // Product catalog (for names + the picker). Loaded once.
       if (_priceProducts.isEmpty) {
         final prods = await client.from('products')
@@ -337,12 +347,22 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     final userId = ref.read(currentUserProvider)?.id;
     final client = Supabase.instance.client;
     try {
+      final nowIso = DateTime.now().toUtc().toIso8601String();
       await client.from('customer_price_list').upsert({
         'id': existingId ?? 'cpl_${DateTime.now().microsecondsSinceEpoch}',
         'org_id': orgId, 'customer_id': _customerId, 'product_id': productId,
         'price': price, 'note': note.isEmpty ? null : note,
-        'updated_at': DateTime.now().toUtc().toIso8601String(), 'updated_by': userId,
+        'updated_at': nowIso, 'updated_by': userId,
       }, onConflict: 'org_id,customer_id,product_id');
+      // Append to price history (best-effort; table added in migration 265).
+      try {
+        await client.from('customer_price_history').insert({
+          'id': 'cph_${DateTime.now().microsecondsSinceEpoch}',
+          'org_id': orgId, 'customer_id': _customerId, 'product_id': productId,
+          'price': price, 'note': note.isEmpty ? null : note,
+          'changed_at': nowIso, 'changed_by': userId,
+        });
+      } catch (_) {/* history table may predate migration 265 */}
       await _loadPrices();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
@@ -355,6 +375,24 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
       await _loadPrices();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+
+  Future<void> _saveUseOnInvoice(bool v) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final prev = _useOnInvoice;
+    setState(() => _useOnInvoice = v);
+    try {
+      await Supabase.instance.client.from('customer_price_prefs').upsert({
+        'org_id': orgId, 'customer_id': _customerId, 'use_on_invoice': v,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_by': ref.read(currentUserProvider)?.id,
+      }, onConflict: 'customer_id');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _useOnInvoice = prev); // revert on failure
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save setting: $e')));
     }
   }
 
@@ -418,16 +456,128 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
 
   String _fmtNum(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
 
+  PriceListDoc _buildPriceDoc() {
+    final now = DateTime.now();
+    return PriceListDoc(
+      docTitle: 'Customer Price List',
+      orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      partyLabel: 'Customer',
+      partyName: _shopName,
+      priceLabel: 'Suggested Price',
+      genTime: DateFormat('d MMM y · h:mm a').format(now),
+      rows: [
+        for (final r in _prices)
+          PriceListRow(
+            '${r['name']}',
+            '${r['sku'] ?? ''}',
+            '${r['note'] ?? ''}',
+            'Rs. ${money((r['price'] as num?)?.toDouble() ?? 0)}',
+          ),
+      ],
+      fileBase: 'PriceList_${_shopName.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')}_${DateFormat('yyyyMMdd').format(now)}',
+    );
+  }
+
+  Future<void> _printPriceList() async {
+    try {
+      await printPriceListPdf(_buildPriceDoc());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print failed: $e')));
+    }
+  }
+
+  Future<void> _sharePriceList() async {
+    try {
+      await sharePriceListPdf(_buildPriceDoc());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
+    }
+  }
+
+  // Price lifecycle for one SKU: the full timeline of prices we've recorded.
+  Future<void> _priceHistoryDialog(String productId, String name) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    List<Map<String, dynamic>> hist = [];
+    try {
+      final rows = await Supabase.instance.client
+          .from('customer_price_history')
+          .select('price, note, changed_at')
+          .eq('org_id', orgId).eq('customer_id', _customerId).eq('product_id', productId)
+          .order('changed_at', ascending: false).limit(200);
+      hist = List<Map<String, dynamic>>.from(rows);
+    } catch (_) {/* history table may predate migration 265 */}
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          const Text('Price history', style: TextStyle(fontSize: 16)),
+          Text(name, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, fontWeight: FontWeight.w400)),
+        ]),
+        content: SizedBox(
+          width: 420,
+          child: hist.isEmpty
+              ? const Padding(padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('No history yet. Price changes are recorded from now on.',
+                      style: TextStyle(color: AppTheme.textSecondary)))
+              : ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 360),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: hist.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final h = hist[i];
+                      final at = DateTime.tryParse('${h['changed_at']}')?.toLocal();
+                      final note = (h['note'] as String? ?? '');
+                      final isLatest = i == 0;
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(isLatest ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                            size: 16, color: isLatest ? AppTheme.primary : AppTheme.textSecondary),
+                        title: Text('Rs. ${money((h['price'] as num?)?.toDouble() ?? 0)}',
+                            style: TextStyle(fontWeight: FontWeight.w700,
+                                color: isLatest ? AppTheme.primary : null)),
+                        subtitle: Text([
+                          if (at != null) DateFormat('d MMM y · h:mm a').format(at),
+                          if (note.isNotEmpty) note,
+                        ].join('  ·  '), style: const TextStyle(fontSize: 12)),
+                      );
+                    },
+                  ),
+                ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+      ),
+    );
+  }
+
   Widget _priceListTab() {
     if (_loadingPrices) {
       return const Center(child: Padding(padding: EdgeInsets.all(48), child: CircularProgressIndicator()));
     }
+    final q = _priceQuery.trim().toLowerCase();
+    final shown = q.isEmpty
+        ? _prices
+        : _prices.where((r) => '${r['name']} ${r['sku']} ${r['note']}'.toLowerCase().contains(q)).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
         child: Row(children: [
           Expanded(child: Text('Agreed / suggested prices for $_shopName',
               style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+          IconButton(
+            tooltip: 'Print / Save PDF',
+            icon: const Icon(Icons.print_outlined, size: 20),
+            onPressed: _prices.isEmpty ? null : _printPriceList,
+          ),
+          IconButton(
+            tooltip: 'Share PDF',
+            icon: const Icon(Icons.share_outlined, size: 20),
+            onPressed: _prices.isEmpty ? null : _sharePriceList,
+          ),
+          const SizedBox(width: 4),
           FilledButton.icon(
             onPressed: () => _priceDialog(),
             icon: const Icon(Icons.add, size: 16),
@@ -435,26 +585,67 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
           ),
         ]),
       ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+        child: SwitchListTile(
+          value: _useOnInvoice,
+          onChanged: _saveUseOnInvoice,
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+          title: const Text('Use these prices on this customer’s invoices',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          subtitle: const Text(
+              'When on, a new invoice line for this customer auto-fills the agreed price (still editable).',
+              style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ),
+      ),
+      if (_prices.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+          child: TextField(
+            controller: _priceSearchCtrl,
+            onChanged: (v) => setState(() => _priceQuery = v),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Search product, SKU or note',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              suffixIcon: _priceQuery.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () { _priceSearchCtrl.clear(); setState(() => _priceQuery = ''); }),
+              border: const OutlineInputBorder(),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+          ),
+        ),
       const Divider(height: 1),
       Expanded(
         child: _prices.isEmpty
             ? const Center(child: Text('No prices set for this customer yet.\nUse "Add price" to record agreed prices per product.',
                 textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary)))
-            : ListView.separated(
-                itemCount: _prices.length,
+            : shown.isEmpty
+              ? const Center(child: Text('No products match your search.',
+                  style: TextStyle(color: AppTheme.textSecondary)))
+              : ListView.separated(
+                itemCount: shown.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (_, i) {
-                  final r = _prices[i];
+                  final r = shown[i];
                   final note = (r['note'] as String? ?? '');
                   return ListTile(
+                    onTap: () => _priceHistoryDialog(r['product_id'] as String, '${r['name']}'),
                     title: Text('${r['name']}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
                     subtitle: Text([
                       if ('${r['sku'] ?? ''}'.isNotEmpty) '${r['sku']}',
                       if (note.isNotEmpty) note,
+                      'Tap for price history',
                     ].join('  ·  '), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       Text('Rs. ${money((r['price'] as num?)?.toDouble() ?? 0)}',
                           style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppTheme.primary)),
+                      IconButton(icon: const Icon(Icons.history, size: 18), tooltip: 'Price history',
+                          onPressed: () => _priceHistoryDialog(r['product_id'] as String, '${r['name']}')),
                       IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _priceDialog(existing: r)),
                       IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
                           onPressed: () => _deletePrice(r['id'] as String)),
