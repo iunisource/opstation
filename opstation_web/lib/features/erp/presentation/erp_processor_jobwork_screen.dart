@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../../auth/auth_controller.dart';
 
 /// Processor Job-work — a transformed return: input(s) sitting at a processor are
@@ -97,7 +98,13 @@ class _ErpProcessorJobworkScreenState
     setState(() {
       _editing = {};
       _procId = _processors.length == 1 ? _processors.first['id'] as String? : null;
-      _homeId = _homes.length == 1 ? _homes.first['id'] as String? : null;
+      // Default the home branch to the user's currently selected branch (when it
+      // is a real, non-processor branch); otherwise the sole branch, if only one.
+      final sel = ref.read(selectedBranchProvider)?['id'] as String?;
+      final selIsHome = sel != null && _homes.any((b) => b['id'] == sel);
+      _homeId = selIsHome
+          ? sel
+          : (_homes.length == 1 ? _homes.first['id'] as String? : null);
       _supplierId = null;
       _date = DateTime.now();
       _feeCtrl.text = '0';
@@ -440,15 +447,23 @@ class _ErpProcessorJobworkScreenState
           border: Border.all(color: AppTheme.border)),
       child: Wrap(spacing: 20, runSpacing: 14, crossAxisAlignment: WrapCrossAlignment.end, children: [
         _field('Processor', SizedBox(width: 220, child: editable
-            ? DropdownButtonFormField<String>(
-                value: _procId, isExpanded: true,
-                decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-                hint: const Text('Select processor'),
-                items: [for (final b in _processors) DropdownMenuItem(value: b['id'] as String, child: Text('${b['name']}'))],
-                onChanged: (v) => setState(() {
-                  _procId = v;
-                  _supplierId = _processors.firstWhere((p) => p['id'] == v, orElse: () => {})['supplier_id'] as String?;
-                }),
+            ? InkWell(
+                onTap: () async {
+                  final p = await pickProduct(context, _processors, title: 'Select processor');
+                  if (p == null || p.isEmpty) return;
+                  setState(() {
+                    _procId = p['id'] as String?;
+                    _supplierId = p['supplier_id'] as String?;
+                  });
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                      isDense: true, border: OutlineInputBorder(),
+                      suffixIcon: Icon(Icons.search, size: 18)),
+                  child: Text(_procId == null ? 'Select processor' : _procName(_procId),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: _procId == null ? AppTheme.textSecondary : null)),
+                ),
               )
             : _ro(_procName(_procId)))),
         _field('Home branch', SizedBox(width: 200, child: editable
