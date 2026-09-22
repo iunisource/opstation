@@ -30,6 +30,9 @@ class _ErpProcessorJobworkScreenState
   List<Map<String, dynamic>> _homes = [];
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _suppliers = [];
+  // input product_id -> set of finished-good (output) product_ids that use it in
+  // an active BOM. Powers the "Suggest from inputs" action on the Outputs card.
+  final Map<String, Set<String>> _outputsByInput = {};
 
   // Editor state — null _editing = list mode.
   Map<String, dynamic>? _editing; // the open header (or {} for a new one)
@@ -78,6 +81,28 @@ class _ErpProcessorJobworkScreenState
       final list = await client.from('processor_jobwork')
           .select('*')
           .eq('org_id', orgId).order('created_at', ascending: false).limit(200);
+      // BOM map: which finished good(s) each input material typically produces.
+      _outputsByInput.clear();
+      try {
+        final headers = await client.from('bom_headers')
+            .select('id, product_id').eq('org_id', orgId).eq('status', 'active').limit(5000);
+        final fgByBom = <String, String>{};
+        for (final h in headers as List) {
+          final bid = h['id'] as String?; final fg = h['product_id'] as String?;
+          if (bid != null && fg != null) fgByBom[bid] = fg;
+        }
+        if (fgByBom.isNotEmpty) {
+          final comps = await client.from('bom_components')
+              .select('bom_id, product_id').inFilter('bom_id', fgByBom.keys.toList());
+          for (final c in comps as List) {
+            final inPid = c['product_id'] as String?;
+            final fg = fgByBom[c['bom_id']];
+            if (inPid != null && fg != null && fg != inPid) {
+              (_outputsByInput[inPid] ??= <String>{}).add(fg);
+            }
+          }
+        }
+      } catch (_) {/* suggestions are optional — never block loading */}
       final all = List<Map<String, dynamic>>.from(branches);
       setState(() {
         _processors = all.where((b) => b['is_virtual'] == true).toList();
@@ -304,6 +329,80 @@ class _ErpProcessorJobworkScreenState
     });
   }
 
+  /// Suggest output products from the current input lines: the finished goods
+  /// whose active BOM lists one of these inputs as a component. Only the output
+  /// product is proposed — the BOM's own material lines and overhead/labor heads
+  /// are intentionally left out (this screen books a single processor fee, so
+  /// pulling those would double-count). The user picks which to add and sets qty.
+  Future<void> _suggestOutputs() async {
+    final wanted = <String>{};
+    for (final l in _inputs) {
+      final pid = l['product_id'] as String?;
+      if (pid != null) wanted.addAll(_outputsByInput[pid] ?? const <String>{});
+    }
+    // Don't re-suggest outputs already on the receipt.
+    final already = _outputs.map((o) => o['product_id']).toSet();
+    final candidates = wanted
+        .where((id) => !already.contains(id))
+        .map((id) => _products.firstWhere((p) => p['id'] == id, orElse: () => {}))
+        .where((p) => p.isNotEmpty)
+        .toList()
+      ..sort((a, b) => '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+
+    if (candidates.isEmpty) {
+      _snack('No BOM-based output found for these inputs. Use "Add product" to pick manually.');
+      return;
+    }
+    final chosen = await showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (_) {
+        final sel = <String>{...candidates.map((c) => c['id'] as String)}; // default: all checked
+        return StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+          title: const Text('Suggested outputs'),
+          content: SizedBox(
+            width: 380,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Finished goods whose BOM uses your input material(s). Select which to add — you set the quantity after.',
+                  style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+              const SizedBox(height: 8),
+              Flexible(
+                child: ListView(shrinkWrap: true, children: [
+                  for (final p in candidates)
+                    CheckboxListTile(
+                      dense: true,
+                      value: sel.contains(p['id']),
+                      onChanged: (v) => setS(() => v == true ? sel.add(p['id'] as String) : sel.remove(p['id'])),
+                      title: Text('${p['name']}', style: const TextStyle(fontSize: 13.5)),
+                      subtitle: ('${p['sku'] ?? ''}'.isNotEmpty)
+                          ? Text('${p['sku']}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+                          : null,
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx,
+                  candidates.where((c) => sel.contains(c['id'])).toList()),
+              child: const Text('Add selected'),
+            ),
+          ],
+        ));
+      },
+    );
+    if (chosen == null || chosen.isEmpty) return;
+    setState(() {
+      for (final p in chosen) {
+        _outputs.add({
+          'product_id': p['id'], 'name': p['name'], 'sku': p['sku'] ?? '',
+          'uom_id': p['base_uom_id'], 'qty': 1.0, 'unit_cost': 0.0,
+        });
+      }
+    });
+  }
+
   double get _inputCostEstimate {
     double c = 0;
     for (final l in _inputs) {
@@ -431,7 +530,8 @@ class _ErpProcessorJobworkScreenState
           const SizedBox(height: 16),
           _linesCard('Inputs (consumed at processor)', _inputs, editable, isInput: true),
           const SizedBox(height: 16),
-          _linesCard('Outputs (received at home)', _outputs, editable, isInput: false),
+          _linesCard('Outputs (received at home)', _outputs, editable, isInput: false,
+              onSuggest: _inputs.isEmpty ? null : _suggestOutputs),
           const SizedBox(height: 16),
           _summaryCard(fee),
         ]),
@@ -514,7 +614,8 @@ class _ErpProcessorJobworkScreenState
     );
   }
 
-  Widget _linesCard(String title, List<Map<String, dynamic>> lines, bool editable, {required bool isInput}) {
+  Widget _linesCard(String title, List<Map<String, dynamic>> lines, bool editable,
+      {required bool isInput, VoidCallback? onSuggest}) {
     return Container(
       decoration: BoxDecoration(
           color: Colors.white, borderRadius: BorderRadius.circular(12),
@@ -525,6 +626,12 @@ class _ErpProcessorJobworkScreenState
           child: Row(children: [
             Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
             const Spacer(),
+            if (editable && onSuggest != null)
+              TextButton.icon(
+                onPressed: onSuggest,
+                icon: const Icon(Icons.auto_awesome, size: 16),
+                label: const Text('Suggest from inputs'),
+              ),
             if (editable)
               TextButton.icon(
                 onPressed: () => _addLine(lines),
