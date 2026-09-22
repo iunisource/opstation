@@ -425,27 +425,43 @@ class _ErpProcessorJobworkScreenState
       ),
     );
     if (!mounted) return;
-    var posted = false;
-    if (ok == true) {
-      try {
-        final msg = await Supabase.instance.client
-            .rpc('post_processor_jobwork', params: {'p_id': id, 'p_user': _userId});
-        _snack('$msg');
-        posted = true;
-      } catch (e) {
-        _snack(friendlyError('Could not post', e), error: true);
-      }
+    if (ok != true) { setState(() => _busy = false); return; }
+
+    String resultMsg; bool resultOk;
+    try {
+      final msg = await Supabase.instance.client
+          .rpc('post_processor_jobwork', params: {'p_id': id, 'p_user': _userId});
+      resultMsg = '$msg';
+      // The RPC returns "… already posted" without actually posting when it
+      // finds nothing to do — treat only a real "posted:" result as success.
+      resultOk = resultMsg.toLowerCase().contains('posted:');
+    } catch (e) {
+      resultMsg = friendlyError('Could not post', e);
+      resultOk = false;
     }
     if (!mounted) return;
-    _closeEditor();          // draft stays saved if cancelled or failed
-    await _load();
+    setState(() => _busy = false);
+
+    // Always show the outcome in a dialog the user can't miss.
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(resultOk ? 'Posted' : 'Not posted',
+            style: TextStyle(color: resultOk ? AppTheme.success : AppTheme.danger)),
+        content: SingleChildScrollView(child: Text(resultMsg)),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+      ),
+    );
     if (!mounted) return;
-    // After a successful post, land on the posted receipt (read-only, with
-    // Void available) rather than the list, so the result is visible.
-    if (posted) {
+
+    if (resultOk) {
+      _closeEditor();
+      await _load();
+      if (!mounted) return;
       final h = _list.firstWhere((r) => r['id'] == id, orElse: () => <String, dynamic>{});
       if (h.isNotEmpty) await _openDoc(h);
     }
+    // On failure, stay in the editor so the user can fix the inputs and retry.
   }
 
   Future<void> _void(Map<String, dynamic> h) async {
