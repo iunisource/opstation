@@ -139,13 +139,15 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       routerConfig: router,
-      // Make all on-screen text selectable + copyable app-wide. Flutter renders
-      // to <canvas>, so text isn't natively selectable; SelectionArea provides
-      // drag-to-select and Ctrl+C (plus a floating Copy button) everywhere.
-      // Text fields, buttons and other gestures keep working — they claim their
-      // own gestures ahead of the selection.
-      builder: (context, child) =>
-          SelectionArea(child: child ?? const SizedBox.shrink()),
+      // NOTE: an app-wide SelectionArea used to wrap the routed tree here to
+      // make canvas text drag-selectable. Flutter web's SelectionArea is unstable
+      // in this version: its selection machinery throws "RenderBox was not laid
+      // out" / "Null check operator used on a null value" during layout on every
+      // screen (tolerated on most, but it aborted the whole frame on the
+      // Processor Job-work editor, blanking the app after save). Removed.
+      // Input fields keep native selection; if label selection is needed,
+      // wrap the specific screen in a scoped SelectionArea instead.
+      builder: (context, child) => child ?? const SizedBox.shrink(),
     );
   }
 }

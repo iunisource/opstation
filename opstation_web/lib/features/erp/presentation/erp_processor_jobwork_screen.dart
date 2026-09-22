@@ -462,20 +462,14 @@ class _ErpProcessorJobworkScreenState
 
   @override
   Widget build(BuildContext context) {
-    // Opt out of the app-wide SelectionArea. This editor rebuilds a list of
-    // text fields on every save/keystroke and pops a SnackBar; with selection
-    // enabled that churn trips a null-check deep in Flutter's selection paint
-    // pass ("Null check operator used on a null value"), blanking the whole app.
-    return SelectionContainer.disabled(
-      child: Container(
-        color: AppTheme.background,
-        padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _editing == null
-                ? _listView()
-                : _editorView(),
-      ),
+    return Container(
+      color: AppTheme.background,
+      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
+      child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _editing == null
+              ? _listView()
+              : _editorView(),
     );
   }
 

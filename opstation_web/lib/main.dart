@@ -1,5 +1,4 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
-import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,54 +9,14 @@ import 'app.dart';
 
 const _sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');
 
-/// Dump a fatal error straight into the page DOM (bypassing Flutter's canvas),
-/// so it is visible even when the app has gone blank. Idempotent: replaces any
-/// earlier dump. Never throws.
-int _domFatalCount = 0;
-void _domFatal(Object error, StackTrace? stack) {
-  try {
-    _domFatalCount++;
-    var el = html.document.getElementById('opstation-fatal');
-    if (el == null) {
-      el = html.DivElement()
-        ..id = 'opstation-fatal'
-        ..style.position = 'fixed'
-        ..style.left = '0'
-        ..style.right = '0'
-        ..style.bottom = '0'
-        ..style.maxHeight = '55%'
-        ..style.overflow = 'auto'
-        ..style.zIndex = '2147483647'
-        ..style.background = '#7f0000'
-        ..style.color = '#ffffff'
-        ..style.font = '12px/1.45 monospace'
-        ..style.padding = '12px 14px'
-        ..style.whiteSpace = 'pre-wrap'
-        ..text = 'OPSTATION ERROR LOG (copy this and send it) — newest at top\n';
-      html.document.body?.append(el);
-    }
-    // Keep every error (newest first) so navigating away never loses the one
-    // that mattered. Only the first ~12 stack frames are kept per error.
-    final frames = (stack ?? StackTrace.empty).toString().split('\n').take(12).join('\n');
-    final entry = html.DivElement()
-      ..style.borderTop = '1px solid #ff8080'
-      ..style.margin = '8px 0 0'
-      ..style.padding = '8px 0 0'
-      ..text = '#$_domFatalCount  ${html.window.location.hash}\n$error\n$frames';
-    el.insertBefore(entry, el.firstChild?.nextNode);
-  } catch (_) {}
-}
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Render build/layout errors as readable on-screen text instead of a blank
-  // white page, and keep the crash contained to the failing widget subtree so
-  // the rest of the app stays usable. The message is shown so it can be reported.
-  // Crash-proof error widget. It depends on NOTHING above it (no Material,
-  // MediaQuery, Scrollable or DefaultTextStyle), so it renders even when the
-  // failing widget is at/above MaterialApp — otherwise the replacement itself
-  // double-faults and the page just goes blank.
+  // Crash-proof error widget: renders build errors as readable on-screen text
+  // instead of a blank white page, and keeps the crash contained to the failing
+  // widget subtree. It depends on NOTHING above it (no Material, MediaQuery,
+  // Scrollable or DefaultTextStyle), so it renders even when the failing widget
+  // is at/above MaterialApp — otherwise the replacement itself double-faults.
   ErrorWidget.builder = (FlutterErrorDetails details) {
     return Directionality(
       textDirection: TextDirection.ltr,
@@ -71,8 +30,7 @@ Future<void> main() async {
             'Something went wrong on this screen.\n'
             'Please screenshot this and send it, then go back and try again.\n\n'
             '${details.exceptionAsString()}\n\n'
-            'Where: ${details.context ?? '-'}\n'
-            'Library: ${details.library ?? '-'}',
+            'Where: ${details.context ?? '-'}',
             style: const TextStyle(fontSize: 13, color: Color(0xFFC62828), decoration: TextDecoration.none),
           ),
         ),
@@ -101,19 +59,7 @@ Future<void> main() async {
         ),
       );
       html.document.addEventListener('contextmenu', (e) => e.preventDefault());
-
-      // Surface every fatal error in the page DOM: framework (build/paint)
-      // errors via FlutterError.onError, and uncaught async errors via a
-      // guarded zone. Chains onto Sentry's existing handler.
-      final prevOnError = FlutterError.onError;
-      FlutterError.onError = (FlutterErrorDetails d) {
-        _domFatal(d.exception, d.stack);
-        prevOnError?.call(d);
-      };
-      runZonedGuarded(
-        () => runApp(const ProviderScope(child: OpstationWebApp())),
-        (Object e, StackTrace st) => _domFatal(e, st),
-      );
+      runApp(const ProviderScope(child: OpstationWebApp()));
     },
   );
 }
