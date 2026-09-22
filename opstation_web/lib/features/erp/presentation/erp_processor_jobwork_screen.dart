@@ -81,6 +81,9 @@ class _ErpProcessorJobworkScreenState
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _suppliers = [];
   final Map<String, Set<String>> _outputsByInput = {}; // BOM: input -> finished goods
+  // BOM overhead/labor suggestions, keyed by finished-good product_id:
+  // [{label, rate}] where rate is per output unit (bom amount / bom output_qty).
+  final Map<String, List<Map<String, dynamic>>> _ohSuggestByFg = {};
 
   // Editor state — null _editing = list mode.
   Map<String, dynamic>? _editing;
@@ -180,17 +183,21 @@ class _ErpProcessorJobworkScreenState
       final list = await client.from('processor_jobwork')
           .select('*').eq('org_id', orgId).order('created_at', ascending: false).limit(200);
 
-      // BOM map for output suggestions — optional, never blocks loading.
+      // BOM maps for suggestions — optional, never blocks loading.
       final byInput = <String, Set<String>>{};
+      final byFgOh = <String, List<Map<String, dynamic>>>{};
       try {
         final headers = await client.from('bom_headers')
-            .select('id, product_id').eq('org_id', orgId).eq('status', 'active').limit(2000);
+            .select('id, product_id, output_qty').eq('org_id', orgId).eq('status', 'active').limit(2000);
         final fgByBom = <String, String>{};
+        final outQtyByBom = <String, double>{};
         for (final h in headers as List) {
           final bid = h['id'] as String?; final fg = h['product_id'] as String?;
-          if (bid != null && fg != null) fgByBom[bid] = fg;
+          if (bid != null && fg != null) {
+            fgByBom[bid] = fg;
+            outQtyByBom[bid] = (h['output_qty'] as num?)?.toDouble() ?? 0;
+          }
         }
-        // Fetch components in chunks to keep the request URL short.
         final ids = fgByBom.keys.toList();
         for (var i = 0; i < ids.length; i += 200) {
           final chunk = ids.sublist(i, (i + 200).clamp(0, ids.length));
@@ -203,6 +210,22 @@ class _ErpProcessorJobworkScreenState
               (byInput[inPid] ??= <String>{}).add(fg);
             }
           }
+          // Overhead / labor heads per BOM → per-unit rate for the finished good.
+          try {
+            final ohs = await client.from('bom_overheads')
+                .select('bom_id, description, amount, cost_type').inFilter('bom_id', chunk);
+            for (final o in ohs as List) {
+              final fg = fgByBom[o['bom_id']];
+              final oq = outQtyByBom[o['bom_id']] ?? 0;
+              if (fg == null || oq <= 0) continue;
+              final amt = (o['amount'] as num?)?.toDouble() ?? 0;
+              if (amt == 0) continue;
+              final label = (o['description'] as String?)?.trim().isNotEmpty == true
+                  ? (o['description'] as String).trim()
+                  : ((o['cost_type'] as String?) == 'labor' ? 'Labor' : 'Overhead');
+              (byFgOh[fg] ??= []).add({'label': label, 'rate': amt / oq});
+            }
+          } catch (_) {}
         }
       } catch (_) {}
 
@@ -217,6 +240,9 @@ class _ErpProcessorJobworkScreenState
         _outputsByInput
           ..clear()
           ..addAll(byInput);
+        _ohSuggestByFg
+          ..clear()
+          ..addAll(byFgOh);
         _loading = false;
       });
     } catch (e) {
@@ -508,6 +534,68 @@ class _ErpProcessorJobworkScreenState
   }
 
   void _addHead({required bool isFee}) => setState(() => _heads.add(_Head(isFee: isFee)));
+
+  /// Suggest overhead / labor cost heads from the output products' BOMs: each
+  /// BOM overhead/labor line, converted to a per-output-unit rate. The processor
+  /// fee is external (not in the BOM), so it is never suggested here.
+  Future<void> _suggestHeads() async {
+    // Collect suggestions across the chosen outputs, summing rates for the same
+    // label (so two outputs sharing a "Labor" head don't create duplicates).
+    final byLabel = <String, double>{};
+    for (final o in _outputs) {
+      for (final s in _ohSuggestByFg[o.productId] ?? const <Map<String, dynamic>>[]) {
+        final label = (s['label'] as String?) ?? 'Overhead';
+        final rate = (s['rate'] as num?)?.toDouble() ?? 0;
+        byLabel[label] = (byLabel[label] ?? 0) + rate;
+      }
+    }
+    // Drop labels already present as a head.
+    final existing = _heads.map((h) => h.label.toLowerCase()).toSet();
+    final candidates = byLabel.entries
+        .where((e) => !existing.contains(e.key.toLowerCase()))
+        .toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+
+    if (candidates.isEmpty) {
+      _snack('No BOM overhead / labor found for these outputs. Add heads manually.', error: true);
+      return;
+    }
+    final sel = <String>{...candidates.map((e) => e.key)};
+    final chosen = await showDialog<List<MapEntry<String, double>>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        title: const Text('Suggested overhead / labor'),
+        content: SizedBox(width: 400, height: 360, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('From the output products\' BOMs, as a rate per output unit. Tick the heads to add; edit rates after.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+          Expanded(child: ListView(children: [
+            for (final e in candidates)
+              CheckboxListTile(
+                dense: true,
+                value: sel.contains(e.key),
+                onChanged: (v) => setS(() => v == true ? sel.add(e.key) : sel.remove(e.key)),
+                title: Text(e.key, style: const TextStyle(fontSize: 13.5)),
+                subtitle: Text('Rs ${_fmt(e.value)} / unit', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+              ),
+          ])),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, candidates.where((e) => sel.contains(e.key)).toList()),
+            child: const Text('Add selected'),
+          ),
+        ],
+      )),
+    );
+    if (chosen == null || chosen.isEmpty || !mounted) return;
+    setState(() {
+      for (final e in chosen) {
+        _heads.add(_Head(isFee: false, label: e.key, rate: e.value));
+      }
+    });
+  }
 
   void _removeHead(_Head h) {
     setState(() { _heads.remove(h); });
@@ -836,6 +924,9 @@ class _ErpProcessorJobworkScreenState
           const Expanded(child: Text('Cost heads (processor fee + overhead / labor)',
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15))),
           if (editable) ...[
+            if (_outputs.isNotEmpty)
+              TextButton.icon(onPressed: _suggestHeads,
+                  icon: const Icon(Icons.auto_awesome, size: 16), label: const Text('Suggest from BOM')),
             TextButton.icon(onPressed: () => _addHead(isFee: true),
                 icon: const Icon(Icons.add, size: 16), label: const Text('Processor fee')),
             TextButton.icon(onPressed: () => _addHead(isFee: false),
