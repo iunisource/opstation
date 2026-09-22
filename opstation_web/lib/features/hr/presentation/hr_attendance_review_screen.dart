@@ -101,6 +101,10 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
 
   List<_Pending> _pending = [];
 
+  // Multi-select: keys of the pending rows currently ticked.
+  final Set<String> _selected = {};
+  String _keyOf(_Pending p) => '${p.emp['id']}|${p.dateStr}';
+
   late DateTime _from;
   late DateTime _to;
 
@@ -217,6 +221,9 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
       return (a.emp['full_name'] as String? ?? '').compareTo(b.emp['full_name'] as String? ?? '');
     });
     _pending = out;
+    // Drop any selection that no longer maps to a pending row.
+    final live = {for (final p in out) _keyOf(p)};
+    _selected.retainWhere(live.contains);
   }
 
   // Read the existing attendance row (if any) for an employee/date.
@@ -238,35 +245,101 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     } catch (_) {/* audit is best-effort */}
   }
 
-  // Approved leave → excuse the day (marks Leave, no penalty).
-  Future<void> _excuse(_Pending p) async {
-    final orgId = _orgId; if (orgId == null) return;
-    setState(() => _working = true);
-    try {
-      final client = Supabase.instance.client;
-      final empId = p.emp['id'] as String;
-      final existing = await _rowFor(empId, p.dateStr);
-      final now = DateTime.now().toIso8601String();
-      if (existing != null) {
+  // ── Single-row DB writes (shared by the per-row and bulk actions) ─────────
+
+  // Approved leave → excuse the day (marks Leave, no penalty). Writes only.
+  Future<void> _excuseWrite(SupabaseClient client, _Pending p, String now) async {
+    final orgId = _orgId!;
+    final empId = p.emp['id'] as String;
+    final existing = await _rowFor(empId, p.dateStr);
+    if (existing != null) {
+      await client.from('hr_attendance').update({
+        'status': 'leave', 'review_status': 'excused', 'is_penalty': false,
+        'check_in': null, 'check_out': null, 'work_hours': 0,
+        'remarks': 'Excused (approved leave)', 'updated_at': now,
+      }).eq('id', existing['id'] as String);
+      await _audit(existing['id'] as String, empId, p.dateStr, 'Absence excused as approved leave');
+    } else {
+      final id = 'att_${DateTime.now().microsecondsSinceEpoch}_$empId';
+      await client.from('hr_attendance').insert({
+        'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': p.emp['branch_id'],
+        'att_date': p.dateStr, 'status': 'leave', 'review_status': 'excused',
+        'check_in': null, 'check_out': null, 'work_hours': 0,
+        'remarks': 'Excused (approved leave)', 'updated_at': now,
+      });
+      await _audit(id, empId, p.dateStr, 'Absence excused as approved leave');
+    }
+  }
+
+  // Unapproved → absence stands, plus penalty absents on following working days.
+  // Returns the list of dates a penalty absent was placed on. Writes only.
+  Future<List<String>> _unapprovedWrite(SupabaseClient client, _Pending p, String now) async {
+    final orgId = _orgId!;
+    final empId = p.emp['id'] as String;
+
+    final existing = await _rowFor(empId, p.dateStr);
+    if (existing != null) {
+      await client.from('hr_attendance').update({
+        'status': 'absent', 'review_status': 'unapproved', 'is_penalty': false, 'updated_at': now,
+      }).eq('id', existing['id'] as String);
+      await _audit(existing['id'] as String, empId, p.dateStr, 'Absence confirmed unapproved');
+    } else {
+      final id = 'att_${DateTime.now().microsecondsSinceEpoch}_$empId';
+      await client.from('hr_attendance').insert({
+        'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': p.emp['branch_id'],
+        'att_date': p.dateStr, 'status': 'absent', 'review_status': 'unapproved',
+        'check_in': null, 'check_out': null, 'work_hours': 0, 'updated_at': now,
+      });
+      await _audit(id, empId, p.dateStr, 'Absence confirmed unapproved');
+    }
+
+    final placed = <String>[];
+    var d = p.date;
+    var remaining = p.penaltyDays;
+    var guard = 0;
+    while (remaining > 0 && guard < 40) {
+      guard++;
+      d = d.add(const Duration(days: 1));
+      if (_isRestWeekday(d)) continue;
+      final ds = _fmt(d);
+      final ex = await _rowFor(empId, ds);
+      final exStatus = ex?['status'] as String?;
+      if (exStatus == 'holiday' || exStatus == 'rest_day' || exStatus == 'leave') continue;
+      if (ex != null) {
         await client.from('hr_attendance').update({
-          'status': 'leave', 'review_status': 'excused', 'is_penalty': false,
-          'check_in': null, 'check_out': null, 'work_hours': 0,
-          'remarks': 'Excused (approved leave)', 'updated_at': now,
-        }).eq('id', existing['id'] as String);
-        await _audit(existing['id'] as String, empId, p.dateStr, 'Absence excused as approved leave');
+          'status': 'absent', 'is_penalty': true, 'penalty_source_date': p.dateStr,
+          'remarks': 'Penalty for unapproved absence on ${p.dateStr}', 'updated_at': now,
+        }).eq('id', ex['id'] as String);
+        await _audit(ex['id'] as String, empId, ds, 'Penalty absent (unapproved absence ${p.dateStr}); punch times kept');
       } else {
         final id = 'att_${DateTime.now().microsecondsSinceEpoch}_$empId';
         await client.from('hr_attendance').insert({
           'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': p.emp['branch_id'],
-          'att_date': p.dateStr, 'status': 'leave', 'review_status': 'excused',
+          'att_date': ds, 'status': 'absent', 'is_penalty': true, 'penalty_source_date': p.dateStr,
           'check_in': null, 'check_out': null, 'work_hours': 0,
-          'remarks': 'Excused (approved leave)', 'updated_at': now,
+          'remarks': 'Penalty for unapproved absence on ${p.dateStr}', 'updated_at': now,
         });
-        await _audit(id, empId, p.dateStr, 'Absence excused as approved leave');
+        await _audit(id, empId, ds, 'Penalty absent (unapproved absence ${p.dateStr})');
       }
-      await _loadAtt();
-      _rebuildPending();
-      ref.invalidate(attendanceReviewPendingCountProvider);
+      placed.add(DateFormat('d MMM').format(d));
+      remaining--;
+    }
+    return placed;
+  }
+
+  Future<void> _afterWrites() async {
+    await _loadAtt();
+    _rebuildPending();
+    ref.invalidate(attendanceReviewPendingCountProvider);
+  }
+
+  // ── Per-row actions ───────────────────────────────────────────────────────
+  Future<void> _excuse(_Pending p) async {
+    final orgId = _orgId; if (orgId == null) return;
+    setState(() => _working = true);
+    try {
+      await _excuseWrite(Supabase.instance.client, p, DateTime.now().toIso8601String());
+      await _afterWrites();
       _snack('${p.emp['full_name']} — ${DateFormat('d MMM').format(p.date)} excused as approved leave.');
     } catch (e) {
       _snack('Failed: $e');
@@ -275,73 +348,12 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     }
   }
 
-  // Unapproved → absence stands, and per shift policy add penalty absents on the
-  // next working day(s), preserving any punch times but reporting Absent.
   Future<void> _unapproved(_Pending p) async {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _working = true);
     try {
-      final client = Supabase.instance.client;
-      final empId = p.emp['id'] as String;
-      final now = DateTime.now().toIso8601String();
-
-      // 1) mark the actual absence as reviewed/unapproved
-      final existing = await _rowFor(empId, p.dateStr);
-      if (existing != null) {
-        await client.from('hr_attendance').update({
-          'status': 'absent', 'review_status': 'unapproved', 'is_penalty': false,
-          'updated_at': now,
-        }).eq('id', existing['id'] as String);
-        await _audit(existing['id'] as String, empId, p.dateStr, 'Absence confirmed unapproved');
-      } else {
-        final id = 'att_${DateTime.now().microsecondsSinceEpoch}_$empId';
-        await client.from('hr_attendance').insert({
-          'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': p.emp['branch_id'],
-          'att_date': p.dateStr, 'status': 'absent', 'review_status': 'unapproved',
-          'check_in': null, 'check_out': null, 'work_hours': 0,
-          'updated_at': now,
-        });
-        await _audit(id, empId, p.dateStr, 'Absence confirmed unapproved');
-      }
-
-      // 2) add penalty absents on following working days
-      final placed = <String>[];
-      var d = p.date;
-      var remaining = p.penaltyDays;
-      var guard = 0;
-      while (remaining > 0 && guard < 40) {
-        guard++;
-        d = d.add(const Duration(days: 1));
-        if (_isRestWeekday(d)) continue;
-        final ds = _fmt(d);
-        final ex = await _rowFor(empId, ds);
-        final exStatus = ex?['status'] as String?;
-        // Don't overwrite a holiday / rest day / approved leave — jump ahead.
-        if (exStatus == 'holiday' || exStatus == 'rest_day' || exStatus == 'leave') continue;
-        if (ex != null) {
-          // Preserve punch times; flip the day to a penalty absent.
-          await client.from('hr_attendance').update({
-            'status': 'absent', 'is_penalty': true, 'penalty_source_date': p.dateStr,
-            'remarks': 'Penalty for unapproved absence on ${p.dateStr}', 'updated_at': now,
-          }).eq('id', ex['id'] as String);
-          await _audit(ex['id'] as String, empId, ds, 'Penalty absent (unapproved absence ${p.dateStr}); punch times kept');
-        } else {
-          final id = 'att_${DateTime.now().microsecondsSinceEpoch}_$empId';
-          await client.from('hr_attendance').insert({
-            'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': p.emp['branch_id'],
-            'att_date': ds, 'status': 'absent', 'is_penalty': true, 'penalty_source_date': p.dateStr,
-            'check_in': null, 'check_out': null, 'work_hours': 0,
-            'remarks': 'Penalty for unapproved absence on ${p.dateStr}', 'updated_at': now,
-          });
-          await _audit(id, empId, ds, 'Penalty absent (unapproved absence ${p.dateStr})');
-        }
-        placed.add(DateFormat('d MMM').format(d));
-        remaining--;
-      }
-
-      await _loadAtt();
-      _rebuildPending();
-      ref.invalidate(attendanceReviewPendingCountProvider);
+      final placed = await _unapprovedWrite(Supabase.instance.client, p, DateTime.now().toIso8601String());
+      await _afterWrites();
       final msg = placed.isEmpty
           ? '${p.emp['full_name']} — absence on ${DateFormat('d MMM').format(p.date)} marked unapproved.'
           : '${p.emp['full_name']} — unapproved. Penalty absent added on ${placed.join(', ')}.';
@@ -351,6 +363,85 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     } finally {
       if (mounted) setState(() => _working = false);
     }
+  }
+
+  // ── Bulk actions ──────────────────────────────────────────────────────────
+  List<_Pending> get _selectedPending =>
+      _pending.where((p) => _selected.contains(_keyOf(p))).toList();
+
+  Future<void> _bulkExcuse() async {
+    final targets = _selectedPending;
+    if (targets.isEmpty) return;
+    setState(() => _working = true);
+    final client = Supabase.instance.client;
+    final now = DateTime.now().toIso8601String();
+    int ok = 0; String? firstErr;
+    for (final p in targets) {
+      try { await _excuseWrite(client, p, now); ok++; }
+      catch (e) { firstErr ??= '$e'; }
+    }
+    try { await _afterWrites(); } catch (_) {}
+    if (mounted) setState(() => _working = false);
+    final word = ok == 1 ? 'absence' : 'absences';
+    _snack(firstErr == null
+        ? 'Excused $ok $word as approved leave.'
+        : '$ok done, ${targets.length - ok} failed. $firstErr');
+  }
+
+  Future<void> _bulkUnapproved() async {
+    final targets = _selectedPending;
+    if (targets.isEmpty) return;
+    final withPenalty = targets.where((p) => p.penaltyDays > 0).length;
+    final absWord = targets.length == 1 ? 'absence' : 'absences';
+    final penaltyLine = withPenalty > 0
+        ? '\n\n$withPenalty of them will also add penalty absents on the next working day(s), per each employee shift policy — even if they were present, punch times are kept but the day reports as Absent.'
+        : '';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Mark unapproved absences?', style: TextStyle(fontSize: 16)),
+        content: Text(
+          '${targets.length} $absWord will be recorded as unapproved.$penaltyLine',
+          style: const TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrange, foregroundColor: Colors.white),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _working = true);
+    final client = Supabase.instance.client;
+    final now = DateTime.now().toIso8601String();
+    int done = 0; int penalties = 0; String? firstErr;
+    for (final p in targets) {
+      try { final placed = await _unapprovedWrite(client, p, now); done++; penalties += placed.length; }
+      catch (e) { firstErr ??= '$e'; }
+    }
+    try { await _afterWrites(); } catch (_) {}
+    if (mounted) setState(() => _working = false);
+    final penaltyMsg = penalties > 0 ? ', $penalties penalty absents added' : '';
+    _snack(firstErr == null
+        ? '$done marked unapproved$penaltyMsg.'
+        : '$done done, ${targets.length - done} failed. $firstErr');
+  }
+
+  void _toggle(_Pending p, bool? v) {
+    setState(() {
+      if (v == true) { _selected.add(_keyOf(p)); } else { _selected.remove(_keyOf(p)); }
+    });
+  }
+
+  void _selectAll(bool v) {
+    setState(() {
+      _selected.clear();
+      if (v) { _selected.addAll(_pending.map(_keyOf)); }
+    });
   }
 
   Future<void> _pickDate(bool isFrom) async {
@@ -397,6 +488,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
               : Column(children: [
                   _filterBar(),
                   const Divider(height: 1),
+                  if (_pending.isNotEmpty) _bulkBar(),
                   Expanded(child: _list()),
                   if (_working) const LinearProgressIndicator(minHeight: 2),
                 ]),
@@ -437,6 +529,47 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     );
   }
 
+  Widget _bulkBar() {
+    final total = _pending.length;
+    final sel = _selected.length;
+    final allSelected = sel == total && total > 0;
+    return Container(
+      color: sel > 0 ? AppTheme.primary.withOpacity(0.06) : AppTheme.card,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(children: [
+        Checkbox(
+          value: sel == 0 ? false : (allSelected ? true : null),
+          tristate: true,
+          onChanged: _working ? null : (_) => _selectAll(!allSelected),
+        ),
+        Text(sel == 0 ? 'Select all ($total)' : '$sel selected',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        const Spacer(),
+        if (sel > 0) ...[
+          OutlinedButton.icon(
+            onPressed: _working ? null : _bulkExcuse,
+            icon: const Icon(Icons.check, size: 15),
+            label: Text('Approve leave ($sel)', style: const TextStyle(fontSize: 12)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.green.shade700, visualDensity: VisualDensity.compact,
+              side: BorderSide(color: Colors.green.withOpacity(0.5)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: _working ? null : _bulkUnapproved,
+            icon: const Icon(Icons.block, size: 15),
+            label: Text('Unapproved ($sel)', style: const TextStyle(fontSize: 12)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.deepOrange, foregroundColor: Colors.white, visualDensity: VisualDensity.compact,
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ]),
+    );
+  }
+
   Widget _list() {
     if (_pending.isEmpty) {
       return const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -456,13 +589,31 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
         final items = byDate[ds]!;
         final d = DateTime.tryParse(ds) ?? DateTime.now();
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: double.infinity,
-            color: AppTheme.background,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text('${DateFormat('EEEE, d MMM yyyy').format(d)}  ·  ${items.length} absent',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
-          ),
+          Builder(builder: (_) {
+            final keys = items.map(_keyOf).toList();
+            final allSel = keys.isNotEmpty && keys.every(_selected.contains);
+            return InkWell(
+              onTap: _working ? null : () => setState(() {
+                if (allSel) { _selected.removeAll(keys); } else { _selected.addAll(keys); }
+              }),
+              child: Container(
+                width: double.infinity,
+                color: AppTheme.background,
+                padding: const EdgeInsets.only(left: 8, right: 16, top: 4, bottom: 4),
+                child: Row(children: [
+                  SizedBox(width: 30, height: 30, child: Checkbox(
+                    value: allSel,
+                    onChanged: _working ? null : (_) => setState(() {
+                      if (allSel) { _selected.removeAll(keys); } else { _selected.addAll(keys); }
+                    }),
+                  )),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text('${DateFormat('EEEE, d MMM yyyy').format(d)}  ·  ${items.length} absent',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary))),
+                ]),
+              ),
+            );
+          }),
           ...items.map(_tile),
         ]);
       },
@@ -479,8 +630,13 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
         : 'no penalty (shift policy off)';
     return Container(
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border, width: 0.5))),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.only(left: 4, right: 16, top: 10, bottom: 10),
       child: Row(children: [
+        Checkbox(
+          value: _selected.contains(_keyOf(p)),
+          onChanged: _working ? null : (v) => _toggle(p, v),
+        ),
+        const SizedBox(width: 2),
         CircleAvatar(
           radius: 18, backgroundColor: AppTheme.background,
           backgroundImage: (photo != null && photo.isNotEmpty) ? NetworkImage(photo) : null,
