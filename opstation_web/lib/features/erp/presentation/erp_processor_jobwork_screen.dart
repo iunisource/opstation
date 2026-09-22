@@ -204,7 +204,7 @@ class _ErpProcessorJobworkScreenState
     }
   }
 
-  void _closeEditor() => setState(() => _editing = null);
+  void _closeEditor() => setState(() { _editing = null; _busy = false; });
 
   bool get _isNew => _editing != null && (_editing!['id'] == null);
   bool get _isDraft => _status == 'draft';
@@ -226,7 +226,10 @@ class _ErpProcessorJobworkScreenState
     return 'JW-$year-${(mx + 1).toString().padLeft(4, '0')}';
   }
 
-  Future<String?> _saveDraft() async {
+  /// Saves the draft. When [closeAfter] is true (Save Draft button) the editor
+  /// closes and the list reloads; Post passes false so it can continue with the
+  /// saved id in the editor context.
+  Future<String?> _saveDraft({bool closeAfter = true}) async {
     if (_procId == null || _homeId == null) { _snack('Pick the processor and home branch'); return null; }
     if (_inputs.isEmpty) { _snack('Add at least one input line'); return null; }
     if (_outputs.isEmpty) { _snack('Add at least one output line'); return null; }
@@ -313,12 +316,24 @@ class _ErpProcessorJobworkScreenState
       // ignore: avoid_print
       print('[jobwork] save: heads written; all DB writes done');
       if (!mounted) return id;
-      setState(() => _busy = false);
-      // ignore: avoid_print
-      print('[jobwork] save: busy=false rebuild requested');
-      _snack('Saved');
-      // ignore: avoid_print
-      print('[jobwork] save: snackbar shown; done');
+      if (closeAfter) {
+        // Return to the list after a plain save (avoids re-rendering the editor
+        // in place, which blanked the frame after a successful save).
+        final vnoMsg = '${_editing?['voucher_number'] ?? ''}';
+        setState(() { _busy = false; _editing = null; });
+        // ignore: avoid_print
+        print('[jobwork] save: editor closed, reloading list');
+        _snack('Saved $vnoMsg'.trim());
+        await _load();
+        // ignore: avoid_print
+        print('[jobwork] save: list reloaded; done');
+      } else {
+        // Post flow: do NOT rebuild the editor in place here (that render
+        // blanks the frame). The caller shows its dialog as an overlay and then
+        // returns to the list regardless of outcome.
+        // ignore: avoid_print
+        print('[jobwork] save: done (no in-place rebuild; post continues)');
+      }
       return id;
     } catch (e, st) {
       // ignore: avoid_print
@@ -330,7 +345,7 @@ class _ErpProcessorJobworkScreenState
   }
 
   Future<void> _post() async {
-    final id = await _saveDraft();
+    final id = await _saveDraft(closeAfter: false);
     if (id == null) return;
     final ok = await showDialog<bool>(
       context: context,
@@ -345,18 +360,29 @@ class _ErpProcessorJobworkScreenState
         ],
       ),
     );
-    if (ok != true) return;
-    setState(() => _busy = true);
-    try {
-      final msg = await Supabase.instance.client
-          .rpc('post_processor_jobwork', params: {'p_id': id, 'p_user': _userId});
-      _snack('$msg');
+    if (ok != true) {
+      // Cancelled: the draft is already saved — return to the list (never
+      // re-render the editor in place after a save).
       _closeEditor();
       await _load();
+      return;
+    }
+    try {
+      // ignore: avoid_print
+      print('[jobwork] post: calling post_processor_jobwork');
+      final msg = await Supabase.instance.client
+          .rpc('post_processor_jobwork', params: {'p_id': id, 'p_user': _userId});
+      // ignore: avoid_print
+      print('[jobwork] post: ok -> $msg');
+      _snack('$msg');
     } catch (e) {
-      setState(() => _busy = false);
+      // ignore: avoid_print
+      print('[jobwork] post: FAILED $e');
       _snack(friendlyError('Could not post', e));
     }
+    // Always return to the list afterwards (draft stays if posting failed).
+    _closeEditor();
+    await _load();
   }
 
   Future<void> _void(Map<String, dynamic> h) async {
