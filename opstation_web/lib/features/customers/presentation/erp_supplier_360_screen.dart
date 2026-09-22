@@ -617,6 +617,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
           'org_id': orgId, 'supplier_id': sid, 'product_id': productId,
           'price': price, 'note': note.isEmpty ? null : note,
           'changed_at': nowIso, 'changed_by': userId,
+          'changed_by_name': ref.read(currentUserProvider)?.name,
         });
       } catch (_) {/* history table may predate migration 265 */}
       await _loadPrices();
@@ -741,7 +742,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     try {
       final rows = await Supabase.instance.client
           .from('supplier_price_history')
-          .select('price, note, changed_at')
+          .select('price, note, changed_at, changed_by_name')
           .eq('org_id', orgId).eq('supplier_id', sid).eq('product_id', productId)
           .order('changed_at', ascending: false).limit(200);
       hist = List<Map<String, dynamic>>.from(rows);
@@ -770,6 +771,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                       final h = hist[i];
                       final at = DateTime.tryParse('${h['changed_at']}')?.toLocal();
                       final note = (h['note'] as String? ?? '');
+                      final who = (h['changed_by_name'] as String? ?? '');
                       final isLatest = i == 0;
                       return ListTile(
                         dense: true,
@@ -780,6 +782,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                                 color: isLatest ? AppTheme.primary : null)),
                         subtitle: Text([
                           if (at != null) DateFormat('d MMM y · h:mm a').format(at),
+                          if (who.isNotEmpty) 'by $who',
                           if (note.isNotEmpty) note,
                         ].join('  ·  '), style: const TextStyle(fontSize: 12)),
                       );
