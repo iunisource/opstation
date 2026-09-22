@@ -2348,6 +2348,24 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         for (final p in prods as List) {
           priceMap[p['id'] as String] = (p['selling_price'] as num?)?.toDouble() ?? 0;
         }
+        // Overlay this customer's agreed price list (Customer 360 → Price List
+        // toggle) OVER the product profile rates, so a designated SKU invoices at
+        // the agreed price instead of the profile selling_price.
+        try {
+          final custId = _detail['customer_id'] as String?;
+          if (custId != null && orgId != null) {
+            final pref = await Supabase.instance.client.from('customer_price_prefs')
+                .select('use_on_invoice').eq('org_id', orgId).eq('customer_id', custId).maybeSingle();
+            if (((pref?['use_on_invoice'] as bool?) ?? false)) {
+              final plRows = await Supabase.instance.client.from('customer_price_list')
+                  .select('product_id, price').eq('org_id', orgId).eq('customer_id', custId)
+                  .inFilter('product_id', pids.cast<Object>());
+              for (final r in plRows as List) {
+                priceMap[r['product_id'] as String] = (r['price'] as num?)?.toDouble() ?? 0;
+              }
+            }
+          }
+        } catch (_) {/* price-list tables may predate migrations 263/266 */}
       }
       final siItems = _items.asMap().entries.map((e) {
         final i = e.key; final item = e.value;
