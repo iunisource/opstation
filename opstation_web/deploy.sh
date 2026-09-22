@@ -13,7 +13,7 @@ grab erp_job_card_screen       lib/features/erp/presentation/erp_job_card_screen
 grab erp_customer_360_screen   lib/features/customers/presentation/erp_customer_360_screen.dart
 grab erp_fg_without_bom_screen lib/features/erp/presentation/erp_fg_without_bom_screen.dart
 
-flutter build web --release
+flutter build web --release --source-maps
 firebase deploy --only hosting
 git add -A
 git commit -m "Deploy: account linking + Active Routes visit-status split + pending UI fixes"
