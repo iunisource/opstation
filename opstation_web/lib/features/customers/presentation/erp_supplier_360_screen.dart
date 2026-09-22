@@ -9,6 +9,8 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
+import '../../../core/widgets/product_picker.dart';
+import '../../../core/pdf/price_list_pdf.dart';
 
 /// Supplier Profile (Supplier 360) — the purchase-side mirror of Customer 360.
 ///  • Overview   : contact card, outstanding payable, purchase summary
@@ -69,6 +71,13 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
   bool _loadingComplaints = true;
   List<Map<String, dynamic>> _complaints = [];
 
+  // Per-supplier price list
+  bool _loadingPrices = true;
+  List<Map<String, dynamic>> _prices = [];
+  List<Map<String, dynamic>> _priceProducts = [];
+  final _priceSearchCtrl = TextEditingController();
+  String _priceQuery = '';
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _supplierId => _supplier?['id'] as String?;
   String get _name => (_supplier?['name'] as String?) ?? '';
@@ -76,7 +85,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 5, vsync: this);
+    _tabs = TabController(length: 6, vsync: this);
     _loadSuppliers();
     _loadPending();
     _searchCtrl.addListener(_onSearch);
@@ -92,6 +101,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     _tabs.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    _priceSearchCtrl.dispose();
     super.dispose();
   }
 
@@ -150,6 +160,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     _loadPurchases();
     _loadActivities();
     _loadComplaints();
+    _loadPrices();
   }
 
   /// Per-supplier pending count for the list badges: open/in-progress tasks +
@@ -541,6 +552,336 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$label copied'), duration: const Duration(seconds: 1), behavior: SnackBarBehavior.floating));
   }
 
+  // ── Per-supplier price list ───────────────────────────────────────────────
+  Future<void> _loadPrices() async {
+    final orgId = _orgId;
+    final sid = _supplierId;
+    if (orgId == null || sid == null) { if (mounted) setState(() => _loadingPrices = false); return; }
+    if (mounted) setState(() => _loadingPrices = true);
+    try {
+      final client = Supabase.instance.client;
+      List rows = const [];
+      try {
+        rows = await client.from('supplier_price_list')
+            .select('id, product_id, price, note, updated_at')
+            .eq('org_id', orgId).eq('supplier_id', sid);
+      } catch (_) {/* table may predate migration 264 */}
+      // Product catalog (for names + the picker). Loaded once.
+      if (_priceProducts.isEmpty) {
+        final prods = await client.from('products')
+            .select('id, name, sku, base_uom_id').eq('org_id', orgId).eq('is_active', true).limit(5000);
+        _priceProducts = List<Map<String, dynamic>>.from(prods);
+      }
+      final pById = {for (final p in _priceProducts) p['id'] as String: p};
+      final list = <Map<String, dynamic>>[];
+      for (final r in rows) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final p = pById[m['product_id']];
+        list.add({
+          'id': m['id'],
+          'product_id': m['product_id'],
+          'name': (p?['name'] as String?) ?? (m['product_id'] as String? ?? '—'),
+          'sku': (p?['sku'] as String?) ?? '',
+          'price': (m['price'] as num?)?.toDouble() ?? 0,
+          'note': (m['note'] as String?) ?? '',
+        });
+      }
+      list.sort((a, b) => '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+      if (!mounted) return;
+      setState(() { _prices = list; _loadingPrices = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingPrices = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load price list: $e')));
+    }
+  }
+
+  Future<void> _savePrice({required String productId, required double price, required String note, String? existingId}) async {
+    final orgId = _orgId;
+    final sid = _supplierId;
+    if (orgId == null || sid == null) return;
+    final userId = ref.read(currentUserProvider)?.id;
+    final client = Supabase.instance.client;
+    try {
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      await client.from('supplier_price_list').upsert({
+        'id': existingId ?? 'spl_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': orgId, 'supplier_id': sid, 'product_id': productId,
+        'price': price, 'note': note.isEmpty ? null : note,
+        'updated_at': nowIso, 'updated_by': userId,
+      }, onConflict: 'org_id,supplier_id,product_id');
+      // Append to price history (best-effort; table added in migration 265).
+      try {
+        await client.from('supplier_price_history').insert({
+          'id': 'sph_${DateTime.now().microsecondsSinceEpoch}',
+          'org_id': orgId, 'supplier_id': sid, 'product_id': productId,
+          'price': price, 'note': note.isEmpty ? null : note,
+          'changed_at': nowIso, 'changed_by': userId,
+        });
+      } catch (_) {/* history table may predate migration 265 */}
+      await _loadPrices();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+    }
+  }
+
+  Future<void> _deletePrice(String id) async {
+    try {
+      await Supabase.instance.client.from('supplier_price_list').delete().eq('id', id);
+      await _loadPrices();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+
+  Future<void> _priceDialog({Map<String, dynamic>? existing}) async {
+    String? productId = existing?['product_id'] as String?;
+    String productLabel = existing != null
+        ? '${existing['name']}${(existing['sku'] as String? ?? '').isNotEmpty ? '  (${existing['sku']})' : ''}'
+        : '';
+    final priceCtrl = TextEditingController(text: existing != null ? _fmtNum((existing['price'] as num?)?.toDouble() ?? 0) : '');
+    final noteCtrl = TextEditingController(text: (existing?['note'] as String?) ?? '');
+    final isEdit = existing != null;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        title: Text(isEdit ? 'Edit price' : 'Add price'),
+        content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          InkWell(
+            onTap: isEdit ? null : () async {
+              final p = await pickProduct(ctx, _priceProducts, title: 'Select product');
+              if (p == null || p.isEmpty) return;
+              setS(() { productId = p['id'] as String?; productLabel = '${p['name']}${(p['sku'] as String? ?? '').isNotEmpty ? '  (${p['sku']})' : ''}'; });
+            },
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: 'Product', isDense: true, border: const OutlineInputBorder(),
+                suffixIcon: isEdit ? null : const Icon(Icons.search, size: 18)),
+              child: Text(productLabel.isEmpty ? 'Select product' : productLabel,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: productLabel.isEmpty ? AppTheme.textSecondary : null)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: priceCtrl,
+            decoration: const InputDecoration(labelText: 'Purchase price', isDense: true, border: OutlineInputBorder(), prefixText: 'Rs '),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: noteCtrl,
+            decoration: const InputDecoration(labelText: 'Note (optional)', isDense: true, border: OutlineInputBorder()),
+          ),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (productId == null) { ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Pick a product'))); return; }
+              final price = double.tryParse(priceCtrl.text.trim()) ?? 0;
+              Navigator.pop(ctx);
+              _savePrice(productId: productId!, price: price, note: noteCtrl.text.trim(), existingId: existing?['id'] as String?);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      )),
+    );
+  }
+
+  String _fmtNum(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+  PriceListDoc _buildPriceDoc() {
+    final now = DateTime.now();
+    return PriceListDoc(
+      docTitle: 'Supplier Price List',
+      orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      partyLabel: 'Supplier',
+      partyName: _name,
+      priceLabel: 'Purchase Price',
+      genTime: DateFormat('d MMM y · h:mm a').format(now),
+      rows: [
+        for (final r in _prices)
+          PriceListRow(
+            '${r['name']}',
+            '${r['sku'] ?? ''}',
+            '${r['note'] ?? ''}',
+            'Rs. ${money((r['price'] as num?)?.toDouble() ?? 0)}',
+          ),
+      ],
+      fileBase: 'SupplierPriceList_${_name.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')}_${DateFormat('yyyyMMdd').format(now)}',
+    );
+  }
+
+  Future<void> _printPriceList() async {
+    try {
+      await printPriceListPdf(_buildPriceDoc());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print failed: $e')));
+    }
+  }
+
+  Future<void> _sharePriceList() async {
+    try {
+      await sharePriceListPdf(_buildPriceDoc());
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
+    }
+  }
+
+  // Price lifecycle for one SKU: the full timeline of purchase prices recorded.
+  Future<void> _priceHistoryDialog(String productId, String name) async {
+    final orgId = _orgId;
+    final sid = _supplierId;
+    if (orgId == null || sid == null) return;
+    List<Map<String, dynamic>> hist = [];
+    try {
+      final rows = await Supabase.instance.client
+          .from('supplier_price_history')
+          .select('price, note, changed_at')
+          .eq('org_id', orgId).eq('supplier_id', sid).eq('product_id', productId)
+          .order('changed_at', ascending: false).limit(200);
+      hist = List<Map<String, dynamic>>.from(rows);
+    } catch (_) {/* history table may predate migration 265 */}
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          const Text('Price history', style: TextStyle(fontSize: 16)),
+          Text(name, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, fontWeight: FontWeight.w400)),
+        ]),
+        content: SizedBox(
+          width: 420,
+          child: hist.isEmpty
+              ? const Padding(padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('No history yet. Price changes are recorded from now on.',
+                      style: TextStyle(color: AppTheme.textSecondary)))
+              : ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 360),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: hist.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final h = hist[i];
+                      final at = DateTime.tryParse('${h['changed_at']}')?.toLocal();
+                      final note = (h['note'] as String? ?? '');
+                      final isLatest = i == 0;
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(isLatest ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                            size: 16, color: isLatest ? AppTheme.primary : AppTheme.textSecondary),
+                        title: Text('Rs. ${money((h['price'] as num?)?.toDouble() ?? 0)}',
+                            style: TextStyle(fontWeight: FontWeight.w700,
+                                color: isLatest ? AppTheme.primary : null)),
+                        subtitle: Text([
+                          if (at != null) DateFormat('d MMM y · h:mm a').format(at),
+                          if (note.isNotEmpty) note,
+                        ].join('  ·  '), style: const TextStyle(fontSize: 12)),
+                      );
+                    },
+                  ),
+                ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+      ),
+    );
+  }
+
+  Widget _priceListTab() {
+    if (_loadingPrices) {
+      return const Center(child: Padding(padding: EdgeInsets.all(48), child: CircularProgressIndicator()));
+    }
+    final q = _priceQuery.trim().toLowerCase();
+    final shown = q.isEmpty
+        ? _prices
+        : _prices.where((r) => '${r['name']} ${r['sku']} ${r['note']}'.toLowerCase().contains(q)).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Row(children: [
+          Expanded(child: Text('Agreed / suggested purchase prices for $_name',
+              style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+          IconButton(
+            tooltip: 'Print / Save PDF',
+            icon: const Icon(Icons.print_outlined, size: 20),
+            onPressed: _prices.isEmpty ? null : _printPriceList,
+          ),
+          IconButton(
+            tooltip: 'Share PDF',
+            icon: const Icon(Icons.share_outlined, size: 20),
+            onPressed: _prices.isEmpty ? null : _sharePriceList,
+          ),
+          const SizedBox(width: 4),
+          FilledButton.icon(
+            onPressed: () => _priceDialog(),
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Add price'),
+          ),
+        ]),
+      ),
+      if (_prices.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+          child: TextField(
+            controller: _priceSearchCtrl,
+            onChanged: (v) => setState(() => _priceQuery = v),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Search product, SKU or note',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              suffixIcon: _priceQuery.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () { _priceSearchCtrl.clear(); setState(() => _priceQuery = ''); }),
+              border: const OutlineInputBorder(),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+          ),
+        ),
+      const Divider(height: 1),
+      Expanded(
+        child: _prices.isEmpty
+            ? const Center(child: Text('No prices set for this supplier yet.\nUse "Add price" to record agreed prices per product.',
+                textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary)))
+            : shown.isEmpty
+              ? const Center(child: Text('No products match your search.',
+                  style: TextStyle(color: AppTheme.textSecondary)))
+              : ListView.separated(
+                itemCount: shown.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (_, i) {
+                  final r = shown[i];
+                  final note = (r['note'] as String? ?? '');
+                  return ListTile(
+                    onTap: () => _priceHistoryDialog(r['product_id'] as String, '${r['name']}'),
+                    title: Text('${r['name']}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                    subtitle: Text([
+                      if ('${r['sku'] ?? ''}'.isNotEmpty) '${r['sku']}',
+                      if (note.isNotEmpty) note,
+                      'Tap for price history',
+                    ].join('  ·  '), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('Rs. ${money((r['price'] as num?)?.toDouble() ?? 0)}',
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppTheme.primary)),
+                      IconButton(icon: const Icon(Icons.history, size: 18), tooltip: 'Price history',
+                          onPressed: () => _priceHistoryDialog(r['product_id'] as String, '${r['name']}')),
+                      IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _priceDialog(existing: r)),
+                      IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                          onPressed: () => _deletePrice(r['id'] as String)),
+                    ]),
+                  );
+                },
+              ),
+      ),
+    ]);
+  }
+
   // -------------------------------------------------------------- build
 
   @override
@@ -572,11 +913,12 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                   const Text('Complaints'),
                   if (_openComplaints > 0) _tabBadge(_openComplaints, AppTheme.danger),
                 ])),
+                const Tab(text: 'Price List'),
               ],
             )),
             const Divider(height: 1),
             Expanded(child: TabBarView(controller: _tabs, children: [
-              _overviewTab(), _payablesTab(), _purchasesTab(), _tasksTab(), _complaintsTab(),
+              _overviewTab(), _payablesTab(), _purchasesTab(), _tasksTab(), _complaintsTab(), _priceListTab(),
             ])),
           ])),
       ]),
