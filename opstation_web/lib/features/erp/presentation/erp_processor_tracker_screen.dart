@@ -24,6 +24,11 @@ class _ErpProcessorTrackerScreenState
   String? _processorFilter; // processor_id; null = all processors
   List<Map<String, dynamic>> _rows = [];
 
+  int _tab = 0; // 0 = currently out, 1 = conversions (job-work)
+  bool _loadingConv = false;
+  bool _convLoaded = false;
+  List<Map<String, dynamic>> _conversions = []; // per receipt, resolved
+
   @override
   void initState() {
     super.initState();
@@ -80,6 +85,68 @@ class _ErpProcessorTrackerScreenState
       }
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  // Posted job-work conversions: what was consumed at the processor and what
+  // came back. Read-only movement history so the person tracking the processor
+  // can see the current status of each send.
+  Future<void> _loadConversions() async {
+    final orgId = _orgId;
+    if (orgId == null) { setState(() { _loadingConv = false; _convLoaded = true; }); return; }
+    setState(() => _loadingConv = true);
+    try {
+      final client = Supabase.instance.client;
+      final jw = await client.from('processor_jobwork')
+          .select('id, voucher_number, jobwork_date, processor_branch_id, home_branch_id, fee_amount, overhead_amount, input_cost, total_cost, status')
+          .eq('org_id', orgId).eq('status', 'posted')
+          .order('jobwork_date', ascending: false).limit(300);
+      final receipts = List<Map<String, dynamic>>.from(jw);
+      final ids = [for (final r in receipts) r['id'] as String];
+      final linesByJw = <String, List<Map<String, dynamic>>>{};
+      if (ids.isNotEmpty) {
+        for (var i = 0; i < ids.length; i += 200) {
+          final chunk = ids.sublist(i, (i + 200).clamp(0, ids.length));
+          final lines = await client.from('processor_jobwork_lines')
+              .select('jobwork_id, direction, product_id, quantity, unit_cost').inFilter('jobwork_id', chunk);
+          for (final l in lines as List) {
+            (linesByJw[l['jobwork_id'] as String] ??= []).add(Map<String, dynamic>.from(l as Map));
+          }
+        }
+      }
+      final branches = await client.from('branches').select('id, name').eq('org_id', orgId);
+      final bName = {for (final b in branches as List) b['id'] as String: (b['name'] as String? ?? '—')};
+      final products = await client.from('products').select('id, name, sku').eq('org_id', orgId).limit(5000);
+      final pName = {for (final p in products as List) p['id'] as String: p};
+
+      final out = <Map<String, dynamic>>[];
+      for (final r in receipts) {
+        final ls = linesByJw[r['id']] ?? const [];
+        List<Map<String, dynamic>> side(String dir) => [
+          for (final l in ls) if (l['direction'] == dir) {
+            'name': (pName[l['product_id']]?['name'] as String?) ?? (l['product_id'] as String? ?? '—'),
+            'sku': (pName[l['product_id']]?['sku'] as String?) ?? '',
+            'qty': (l['quantity'] as num?)?.toDouble() ?? 0,
+          }
+        ];
+        out.add({
+          'voucher': r['voucher_number'] ?? '—',
+          'date': r['jobwork_date'] ?? '',
+          'processor_name': bName[r['processor_branch_id']] ?? '—',
+          'home_name': bName[r['home_branch_id']] ?? '—',
+          'fee': (r['fee_amount'] as num?)?.toDouble() ?? 0,
+          'overhead': (r['overhead_amount'] as num?)?.toDouble() ?? 0,
+          'total': (r['total_cost'] as num?)?.toDouble() ?? 0,
+          'inputs': side('input'),
+          'outputs': side('output'),
+        });
+      }
+      if (!mounted) return;
+      setState(() { _conversions = out; _loadingConv = false; _convLoaded = true; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _loadingConv = false; _convLoaded = true; });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load conversions: $e')));
     }
   }
 
@@ -155,6 +222,11 @@ class _ErpProcessorTrackerScreenState
             'back. Lines past their return-due date are flagged overdue.',
             style: TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
+        _tabBar(),
+        const SizedBox(height: 16),
+        if (_tab == 1)
+          Expanded(child: _conversionsView())
+        else ...[
         Wrap(spacing: 12, runSpacing: 12, children: [
           _card('Stock with Processors', 'Rs. ${money(totalValue)}',
               AppTheme.primary),
@@ -224,9 +296,139 @@ class _ErpProcessorTrackerScreenState
                       ]),
                     ),
         ),
+        ],
       ]),
     );
   }
+
+  Widget _tabBar() {
+    Widget seg(String label, IconData icon, int idx) {
+      final on = _tab == idx;
+      return InkWell(
+        onTap: () {
+          setState(() => _tab = idx);
+          if (idx == 1 && !_convLoaded && !_loadingConv) _loadConversions();
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? AppTheme.primary.withOpacity(0.10) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: on ? AppTheme.primary.withOpacity(0.5) : AppTheme.border),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 15, color: on ? AppTheme.primary : AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                color: on ? AppTheme.primary : AppTheme.textSecondary)),
+          ]),
+        ),
+      );
+    }
+    return Row(children: [
+      seg('Currently out', Icons.inventory_2_outlined, 0),
+      const SizedBox(width: 8),
+      seg('Conversions (job-work)', Icons.sync_alt, 1),
+    ]);
+  }
+
+  Widget _conversionsView() {
+    if (_loadingConv) return const Center(child: CircularProgressIndicator());
+    if (_conversions.isEmpty) {
+      return const Center(child: Text(
+          'No posted job-work conversions yet.\nWhen a job-work receipt is posted, the material consumed and the goods received appear here.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)));
+    }
+    // Group receipts by processor.
+    final byProc = <String, List<Map<String, dynamic>>>{};
+    for (final r in _conversions) { (byProc[r['processor_name'] as String? ?? '—'] ??= []).add(r); }
+    final names = byProc.keys.toList()..sort();
+    return ListView(children: [
+      for (final name in names) _convProcessorSection(name, byProc[name]!),
+    ]);
+  }
+
+  Widget _convProcessorSection(String name, List<Map<String, dynamic>> receipts) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: Colors.white, borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: const BoxDecoration(
+            color: AppTheme.background,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.factory_outlined, size: 18, color: Colors.purple),
+            const SizedBox(width: 8),
+            Text(name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+            const Spacer(),
+            Text('${receipts.length} conversion${receipts.length == 1 ? '' : 's'}',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+        const Divider(height: 1),
+        for (int i = 0; i < receipts.length; i++) ...[
+          if (i > 0) const Divider(height: 1),
+          _convRow(receipts[i]),
+        ],
+      ]),
+    );
+  }
+
+  Widget _convRow(Map<String, dynamic> r) {
+    final inputs = (r['inputs'] as List).cast<Map<String, dynamic>>();
+    final outputs = (r['outputs'] as List).cast<Map<String, dynamic>>();
+    String linesText(List<Map<String, dynamic>> ls) => ls.isEmpty
+        ? '—'
+        : ls.map((l) => '${l['name']}  ×  ${_qty(l['qty'])}').join('\n');
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('${r['voucher']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 10),
+          Text('${r['date']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const Spacer(),
+          Text('Received at: ${r['home_name']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        ]),
+        const SizedBox(height: 8),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _convLabel('Consumed at processor', AppTheme.danger),
+            const SizedBox(height: 3),
+            Text(linesText(inputs), style: const TextStyle(fontSize: 12.5)),
+          ])),
+          const Padding(padding: EdgeInsets.symmetric(horizontal: 8),
+              child: Icon(Icons.arrow_forward, size: 16, color: AppTheme.textSecondary)),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _convLabel('Received at home', AppTheme.success),
+            const SizedBox(height: 3),
+            Text(linesText(outputs), style: const TextStyle(fontSize: 12.5)),
+          ])),
+          const SizedBox(width: 12),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            _convLabel('Cost added', AppTheme.primary),
+            const SizedBox(height: 3),
+            Text('Fee Rs. ${money(_n(r['fee']))}', style: const TextStyle(fontSize: 12)),
+            if (_n(r['overhead']) > 0)
+              Text('OH Rs. ${money(_n(r['overhead']))}', style: const TextStyle(fontSize: 12)),
+            Text('Output Rs. ${money(_n(r['total']))}',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+          ]),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _convLabel(String t, Color c) => Text(t.toUpperCase(),
+      style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 0.4, color: c));
 
   Widget _processorSection(String name, List<Map<String, dynamic>> lines) {
     final subtotal = lines.fold<double>(0, (s, r) => s + _n(r['open_value']));

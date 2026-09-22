@@ -299,7 +299,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       final jvHeaders = await client.from('journal_entries')
           .select('id, entry_number, entry_date, description, posted_at, created_at, status, reference_type')
           .eq('org_id', orgId)
-          .inFilter('reference_type', const ['jv', 'opening_jv', 'opening_balance'])
+          .inFilter('reference_type', const ['jv', 'opening_jv', 'opening_balance', 'jobwork', 'jobwork_void'])
           .eq('status', 'posted');
       final jvMap = {for (final v in jvHeaders as List) v['id'] as String: v};
       if (jvMap.isNotEmpty) {
@@ -310,15 +310,18 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           final v = jvMap[line['entry_id'] as String]; if (v == null) continue;
           final refType = (v['reference_type'] as String?) ?? 'jv';
           final isOpening = refType == 'opening_jv' || refType == 'opening_balance';
+          final isJobwork = refType == 'jobwork' || refType == 'jobwork_void';
           final date = extractDate(v as Map, const ['entry_date', 'posted_at', 'created_at']);
           final vno = (v['entry_number'] as String?) ?? '';
           final lineDesc = (line['description'] as String?) ?? '';
+          final prefix = isOpening ? 'Opening Balance — ' : (isJobwork ? 'Job-work — ' : 'Journal — ');
+          final type = isOpening ? 'Opening Balance' : (isJobwork ? 'Job-work Fee' : 'Journal (JV)');
           entries.add({
             'date': date, 'voucher': vno,
-            'description': (isOpening ? 'Opening Balance — ' : 'Journal — ') + (lineDesc.isNotEmpty ? lineDesc : (v['description'] as String? ?? vno)),
+            'description': prefix + (lineDesc.isNotEmpty ? lineDesc : (v['description'] as String? ?? vno)),
             'debit': (line['debit'] as num?)?.toDouble() ?? 0,
             'credit': (line['credit'] as num?)?.toDouble() ?? 0,
-            'id': v['id'] as String?, 'type': isOpening ? 'Opening Balance' : 'Journal (JV)',
+            'id': v['id'] as String?, 'type': type,
           });
         }
       }
