@@ -366,8 +366,9 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
       builder: (_) => StatefulBuilder(
         builder: (dCtx, setS) => AlertDialog(
           title: Text(isEdit ? 'Edit Organization' : 'Add Organization'),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           content: SizedBox(
-            width: 480,
+            width: MediaQuery.of(dCtx).size.width < 560 ? MediaQuery.of(dCtx).size.width : 480,
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -596,9 +597,11 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
       builder: (dCtx) => StatefulBuilder(
         builder: (dCtx, setS) => AlertDialog(
           title: Text('Modules — $orgName'),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           content: SizedBox(
-            width: 340,
-            child: Column(
+            width: MediaQuery.of(dCtx).size.width < 420 ? MediaQuery.of(dCtx).size.width : 340,
+            child: SingleChildScrollView(
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               children: kAppModules.map((m) => SwitchListTile(
                 title: Row(
@@ -657,6 +660,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                 },
               )).toList(),
             ),
+            ),
           ),
           actions: [
             TextButton(
@@ -676,21 +680,21 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
       padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text('Organizations',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-          const Spacer(),
+          Expanded(child: Text('Organizations',
+              style: TextStyle(fontSize: MediaQuery.of(context).size.width < 700 ? 22 : 28, fontWeight: FontWeight.w800),
+              overflow: TextOverflow.ellipsis)),
+          const SizedBox(width: 12),
           ElevatedButton.icon(
             onPressed: () => _showDialog(context, null),
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('Add Organization'),
+            label: Text(MediaQuery.of(context).size.width < 700 ? 'Add' : 'Add Organization'),
           ),
         ]),
         const SizedBox(height: 8),
         Row(children: [
-          Text('${_visibleOrgs.length} organizations'
+          Expanded(child: Text('${_visibleOrgs.length} organizations'
               '${_archivedCount > 0 ? ' · $_archivedCount archived' : ''}',
-              style: const TextStyle(color: AppTheme.textSecondary)),
-          const Spacer(),
+              style: const TextStyle(color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           if (_archivedCount > 0) ...[
             const Text('Show archived', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
             Switch(value: _showArchived, onChanged: (v) => setState(() => _showArchived = v)),
@@ -715,113 +719,125 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     ? DateTime.parse(o['expires_at'] as String).toLocal()
                     : null;
                 final isExpired = expiresAt != null && expiresAt.isBefore(DateTime.now());
+                final narrow = MediaQuery.of(context).size.width < 640;
+                final avatar = Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    (o['name'] as String? ?? 'O').substring(0, 1).toUpperCase(),
+                    style: const TextStyle(
+                        color: AppTheme.primary, fontWeight: FontWeight.w800, fontSize: 20),
+                  ),
+                );
+                final info = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(o['name'] as String? ?? '',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                      const SizedBox(height: 2),
+                      Text(
+                        master != null
+                            ? 'Admin: ${master['name']} · ${master['email']}'
+                            : 'No master admin assigned',
+                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                      ),
+                      const SizedBox(height: 6),
+                      // Wrap so the chips never overflow on a phone.
+                      Wrap(spacing: 8, runSpacing: 6, children: [
+                        _Chip(
+                          icon: Icons.people_outline,
+                          label: '$userCount${maxUsers != null ? '/$maxUsers' : ''} users',
+                          color: maxUsers != null && userCount >= maxUsers
+                              ? AppTheme.danger
+                              : AppTheme.textSecondary,
+                        ),
+                        _Chip(
+                          icon: Icons.event_outlined,
+                          label: expiresAt == null
+                              ? 'No expiry'
+                              : (isExpired
+                                  ? 'Expired'
+                                  : 'Until ${DateFormat('d MMM yyyy').format(expiresAt)}'),
+                          color: isExpired ? AppTheme.danger : AppTheme.textSecondary,
+                        ),
+                      ]),
+                    ]);
+                final statusBadge = Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isActive
+                        ? AppTheme.success.withOpacity(0.1)
+                        : AppTheme.danger.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    isActive ? 'Active' : 'Inactive',
+                    style: TextStyle(
+                      color: isActive ? AppTheme.success : AppTheme.danger,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                );
+                final actionButtons = <Widget>[
+                  IconButton(
+                    tooltip: 'Manage Modules',
+                    icon: const Icon(Icons.extension_outlined, size: 18),
+                    onPressed: () => _showModulesDialog(context, o['id'] as String, o['name'] as String),
+                  ),
+                  IconButton(
+                    tooltip: 'Edit',
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    onPressed: () => _showDialog(context, o),
+                  ),
+                  IconButton(
+                    tooltip: isActive ? 'Deactivate' : 'Activate',
+                    icon: Icon(isActive ? Icons.block : Icons.check_circle_outline,
+                        size: 18, color: isActive ? AppTheme.danger : AppTheme.success),
+                    onPressed: () => _toggleActive(o),
+                  ),
+                  IconButton(
+                    tooltip: isArchived ? 'Unarchive' : 'Archive (hide from list)',
+                    icon: Icon(isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+                        size: 18, color: AppTheme.textSecondary),
+                    onPressed: () => _toggleArchive(o),
+                  ),
+                ];
                 return Container(
-                  padding: const EdgeInsets.all(20),
+                  padding: EdgeInsets.all(narrow ? 14 : 20),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppTheme.border),
                   ),
-                  child: Row(children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: AppTheme.primary.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        (o['name'] as String? ?? 'O').substring(0, 1).toUpperCase(),
-                        style: const TextStyle(
-                            color: AppTheme.primary,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 20),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(o['name'] as String? ?? '',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700, fontSize: 16)),
-                            const SizedBox(height: 2),
-                            Text(
-                              master != null
-                                  ? 'Admin: ${master['name']} · ${master['email']}'
-                                  : 'No master admin assigned',
-                              style: const TextStyle(
-                                  color: AppTheme.textSecondary, fontSize: 12),
-                            ),
-                            const SizedBox(height: 6),
-                            Row(children: [
-                              _Chip(
-                                icon: Icons.people_outline,
-                                label:
-                                    '$userCount${maxUsers != null ? '/$maxUsers' : ''} users',
-                                color: maxUsers != null && userCount >= maxUsers
-                                    ? AppTheme.danger
-                                    : AppTheme.textSecondary,
-                              ),
-                              const SizedBox(width: 8),
-                              _Chip(
-                                icon: Icons.event_outlined,
-                                label: expiresAt == null
-                                    ? 'No expiry'
-                                    : (isExpired
-                                        ? 'Expired'
-                                        : 'Until ${DateFormat('d MMM yyyy').format(expiresAt)}'),
-                                color: isExpired
-                                    ? AppTheme.danger
-                                    : AppTheme.textSecondary,
-                              ),
-                            ]),
+                  child: narrow
+                      // Phone: stack — header row, then status + actions wrap below.
+                      ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            avatar,
+                            const SizedBox(width: 12),
+                            Expanded(child: info),
                           ]),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: isActive
-                            ? AppTheme.success.withOpacity(0.1)
-                            : AppTheme.danger.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        isActive ? 'Active' : 'Inactive',
-                        style: TextStyle(
-                          color: isActive ? AppTheme.success : AppTheme.danger,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      tooltip: 'Manage Modules',
-                      icon: const Icon(Icons.extension_outlined, size: 18),
-                      onPressed: () => _showModulesDialog(context, o['id'] as String, o['name'] as String),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                      onPressed: () => _showDialog(context, o),
-                    ),
-                    IconButton(
-                      icon: Icon(
-                        isActive ? Icons.block : Icons.check_circle_outline,
-                        size: 18,
-                        color: isActive ? AppTheme.danger : AppTheme.success,
-                      ),
-                      onPressed: () => _toggleActive(o),
-                    ),
-                    IconButton(
-                      tooltip: isArchived ? 'Unarchive' : 'Archive (hide from list)',
-                      icon: Icon(isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
-                          size: 18, color: AppTheme.textSecondary),
-                      onPressed: () => _toggleArchive(o),
-                    ),
-                  ]),
+                          const SizedBox(height: 10),
+                          Wrap(spacing: 2, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                            statusBadge,
+                            ...actionButtons,
+                          ]),
+                        ])
+                      // Wide: single row.
+                      : Row(children: [
+                          avatar,
+                          const SizedBox(width: 16),
+                          Expanded(child: info),
+                          statusBadge,
+                          const SizedBox(width: 8),
+                          ...actionButtons,
+                        ]),
                 );
               },
             ),

@@ -199,8 +199,9 @@ class _State extends ConsumerState<SubscriptionsScreen> {
       context: context,
       builder: (dialogCtx) => AlertDialog(
         title: Text('${r.name} — history'),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         content: SizedBox(
-          width: 560,
+          width: MediaQuery.of(dialogCtx).size.width < 600 ? MediaQuery.of(dialogCtx).size.width : 560,
           child: DefaultTabController(
             length: 3,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
