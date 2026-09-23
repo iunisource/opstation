@@ -899,7 +899,14 @@ class ReportPdfBuilder {
     for (final v in visits) {
       if (v.amount <= 0) continue;
       final r = (v.receiptNumber ?? '').trim();
-      final key = (r.isEmpty || r == '0') ? '__nr${noReceiptSeq++}' : r;
+      // Scope the de-dup to the CUSTOMER: a GPS re-fire re-sends the SAME
+      // shop's SAME receipt (must collapse), but two DIFFERENT shops that
+      // happen to carry the same (mis-typed) receipt number are separate
+      // collections and must both be counted — otherwise the smaller one is
+      // silently dropped and COLLECTED under-reports (matches web _custLines).
+      final key = (r.isEmpty || r == '0')
+          ? '__nr${noReceiptSeq++}'
+          : '${v.customerId}|$r';
       final prev = m[key] ?? 0;
       m[key] = v.amount > prev ? v.amount : prev;
     }

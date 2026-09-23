@@ -237,7 +237,10 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
     } catch (e) {
       setState(() {
         _submitting = false;
-        _errorText = e.toString().replaceFirst('Exception: ', '');
+        _errorText = e
+            .toString()
+            .replaceFirst('Exception: ', '')
+            .replaceFirst('Invalid argument(s): ', '');
       });
     }
   }

@@ -255,6 +255,19 @@ class TripController extends AsyncNotifier<TripState> {
     if (amount > 0 && (receiptNumber == null || receiptNumber.trim().isEmpty)) {
       throw ArgumentError('Receipt number is required when amount > 0.');
     }
+    // A physical CR slip number is unique, so the same number appearing twice
+    // in a trip means a typo. Reject it here — otherwise the two collections
+    // collapse into one in the report and COLLECTED under-reports.
+    if (amount > 0 && receiptNumber != null && receiptNumber.trim().isNotEmpty) {
+      final rn = receiptNumber.trim();
+      for (final v in active.visits) {
+        if (v.amount > 0 && (v.receiptNumber ?? '').trim() == rn) {
+          throw ArgumentError(
+              'CR# $rn is already entered on this trip (Rs ${v.amount}). '
+              'Check the slip and enter the correct receipt number.');
+        }
+      }
+    }
 
     VisitStatus status;
     double? distance;
@@ -460,6 +473,19 @@ class TripController extends AsyncNotifier<TripState> {
     if (isNew) {
       await _repo.createTrip(trip);
       await _repo.setDayStamp(today);
+    }
+
+    // Reject a receipt number already used in today's off-route summary (same
+    // uniqueness rule as an on-route trip — see markVisit).
+    if (amount > 0 && receiptNumber != null && receiptNumber.trim().isNotEmpty) {
+      final rn = receiptNumber.trim();
+      for (final v in trip.visits) {
+        if (v.amount > 0 && (v.receiptNumber ?? '').trim() == rn) {
+          throw ArgumentError(
+              'CR# $rn is already entered today (Rs ${v.amount}). '
+              'Check the slip and enter the correct receipt number.');
+        }
+      }
     }
 
     final visit = Visit(
