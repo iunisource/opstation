@@ -1247,7 +1247,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isAdminTier) ...[
           if (modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/live-map', '/reports', '/compliance', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
+            ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/compliance', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
               _menuItem(context, 'Team', Icons.people_outline, '/team', location),
@@ -1258,6 +1258,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
               _menuLabel('Reports'),
               _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
+              _menuItem(context, 'Combined Trip Summary', Icons.route_outlined, '/reports/combined-summary', location),
               _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
               _menuLabel('Setup'),
               _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),

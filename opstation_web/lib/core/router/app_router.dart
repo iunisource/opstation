@@ -61,6 +61,7 @@ import '../../features/routes/presentation/routes_screen.dart' deferred as _s055
 import '../../features/customers/presentation/bulk_import_customers_screen.dart' deferred as _s056;
 import '../../features/routes/presentation/bulk_import_routes_screen.dart' deferred as _s057;
 import '../../features/reports/presentation/reports_screen.dart' deferred as _s058;
+import '../../features/reports/presentation/combined_trip_summary_screen.dart' deferred as _s140;
 import '../../features/deliveries/presentation/deliveries_screen.dart' deferred as _s059;
 import '../../features/deliveries/presentation/delivery_detail_screen.dart' deferred as _s060;
 import '../../features/dispatch_orders/presentation/dispatch_orders_screen.dart' deferred as _s061;
@@ -365,6 +366,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/dispatch-orders', builder: (_, __) => _deferred(_s061.loadLibrary(), () => _s061.DispatchOrdersScreen())),
           GoRoute(path: '/orders', builder: (_, __) => _deferred(_s062.loadLibrary(), () => _s062.OrdersScreen())),
           GoRoute(path: '/reports', builder: (_, __) => _deferred(_s058.loadLibrary(), () => _s058.ReportsScreen())),
+          GoRoute(path: '/reports/combined-summary', builder: (_, __) => _deferred(_s140.loadLibrary(), () => _s140.CombinedTripSummaryScreen())),
           GoRoute(path: '/compliance', builder: (_, __) => _deferred(_s070.loadLibrary(), () => _s070.ComplianceScreen())),
           GoRoute(path: '/settings', builder: (_, __) => _deferred(_s063.loadLibrary(), () => _s063.SettingsScreen())),
           GoRoute(path: '/account-linking', builder: (_, __) => _deferred(_s066.loadLibrary(), () => _s066.OrgAccessScreen())),
