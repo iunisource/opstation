@@ -26,7 +26,9 @@ class _Party {
   final String type; // 'customer' | 'supplier'
   final String bank;
   final double balance;
-  const _Party(this.id, this.name, this.type, this.bank, this.balance);
+  final DateTime? lastPayment;
+  const _Party(this.id, this.name, this.type, this.bank, this.balance,
+      [this.lastPayment]);
 }
 
 class _PaLine {
@@ -38,6 +40,7 @@ class _PaLine {
   final TextEditingController bankCtrl = TextEditingController();
   final TextEditingController dueCtrl = TextEditingController();
   final TextEditingController payCtrl = TextEditingController();
+  DateTime? lastPayment;
   void dispose() {
     bankCtrl.dispose();
     dueCtrl.dispose();
@@ -61,6 +64,7 @@ class _ErpPaymentAdviceScreenState
   List<Map<String, dynamic>> _advices = [];
   final List<_Party> _parties = [];
   final Map<String, _Party> _partyById = {};
+  bool _balancesLoaded = false;
 
   // Editor state
   bool _editing = false;
@@ -229,10 +233,13 @@ class _ErpPaymentAdviceScreenState
           .timeout(const Duration(seconds: 20), onTimeout: () => <String, double>{});
       final sup = await _loadSupplierBalances(orgId)
           .timeout(const Duration(seconds: 20), onTimeout: () => <String, double>{});
-      if ((cust.isEmpty && sup.isEmpty) || !mounted) return;
+      final lastPay = await _loadLastPayments(orgId)
+          .timeout(const Duration(seconds: 20), onTimeout: () => <String, DateTime>{});
+      if (!mounted) return;
       final rebuilt = _parties.map((p) {
         final bal = (p.type == 'customer' ? cust[p.id] : sup[p.id]) ?? p.balance;
-        return _Party(p.id, p.name, p.type, p.bank, bal);
+        final lp = lastPay['${p.type}:${p.id}'] ?? p.lastPayment;
+        return _Party(p.id, p.name, p.type, p.bank, bal, lp);
       }).toList();
       setState(() {
         _parties
@@ -242,9 +249,27 @@ class _ErpPaymentAdviceScreenState
         for (final p in _parties) {
           _partyById['${p.type}:${p.id}'] = p;
         }
+        _balancesLoaded = true;
       });
     } catch (_) {
       // ignore — balances are optional
+    }
+  }
+
+  /// Latest posted payment date per party ('type:id' -> date). Best-effort.
+  Future<Map<String, DateTime>> _loadLastPayments(String orgId) async {
+    try {
+      final rows =
+          await _db.rpc('rpc_party_last_payment', params: {'p_org_id': orgId});
+      final out = <String, DateTime>{};
+      for (final r in rows as List) {
+        final key = r['party_key'] as String?;
+        final d = DateTime.tryParse((r['last_payment'] as String?) ?? '');
+        if (key != null && d != null) out[key] = d;
+      }
+      return out;
+    } catch (_) {
+      return {};
     }
   }
 
@@ -332,6 +357,8 @@ class _ErpPaymentAdviceScreenState
         ln.bankCtrl.text = (r['bank_details'] as String?) ?? '';
         ln.dueCtrl.text = _numStr(r['amount_due']);
         ln.payCtrl.text = _numStr(r['amount_to_pay']);
+        ln.lastPayment =
+            DateTime.tryParse((r['last_payment_date'] as String?) ?? '');
         ln.collapsed = true;
         _lines.add(ln);
       }
@@ -371,6 +398,7 @@ class _ErpPaymentAdviceScreenState
       line.partyId = picked.id;
       line.partyType = picked.type;
       line.partyName = picked.name;
+      line.lastPayment = picked.lastPayment;
       line.bankCtrl.text = picked.bank; // editable; empty if none on profile
       line.dueCtrl.text = picked.balance == 0 ? '' : _numStr(picked.balance);
       if (line.payCtrl.text.trim().isEmpty && picked.balance != 0) {
@@ -446,10 +474,26 @@ class _ErpPaymentAdviceScreenState
           'bank_details': l.bankCtrl.text.trim(),
           'amount_due': double.tryParse(l.dueCtrl.text.trim()) ?? 0,
           'amount_to_pay': double.tryParse(l.payCtrl.text.trim()) ?? 0,
+          'last_payment_date': l.lastPayment == null
+              ? null
+              : DateFormat('yyyy-MM-dd').format(l.lastPayment!),
           'line_order': i,
         });
       }
-      await _db.from('payment_advice_lines').insert(rows);
+      try {
+        await _db.from('payment_advice_lines').insert(rows);
+      } catch (e) {
+        // If the last_payment_date column isn't present yet (migration 274 not
+        // applied), retry without it so saving never breaks.
+        if (e.toString().contains('last_payment_date')) {
+          for (final r in rows) {
+            r.remove('last_payment_date');
+          }
+          await _db.from('payment_advice_lines').insert(rows);
+        } else {
+          rethrow;
+        }
+      }
 
       if (!mounted) return;
       setState(() {
@@ -767,12 +811,21 @@ class _ErpPaymentAdviceScreenState
                     _lineCard(i, readOnly, narrow),
                     const SizedBox(height: 10),
                   ],
-                if (!readOnly && !_lines.any((l) => !l.collapsed))
-                  OutlinedButton.icon(
-                    onPressed: () => setState(() => _lines.add(_PaLine())),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Add party'),
-                  ),
+                if (!readOnly) ...[
+                  Wrap(spacing: 10, runSpacing: 8, children: [
+                    if (!_lines.any((l) => !l.collapsed))
+                      OutlinedButton.icon(
+                        onPressed: () => setState(() => _lines.add(_PaLine())),
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('Add party'),
+                      ),
+                    OutlinedButton.icon(
+                      onPressed: _suggestParties,
+                      icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+                      label: const Text('Suggest by balance'),
+                    ),
+                  ]),
+                ],
                 const SizedBox(height: 16),
                 _grandTotalBar(),
                 const SizedBox(height: 20),
@@ -930,6 +983,20 @@ class _ErpPaymentAdviceScreenState
         ),
         const SizedBox(height: 12),
         amounts,
+        if (l.partyId != null) ...[
+          const SizedBox(height: 8),
+          Row(children: [
+            const Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text(
+              l.lastPayment == null
+                  ? 'No prior payment on record'
+                  : 'Last paid: ${DateFormat('d MMM yyyy').format(l.lastPayment!)}',
+              style: const TextStyle(
+                  fontSize: 12, color: AppTheme.textSecondary),
+            ),
+          ]),
+        ],
         if (!readOnly) ...[
           const SizedBox(height: 10),
           Align(
@@ -950,6 +1017,44 @@ class _ErpPaymentAdviceScreenState
   void _parkLine(_PaLine l) {
     setState(() {
       l.collapsed = true;
+      if (!_lines.any((x) => !x.collapsed)) _lines.add(_PaLine());
+    });
+  }
+
+  /// Suggest parties whose balance is at or above a user-given threshold, and
+  /// add the selected ones as parked lines (bank / due / pay / last-paid
+  /// pre-filled). Amounts stay editable afterwards.
+  Future<void> _suggestParties() async {
+    if (_isApproved) return;
+    if (!_balancesLoaded) {
+      _snack('Balances are still loading — try again in a moment.');
+      return;
+    }
+    final existing = <String>{
+      for (final l in _lines)
+        if (l.partyId != null) '${l.partyType}:${l.partyId}',
+    };
+    final picked = await showDialog<List<_Party>>(
+      context: context,
+      builder: (_) => _SuggestDialog(parties: _parties, alreadyAdded: existing),
+    );
+    if (picked == null || picked.isEmpty) return;
+    setState(() {
+      // Drop an untouched empty entry card so the parked list reads cleanly.
+      _lines.removeWhere(
+          (x) => !x.collapsed && x.partyId == null && x.payCtrl.text.isEmpty);
+      for (final p in picked) {
+        final l = _PaLine()
+          ..partyId = p.id
+          ..partyType = p.type
+          ..partyName = p.name
+          ..lastPayment = p.lastPayment
+          ..collapsed = true;
+        l.bankCtrl.text = p.bank;
+        l.dueCtrl.text = p.balance == 0 ? '' : _numStr(p.balance);
+        l.payCtrl.text = p.balance == 0 ? '' : _numStr(p.balance);
+        _lines.add(l);
+      }
       if (!_lines.any((x) => !x.collapsed)) _lines.add(_PaLine());
     });
   }
@@ -985,10 +1090,20 @@ class _ErpPaymentAdviceScreenState
               color: AppTheme.primary),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(l.partyName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(l.partyName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  if (l.lastPayment != null)
+                    Text(
+                        'Last paid ${DateFormat('d MMM yyyy').format(l.lastPayment!)}',
+                        style: const TextStyle(
+                            fontSize: 10.5, color: AppTheme.textSecondary)),
+                ]),
           ),
           const SizedBox(width: 8),
           Text('Due ${_numStr(due)}',
@@ -1033,6 +1148,8 @@ class _ErpPaymentAdviceScreenState
             bankDetails: (r['bank_details'] as String?) ?? '',
             amountDue: ((r['amount_due'] as num?) ?? 0).toDouble(),
             amountToPay: ((r['amount_to_pay'] as num?) ?? 0).toDouble(),
+            lastPayment:
+                DateTime.tryParse((r['last_payment_date'] as String?) ?? ''),
           ),
       ];
       final bytes = await PaymentAdvicePdf.build(
@@ -1287,6 +1404,223 @@ class _PartyPickerDialogState extends State<_PartyPickerDialog> {
     final sel = _type == val;
     return InkWell(
       onTap: () => setState(() => _type = val),
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: sel ? AppTheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: sel ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: sel ? Colors.white : AppTheme.textPrimary)),
+      ),
+    );
+  }
+}
+
+// ── Suggest-by-balance dialog ──────────────────────────────────────────────
+class _SuggestDialog extends StatefulWidget {
+  final List<_Party> parties;
+  final Set<String> alreadyAdded; // 'type:id'
+  const _SuggestDialog({required this.parties, required this.alreadyAdded});
+
+  @override
+  State<_SuggestDialog> createState() => _SuggestDialogState();
+}
+
+class _SuggestDialogState extends State<_SuggestDialog> {
+  final TextEditingController _thrCtrl =
+      TextEditingController(text: '1000');
+  double _threshold = 1000;
+  String _type = 'all'; // all | customer | supplier
+  final Set<String> _selected = {};
+
+  @override
+  void dispose() {
+    _thrCtrl.dispose();
+    super.dispose();
+  }
+
+  String _numStr(double d) =>
+      d == d.roundToDouble() ? d.toStringAsFixed(0) : d.toStringAsFixed(2);
+
+  List<_Party> get _matches {
+    final list = widget.parties.where((p) {
+      if (widget.alreadyAdded.contains('${p.type}:${p.id}')) return false;
+      if (_type != 'all' && p.type != _type) return false;
+      return p.balance >= _threshold;
+    }).toList()
+      ..sort((a, b) => b.balance.compareTo(a.balance));
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context).size;
+    final shown = _matches;
+    final allKeys = shown.map((p) => '${p.type}:${p.id}').toSet();
+    final allSelected =
+        allKeys.isNotEmpty && _selected.containsAll(allKeys);
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: SizedBox(
+        width: mq.width < 560 ? mq.width - 32 : 520,
+        height: mq.height < 680 ? mq.height * 0.88 : 600,
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Column(children: [
+              Row(children: [
+                const Text('Suggest parties by balance',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close)),
+              ]),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: _thrCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: 'Balance at or above',
+                      prefixText: 'Rs ',
+                      isDense: true,
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onChanged: (v) => setState(() {
+                      _threshold = double.tryParse(v.trim()) ?? 0;
+                      _selected.removeWhere((k) => !_matches
+                          .any((p) => '${p.type}:${p.id}' == k));
+                    }),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              Row(children: [
+                _chip('All', 'all'),
+                const SizedBox(width: 6),
+                _chip('Customers', 'customer'),
+                const SizedBox(width: 6),
+                _chip('Suppliers', 'supplier'),
+                const Spacer(),
+                Text('${shown.length} match${shown.length == 1 ? '' : 'es'}',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
+              ]),
+            ]),
+          ),
+          const Divider(height: 1),
+          if (shown.isNotEmpty)
+            CheckboxListTile(
+              dense: true,
+              controlAffinity: ListTileControlAffinity.leading,
+              value: allSelected,
+              title: Text(allSelected ? 'Clear all' : 'Select all',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600)),
+              onChanged: (_) => setState(() {
+                if (allSelected) {
+                  _selected.removeAll(allKeys);
+                } else {
+                  _selected.addAll(allKeys);
+                }
+              }),
+            ),
+          const Divider(height: 1),
+          Expanded(
+            child: shown.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'No parties at or above this balance.\n'
+                        'Lower the threshold, or balances may still be loading.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: AppTheme.textSecondary),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: shown.length,
+                    itemBuilder: (_, i) {
+                      final p = shown[i];
+                      final key = '${p.type}:${p.id}';
+                      return CheckboxListTile(
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: _selected.contains(key),
+                        onChanged: (v) => setState(() {
+                          if (v == true) {
+                            _selected.add(key);
+                          } else {
+                            _selected.remove(key);
+                          }
+                        }),
+                        title: Text(p.name,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(
+                          '${p.type} · due Rs ${_numStr(p.balance)}'
+                          '${p.lastPayment == null ? '' : ' · last paid ${DateFormat('d MMM yyyy').format(p.lastPayment!)}'}',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        secondary: Icon(
+                            p.type == 'customer'
+                                ? Icons.store_outlined
+                                : Icons.local_shipping_outlined,
+                            size: 20,
+                            color: AppTheme.primary),
+                      );
+                    },
+                  ),
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(children: [
+              Expanded(
+                child: Text(
+                    _selected.isEmpty
+                        ? 'Select parties to add'
+                        : '${_selected.length} selected',
+                    style: const TextStyle(color: AppTheme.textSecondary)),
+              ),
+              ElevatedButton.icon(
+                onPressed: _selected.isEmpty
+                    ? null
+                    : () {
+                        final chosen = widget.parties
+                            .where((p) =>
+                                _selected.contains('${p.type}:${p.id}'))
+                            .toList();
+                        Navigator.pop(context, chosen);
+                      },
+                icon: const Icon(Icons.add, size: 18),
+                label: Text('Add ${_selected.length}'),
+              ),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _chip(String label, String val) {
+    final sel = _type == val;
+    return InkWell(
+      onTap: () => setState(() {
+        _type = val;
+        _selected.removeWhere(
+            (k) => !_matches.any((p) => '${p.type}:${p.id}' == k));
+      }),
       borderRadius: BorderRadius.circular(999),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

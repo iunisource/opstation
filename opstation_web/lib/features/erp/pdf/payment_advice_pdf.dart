@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 /// One party row on a Payment Advice slip.
 class PaymentAdvicePdfLine {
@@ -11,12 +12,14 @@ class PaymentAdvicePdfLine {
   final String bankDetails;
   final double amountDue;
   final double amountToPay;
+  final DateTime? lastPayment;
   const PaymentAdvicePdfLine({
     required this.partyName,
     required this.partyType,
     required this.bankDetails,
     required this.amountDue,
     required this.amountToPay,
+    this.lastPayment,
   });
 }
 
@@ -49,9 +52,23 @@ class PaymentAdvicePdf {
     required String? approvedBy,
     required DateTime? approvedAt,
   }) async {
-    final doc = pw.Document(title: 'Payment Advice $adviceNumber');
+    // Use a Unicode TTF so em-dashes, bullets (•) in bank details, middots
+    // and non-Latin text all render instead of the missing-glyph box that
+    // the built-in Helvetica shows. Falls back to Helvetica if the font
+    // can't be fetched (offline), which is still correct for plain ASCII.
+    pw.ThemeData? theme;
+    try {
+      final base = await PdfGoogleFonts.notoSansRegular();
+      final bold = await PdfGoogleFonts.notoSansBold();
+      theme = pw.ThemeData.withFont(base: base, bold: bold);
+    } catch (_) {
+      theme = null;
+    }
+
+    final doc = pw.Document(title: 'Payment Advice $adviceNumber', theme: theme);
     final dFmt = DateFormat('d MMM yyyy');
     final dtFmt = DateFormat('d MMM yyyy, HH:mm');
+    final dShort = DateFormat('d MMM yy');
 
     pw.Widget cell(String t,
             {bool bold = false,
@@ -76,6 +93,7 @@ class PaymentAdvicePdf {
           cell('#', bold: true),
           cell('Party', bold: true),
           cell('Bank details', bold: true),
+          cell('Last paid', bold: true, align: pw.TextAlign.center),
           cell('Amount due', bold: true, align: pw.TextAlign.right),
           cell('Amount to pay', bold: true, align: pw.TextAlign.right),
         ],
@@ -100,7 +118,13 @@ class PaymentAdvicePdf {
                         style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
                   ]),
             ),
-            cell(lines[i].bankDetails.isEmpty ? '—' : lines[i].bankDetails,
+            cell(lines[i].bankDetails.isEmpty ? '-' : lines[i].bankDetails,
+                size: 8.5),
+            cell(
+                lines[i].lastPayment == null
+                    ? '-'
+                    : dShort.format(lines[i].lastPayment!),
+                align: pw.TextAlign.center,
                 size: 8.5),
             cell(_money(lines[i].amountDue), align: pw.TextAlign.right),
             cell(_money(lines[i].amountToPay),
@@ -169,7 +193,7 @@ class PaymentAdvicePdf {
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
               pw.Text(
-                  'Non-financial processing slip — does not post to accounts.',
+                  'Non-financial processing slip - does not post to accounts.',
                   style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
               pw.Text('Page ${c.pageNumber} of ${c.pagesCount}',
                   style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
@@ -222,10 +246,11 @@ class PaymentAdvicePdf {
               bottom: pw.BorderSide(color: _rule, width: 0.6)),
           columnWidths: {
             0: const pw.FixedColumnWidth(22),
-            1: const pw.FlexColumnWidth(2.2),
-            2: const pw.FlexColumnWidth(3.2),
-            3: const pw.FlexColumnWidth(1.4),
-            4: const pw.FlexColumnWidth(1.4),
+            1: const pw.FlexColumnWidth(2.1),
+            2: const pw.FlexColumnWidth(2.9),
+            3: const pw.FlexColumnWidth(1.1),
+            4: const pw.FlexColumnWidth(1.3),
+            5: const pw.FlexColumnWidth(1.3),
           },
           children: rows,
         ),
@@ -253,12 +278,12 @@ class PaymentAdvicePdf {
         pw.SizedBox(height: 28),
         pw.Row(children: [
           foot('CREATED BY', createdBy,
-              createdAt == null ? '—' : dtFmt.format(createdAt.toLocal())),
+              createdAt == null ? '-' : dtFmt.format(createdAt.toLocal())),
           foot(
               'APPROVED BY',
-              approvedBy ?? '—',
+              approvedBy ?? '-',
               approvedAt == null
-                  ? (status == 'pending' ? 'Awaiting approval' : '—')
+                  ? (status == 'pending' ? 'Awaiting approval' : '-')
                   : dtFmt.format(approvedAt.toLocal())),
           foot('RECEIVED BY', '', ''),
         ]),
