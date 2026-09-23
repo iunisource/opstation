@@ -204,7 +204,13 @@ class SupabasePullService {
   Future<void> pullRoutesAndStops(String orgId) async {
     try {
       final routes = await _sync.pullTable('sales_routes', orgId);
-      final stops = await _sync.pullTable('route_stops', null);
+      final routeIds = [for (final r in routes) r['id'] as String];
+      // Scope + paginate the stop fetch to THIS org's routes. A bare
+      // `.select()` on route_stops (no org_id column) returns at most
+      // PostgREST's 1000-row cap in an unstable order, so on a large org the
+      // wholesale delete+replace below dropped whatever fell outside that
+      // window — customers appeared to auto-add and vanish between syncs.
+      final stops = await _sync.pullRouteStopsByRouteIds(routeIds);
       await _db.transaction(() async {
         // Prune this org's routes that vanished from the cloud.
         final cloudIds = {for (final r in routes) r['id'] as String};
@@ -219,9 +225,14 @@ class SupabasePullService {
           }
         }
         await _pullRoutes(routes);
-        // Stops carry no org_id; mirror pullOrgData and replace wholesale so
-        // removed stops disappear too.
-        await _db.delete(_db.routeStops).go();
+        // Replace stops only for THIS org's routes (not every route on the
+        // device), and only when we actually have routes to refresh — so a
+        // momentarily-empty routes fetch can never wipe local membership.
+        if (routeIds.isNotEmpty) {
+          await (_db.delete(_db.routeStops)
+                ..where((s) => s.routeId.isIn(routeIds)))
+              .go();
+        }
         await _pullRouteStops(stops);
       });
     } catch (e) {

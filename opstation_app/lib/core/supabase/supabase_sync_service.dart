@@ -101,6 +101,13 @@ class SupabaseSyncService {
     });
   }
 
+  /// Route_stops for a set of routes — bounded + paginated (see _pullChildIn),
+  /// so a large org is never silently truncated at PostgREST's 1000-row cap the
+  /// way a bare `.select()` on route_stops is.
+  Future<List<Map<String, dynamic>>> pullRouteStopsByRouteIds(
+          List<String> routeIds) =>
+      _pullChildIn('route_stops', 'route_id', routeIds);
+
   Future<void> pushRouteAssignment(RouteAssignmentsData a) async {
     await _client.from('route_assignments').upsert({
       'user_id': a.userId,
