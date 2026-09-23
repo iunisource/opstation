@@ -384,7 +384,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dlg) => AlertDialog(
         title: Text(supplier == null ? 'Add Supplier' : 'Edit Supplier'),
         content: SizedBox(
           width: 520,
@@ -542,7 +542,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+              onPressed: () => Navigator.of(dlg, rootNavigator: true).pop(),
               child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () async {
@@ -577,9 +577,12 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                 } else {
                   await Supabase.instance.client.from('suppliers').update(data).eq('id', supplier['id']);
                 }
-                if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+                // Pop with the DIALOG's own context: the screen context can be
+                // unmounted/rebuilt (deferred route shell), which left the
+                // modal open after a successful save.
+                if (dlg.mounted) Navigator.of(dlg, rootNavigator: true).pop();
                 _showSnack(supplier == null ? 'Supplier added' : 'Supplier updated');
-                _load();
+                if (mounted) _load();
               } catch (e) {
                 if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
               }

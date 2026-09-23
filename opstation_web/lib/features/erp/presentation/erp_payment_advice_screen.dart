@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../pdf/payment_advice_pdf.dart';
 
 /// Payment Advice — a non-financial processing slip listing parties to pay,
 /// their bank details, amount due and amount to be paid, with a grand total.
@@ -31,6 +33,8 @@ class _PaLine {
   String? partyId;
   String partyType = 'supplier';
   String partyName = '';
+  /// Collapsed lines render as a single summary row above the entry area.
+  bool collapsed = false;
   final TextEditingController bankCtrl = TextEditingController();
   final TextEditingController dueCtrl = TextEditingController();
   final TextEditingController payCtrl = TextEditingController();
@@ -328,6 +332,7 @@ class _ErpPaymentAdviceScreenState
         ln.bankCtrl.text = (r['bank_details'] as String?) ?? '';
         ln.dueCtrl.text = _numStr(r['amount_due']);
         ln.payCtrl.text = _numStr(r['amount_to_pay']);
+        ln.collapsed = true;
         _lines.add(ln);
       }
       if (_lines.isEmpty) _lines.add(_PaLine());
@@ -684,6 +689,13 @@ class _ErpPaymentAdviceScreenState
                     fontSize: 11,
                     fontWeight: FontWeight.w700)),
           ),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed: () => _print(a),
+            icon: const Icon(Icons.print_outlined, size: 20),
+            color: AppTheme.textSecondary,
+            tooltip: 'Print / PDF',
+          ),
         ]),
       ),
     );
@@ -709,6 +721,12 @@ class _ErpPaymentAdviceScreenState
             style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
           ),
         ),
+        if (_current != null)
+          IconButton(
+            onPressed: () => _print(_current!),
+            icon: const Icon(Icons.print_outlined),
+            tooltip: 'Print / PDF',
+          ),
       ]),
       const SizedBox(height: 8),
       Expanded(
@@ -736,11 +754,20 @@ class _ErpPaymentAdviceScreenState
                   ),
                 ]),
                 const SizedBox(height: 18),
-                for (var i = 0; i < _lines.length; i++) ...[
-                  _lineCard(i, readOnly, narrow),
-                  const SizedBox(height: 10),
-                ],
-                if (!readOnly)
+                // Parked (collapsed) parties: one line each, above the entry area.
+                for (var i = 0; i < _lines.length; i++)
+                  if (_lines[i].collapsed) ...[
+                    _collapsedRow(i, readOnly),
+                    const SizedBox(height: 6),
+                  ],
+                // Open entry cards (normally just one).
+                for (var i = 0; i < _lines.length; i++)
+                  if (!_lines[i].collapsed) ...[
+                    const SizedBox(height: 6),
+                    _lineCard(i, readOnly, narrow),
+                    const SizedBox(height: 10),
+                  ],
+                if (!readOnly && !_lines.any((l) => !l.collapsed))
                   OutlinedButton.icon(
                     onPressed: () => setState(() => _lines.add(_PaLine())),
                     icon: const Icon(Icons.add, size: 18),
@@ -903,8 +930,131 @@ class _ErpPaymentAdviceScreenState
         ),
         const SizedBox(height: 12),
         amounts,
+        if (!readOnly) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              onPressed: l.partyId == null ? null : () => _parkLine(l),
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Done — add another'),
+            ),
+          ),
+        ],
       ]),
     );
+  }
+
+  /// Collapse a finished line into a one-row summary and open a fresh entry
+  /// card below it, so the same area is reused for the next party.
+  void _parkLine(_PaLine l) {
+    setState(() {
+      l.collapsed = true;
+      if (!_lines.any((x) => !x.collapsed)) _lines.add(_PaLine());
+    });
+  }
+
+  Widget _collapsedRow(int i, bool readOnly) {
+    final l = _lines[i];
+    final due = double.tryParse(l.dueCtrl.text.trim()) ?? 0;
+    final pay = double.tryParse(l.payCtrl.text.trim()) ?? 0;
+    return InkWell(
+      onTap: readOnly
+          ? null
+          : () => setState(() {
+                // Re-open this line; drop an untouched empty entry card so
+                // only one card is open at a time.
+                _lines.removeWhere((x) =>
+                    !x.collapsed && x.partyId == null && x != l);
+                l.collapsed = false;
+              }),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Row(children: [
+          Icon(
+              l.partyType == 'customer'
+                  ? Icons.store_outlined
+                  : Icons.local_shipping_outlined,
+              size: 16,
+              color: AppTheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(l.partyName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 8),
+          Text('Due ${_numStr(due)}',
+              style: const TextStyle(
+                  fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(width: 12),
+          Text('Pay Rs ${_numStr(pay)}',
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          if (!readOnly) ...[
+            const SizedBox(width: 4),
+            IconButton(
+              onPressed: () => setState(() {
+                _lines[i].dispose();
+                _lines.removeAt(i);
+                if (_lines.isEmpty) _lines.add(_PaLine());
+              }),
+              icon: const Icon(Icons.close, size: 16),
+              color: AppTheme.textSecondary,
+              tooltip: 'Remove',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  // ── Print / PDF ────────────────────────────────────────────────────────
+  Future<void> _print(Map<String, dynamic> a) async {
+    try {
+      final rows = await _db
+          .from('payment_advice_lines')
+          .select()
+          .eq('advice_id', a['id'])
+          .order('line_order');
+      final lines = [
+        for (final r in rows as List)
+          PaymentAdvicePdfLine(
+            partyName: (r['party_name'] as String?) ?? '',
+            partyType: (r['party_type'] as String?) ?? '',
+            bankDetails: (r['bank_details'] as String?) ?? '',
+            amountDue: ((r['amount_due'] as num?) ?? 0).toDouble(),
+            amountToPay: ((r['amount_to_pay'] as num?) ?? 0).toDouble(),
+          ),
+      ];
+      final bytes = await PaymentAdvicePdf.build(
+        orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+        adviceNumber: (a['advice_number'] as String?) ?? '',
+        adviceDate:
+            DateTime.tryParse(a['advice_date'] as String? ?? '') ?? DateTime.now(),
+        status: (a['status'] as String?) ?? 'approved',
+        note: (a['note'] as String?) ?? '',
+        lines: lines,
+        grandTotal: ((a['grand_total'] as num?) ?? 0).toDouble(),
+        createdBy: (a['created_by_name'] as String?) ?? '—',
+        createdAt: DateTime.tryParse(a['created_at'] as String? ?? ''),
+        approvedBy: a['approved_by_name'] as String?,
+        approvedAt: DateTime.tryParse(a['approved_at'] as String? ?? ''),
+      );
+      await Printing.layoutPdf(
+          name: 'Payment Advice ${a['advice_number'] ?? ''}',
+          onLayout: (_) async => bytes);
+    } catch (e) {
+      _snack('Print failed: $e');
+    }
   }
 
   Widget _amountField(String label, TextEditingController c,
