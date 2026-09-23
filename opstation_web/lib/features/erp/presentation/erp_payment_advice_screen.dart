@@ -44,6 +44,8 @@ class _PaLine {
 class _ErpPaymentAdviceScreenState
     extends ConsumerState<ErpPaymentAdviceScreen> {
   bool _loading = true;
+  String _stage = 'starting';
+  String? _partyWarning;
   String? _error;
   bool _saving = false;
 
@@ -65,6 +67,38 @@ class _ErpPaymentAdviceScreenState
   String _search = '';
 
   SupabaseClient get _db => Supabase.instance.client;
+
+  void _setStage(String st) {
+    if (!mounted) return;
+    setState(() => _stage = st);
+  }
+
+  /// Time-box any Supabase query so a stalled request can never hang the load.
+  Future<T> _timed<T>(Future<T> f) =>
+      f.timeout(const Duration(seconds: 10));
+
+  /// Fetch a party table; if the bank_details column doesn't exist yet
+  /// (migration not run), retry without it so the screen still works.
+  Future<List> _selectParties(String table, String fullSel, String baseSel,
+      String orgId, String orderCol) async {
+    try {
+      final r = await _timed(_db
+          .from(table)
+          .select(fullSel)
+          .eq('org_id', orgId)
+          .order(orderCol)
+          .limit(5000));
+      return r as List;
+    } catch (_) {
+      final r = await _timed(_db
+          .from(table)
+          .select(baseSel)
+          .eq('org_id', orgId)
+          .order(orderCol)
+          .limit(5000));
+      return r as List;
+    }
+  }
 
   @override
   void initState() {
@@ -96,43 +130,62 @@ class _ErpPaymentAdviceScreenState
     });
     try {
       // Settings (approval toggle + approver list) from app_config.
-      final cfgRows = await _db
-          .from('app_config')
-          .select('key, value')
-          .eq('org_id', orgId)
-          .inFilter('key', ['org.pa_approval_enabled', 'org.pa_approvers']);
-      final cfg = <String, String>{};
-      for (final r in cfgRows as List) {
-        cfg[r['key'] as String] = (r['value'] as String?) ?? '';
+      // Best-effort: never let a settings hiccup block the whole screen.
+      _setStage('settings');
+      try {
+        final cfgRows = await _timed(_db
+            .from('app_config')
+            .select('key, value')
+            .eq('org_id', orgId)
+            .inFilter('key', ['org.pa_approval_enabled', 'org.pa_approvers']));
+        final cfg = <String, String>{};
+        for (final r in cfgRows as List) {
+          cfg[r['key'] as String] = (r['value'] as String?) ?? '';
+        }
+        _approvalEnabled = cfg['org.pa_approval_enabled'] == 'true';
+        final ap = (cfg['org.pa_approvers'] ?? '').trim();
+        _approvers = ap.isEmpty
+            ? <String>{}
+            : ap.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+      } catch (_) {
+        _approvalEnabled = false;
+        _approvers = <String>{};
       }
-      _approvalEnabled = cfg['org.pa_approval_enabled'] == 'true';
-      final ap = (cfg['org.pa_approvers'] ?? '').trim();
-      _approvers = ap.isEmpty
-          ? <String>{}
-          : ap.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
 
-      // Saved advices.
-      final adv = await _db
+      // Saved advices (time-boxed so a slow/absent table can't hang the page).
+      _setStage('advices');
+      final adv = await _timed(_db
           .from('payment_advices')
           .select()
           .eq('org_id', orgId)
           .order('created_at', ascending: false)
-          .limit(500);
-      _advices = List<Map<String, dynamic>>.from(adv);
+          .limit(500));
+      _advices = List<Map<String, dynamic>>.from(adv as List);
 
-      // Party master (customers + suppliers) with bank details.
+      // Party master — resilient to the bank_details column not existing yet
+      // (falls back to a select without it) and time-boxed.
       _parties.clear();
       _partyById.clear();
-      final custs = await _db
-          .from('customers')
-          .select('id, shop_name, bank_details')
-          .eq('org_id', orgId)
-          .order('shop_name');
-      final sups = await _db
-          .from('suppliers')
-          .select('id, name, bank_details')
-          .eq('org_id', orgId)
-          .order('name');
+      // Load both party tables IN PARALLEL and never let one block the other:
+      // a slow/locked table just yields an empty list + a warning banner.
+      _setStage('customers & suppliers');
+      _partyWarning = null;
+      final results = await Future.wait<List>([
+        _selectParties('customers', 'id, shop_name, bank_details', 'id, shop_name',
+                orgId, 'shop_name')
+            .catchError((e) {
+          _partyWarning = 'Customers could not be loaded: $e';
+          return <dynamic>[];
+        }),
+        _selectParties('suppliers', 'id, name, bank_details', 'id, name', orgId,
+                'name')
+            .catchError((e) {
+          _partyWarning = 'Suppliers could not be loaded: $e';
+          return <dynamic>[];
+        }),
+      ]);
+      final custs = results[0];
+      final sups = results[1];
 
       // Build parties immediately with balance 0 so the page renders fast.
       // Balances come from heavy org-wide RPCs — fetch them in the background
@@ -152,6 +205,7 @@ class _ErpPaymentAdviceScreenState
         _partyById['supplier:$id'] = p;
       }
 
+      _setStage('done');
       setState(() => _loading = false);
       // Non-blocking: fill balances when they arrive.
       _loadBalancesInBackground(orgId);
@@ -460,7 +514,15 @@ class _ErpPaymentAdviceScreenState
       color: AppTheme.background,
       padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 12 : 28),
       child: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 12),
+                Text('Loading payment advice — $_stage…',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
+              ]),
+            )
           : _error != null
               ? _errorView()
               : _editing
@@ -495,25 +557,38 @@ class _ErpPaymentAdviceScreenState
                 .toLowerCase();
             return s.contains(q);
           }).toList();
+    // NOTE: never put Spacer/Expanded inside a Wrap — Wrap is not a Flex, and
+    // in release builds that mismatch breaks the render tree instead of
+    // throwing a readable error (this froze the whole app on first render).
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 12,
-        runSpacing: 8,
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const Text('Payment Advice',
-              style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
-          if (_pendingCount > 0)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                  color: AppTheme.warning.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(999)),
-              child: Text('$_pendingCount pending approval',
-                  style: const TextStyle(
-                      color: AppTheme.warning, fontWeight: FontWeight.w700)),
+          Expanded(
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                const Text('Payment Advice',
+                    style:
+                        TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+                if (_pendingCount > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                        color: AppTheme.warning.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(999)),
+                    child: Text('$_pendingCount pending approval',
+                        style: const TextStyle(
+                            color: AppTheme.warning,
+                            fontWeight: FontWeight.w700)),
+                  ),
+              ],
             ),
-          const Spacer(),
+          ),
+          const SizedBox(width: 12),
           ElevatedButton.icon(
             onPressed: _newAdvice,
             icon: const Icon(Icons.add, size: 18),
@@ -524,6 +599,17 @@ class _ErpPaymentAdviceScreenState
       const SizedBox(height: 4),
       const Text('Non-financial processing slip — does not post to accounts.',
           style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      if (_partyWarning != null) ...[
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+              color: AppTheme.warning.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8)),
+          child: Text(_partyWarning!,
+              style: const TextStyle(fontSize: 12, color: AppTheme.warning)),
+        ),
+      ],
       const SizedBox(height: 16),
       TextField(
         decoration: InputDecoration(

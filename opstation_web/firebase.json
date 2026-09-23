@@ -109,7 +109,7 @@
     ],
     "rewrites": [
       {
-        "source": "**",
+        "source": "**/!(*.@(js|mjs|wasm|json|css|map|png|jpg|jpeg|gif|svg|ico|otf|ttf|woff|woff2|txt|xml|webmanifest))",
         "destination": "/index.html"
       }
     ]

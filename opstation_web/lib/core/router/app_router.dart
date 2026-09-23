@@ -543,60 +543,50 @@ class _DeferredScreen extends StatelessWidget {
           }
           if (snap.hasError) {
             // A deferred code chunk failed to load — almost always a stale
-            // cached bundle after a new deploy (the .part.js hashes changed).
-            // Self-heal: drop the service worker + caches and hard-reload once
-            // so the browser fetches the fresh bundle, instead of throwing
-            // "Deferred library not loaded" while building.
-            _reloadForStaleBundle();
-            return const Scaffold(
+            // cached bundle after a new deploy. Show a manual reload (never
+            // auto-reload, which can loop against a stale bundle).
+            return Scaffold(
               body: Center(
                 child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('Updating to the latest version…',
-                      textAlign: TextAlign.center),
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.refresh, size: 36),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'This screen could not load — a newer version of '
+                        'Opstation is available.',
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: _hardReload,
+                        icon: const Icon(Icons.refresh, size: 18),
+                        label: const Text('Reload'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
           }
-          // Reached a good build — reset the reload guard.
-          try {
-            html.window.sessionStorage.remove('ops_chunk_reload');
-          } catch (_) {}
           return make();
         },
       );
 }
 
-bool _reloadInFlight = false;
-
-/// Force a one-time clean reload when a deferred chunk can't be fetched.
-/// Guarded by a sessionStorage counter so a genuinely broken deploy can't
-/// trap the user in a reload loop.
-void _reloadForStaleBundle() {
-  if (_reloadInFlight) return;
-  _reloadInFlight = true;
+/// User-initiated clean reload: drop any app service worker, then reload so
+/// the browser fetches the fresh bundle.
+Future<void> _hardReload() async {
   try {
-    final ss = html.window.sessionStorage;
-    final n = int.tryParse(ss['ops_chunk_reload'] ?? '0') ?? 0;
-    if (n >= 2) return; // gave it two tries — stop to avoid a loop
-    ss['ops_chunk_reload'] = '${n + 1}';
-    Future<void> done() async {
-      try {
-        final sw = html.window.navigator.serviceWorker;
-        if (sw != null) {
-          final regs = await sw.getRegistrations();
-          for (final r in regs) {
-            await r.unregister();
-          }
-        }
-      } catch (_) {}
-      html.window.location.reload();
+    final sw = html.window.navigator.serviceWorker;
+    if (sw != null) {
+      final regs = await sw.getRegistrations();
+      for (final r in regs) {
+        await r.unregister();
+      }
     }
-
-    done();
-  } catch (_) {
-    try {
-      html.window.location.reload();
-    } catch (_) {}
-  }
+  } catch (_) {}
+  html.window.location.reload();
 }
