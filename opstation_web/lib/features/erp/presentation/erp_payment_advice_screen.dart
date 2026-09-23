@@ -65,6 +65,7 @@ class _ErpPaymentAdviceScreenState
   final List<_Party> _parties = [];
   final Map<String, _Party> _partyById = {};
   bool _balancesLoaded = false;
+  bool _showArchived = false;
 
   // Editor state
   bool _editing = false;
@@ -439,6 +440,7 @@ class _ErpPaymentAdviceScreenState
         number = await _nextNumber(orgId);
         adviceId = 'pa_${DateTime.now().millisecondsSinceEpoch}';
         final status = _approvalEnabled ? 'pending' : 'approved';
+        final autoApproved = !_approvalEnabled;
         await _db.from('payment_advices').insert({
           'id': adviceId,
           'org_id': orgId,
@@ -449,6 +451,11 @@ class _ErpPaymentAdviceScreenState
           'grand_total': total,
           'created_by': me?.id,
           'created_by_name': me?.name,
+          // With no approval flow the slip is approved on creation, so record
+          // the creator as the approver instead of leaving "Approved by" blank.
+          if (autoApproved) 'approved_by': me?.id,
+          if (autoApproved) 'approved_by_name': me?.name,
+          if (autoApproved) 'approved_at': DateTime.now().toIso8601String(),
         });
       } else {
         adviceId = _current!['id'] as String;
@@ -554,6 +561,20 @@ class _ErpPaymentAdviceScreenState
         .showSnackBar(SnackBar(content: Text(m)));
   }
 
+  Future<void> _setArchived(Map<String, dynamic> a, bool archived) async {
+    try {
+      await _db.from('payment_advices').update({
+        'is_archived': archived,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', a['id']);
+      if (!mounted) return;
+      setState(() => a['is_archived'] = archived);
+      _snack(archived ? 'Archived.' : 'Unarchived.');
+    } catch (e) {
+      _snack('Could not ${archived ? 'archive' : 'unarchive'}: $e');
+    }
+  }
+
   int get _pendingCount =>
       _advices.where((a) => a['status'] == 'pending').length;
 
@@ -598,9 +619,13 @@ class _ErpPaymentAdviceScreenState
   // ── List view ──────────────────────────────────────────────────────────
   Widget _list() {
     final q = _search.trim().toLowerCase();
+    final base = _advices.where((a) {
+      final archived = (a['is_archived'] as bool?) ?? false;
+      return _showArchived ? archived : !archived;
+    });
     final shown = q.isEmpty
-        ? _advices
-        : _advices.where((a) {
+        ? base.toList()
+        : base.where((a) {
             final s = '${a['advice_number'] ?? ''} ${a['created_by_name'] ?? ''} '
                     '${a['status'] ?? ''}'
                 .toLowerCase();
@@ -672,12 +697,26 @@ class _ErpPaymentAdviceScreenState
         ),
         onChanged: (v) => setState(() => _search = v),
       ),
+      const SizedBox(height: 8),
+      Row(children: [
+        FilterChip(
+          label: Text(_showArchived ? 'Showing archived' : 'Show archived'),
+          selected: _showArchived,
+          onSelected: (v) => setState(() => _showArchived = v),
+          avatar: Icon(
+              _showArchived ? Icons.inventory_2 : Icons.inventory_2_outlined,
+              size: 16),
+        ),
+      ]),
       const SizedBox(height: 12),
       Expanded(
         child: shown.isEmpty
-            ? const Center(
-                child: Text('No payment advices yet.',
-                    style: TextStyle(color: AppTheme.textSecondary)))
+            ? Center(
+                child: Text(
+                    _showArchived
+                        ? 'No archived payment advices.'
+                        : 'No payment advices yet.',
+                    style: const TextStyle(color: AppTheme.textSecondary)))
             : ListView.separated(
                 itemCount: shown.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -739,6 +778,18 @@ class _ErpPaymentAdviceScreenState
             icon: const Icon(Icons.print_outlined, size: 20),
             color: AppTheme.textSecondary,
             tooltip: 'Print / PDF',
+          ),
+          IconButton(
+            onPressed: () => _setArchived(a, !((a['is_archived'] as bool?) ?? false)),
+            icon: Icon(
+                ((a['is_archived'] as bool?) ?? false)
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+                size: 20),
+            color: AppTheme.textSecondary,
+            tooltip: ((a['is_archived'] as bool?) ?? false)
+                ? 'Unarchive'
+                : 'Archive',
           ),
         ]),
       ),
@@ -1026,6 +1077,19 @@ class _ErpPaymentAdviceScreenState
   /// pre-filled). Amounts stay editable afterwards.
   Future<void> _suggestParties() async {
     if (_isApproved) return;
+    // Pull balances LIVE right now so the suggestion reflects current
+    // outstanding amounts (a payment made elsewhere since this screen opened
+    // would otherwise show stale). Last-payment dates are reference only.
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId != null) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+      await _loadBalancesInBackground(orgId);
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
     if (!_balancesLoaded) {
       _snack('Balances are still loading — try again in a moment.');
       return;
@@ -1222,11 +1286,17 @@ class _ErpPaymentAdviceScreenState
         ? DateFormat('d MMM yyyy, HH:mm')
             .format(DateTime.tryParse(a!['created_at'] as String)!.toLocal())
         : '—';
-    final approvedBy = a?['approved_by_name'] as String?;
+    final status = (a?['status'] as String?) ?? 'approved';
+    final isApproved = status == 'approved';
+    // Fallback for older rows saved before the auto-approve stamp: an approved
+    // slip with no approver recorded was approved on creation, so show the
+    // creator rather than a blank.
+    final approvedBy = (a?['approved_by_name'] as String?) ??
+        (isApproved ? createdBy : null);
     final approvedAt = a?['approved_at'] != null
         ? DateFormat('d MMM yyyy, HH:mm')
             .format(DateTime.tryParse(a!['approved_at'] as String)!.toLocal())
-        : null;
+        : (isApproved ? createdAt : null);
     Widget foot(String label, String who, String when) => Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label,
@@ -1252,7 +1322,7 @@ class _ErpPaymentAdviceScreenState
       child: Row(children: [
         foot('CREATED BY', createdBy, createdAt),
         foot('APPROVED BY', approvedBy ?? '—',
-            approvedAt ?? (_approvalEnabled ? 'Awaiting approval' : '—')),
+            approvedAt ?? (status == 'pending' ? 'Awaiting approval' : '—')),
       ]),
     );
   }
@@ -1568,8 +1638,8 @@ class _SuggestDialogState extends State<_SuggestDialog> {
                         title: Text(p.name,
                             maxLines: 1, overflow: TextOverflow.ellipsis),
                         subtitle: Text(
-                          '${p.type} · due Rs ${_numStr(p.balance)}'
-                          '${p.lastPayment == null ? '' : ' · last paid ${DateFormat('d MMM yyyy').format(p.lastPayment!)}'}',
+                          '${p.type} · current balance Rs ${_numStr(p.balance)}'
+                          '${p.lastPayment == null ? '' : ' · last paid ${DateFormat('d MMM yyyy').format(p.lastPayment!)} (ref)'}',
                           style: const TextStyle(fontSize: 11),
                         ),
                         secondary: Icon(
