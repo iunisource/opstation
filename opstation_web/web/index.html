@@ -33,31 +33,13 @@
     @keyframes opsspin{to{transform:rotate(360deg)}}
   </style>
 
-  <!-- Drop the Flutter app service worker (keep the /push/ worker). A stale
-       app SW after a deploy caused "Deferred library not loaded" errors and
-       slow white-screen refreshes. The app is built with --pwa-strategy=none
-       so no Flutter SW registers; this clears any already-installed one and
-       its caches so existing users self-recover on their next load. -->
-  <script>
-    (function () {
-      if (!('serviceWorker' in navigator)) return;
-      try {
-        navigator.serviceWorker.getRegistrations().then(function (regs) {
-          regs.forEach(function (r) {
-            var scope = r.scope || '';
-            if (scope.indexOf('/push/') === -1) { r.unregister(); }
-          });
-        }).catch(function () {});
-        if (window.caches && caches.keys) {
-          caches.keys().then(function (keys) {
-            keys.forEach(function (k) {
-              if (k && k.toLowerCase().indexOf('push') === -1) { caches.delete(k); }
-            });
-          }).catch(function () {});
-        }
-      } catch (e) {}
-    })();
-  </script>
+  <!-- The Flutter app service worker (offline-first) is intentionally kept:
+       it downloads a whole build atomically and serves it from cache, which
+       is what makes new tabs open instantly. The earlier "Deferred library
+       not loaded" errors were caused by the hosting catch-all rewrite serving
+       index.html for missing chunks (fixed in firebase.json), not by the SW.
+       Do NOT add code here that unregisters it or wipes its caches — that
+       forces a full re-download on every page load. -->
 
   <!-- ── Web Push helpers (native JS; called from Dart) ───────────────────── -->
   <script>
