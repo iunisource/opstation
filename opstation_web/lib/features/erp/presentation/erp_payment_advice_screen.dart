@@ -230,15 +230,20 @@ class _ErpPaymentAdviceScreenState
   /// list. Best-effort and time-boxed so a slow/absent RPC never hangs the UI.
   Future<void> _loadBalancesInBackground(String orgId) async {
     try {
-      final cust = await _loadCustomerBalances(orgId)
-          .timeout(const Duration(seconds: 20), onTimeout: () => <String, double>{});
-      final sup = await _loadSupplierBalances(orgId)
+      // Current NET balance per party from the posted GL (folds in advances /
+      // prepayments, so a fully-paid supplier reads 0 — not its old payable).
+      final net = await _loadPartyNet(orgId)
           .timeout(const Duration(seconds: 20), onTimeout: () => <String, double>{});
       final lastPay = await _loadLastPayments(orgId)
           .timeout(const Duration(seconds: 20), onTimeout: () => <String, DateTime>{});
       if (!mounted) return;
       final rebuilt = _parties.map((p) {
-        final bal = (p.type == 'customer' ? cust[p.id] : sup[p.id]) ?? p.balance;
+        final raw = net[p.id];
+        // net = credit - debit. Supplier payable is a credit balance (positive);
+        // customer receivable is a debit balance, so negate for customers.
+        final bal = raw == null
+            ? p.balance
+            : (p.type == 'customer' ? -raw : raw);
         final lp = lastPay['${p.type}:${p.id}'] ?? p.lastPayment;
         return _Party(p.id, p.name, p.type, p.bank, bal, lp);
       }).toList();
@@ -274,40 +279,16 @@ class _ErpPaymentAdviceScreenState
     }
   }
 
-  Future<Map<String, double>> _loadCustomerBalances(String orgId) async {
+  /// Current net (credit - debit) per party id from the posted GL. Positive =
+  /// supplier payable; for customers the caller negates it to get receivable.
+  Future<Map<String, double>> _loadPartyNet(String orgId) async {
     try {
-      final rows = await _db.rpc('rpc_customer_aging', params: {
-        'p_org_id': orgId,
-        'p_as_of': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-      });
+      final rows =
+          await _db.rpc('rpc_party_net_balances', params: {'p_org': orgId});
       final out = <String, double>{};
       for (final r in rows as List) {
-        final id = r['customer_id'] as String?;
-        if (id != null) out[id] = (r['total'] as num?)?.toDouble() ?? 0;
-      }
-      return out;
-    } catch (_) {
-      return {};
-    }
-  }
-
-  Future<Map<String, double>> _loadSupplierBalances(String orgId) async {
-    try {
-      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      final rows = await _db.rpc('rpc_supplier_balance_report', params: {
-        'p_org_id': orgId,
-        'p_d1': today,
-        'p_d2': today,
-        'p_d3': today,
-        'p_branch_ids': null,
-      });
-      final out = <String, double>{};
-      for (final r in rows as List) {
-        final id = (r['supplier_id'] ?? r['id']) as String?;
-        if (id != null) {
-          // report returns credit-positive payable; take the magnitude due.
-          out[id] = ((r['bal3'] as num?)?.toDouble() ?? 0).abs();
-        }
+        final id = r['party_id'] as String?;
+        if (id != null) out[id] = (r['net'] as num?)?.toDouble() ?? 0;
       }
       return out;
     } catch (_) {
