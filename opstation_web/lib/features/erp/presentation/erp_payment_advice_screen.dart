@@ -134,31 +134,59 @@ class _ErpPaymentAdviceScreenState
           .eq('org_id', orgId)
           .order('name');
 
-      // Balances (best-effort; Amount Due is editable so failures are fine).
-      final custBal = await _loadCustomerBalances(orgId);
-      final supBal = await _loadSupplierBalances(orgId);
-
+      // Build parties immediately with balance 0 so the page renders fast.
+      // Balances come from heavy org-wide RPCs — fetch them in the background
+      // (Amount Due is editable, so a missing/late balance never blocks use).
       for (final c in custs as List) {
         final id = c['id'] as String;
         final p = _Party(id, (c['shop_name'] as String?) ?? '(customer)',
-            'customer', (c['bank_details'] as String?) ?? '', custBal[id] ?? 0);
+            'customer', (c['bank_details'] as String?) ?? '', 0);
         _parties.add(p);
         _partyById['customer:$id'] = p;
       }
       for (final s in sups as List) {
         final id = s['id'] as String;
         final p = _Party(id, (s['name'] as String?) ?? '(supplier)', 'supplier',
-            (s['bank_details'] as String?) ?? '', supBal[id] ?? 0);
+            (s['bank_details'] as String?) ?? '', 0);
         _parties.add(p);
         _partyById['supplier:$id'] = p;
       }
 
       setState(() => _loading = false);
+      // Non-blocking: fill balances when they arrive.
+      _loadBalancesInBackground(orgId);
     } catch (e) {
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  /// Fetch party balances off the critical path and merge them into the party
+  /// list. Best-effort and time-boxed so a slow/absent RPC never hangs the UI.
+  Future<void> _loadBalancesInBackground(String orgId) async {
+    try {
+      final cust = await _loadCustomerBalances(orgId)
+          .timeout(const Duration(seconds: 20), onTimeout: () => <String, double>{});
+      final sup = await _loadSupplierBalances(orgId)
+          .timeout(const Duration(seconds: 20), onTimeout: () => <String, double>{});
+      if ((cust.isEmpty && sup.isEmpty) || !mounted) return;
+      final rebuilt = _parties.map((p) {
+        final bal = (p.type == 'customer' ? cust[p.id] : sup[p.id]) ?? p.balance;
+        return _Party(p.id, p.name, p.type, p.bank, bal);
+      }).toList();
+      setState(() {
+        _parties
+          ..clear()
+          ..addAll(rebuilt);
+        _partyById.clear();
+        for (final p in _parties) {
+          _partyById['${p.type}:${p.id}'] = p;
+        }
+      });
+    } catch (_) {
+      // ignore — balances are optional
     }
   }
 

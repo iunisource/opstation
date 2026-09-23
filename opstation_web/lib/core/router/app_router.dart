@@ -1,3 +1,4 @@
+import 'dart:html' as html;
 import '../../features/inventory/erp_stock_adjustment_screen.dart' deferred as _s001;
 import '../../features/erp/presentation/erp_trial_balance_screen.dart' deferred as _s002;
 import '../../features/erp/presentation/erp_journal_voucher_screen.dart' deferred as _s003;
@@ -62,6 +63,7 @@ import '../../features/customers/presentation/bulk_import_customers_screen.dart'
 import '../../features/routes/presentation/bulk_import_routes_screen.dart' deferred as _s057;
 import '../../features/reports/presentation/reports_screen.dart' deferred as _s058;
 import '../../features/reports/presentation/combined_trip_summary_screen.dart' deferred as _s140;
+import '../../features/erp/presentation/erp_payment_advice_screen.dart' deferred as _s141;
 import '../../features/deliveries/presentation/deliveries_screen.dart' deferred as _s059;
 import '../../features/deliveries/presentation/delivery_detail_screen.dart' deferred as _s060;
 import '../../features/dispatch_orders/presentation/dispatch_orders_screen.dart' deferred as _s061;
@@ -402,6 +404,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => _deferred(_s001.loadLibrary(), () => _s001.ErpStockAdjustmentScreen())),
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => _deferred(_s080.loadLibrary(), () => _s080.ErpPaymentVoucherScreen())),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => _deferred(_s117.loadLibrary(), () => _s117.ErpReceiptVouchersScreen())),
+      GoRoute(path: '/financials/payment-advice', builder: (_, __) => _deferred(_s141.loadLibrary(), () => _s141.ErpPaymentAdviceScreen())),
           GoRoute(path: '/erp/pdc-voucher', builder: (_, __) => _deferred(_s110.loadLibrary(), () => _s110.ErpPdcVoucherScreen())),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => _deferred(_s118.loadLibrary(), () => _s118.ErpSupplierLedgerScreen())),
                 GoRoute(path: '/financials/journal-vouchers', builder: (_, __) => _deferred(_s003.loadLibrary(), () => _s003.ErpJournalVoucherScreen())),
@@ -533,8 +536,67 @@ class _DeferredScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => FutureBuilder<void>(
         future: load,
-        builder: (_, snap) => snap.connectionState == ConnectionState.done
-            ? make()
-            : const Scaffold(body: Center(child: CircularProgressIndicator())),
+        builder: (_, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return const Scaffold(
+                body: Center(child: CircularProgressIndicator()));
+          }
+          if (snap.hasError) {
+            // A deferred code chunk failed to load — almost always a stale
+            // cached bundle after a new deploy (the .part.js hashes changed).
+            // Self-heal: drop the service worker + caches and hard-reload once
+            // so the browser fetches the fresh bundle, instead of throwing
+            // "Deferred library not loaded" while building.
+            _reloadForStaleBundle();
+            return const Scaffold(
+              body: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('Updating to the latest version…',
+                      textAlign: TextAlign.center),
+                ),
+              ),
+            );
+          }
+          // Reached a good build — reset the reload guard.
+          try {
+            html.window.sessionStorage.remove('ops_chunk_reload');
+          } catch (_) {}
+          return make();
+        },
       );
+}
+
+bool _reloadInFlight = false;
+
+/// Force a one-time clean reload when a deferred chunk can't be fetched.
+/// Guarded by a sessionStorage counter so a genuinely broken deploy can't
+/// trap the user in a reload loop.
+void _reloadForStaleBundle() {
+  if (_reloadInFlight) return;
+  _reloadInFlight = true;
+  try {
+    final ss = html.window.sessionStorage;
+    final n = int.tryParse(ss['ops_chunk_reload'] ?? '0') ?? 0;
+    if (n >= 2) return; // gave it two tries — stop to avoid a loop
+    ss['ops_chunk_reload'] = '${n + 1}';
+    Future<void> done() async {
+      try {
+        final sw = html.window.navigator.serviceWorker;
+        if (sw != null) {
+          final regs = await sw.getRegistrations();
+          for (final r in regs) {
+            await r.unregister();
+          }
+        }
+      } catch (_) {}
+      html.window.location.reload();
+    }
+
+    done();
+  } catch (_) {
+    try {
+      html.window.location.reload();
+    } catch (_) {}
+  }
 }

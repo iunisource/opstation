@@ -1106,6 +1106,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/payment-vouchers')) _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
       if (show('/erp/receipt-vouchers')) _menuItem(context, 'Receipt Vouchers', Icons.payments_outlined,     '/erp/receipt-vouchers',      location),
       if (show('/erp/pdc-voucher')) _menuItem(context, 'PDC Voucher', Icons.account_balance_wallet_outlined, '/erp/pdc-voucher', location),
+      if (show('/financials/payment-advice')) _menuItem(context, 'Payment Advice', Icons.request_quote_outlined, '/financials/payment-advice', location),
     ];
     final finReports = <Widget>[
       if (show('/financials/trial-balance')) _menuItem(context, 'Trial Balance',    Icons.account_balance_outlined, '/financials/trial-balance',  location),
@@ -1182,7 +1183,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(manufacturingItems), badge: jobAckPending),
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
-          ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/cash-book'],
+          ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/payment-advice', '/financials/cash-book'],
           _trimDividers(financialItems)),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
