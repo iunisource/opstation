@@ -116,6 +116,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.pa_approval_enabled',
+    'Payment Advice approval flow',
+    'When ON, a new Payment Advice is saved as "Pending" and must be approved '
+        'by one of the users selected below before it is final. When OFF, a '
+        'saved advice is approved immediately.',
+    users: _UsersField('org.pa_approvers', 'Users allowed to approve'),
+  ),
+
+  _AdminToggle(
     'org.si_price_editable',
     'Editable prices on Sales Invoices',
     'When ON, the unit price on a Sales Invoice can be edited before it is saved/posted '
@@ -605,6 +614,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Financials', Icons.account_balance_outlined, [
     'org.jv_supervise_flow',
     'org.jv_approve_flow',
+    'org.pa_approval_enabled',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
     'org.show_org_name_sales',

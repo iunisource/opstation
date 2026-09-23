@@ -380,6 +380,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
     final lngCtrl = TextEditingController(text: supplier?['longitude']?.toString() ?? '');
     final termsCtrl = TextEditingController(text: supplier?['payment_terms_days']?.toString() ?? '30');
     final creditCtrl = TextEditingController(text: supplier?['credit_limit']?.toString() ?? '');
+    final bankDetailsCtrl = TextEditingController(text: supplier?['bank_details'] ?? '');
 
     showDialog(
       context: context,
@@ -524,6 +525,18 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                     decoration: const InputDecoration(labelText: 'Credit Limit (optional)', hintText: 'Leave blank for no limit'),
                     keyboardType: const TextInputType.numberWithOptions(decimal: true))),
               ]),
+              const SizedBox(height: 16),
+              const Align(alignment: Alignment.centerLeft,
+                  child: Text('Bank Details', style: TextStyle(
+                      fontWeight: FontWeight.w700, fontSize: 13,
+                      color: AppTheme.textSecondary))),
+              const SizedBox(height: 8),
+              TextField(controller: bankDetailsCtrl,
+                  minLines: 2, maxLines: 5,
+                  decoration: const InputDecoration(
+                      labelText: 'Bank details (bank, account title, number, IBAN)',
+                      hintText: 'Used to pre-fill Payment Advice slips',
+                      alignLabelWithHint: true)),
             ]),
           ),
         ),
@@ -553,6 +566,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                 'category_id': selectedCategoryId,
                 'payment_terms_days': int.tryParse(termsCtrl.text.trim()) ?? 30,
                 'credit_limit': creditCtrl.text.trim().isEmpty ? null : double.tryParse(creditCtrl.text.trim()),
+                'bank_details': bankDetailsCtrl.text.trim().isEmpty ? null : bankDetailsCtrl.text.trim(),
                 'is_active': true,
                 'updated_at': DateTime.now().toUtc().toIso8601String(),
               };

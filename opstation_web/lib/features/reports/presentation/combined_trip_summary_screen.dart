@@ -183,7 +183,28 @@ class _CombinedTripSummaryScreenState
                   orElse: () => {'name': 'Salesperson'})['name'] as String);
       final periodLabel =
           '${DateFormat('d MMM y').format(_range!.start)} - ${DateFormat('d MMM y').format(_range!.end)}';
-      final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+      final user = ref.read(currentUserProvider);
+      final orgName = user?.orgName ?? 'Opstation';
+
+      // Reimbursement doc: flag re-issues (same salesperson + range) DUPLICATE.
+      String ymd(DateTime d) =>
+          '${d.year.toString().padLeft(4, '0')}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}';
+      final key =
+          '${_selectedUserId ?? 'all'}|${ymd(_range!.start)}|${ymd(_range!.end)}';
+      bool duplicate = false;
+      if (user?.orgId != null) {
+        try {
+          final res = await Supabase.instance.client
+              .rpc('register_report_issue', params: {
+            'p_org': user!.orgId,
+            'p_type': 'combined_summary',
+            'p_key': key,
+            'p_by': user.id,
+            'p_increment': true,
+          });
+          duplicate = res == true;
+        } catch (_) {}
+      }
 
       final pdfRows = _rows
           .map((r) => CombinedSummaryRow(
@@ -201,6 +222,7 @@ class _CombinedTripSummaryScreenState
         showSalesperson: showSalesperson,
         rows: pdfRows,
         grandTotalKm: _grandKm,
+        duplicate: duplicate,
       );
       await Printing.layoutPdf(onLayout: (_) async => bytes);
     } catch (e) {

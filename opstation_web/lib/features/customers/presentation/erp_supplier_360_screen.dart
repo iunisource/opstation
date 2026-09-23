@@ -124,7 +124,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
       while (true) {
         final rows = await Supabase.instance.client
             .from('suppliers')
-            .select('id, name, phone, email, address, contact_person, ntn, credit_limit')
+            .select('id, name, phone, email, address, contact_person, ntn, credit_limit, bank_details')
             .eq('org_id', orgId)
             .order('name')
             .range(from, from + page - 1);
@@ -1112,6 +1112,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
         _infoRow(Icons.mail_outline, 'Email', _val(c['email'])),
         _infoRow(Icons.badge_outlined, 'NTN', _val(c['ntn'])),
         _infoRow(Icons.home_outlined, 'Address', _val(c['address'])),
+        _infoRow(Icons.account_balance_outlined, 'Bank Details', _val(c['bank_details'])),
       ])),
     ]);
   }

@@ -73,13 +73,13 @@ class ReportPdfBuilder {
   static Future<List<int>> buildTripSummary({
     required TripReportContext ctx,
     required String orgName,
+    bool duplicate = false,
   }) async {
     final trip = ctx.trip;
     final doc = pw.Document();
     doc.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+        pageTheme: _pageTheme(duplicate),
         header: (c) => _pageHeader(orgName, 'Trip Summary'),
         footer: (c) =>
             _pageFooter(c, orgName, 'Trip Summary',
@@ -122,6 +122,7 @@ class ReportPdfBuilder {
     required List<CombinedSummaryRow> rows,
     required double grandTotalKm,
     required bool usedGoogle,
+    bool duplicate = false,
   }) async {
     final doc = pw.Document();
 
@@ -150,8 +151,7 @@ class ReportPdfBuilder {
 
     doc.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+        pageTheme: _pageTheme(duplicate),
         header: (c) => _pageHeader(orgName, 'Combined Trip Summary'),
         footer: (c) => _pageFooter(
           c,
@@ -432,6 +432,35 @@ class ReportPdfBuilder {
   }
 
   // ========= Shared building blocks =======================================
+
+  /// A4 page theme; when [duplicate] is true every page gets a faint diagonal
+  /// "DUPLICATE" watermark behind the content (re-issued reimbursement docs).
+  static pw.PageTheme _pageTheme(bool duplicate) => pw.PageTheme(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+        buildBackground: (ctx) =>
+            duplicate ? _duplicateWatermark() : pw.SizedBox(),
+      );
+
+  static pw.Widget _duplicateWatermark() => pw.FullPage(
+        ignoreMargins: true,
+        child: pw.Center(
+          child: pw.Transform.rotate(
+            angle: 0.6,
+            child: pw.Opacity(
+              opacity: 0.12,
+              child: pw.Text(
+                'DUPLICATE',
+                style: pw.TextStyle(
+                  fontSize: 130,
+                  fontWeight: pw.FontWeight.bold,
+                  color: PdfColors.red,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 
   static pw.Widget _pageHeader(String orgName, String title) {
     return pw.Container(

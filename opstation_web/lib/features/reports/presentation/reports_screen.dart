@@ -139,6 +139,26 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 
 
+  /// Claim a reimbursement report issue; returns true if it was already issued
+  /// before (this generation is a DUPLICATE). Best-effort — never blocks print.
+  Future<bool> _registerReportIssue(
+      String type, String key, String? orgId, String? by) async {
+    if (orgId == null) return false;
+    try {
+      final res =
+          await Supabase.instance.client.rpc('register_report_issue', params: {
+        'p_org': orgId,
+        'p_type': type,
+        'p_key': key,
+        'p_by': by,
+        'p_increment': true,
+      });
+      return res == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _generateTripSummary(Map<String, dynamic> trip) async {
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
@@ -147,11 +167,15 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         visits: visits,
         customersById: _customersById,
       );
-      final orgName =
-          ref.read(currentUserProvider)?.orgName ?? 'Opstation';
+      final user = ref.read(currentUserProvider);
+      final orgName = user?.orgName ?? 'Opstation';
+      // Reimbursement doc: flag re-issues with a DUPLICATE watermark.
+      final duplicate = await _registerReportIssue(
+          'trip_summary', trip['id'] as String, user?.orgId, user?.id);
       final bytes = await ReportPdfBuilder.buildTripSummary(
         ctx: ctx,
         orgName: orgName,
+        duplicate: duplicate,
       );
       await Printing.layoutPdf(onLayout: (_) async => bytes);
     } catch (e) {

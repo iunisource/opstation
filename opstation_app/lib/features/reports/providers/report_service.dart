@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide AuthUser;
 import '../../../core/database/app_database_provider.dart';
 import 'package:printing/printing.dart';
 
@@ -41,10 +42,40 @@ class ReportService {
   final Ref _ref;
   ReportService(this._ref);
 
+  /// Register (claim=true) or check (claim=false) that a reimbursement report
+  /// has been issued. Returns true when it was already issued before — i.e.
+  /// this generation is a DUPLICATE and should be watermarked. Best-effort:
+  /// any failure (offline, no org) returns false so the report still prints.
+  Future<bool> registerReportIssue({
+    required String type,
+    required String key,
+    required String? orgId,
+    required String? by,
+    required bool claim,
+  }) async {
+    if (orgId == null) return false;
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'register_report_issue',
+        params: {
+          'p_org': orgId,
+          'p_type': type,
+          'p_key': key,
+          'p_by': by,
+          'p_increment': claim,
+        },
+      );
+      return res == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Uint8List> buildBytes({
     required ReportKind kind,
     required Trip trip,
     required AuthUser? actor,
+    bool claim = false,
   }) async {
     // Pre-compute addresses + road distances. This can hit the network
     // via OSRM + Nominatim; both have graceful fallbacks baked in.
@@ -64,6 +95,18 @@ class ReportService {
     }
     if (orgName.isEmpty) orgName = 'Opstation';
 
+    // Trip Summary is a reimbursement doc: flag re-issues with a DUPLICATE
+    // watermark. Visit Report is operational, so it isn't tracked.
+    final duplicate = kind == ReportKind.summary
+        ? await registerReportIssue(
+            type: 'trip_summary',
+            key: trip.id,
+            orgId: actor?.organizationId,
+            by: actor?.id,
+            claim: claim,
+          )
+        : false;
+
     final bytes = switch (kind) {
       ReportKind.visit => await ReportPdfBuilder.buildVisitReport(
           ctx: ctx,
@@ -72,6 +115,7 @@ class ReportService {
       ReportKind.summary => await ReportPdfBuilder.buildTripSummary(
           ctx: ctx,
           orgName: orgName,
+          duplicate: duplicate,
         ),
     };
     settings.toString(); // reserved
@@ -83,7 +127,9 @@ class ReportService {
     required Trip trip,
     required AuthUser? actor,
   }) async {
-    final bytes = await buildBytes(kind: kind, trip: trip, actor: actor);
+    // Share is the deliverable — claim the issue (marks re-issues DUPLICATE).
+    final bytes =
+        await buildBytes(kind: kind, trip: trip, actor: actor, claim: true);
     try {
       await Printing.sharePdf(bytes: bytes, filename: kind.filename(trip));
     } on PlatformException {
@@ -96,6 +142,7 @@ class ReportService {
     required Trip trip,
     required AuthUser? actor,
   }) async {
+    // Preview is read-only: it reflects DUPLICATE status but never claims it.
     await Printing.layoutPdf(
       onLayout: (_) => buildBytes(kind: kind, trip: trip, actor: actor),
       name: kind.filename(trip),
@@ -199,6 +246,7 @@ class ReportService {
     required String periodLabel,
     required String salespersonLabel,
     required AuthUser? actor,
+    bool duplicate = false,
   }) async {
     final builder = _ref.read(reportContextBuilderProvider);
     final ctxs = await Future.wait(trips.map((t) => builder.build(t)));
@@ -259,6 +307,7 @@ class ReportService {
       rows: rows,
       grandTotalKm: grand,
       usedGoogle: usedGoogle,
+      duplicate: duplicate,
     );
     return Uint8List.fromList(bytes);
   }

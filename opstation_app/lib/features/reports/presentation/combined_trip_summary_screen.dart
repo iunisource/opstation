@@ -116,6 +116,17 @@ class _CombinedTripSummaryScreenState
           : (loaded.userNames[effectiveUserId] ?? 'Salesperson');
 
       final svc = ref.read(reportServiceProvider);
+      // Reimbursement doc: Share claims the issue (re-issues get a DUPLICATE
+      // watermark); Preview only checks, so it never spends the original.
+      final key =
+          '${effectiveUserId ?? 'all'}|${_ymd(start)}|${_ymd(end)}';
+      final duplicate = await svc.registerReportIssue(
+        type: 'combined_summary',
+        key: key,
+        orgId: actor?.organizationId,
+        by: actor?.id,
+        claim: action == _Action.share,
+      );
       final bytes = await svc.buildCombinedSummaryBytes(
         trips: loaded.trips,
         userNames: loaded.userNames,
@@ -123,6 +134,7 @@ class _CombinedTripSummaryScreenState
         periodLabel: _periodLabel(range),
         salespersonLabel: salespersonLabel,
         actor: actor,
+        duplicate: duplicate,
       );
       final fname = 'combined_summary_${_ymd(start)}_${_ymd(end)}.pdf';
       if (action == _Action.preview) {
