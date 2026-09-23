@@ -188,6 +188,13 @@ class AdminDashboardBody extends ConsumerWidget {
         ),
         const SizedBox(height: 10),
         ManagementTile(
+          icon: Icons.route_outlined,
+          title: 'Combined trip summary',
+          subtitle: 'Multi-date distance sheet for reimbursement',
+          onTap: () => context.push('/admin/combined-summary'),
+        ),
+        const SizedBox(height: 10),
+        ManagementTile(
           icon: Icons.verified_user_outlined,
           title: 'Compliance',
           subtitle: 'Spoofing detection & visit integrity',

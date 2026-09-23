@@ -7,6 +7,21 @@ import '../../salesperson/models/trip.dart';
 import '../services/coverage_context_builder.dart';
 import '../services/report_context_builder.dart';
 
+/// One aggregated line of a Combined Trip Summary: the total road distance a
+/// salesperson covered on a single date, and the route(s) they ran that day.
+class CombinedSummaryRow {
+  final DateTime date;
+  final String salesperson;
+  final String routes;
+  final double km;
+  const CombinedSummaryRow({
+    required this.date,
+    required this.salesperson,
+    required this.routes,
+    required this.km,
+  });
+}
+
 /// Builder for PDF reports. Shapes match the reference PDFs the user
 /// supplied (OPSTATION branded, OPERATIONS MANAGER signature, etc.).
 class ReportPdfBuilder {
@@ -91,6 +106,137 @@ class ReportPdfBuilder {
       ),
     );
     return doc.save();
+  }
+
+  // ========= Combined Trip Summary (multi-date, reimbursement) ============
+
+  /// A multi-date reimbursement sheet: one row per day with that day's total
+  /// road distance and the route(s) covered, a grand-total distance, and a
+  /// claim block whose Rate/km and Total Amount are left blank on purpose for
+  /// finance to fill in by hand. No per-stop detail (that's the Trip Summary).
+  static Future<List<int>> buildCombinedTripSummary({
+    required String orgName,
+    required String periodLabel,
+    required String salespersonLabel,
+    required bool showSalesperson,
+    required List<CombinedSummaryRow> rows,
+    required double grandTotalKm,
+    required bool usedGoogle,
+  }) async {
+    final doc = pw.Document();
+
+    final headers = <String>[
+      'DATE',
+      if (showSalesperson) 'SALESPERSON',
+      'ROUTE(S)',
+      'DISTANCE (KM)',
+    ];
+    final data = <List<String>>[
+      for (final r in rows)
+        [
+          DateFormat('EEE, MMM d, y').format(r.date),
+          if (showSalesperson) r.salesperson,
+          r.routes,
+          r.km.toStringAsFixed(2),
+        ],
+      [
+        'TOTAL',
+        if (showSalesperson) '',
+        '',
+        '${grandTotalKm.toStringAsFixed(2)} km',
+      ],
+    ];
+    final distIdx = showSalesperson ? 3 : 2;
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+        header: (c) => _pageHeader(orgName, 'Combined Trip Summary'),
+        footer: (c) => _pageFooter(
+          c,
+          orgName,
+          'Combined Trip Summary',
+          distanceNote: usedGoogle
+              ? 'Distances: Google Directions API (road distance)'
+              : 'Distances: straight-line / Haversine — add GOOGLE_MAPS_API_KEY for road distances',
+        ),
+        build: (c) => [
+          pw.Text(
+            salespersonLabel,
+            style: pw.TextStyle(
+                fontSize: 12, fontWeight: pw.FontWeight.bold, color: _ink),
+          ),
+          pw.SizedBox(height: 2),
+          pw.Text(
+            'Period: $periodLabel   -   ${rows.length} day${rows.length == 1 ? '' : 's'}',
+            style: pw.TextStyle(fontSize: 9, color: _muted),
+          ),
+          pw.SizedBox(height: 14),
+          if (rows.isEmpty)
+            pw.Text('No trips in the selected period.',
+                style: pw.TextStyle(fontSize: 10, color: _muted))
+          else
+            pw.TableHelper.fromTextArray(
+              headers: headers,
+              data: data,
+              cellAlignment: pw.Alignment.centerLeft,
+              cellAlignments: {distIdx: pw.Alignment.centerRight},
+              headerStyle: pw.TextStyle(
+                fontSize: 7.5,
+                fontWeight: pw.FontWeight.bold,
+                color: _muted,
+                letterSpacing: 0.3,
+              ),
+              headerDecoration: const pw.BoxDecoration(color: _bg),
+              cellStyle: const pw.TextStyle(fontSize: 8.5, color: _ink),
+              cellPadding:
+                  const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+              border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
+            ),
+          pw.SizedBox(height: 18),
+          _reimbursementClaimBlock(grandTotalKm),
+          pw.SizedBox(height: 36),
+          _signatureLine(),
+        ],
+      ),
+    );
+    return doc.save();
+  }
+
+  /// Claim block for the combined summary: the distance is filled from the
+  /// trips; Rate per km and Total Amount are left blank for finance.
+  static pw.Widget _reimbursementClaimBlock(double totalKm) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        color: _bg,
+        border: pw.Border.all(color: _ruleSoft, width: 0.5),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            'REIMBURSEMENT',
+            style: pw.TextStyle(
+              fontSize: 9,
+              fontWeight: pw.FontWeight.bold,
+              letterSpacing: 0.8,
+              color: _muted,
+            ),
+          ),
+          pw.SizedBox(height: 8),
+          _reimbRow('Total Distance', '${totalKm.toStringAsFixed(2)} km'),
+          pw.SizedBox(height: 6),
+          _reimbRow('Rate per km', ''),
+          pw.SizedBox(height: 6),
+          _reimbRow('Total Amount', ''),
+          pw.SizedBox(height: 6),
+          _reimbRow('Approved By', ''),
+        ],
+      ),
+    );
   }
 
   // ========= Coverage Report ==============================================

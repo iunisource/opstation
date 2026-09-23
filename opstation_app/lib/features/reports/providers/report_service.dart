@@ -185,6 +185,92 @@ class ReportService {
       name: _coverageFilename(from, to),
     );
   }
+
+  // ---- Combined Trip Summary (multi-date reimbursement) ---------------
+
+  /// Build the combined, distance-only reimbursement summary. [trips] must
+  /// already be filtered to the chosen range/salesperson; [userNames] maps a
+  /// userId to a display name. Distances are computed per trip (same figures
+  /// as the single-trip Trip Summary) and aggregated by (salesperson, date).
+  Future<Uint8List> buildCombinedSummaryBytes({
+    required List<Trip> trips,
+    required Map<String, String> userNames,
+    required bool showSalesperson,
+    required String periodLabel,
+    required String salespersonLabel,
+    required AuthUser? actor,
+  }) async {
+    final builder = _ref.read(reportContextBuilderProvider);
+    final ctxs = await Future.wait(trips.map((t) => builder.build(t)));
+
+    bool usedGoogle = false;
+    final acc = <String, _CombinedAcc>{};
+    for (var i = 0; i < trips.length; i++) {
+      final t = trips[i];
+      final ctx = ctxs[i];
+      usedGoogle = usedGoogle || ctx.usedGoogle;
+      final d = DateTime(t.startedAt.year, t.startedAt.month, t.startedAt.day);
+      final key = '${t.userId}|${d.toIso8601String()}';
+      final a = acc.putIfAbsent(
+        key,
+        () => _CombinedAcc(
+          date: d,
+          salesperson: userNames[t.userId] ?? t.userName,
+        ),
+      );
+      a.km += ctx.totalDistanceKm;
+      if (t.routeName.trim().isNotEmpty) a.routes.add(t.routeName.trim());
+    }
+
+    final rows = acc.values
+        .map((a) => CombinedSummaryRow(
+              date: a.date,
+              salesperson: a.salesperson,
+              routes: a.routes.join(', '),
+              km: a.km,
+            ))
+        .toList()
+      ..sort((x, y) {
+        final s = x.salesperson.compareTo(y.salesperson);
+        return s != 0 ? s : x.date.compareTo(y.date);
+      });
+
+    final grand = rows.fold<double>(0, (s, r) => s + r.km);
+
+    String orgName = actor?.organizationName ?? '';
+    if (orgName.isEmpty && actor?.organizationId != null) {
+      try {
+        final db = _ref.read(appDatabaseProvider);
+        final orgRow = await (db.select(db.orgs)
+              ..where((o) => o.id.equals(actor!.organizationId!)))
+            .getSingleOrNull();
+        orgName = orgRow?.name ?? 'Opstation';
+      } catch (_) {
+        orgName = 'Opstation';
+      }
+    }
+    if (orgName.isEmpty) orgName = 'Opstation';
+
+    final bytes = await ReportPdfBuilder.buildCombinedTripSummary(
+      orgName: orgName,
+      periodLabel: periodLabel,
+      salespersonLabel: salespersonLabel,
+      showSalesperson: showSalesperson,
+      rows: rows,
+      grandTotalKm: grand,
+      usedGoogle: usedGoogle,
+    );
+    return Uint8List.fromList(bytes);
+  }
+}
+
+/// Per-(salesperson, date) accumulator for the combined summary.
+class _CombinedAcc {
+  final DateTime date;
+  final String salesperson;
+  final Set<String> routes = {};
+  double km = 0;
+  _CombinedAcc({required this.date, required this.salesperson});
 }
 
 final reportServiceProvider = Provider<ReportService>((ref) {

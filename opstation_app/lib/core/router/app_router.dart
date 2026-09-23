@@ -34,6 +34,7 @@ import '../../features/audit/presentation/audit_log_screen.dart';
 import '../../features/accountant/presentation/accountant_home_screen.dart';
 import '../../features/compliance/presentation/compliance_screen.dart';
 import '../../features/reports/presentation/coverage_report_screen.dart';
+import '../../features/reports/presentation/combined_trip_summary_screen.dart';
 import '../../features/reports/presentation/reports_screen.dart';
 import '../../shared/widgets/coming_soon_screen.dart';
 import '../../features/admin_settings/presentation/notification_settings_screen.dart';
@@ -255,6 +256,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const CoverageReportScreen(),
       ),
       GoRoute(
+        path: '/admin/combined-summary',
+        builder: (_, __) => const CombinedTripSummaryScreen(),
+      ),
+      GoRoute(
         path: '/admin/compliance',
         builder: (_, __) => const ComplianceScreen(),
       ),
@@ -289,6 +294,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/salesperson/reports',
         builder: (_, s) => ReportsScreen(
+          scopedUserId: s.uri.queryParameters['uid'],
+        ),
+      ),
+      GoRoute(
+        path: '/salesperson/combined-summary',
+        builder: (_, s) => CombinedTripSummaryScreen(
           scopedUserId: s.uri.queryParameters['uid'],
         ),
       ),
