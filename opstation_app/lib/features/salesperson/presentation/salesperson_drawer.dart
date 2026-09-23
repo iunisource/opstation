@@ -127,6 +127,20 @@ class SalespersonDrawer extends ConsumerWidget {
               }
             },
           ),
+          _tile(
+            context,
+            icon: Icons.route_outlined,
+            label: 'Combined Trip Summary',
+            subtitle: 'Distance sheet for reimbursement',
+            onTap: () {
+              final userId =
+                  ref.read(authControllerProvider).valueOrNull?.id;
+              Navigator.pop(context); // close the drawer first
+              if (userId != null) {
+                context.push('/salesperson/combined-summary?uid=$userId');
+              }
+            },
+          ),
         ]),
       ),
     );
