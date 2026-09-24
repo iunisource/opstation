@@ -125,6 +125,18 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.pa_notify_new',
+    'Notify when a new Payment Advice is saved (pending approval)',
+    'When ON, saving a new Payment Advice that is pending approval sends a push '
+        'notification to the selected users (on their devices) and an email to '
+        'the addresses below — so you are alerted even when you are away from a '
+        'device. Fires once per advice, when it is first created.',
+    users: _UsersField('org.pa_notify_users', 'Users to notify (push)'),
+    text: _TextSetting('org.pa_notify_emails', 'Email recipients',
+        hint: 'comma-separated email addresses'),
+  ),
+
+  _AdminToggle(
     'org.si_price_editable',
     'Editable prices on Sales Invoices',
     'When ON, the unit price on a Sales Invoice can be edited before it is saved/posted '
@@ -615,6 +627,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.jv_supervise_flow',
     'org.jv_approve_flow',
     'org.pa_approval_enabled',
+    'org.pa_notify_new',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
     'org.show_org_name_sales',

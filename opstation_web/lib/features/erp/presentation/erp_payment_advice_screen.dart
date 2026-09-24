@@ -296,10 +296,24 @@ class _ErpPaymentAdviceScreenState
     }
   }
 
+  bool get _isAdmin {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.superAdmin ||
+        r == WebUserRole.masterAdmin ||
+        r == WebUserRole.admin;
+  }
+
   bool get _canApprove {
     final me = ref.read(currentUserProvider);
     if (me == null) return false;
     return _approvalEnabled && _approvers.contains(me.id);
+  }
+
+  /// Admins and listed approvers can moderate (reject / archive).
+  bool get _canModerate {
+    final me = ref.read(currentUserProvider);
+    if (me == null) return false;
+    return _isAdmin || _approvers.contains(me.id);
   }
 
   double get _grandTotal =>
@@ -361,6 +375,9 @@ class _ErpPaymentAdviceScreenState
   }
 
   bool get _isApproved => (_current?['status'] as String?) == 'approved';
+  bool get _isRejected => (_current?['status'] as String?) == 'rejected';
+  // Approved and rejected advices are both final — read-only, archive only.
+  bool get _isLocked => _isApproved || _isRejected;
 
   String _numStr(dynamic v) {
     final d = (v as num?)?.toDouble() ?? 0;
@@ -370,7 +387,7 @@ class _ErpPaymentAdviceScreenState
 
   // ── Party picker ───────────────────────────────────────────────────────
   Future<void> _pickParty(_PaLine line) async {
-    if (_isApproved) return;
+    if (_isLocked) return;
     final picked = await showDialog<_Party>(
       context: context,
       builder: (_) => _PartyPickerDialog(parties: _parties),
@@ -520,6 +537,70 @@ class _ErpPaymentAdviceScreenState
     }
   }
 
+  Future<void> _reject() async {
+    if (_current == null || _saving) return;
+    // Only a pending advice can be rejected; approved is final (archive only).
+    if ((_current!['status'] as String?) != 'pending') {
+      _snack('Only a pending advice can be rejected.');
+      return;
+    }
+    final reason = await _askRejectReason();
+    if (reason == null) return; // cancelled
+    final me = ref.read(currentUserProvider);
+    setState(() => _saving = true);
+    try {
+      await _db.from('payment_advices').update({
+        'status': 'rejected',
+        'rejected_by': me?.id,
+        'rejected_by_name': me?.name,
+        'rejected_at': DateTime.now().toIso8601String(),
+        'reject_reason': reason.trim().isEmpty ? null : reason.trim(),
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', _current!['id']);
+      if (!mounted) return;
+      setState(() {
+        _editing = false;
+        _saving = false;
+      });
+      await _loadAll();
+      _snack('Payment advice rejected.');
+    } catch (e) {
+      setState(() => _saving = false);
+      _snack('Reject failed: $e');
+    }
+  }
+
+  Future<String?> _askRejectReason() async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dlg) => AlertDialog(
+        title: const Text('Reject payment advice'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            labelText: 'Reason (optional)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dlg, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dlg, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    return ok == true ? ctrl.text : null;
+  }
+
   Future<String> _nextNumber(String orgId) async {
     final rows = await _db
         .from('payment_advices')
@@ -543,6 +624,10 @@ class _ErpPaymentAdviceScreenState
   }
 
   Future<void> _setArchived(Map<String, dynamic> a, bool archived) async {
+    if (!_canModerate) {
+      _snack('Only admins and approvers can archive payment advices.');
+      return;
+    }
     try {
       await _db.from('payment_advices').update({
         'is_archived': archived,
@@ -710,6 +795,12 @@ class _ErpPaymentAdviceScreenState
   Widget _adviceCard(Map<String, dynamic> a) {
     final status = (a['status'] as String?) ?? 'approved';
     final pending = status == 'pending';
+    final rejected = status == 'rejected';
+    final statusColor = rejected
+        ? AppTheme.danger
+        : (pending ? AppTheme.warning : AppTheme.success);
+    final statusLabel =
+        rejected ? 'Rejected' : (pending ? 'Pending' : 'Approved');
     final date = a['advice_date'] != null
         ? DateFormat('d MMM yyyy')
             .format(DateTime.tryParse(a['advice_date'] as String) ?? DateTime.now())
@@ -743,13 +834,12 @@ class _ErpPaymentAdviceScreenState
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: (pending ? AppTheme.warning : AppTheme.success)
-                  .withOpacity(0.12),
+              color: statusColor.withOpacity(0.12),
               borderRadius: BorderRadius.circular(6),
             ),
-            child: Text(pending ? 'Pending' : 'Approved',
+            child: Text(statusLabel,
                 style: TextStyle(
-                    color: pending ? AppTheme.warning : AppTheme.success,
+                    color: statusColor,
                     fontSize: 11,
                     fontWeight: FontWeight.w700)),
           ),
@@ -760,6 +850,7 @@ class _ErpPaymentAdviceScreenState
             color: AppTheme.textSecondary,
             tooltip: 'Print / PDF',
           ),
+          if (_canModerate)
           IconButton(
             onPressed: () => _setArchived(a, !((a['is_archived'] as bool?) ?? false)),
             icon: Icon(
@@ -779,7 +870,7 @@ class _ErpPaymentAdviceScreenState
 
   // ── Editor view ────────────────────────────────────────────────────────
   Widget _editor() {
-    final readOnly = _isApproved;
+    final readOnly = _isLocked;
     final narrow = MediaQuery.of(context).size.width < 760;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
@@ -1057,7 +1148,7 @@ class _ErpPaymentAdviceScreenState
   /// add the selected ones as parked lines (bank / due / pay / last-paid
   /// pre-filled). Amounts stay editable afterwards.
   Future<void> _suggestParties() async {
-    if (_isApproved) return;
+    if (_isLocked) return;
     // Pull balances LIVE right now so the suggestion reflects current
     // outstanding amounts (a payment made elsewhere since this screen opened
     // would otherwise show stale). Last-payment dates are reference only.
@@ -1302,8 +1393,17 @@ class _ErpPaymentAdviceScreenState
       ),
       child: Row(children: [
         foot('CREATED BY', createdBy, createdAt),
-        foot('APPROVED BY', approvedBy ?? '—',
-            approvedAt ?? (status == 'pending' ? 'Awaiting approval' : '—')),
+        if (status == 'rejected')
+          foot(
+              'REJECTED BY',
+              (a?['rejected_by_name'] as String?) ?? '—',
+              a?['rejected_at'] != null
+                  ? DateFormat('d MMM yyyy, HH:mm').format(
+                      DateTime.tryParse(a!['rejected_at'] as String)!.toLocal())
+                  : '—')
+        else
+          foot('APPROVED BY', approvedBy ?? '—',
+              approvedAt ?? (status == 'pending' ? 'Awaiting approval' : '—')),
       ]),
     );
   }
@@ -1316,9 +1416,12 @@ class _ErpPaymentAdviceScreenState
         padding: const EdgeInsets.only(top: 8),
         child: Row(children: [
           if (readOnly)
-            const Expanded(
-              child: Text('This advice is approved and locked.',
-                  style: TextStyle(color: AppTheme.textSecondary)),
+            Expanded(
+              child: Text(
+                  _isRejected
+                      ? 'This advice was rejected — it can only be archived.'
+                      : 'This advice is approved and locked.',
+                  style: const TextStyle(color: AppTheme.textSecondary)),
             )
           else ...[
             Expanded(
@@ -1337,6 +1440,20 @@ class _ErpPaymentAdviceScreenState
                 style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
               ),
             ),
+            if (pending && _canModerate) ...[
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _saving ? null : _reject,
+                  icon: const Icon(Icons.close, size: 18),
+                  label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.danger,
+                      side: const BorderSide(color: AppTheme.danger),
+                      minimumSize: const Size(0, 48)),
+                ),
+              ),
+            ],
             if (pending && _canApprove) ...[
               const SizedBox(width: 12),
               Expanded(

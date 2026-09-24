@@ -250,6 +250,23 @@ final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Count of Payment Advices awaiting approval for the current org (nav badge).
+final paPendingApprovalCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final res = await client
+        .from('payment_advices')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'pending');
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 /// Invoices awaiting admin review (review_status = 'pending'), gated by the
 /// org.doc_review_flow toggle. One provider per invoice type so each menu item
 /// gets its own badge; the parent menu sums them. Invalidated by the invoice
@@ -885,6 +902,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
+  final paPending = ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0;
   final piReviewPending = ref.watch(piReviewPendingProvider).valueOrNull ?? 0;
   final grnPendingInvoice = ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0;
   final priReviewPending = ref.watch(priReviewPendingProvider).valueOrNull ?? 0;
@@ -1106,7 +1124,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/payment-vouchers')) _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
       if (show('/erp/receipt-vouchers')) _menuItem(context, 'Receipt Vouchers', Icons.payments_outlined,     '/erp/receipt-vouchers',      location),
       if (show('/erp/pdc-voucher')) _menuItem(context, 'PDC Voucher', Icons.account_balance_wallet_outlined, '/erp/pdc-voucher', location),
-      if (show('/financials/payment-advice')) _menuItem(context, 'Payment Advice', Icons.request_quote_outlined, '/financials/payment-advice', location),
+      if (show('/financials/payment-advice')) _menuItem(context, 'Payment Advice', Icons.request_quote_outlined, '/financials/payment-advice', location, badge: paPending),
     ];
     final finReports = <Widget>[
       if (show('/financials/trial-balance')) _menuItem(context, 'Trial Balance',    Icons.account_balance_outlined, '/financials/trial-balance',  location),
@@ -1184,7 +1202,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
           ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/payment-advice', '/financials/cash-book'],
-          _trimDividers(financialItems)),
+          _trimDividers(financialItems), badge: paPending),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending),
