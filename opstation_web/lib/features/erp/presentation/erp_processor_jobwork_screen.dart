@@ -668,12 +668,17 @@ class _ErpProcessorJobworkScreenState
   @override
   Widget build(BuildContext context) {
     final narrow = MediaQuery.of(context).size.width < 700;
-    return Container(
-      color: AppTheme.background,
-      padding: EdgeInsets.all(narrow ? 16 : 32),
-      child: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : (_editing == null ? _listView() : _editorView()),
+    // Excluded from the app-wide SelectionArea: its selection machinery aborted
+    // the whole frame here (blank app after save). Native field selection still
+    // works; only drag-select of static labels is off on this one screen.
+    return SelectionContainer.disabled(
+      child: Container(
+        color: AppTheme.background,
+        padding: EdgeInsets.all(narrow ? 16 : 32),
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : (_editing == null ? _listView() : _editorView()),
+      ),
     );
   }
 

@@ -139,15 +139,15 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       routerConfig: router,
-      // NOTE: an app-wide SelectionArea used to wrap the routed tree here to
-      // make canvas text drag-selectable. Flutter web's SelectionArea is unstable
-      // in this version: its selection machinery throws "RenderBox was not laid
-      // out" / "Null check operator used on a null value" during layout on every
-      // screen (tolerated on most, but it aborted the whole frame on the
-      // Processor Job-work editor, blanking the app after save). Removed.
-      // Input fields keep native selection; if label selection is needed,
-      // wrap the specific screen in a scoped SelectionArea instead.
-      builder: (context, child) => child ?? const SizedBox.shrink(),
+      // App-wide text selection so users can select/copy on-screen data (the
+      // CanvasKit renderer draws text to canvas, so it isn't selectable without
+      // this). SelectionArea previously aborted the frame on the Processor
+      // Job-work editor after save — that ONE screen is now excluded from
+      // selection via SelectionContainer.disabled() in its build, so this is
+      // safe to keep app-wide. If any other screen throws a selection-layout
+      // error, wrap that screen the same way rather than removing this.
+      builder: (context, child) =>
+          SelectionArea(child: child ?? const SizedBox.shrink()),
     );
   }
 }
