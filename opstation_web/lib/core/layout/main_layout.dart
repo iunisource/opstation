@@ -2167,9 +2167,11 @@ class _DrawerNavMenuState extends State<_DrawerNavMenu> {
   }
 }
 
-/// Top-nav dropdown that opens on hover and closes shortly after the pointer
-/// leaves both the trigger and the panel. Click still toggles it.
-class _HoverNavMenu extends StatefulWidget {
+/// Nav dropdown. In the TOP bar it opens on hover and closes shortly after the
+/// pointer leaves both the trigger and the panel (click still toggles it).
+/// In the SIDEBAR layout hover does nothing — it opens/closes on click only,
+/// and closes on an outside click or when an item is chosen.
+class _HoverNavMenu extends ConsumerStatefulWidget {
   final String label;
   final IconData icon;
   final String location;
@@ -2185,10 +2187,10 @@ class _HoverNavMenu extends StatefulWidget {
     this.badge = 0,
   });
   @override
-  State<_HoverNavMenu> createState() => _HoverNavMenuState();
+  ConsumerState<_HoverNavMenu> createState() => _HoverNavMenuState();
 }
 
-class _HoverNavMenuState extends State<_HoverNavMenu> {
+class _HoverNavMenuState extends ConsumerState<_HoverNavMenu> {
   final MenuController _controller = MenuController();
   Timer? _closeTimer;
 
@@ -2214,6 +2216,8 @@ class _HoverNavMenuState extends State<_HoverNavMenu> {
   Widget build(BuildContext context) {
     final location = widget.location;
     final isActive = widget.activePaths.any((p) => location.startsWith(p));
+    // Sidebar layout: click-to-open only (no hover open / hover close).
+    final hover = ref.watch(navLayoutProvider) != NavLayout.side;
     return MenuAnchor(
       controller: _controller,
       style: MenuStyle(
@@ -2230,7 +2234,7 @@ class _HoverNavMenuState extends State<_HoverNavMenu> {
         // Keep the menu open while the pointer is over the panel.
         MouseRegion(
           onEnter: (_) => _closeTimer?.cancel(),
-          onExit: (_) => _scheduleClose(),
+          onExit: (_) { if (hover) _scheduleClose(); },
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2240,8 +2244,8 @@ class _HoverNavMenuState extends State<_HoverNavMenu> {
       ],
       builder: (ctx, controller, _) {
         return MouseRegion(
-          onEnter: (_) => _openNow(),
-          onExit: (_) => _scheduleClose(),
+          onEnter: (_) { if (hover) _openNow(); },
+          onExit: (_) { if (hover) _scheduleClose(); },
           child: InkWell(
             onTap: () => controller.isOpen ? controller.close() : controller.open(),
             borderRadius: BorderRadius.circular(6),
