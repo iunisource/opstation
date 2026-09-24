@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 
 /// Attendance Board — an Andon-style visual-management display for an executive
@@ -170,7 +171,9 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
       backgroundColor: bg,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+          padding: isNarrow(context)
+              ? const EdgeInsets.fromLTRB(12, 12, 12, 12)
+              : const EdgeInsets.fromLTRB(20, 16, 20, 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _topBar(),
             const SizedBox(height: 14),
@@ -188,36 +191,57 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
   }
 
   Widget _topBar() {
-    return Row(children: [
-      const Text('Attendance Board', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
-      const SizedBox(width: 16),
-      // date stepper
+    final title = const Text('Attendance Board', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800));
+    final dateStepper = Row(mainAxisSize: MainAxisSize.min, children: [
       _ghostBtn(Icons.chevron_left, () => setState(() { _date = _date.subtract(const Duration(days: 1)); _load(); })),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Text(DateFormat('EEE, d MMM yyyy').format(_date), style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600))),
       _ghostBtn(Icons.chevron_right, _isToday ? null : () => setState(() { _date = _date.add(const Duration(days: 1)); _load(); })),
-      const SizedBox(width: 12),
-      if (_branches.isNotEmpty)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8)),
-          child: DropdownButtonHideUnderline(child: DropdownButton<String?>(
-            value: _branchId, dropdownColor: const Color(0xFF18213a),
-            style: const TextStyle(color: Colors.white, fontSize: 13),
-            hint: const Text('All branches', style: TextStyle(color: Colors.white70, fontSize: 13)),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All branches')),
-              ..._branches.map((b) => DropdownMenuItem<String?>(value: b['id'] as String, child: Text(b['name'] as String? ?? ''))),
-            ],
-            onChanged: (v) => setState(() { _branchId = v; _load(); }),
-          )),
-        ),
-      const Spacer(),
-      Text('Updated ${DateFormat('h:mm:ss a').format(_lastRefresh)}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
-      const SizedBox(width: 10),
+    ]);
+    final branchDropdown = _branches.isNotEmpty
+        ? Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8)),
+            child: DropdownButtonHideUnderline(child: DropdownButton<String?>(
+              value: _branchId, dropdownColor: const Color(0xFF18213a),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              hint: const Text('All branches', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('All branches')),
+                ..._branches.map((b) => DropdownMenuItem<String?>(value: b['id'] as String, child: Text(b['name'] as String? ?? ''))),
+              ],
+              onChanged: (v) => setState(() { _branchId = v; _load(); }),
+            )),
+          )
+        : null;
+    final updated = Text('Updated ${DateFormat('h:mm:ss a').format(_lastRefresh)}', style: const TextStyle(color: Colors.white38, fontSize: 12));
+    final actionBtns = Row(mainAxisSize: MainAxisSize.min, children: [
       _ghostBtn(Icons.refresh, () => _load()),
       const SizedBox(width: 6),
       _ghostBtn(_fullscreen ? Icons.fullscreen_exit : Icons.fullscreen, _toggleFullscreen),
+    ]);
+
+    if (isNarrow(context)) {
+      return Wrap(spacing: 12, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        title,
+        dateStepper,
+        if (branchDropdown != null) branchDropdown,
+        updated,
+        actionBtns,
+      ]);
+    }
+
+    return Row(children: [
+      title,
+      const SizedBox(width: 16),
+      // date stepper
+      dateStepper,
+      const SizedBox(width: 12),
+      if (branchDropdown != null) branchDropdown,
+      const Spacer(),
+      updated,
+      const SizedBox(width: 10),
+      actionBtns,
     ]);
   }
 
@@ -229,32 +253,41 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
   }
 
   Widget _headline() {
-    Widget tile(String label, int n, Color c) => Expanded(child: Container(
-      margin: const EdgeInsets.only(right: 10),
+    final narrow = isNarrow(context);
+    Widget tileBody(String label, String value, Color valueColor, Color bg, Color border) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(color: c.withOpacity(0.14), borderRadius: BorderRadius.circular(12), border: Border.all(color: c.withOpacity(0.4))),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12), border: Border.all(color: border)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('$n', style: TextStyle(color: c, fontSize: 30, fontWeight: FontWeight.w900, height: 1)),
+        Text(value, style: TextStyle(color: valueColor, fontSize: 30, fontWeight: FontWeight.w900, height: 1)),
         const SizedBox(height: 2),
         Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
       ]),
-    ));
+    );
     final total = _emps.length;
+
+    if (narrow) {
+      Widget cell(Widget body) => SizedBox(width: 150, child: body);
+      return Wrap(spacing: 10, runSpacing: 10, children: [
+        cell(tileBody('On site', '${_count(_St.present)}', const Color(0xFF2E9E5B), const Color(0xFF2E9E5B).withOpacity(0.14), const Color(0xFF2E9E5B).withOpacity(0.4))),
+        cell(tileBody('Left', '${_count(_St.left)}', const Color(0xFF5B7F9E), const Color(0xFF5B7F9E).withOpacity(0.14), const Color(0xFF5B7F9E).withOpacity(0.4))),
+        cell(tileBody('Not arrived', '${_count(_St.notArrived)}', const Color(0xFF8A93A3), const Color(0xFF8A93A3).withOpacity(0.14), const Color(0xFF8A93A3).withOpacity(0.4))),
+        cell(tileBody('Leave / Half', '${_count(_St.leave)}', const Color(0xFFD9822B), const Color(0xFFD9822B).withOpacity(0.14), const Color(0xFFD9822B).withOpacity(0.4))),
+        cell(tileBody('Absent', '${_count(_St.absent)}', const Color(0xFFD64545), const Color(0xFFD64545).withOpacity(0.14), const Color(0xFFD64545).withOpacity(0.4))),
+        cell(tileBody('Total staff', '$total', Colors.white, Colors.white10, Colors.white24)),
+      ]);
+    }
+
+    Widget tile(String label, int n, Color c) => Expanded(child: Container(
+      margin: const EdgeInsets.only(right: 10),
+      child: tileBody(label, '$n', c, c.withOpacity(0.14), c.withOpacity(0.4)),
+    ));
     return Row(children: [
       tile('On site', _count(_St.present), const Color(0xFF2E9E5B)),
       tile('Left', _count(_St.left), const Color(0xFF5B7F9E)),
       tile('Not arrived', _count(_St.notArrived), const Color(0xFF8A93A3)),
       tile('Leave / Half', _count(_St.leave), const Color(0xFFD9822B)),
       tile('Absent', _count(_St.absent), const Color(0xFFD64545)),
-      Expanded(child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('$total', style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w900, height: 1)),
-          const SizedBox(height: 2),
-          const Text('Total staff', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
-        ]),
-      )),
+      Expanded(child: tileBody('Total staff', '$total', Colors.white, Colors.white10, Colors.white24)),
     ]);
   }
 

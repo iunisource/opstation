@@ -8,6 +8,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/permissions/access_control.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 
 class HrAttendanceScreen extends ConsumerStatefulWidget {
@@ -301,7 +302,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
 
       return StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
         title: const Text('Attendance summary emails'),
-        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        content: SizedBox(width: isNarrow(context) ? double.maxFinite : 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('A summary is emailed twice daily — 9:30am and 6:30pm PKT — to the addresses below: counts plus who is late, absent, or not checked out.',
               style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
           const SizedBox(height: 14),
@@ -356,14 +357,12 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   Widget build(BuildContext context) {
     final access = ref.watch(accessSyncProvider);
     _canWrite = _isAdmin;  // attendance editable by admin / masterAdmin / superAdmin only
+    final narrow = isNarrow(context);
     final vis = _visible;
     final counts = <String, int>{};
     for (final r in vis) counts[r.status] = (counts[r.status] ?? 0) + 1;
 
-    return Container(color: AppTheme.background, child: Column(children: [
-      Container(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
+    final toolbarChildren = <Widget>[
           const Text('Attendance', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
           const SizedBox(width: 12),
           OutlinedButton.icon(icon: const Icon(Icons.calendar_today_outlined, size: 15),
@@ -377,7 +376,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           if (_canNext) IconButton(icon: const Icon(Icons.chevron_right, size: 20), tooltip: 'Next day', onPressed: () async { setState(() => _date = _date.add(const Duration(days: 1))); await _loadForDate(); await _loadAudit(); }),
           const SizedBox(width: 8),
           if (_isAdmin) _branchDropdown(),
-          const Spacer(),
+          if (!narrow) const Spacer(),
           SizedBox(width: 170, child: TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 15), isDense: true, border: OutlineInputBorder()), onChanged: (v) => setState(() => _search = v))),
           const SizedBox(width: 8),
           OutlinedButton.icon(icon: const Icon(Icons.print_outlined, size: 15), label: const Text('Print register', style: TextStyle(fontSize: 12)), onPressed: _printDialog),
@@ -398,23 +397,29 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           if (!_canWrite) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
             child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 13, color: Colors.grey.shade700), const SizedBox(width: 5), Text('View only', style: TextStyle(fontSize: 11, color: Colors.grey.shade700))])),
-        ])),
-      if (!_loading) Container(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+    ];
+    return Container(color: AppTheme.background, child: Column(children: [
+      Container(padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 20, vertical: 10),
         decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
+        child: narrow
+          ? Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: toolbarChildren)
+          : Row(children: toolbarChildren)),
+      if (!_loading) Container(padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 20, vertical: 8),
+        decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+        child: Wrap(spacing: 10, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text('${vis.length} employees', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          const SizedBox(width: 14),
-          for (final s in _statuses) if ((counts[s['v']] ?? 0) > 0) Container(margin: const EdgeInsets.only(right: 10), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          const SizedBox(width: 4),
+          for (final s in _statuses) if ((counts[s['v']] ?? 0) > 0) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(color: _statusColor(s['v']!).withOpacity(0.12), borderRadius: BorderRadius.circular(20)),
             child: Text('${s['l']}: ${counts[s['v']]}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _statusColor(s['v']!)))),
-          if (!_isAdmin && _effectiveBranch() != null) ...[const Spacer(), Text('Branch: ${_branchName[_effectiveBranch()] ?? ''}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))],
+          if (!_isAdmin && _effectiveBranch() != null) Text('Branch: ${_branchName[_effectiveBranch()] ?? ''}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ])),
       Expanded(child: _loading
         ? const Center(child: CircularProgressIndicator())
         : vis.isEmpty
           ? const Center(child: Text('No active employees for this branch. Add employees in the Employee Directory first.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)))
-          : ListView(padding: const EdgeInsets.all(20), children: [
-              Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)), child: Column(children: [
+          : ListView(padding: EdgeInsets.all(narrow ? 12 : 20), children: [
+              HScrollOnNarrow(minWidth: 880, child: Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)), child: Column(children: [
                 Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                   decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
                   child: Row(children: const [
@@ -429,7 +434,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
                     SizedBox(width: 40),
                   ])),
                 for (var i = 0; i < vis.length; i++) _rowWidget(vis[i], i == vis.length - 1),
-              ])),
+              ]))),
               const SizedBox(height: 20),
               _auditSection(),
               const SizedBox(height: 30),

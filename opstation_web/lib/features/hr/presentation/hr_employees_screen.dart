@@ -250,7 +250,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         Future<void> refresh() async { if (table == 'hr_departments') { await _loadDepts(); } else { await _loadDesignations(); } setLocal(() {}); }
         return AlertDialog(
           title: Text('Manage $title'),
-          content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          content: SizedBox(width: isNarrow(context) ? double.maxFinite : 420, child: Column(mainAxisSize: MainAxisSize.min, children: [
             Row(children: [
               Expanded(child: TextField(controller: addCtrl, decoration: InputDecoration(hintText: 'New $title', isDense: true, border: const OutlineInputBorder()))),
               const SizedBox(width: 8),
@@ -258,7 +258,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 onPressed: () async { if (addCtrl.text.trim().isEmpty) return; await _createListItem(table, addCtrl.text); addCtrl.clear(); await refresh(); }, child: const Text('Add')),
             ]),
             const SizedBox(height: 12),
-            SizedBox(height: 280, width: 420, child: list.isEmpty
+            SizedBox(height: 280, width: isNarrow(context) ? double.maxFinite : 420, child: list.isEmpty
               ? Center(child: Text('No $title yet', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
               : ListView.separated(itemCount: list.length, separatorBuilder: (_, __) => const Divider(height: 1), itemBuilder: (_, i) {
                   final r = list[i]; final active = r['is_active'] != false;
@@ -802,108 +802,61 @@ $docsHtml
         ]));
 
     final detailPane = Column(children: [
-        Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
-            const SizedBox(width: 8),
-            Expanded(child: Text(_current == null ? 'New Employee' : (_name.text.isEmpty ? 'Employee' : _name.text), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
-            if (_canWrite) TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
-            if (_canWrite) TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
-            if (_isAdmin) TextButton.icon(icon: const Icon(Icons.schedule_outlined, size: 15), label: const Text('Shifts', style: TextStyle(fontSize: 12)), onPressed: _manageShifts),
-            if (_current != null) TextButton.icon(icon: const Icon(Icons.event_available_outlined, size: 15), label: const Text('Attendance record', style: TextStyle(fontSize: 12)), onPressed: () { final id = _current?['id'] as String?; if (id != null) context.push('/hr/employee-attendance?emp=$id'); }),
-            if (_current != null) _statusChip(),
-            if (_current != null) const SizedBox(width: 6),
-            if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 19), tooltip: 'Print / PDF', onPressed: _printProfile),
-            if (_current != null) IconButton(icon: const Icon(Icons.badge_outlined, size: 19), tooltip: 'Employee Card (PDF)', onPressed: _printCard),
-            if (_isAdmin && _pending && !_voided)
-              Padding(padding: const EdgeInsets.only(left: 2), child: ElevatedButton.icon(
-                icon: const Icon(Icons.verified_outlined, size: 15), label: const Text('Approve', style: TextStyle(fontSize: 12)),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9), minimumSize: Size.zero),
-                onPressed: _approve)),
-            if (_current != null && !_voided && _canWrite)
-              TextButton.icon(icon: Icon(Icons.block, size: 16, color: Colors.orange.shade800), label: Text('Void', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)), onPressed: _void),
-            if (_isAdmin && _voided)
-              TextButton.icon(icon: const Icon(Icons.restore, size: 16), label: const Text('Restore', style: TextStyle(fontSize: 12)), onPressed: _unvoid),
-            if (_isAdmin && _current != null)
-              IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete permanently (admin)'),
-            const SizedBox(width: 8),
-            if (!_voided && _canWrite) ElevatedButton.icon(
-              icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_outlined, size: 16),
-              label: const Text('Save'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-              onPressed: _saving ? null : _save),
-            if (!_canWrite && !_voided) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.lock_outline, size: 13, color: Colors.grey.shade700),
-                const SizedBox(width: 5),
-                Text('View only', style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
-              ])),
-            if (_voided) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
-              child: Text('Voided \u2014 restore to edit', style: TextStyle(fontSize: 11, color: Colors.grey.shade700))),
-          ])),
+        _detailHeader(),
         Expanded(child: _loading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          : SingleChildScrollView(padding: EdgeInsets.all(isNarrow(context) ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _photoSection(),
             const SizedBox(height: 16),
             _card('Employment', [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _labeled('Employee code', _tf(_code, hint: 'Auto if blank'))),
-                const SizedBox(width: 12),
-                Expanded(flex: 2, child: _labeled('Full name *', _tf(_name))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Status', _statusToggle())),
+              _fieldRow([
+                _labeled('Employee code', _tf(_code, hint: 'Auto if blank')),
+                _labeled('Full name *', _tf(_name)),
+                _labeled('Status', _statusToggle()),
+              ], flex: const [1, 2, 1]),
+              const SizedBox(height: 12),
+              isNarrow(context)
+                ? _labeled('RFID card', Row(children: [
+                    Expanded(child: _tf(_cardUid, hint: 'Tap card or type UID — blank to unassign')),
+                    const SizedBox(width: 6),
+                    IconButton(icon: const Icon(Icons.nfc, size: 20), tooltip: 'Tap card to capture', onPressed: _enrollCardScan),
+                  ]))
+                : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(child: _labeled('RFID card', Row(children: [
+                      Expanded(child: _tf(_cardUid, hint: 'Tap card or type UID — blank to unassign')),
+                      const SizedBox(width: 6),
+                      IconButton(icon: const Icon(Icons.nfc, size: 20), tooltip: 'Tap card to capture', onPressed: _enrollCardScan),
+                    ]))),
+                    const SizedBox(width: 12),
+                    const Expanded(flex: 2, child: SizedBox()),
+                  ]),
+              const SizedBox(height: 12),
+              _fieldRow([
+                _labeled('Department', _dropdown(_deptId, _activeDepts, (v) => setState(() => _deptId = v), addLabel: 'department', addTable: 'hr_departments', onAdd: (id) => setState(() => _deptId = id))),
+                _labeled('Designation', _dropdown(_desigId, _activeDesigs, (v) => setState(() => _desigId = v), addLabel: 'designation', addTable: 'hr_designations', onAdd: (id) => setState(() => _desigId = id))),
+                _labeled('Branch', _branchDropdown()),
               ]),
               const SizedBox(height: 12),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _labeled('RFID card', Row(children: [
-                  Expanded(child: _tf(_cardUid, hint: 'Tap card or type UID — blank to unassign')),
-                  const SizedBox(width: 6),
-                  IconButton(icon: const Icon(Icons.nfc, size: 20), tooltip: 'Tap card to capture', onPressed: _enrollCardScan),
-                ]))),
-                const SizedBox(width: 12),
-                const Expanded(flex: 2, child: SizedBox()),
-              ]),
-              const SizedBox(height: 12),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _labeled('Department', _dropdown(_deptId, _activeDepts, (v) => setState(() => _deptId = v), addLabel: 'department', addTable: 'hr_departments', onAdd: (id) => setState(() => _deptId = id)))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Designation', _dropdown(_desigId, _activeDesigs, (v) => setState(() => _desigId = v), addLabel: 'designation', addTable: 'hr_designations', onAdd: (id) => setState(() => _desigId = id)))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Branch', _branchDropdown())),
-              ]),
-              const SizedBox(height: 12),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _labeled('Employment type', _simpleDropdown(_empType, _empTypes, (v) => setState(() => _empType = v)))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Join date', _dateField(_joinDate, (d) => setState(() => _joinDate = d)))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Basic salary', _tf(_salary, numeric: true))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Shift', _shiftDropdown())),
+              _fieldRow([
+                _labeled('Employment type', _simpleDropdown(_empType, _empTypes, (v) => setState(() => _empType = v))),
+                _labeled('Join date', _dateField(_joinDate, (d) => setState(() => _joinDate = d))),
+                _labeled('Basic salary', _tf(_salary, numeric: true)),
+                _labeled('Shift', _shiftDropdown()),
               ]),
             ]),
             const SizedBox(height: 16),
             _card('Personal', [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _labeled('Father name', _tf(_father))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('CNIC', _tf(_cnic, hint: 'xxxxx-xxxxxxx-x'))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Gender', _simpleDropdown(_gender, _genders, (v) => setState(() => _gender = v)))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Date of birth', _dateField(_dob, (d) => setState(() => _dob = d)))),
+              _fieldRow([
+                _labeled('Father name', _tf(_father)),
+                _labeled('CNIC', _tf(_cnic, hint: 'xxxxx-xxxxxxx-x')),
+                _labeled('Gender', _simpleDropdown(_gender, _genders, (v) => setState(() => _gender = v))),
+                _labeled('Date of birth', _dateField(_dob, (d) => setState(() => _dob = d))),
               ]),
               const SizedBox(height: 12),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _labeled('Phone', _tf(_phone))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Email', _tf(_email))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Emergency contact', _tf(_emergency))),
+              _fieldRow([
+                _labeled('Phone', _tf(_phone)),
+                _labeled('Email', _tf(_email)),
+                _labeled('Emergency contact', _tf(_emergency)),
               ]),
               const SizedBox(height: 12),
               _labeled('Address', _tf(_address, lines: 2)),
@@ -920,10 +873,9 @@ $docsHtml
             ]),
             const SizedBox(height: 16),
             _card('Bank & notes', [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _labeled('Bank name', _tf(_bankName))),
-                const SizedBox(width: 12),
-                Expanded(child: _labeled('Bank account', _tf(_bankAcct))),
+              _fieldRow([
+                _labeled('Bank name', _tf(_bankName)),
+                _labeled('Bank account', _tf(_bankAcct)),
               ]),
               const SizedBox(height: 12),
               _labeled('Notes', _tf(_notes, lines: 2)),
@@ -957,6 +909,83 @@ $docsHtml
     Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
     const SizedBox(height: 4), child,
   ]);
+
+  // A row of form fields that lays them side by side on desktop (each wrapped in
+  // Expanded with the given flex) but stacks them vertically on phone widths, so
+  // three or four fields don't get crushed to a few pixels each.
+  Widget _fieldRow(List<Widget> children, {List<int>? flex}) {
+    if (isNarrow(context)) {
+      final out = <Widget>[];
+      for (var i = 0; i < children.length; i++) {
+        out.add(children[i]);
+        if (i < children.length - 1) out.add(const SizedBox(height: 12));
+      }
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: out);
+    }
+    final out = <Widget>[];
+    for (var i = 0; i < children.length; i++) {
+      out.add(Expanded(flex: flex != null && i < flex.length ? flex[i] : 1, child: children[i]));
+      if (i < children.length - 1) out.add(const SizedBox(width: 12));
+    }
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: out);
+  }
+
+  // The detail-pane toolbar. On desktop it stays a single Row exactly as before;
+  // on phone widths the title sits on its own line and the action buttons flow in
+  // a Wrap so they never overflow.
+  Widget _detailHeader() {
+    final narrow = isNarrow(context);
+    final leading = IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact);
+    final title = Expanded(child: Text(_current == null ? 'New Employee' : (_name.text.isEmpty ? 'Employee' : _name.text), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis));
+    final actions = <Widget>[
+      if (_canWrite) TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
+      if (_canWrite) TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
+      if (_isAdmin) TextButton.icon(icon: const Icon(Icons.schedule_outlined, size: 15), label: const Text('Shifts', style: TextStyle(fontSize: 12)), onPressed: _manageShifts),
+      if (_current != null) TextButton.icon(icon: const Icon(Icons.event_available_outlined, size: 15), label: const Text('Attendance record', style: TextStyle(fontSize: 12)), onPressed: () { final id = _current?['id'] as String?; if (id != null) context.push('/hr/employee-attendance?emp=$id'); }),
+      if (_current != null) _statusChip(),
+      if (_current != null) const SizedBox(width: 6),
+      if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 19), tooltip: 'Print / PDF', onPressed: _printProfile),
+      if (_current != null) IconButton(icon: const Icon(Icons.badge_outlined, size: 19), tooltip: 'Employee Card (PDF)', onPressed: _printCard),
+      if (_isAdmin && _pending && !_voided)
+        Padding(padding: const EdgeInsets.only(left: 2), child: ElevatedButton.icon(
+          icon: const Icon(Icons.verified_outlined, size: 15), label: const Text('Approve', style: TextStyle(fontSize: 12)),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9), minimumSize: Size.zero),
+          onPressed: _approve)),
+      if (_current != null && !_voided && _canWrite)
+        TextButton.icon(icon: Icon(Icons.block, size: 16, color: Colors.orange.shade800), label: Text('Void', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)), onPressed: _void),
+      if (_isAdmin && _voided)
+        TextButton.icon(icon: const Icon(Icons.restore, size: 16), label: const Text('Restore', style: TextStyle(fontSize: 12)), onPressed: _unvoid),
+      if (_isAdmin && _current != null)
+        IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete permanently (admin)'),
+      const SizedBox(width: 8),
+      if (!_voided && _canWrite) ElevatedButton.icon(
+        icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_outlined, size: 16),
+        label: const Text('Save'),
+        style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+        onPressed: _saving ? null : _save),
+      if (!_canWrite && !_voided) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.lock_outline, size: 13, color: Colors.grey.shade700),
+          const SizedBox(width: 5),
+          Text('View only', style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
+        ])),
+      if (_voided) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
+        child: Text('Voided — restore to edit', style: TextStyle(fontSize: 11, color: Colors.grey.shade700))),
+    ];
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 16, vertical: 10),
+      decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+      child: narrow
+        ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [leading, const SizedBox(width: 8), title]),
+            const SizedBox(height: 6),
+            Wrap(spacing: 4, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+          ])
+        : Row(children: [leading, const SizedBox(width: 8), title, ...actions]),
+    );
+  }
 
   Widget _tf(TextEditingController c, {String hint = '', bool numeric = false, int lines = 1}) => TextField(
     controller: c, minLines: lines, maxLines: lines, enabled: _canWrite,
@@ -1143,7 +1172,7 @@ $docsHtml
         }
         return AlertDialog(
           title: Text(editId == null ? 'Shifts' : 'Edit shift'),
-          content: SizedBox(width: 470, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          content: SizedBox(width: isNarrow(context) ? double.maxFinite : 470, child: Column(mainAxisSize: MainAxisSize.min, children: [
             // Org-wide weekly rest day (auto-marked in the attendance register).
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1210,7 +1239,7 @@ $docsHtml
               ElevatedButton(onPressed: saveShift, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: Text(editId == null ? 'Add shift' : 'Update')),
             ]),
             const Divider(),
-            SizedBox(height: 220, width: 470, child: _shifts.isEmpty
+            SizedBox(height: 220, width: isNarrow(context) ? double.maxFinite : 470, child: _shifts.isEmpty
               ? const Center(child: Text('No shifts yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
               : ListView.separated(itemCount: _shifts.length, separatorBuilder: (_, __) => const Divider(height: 1), itemBuilder: (_, i) {
                   final s = _shifts[i]; final active = s['is_active'] != false;

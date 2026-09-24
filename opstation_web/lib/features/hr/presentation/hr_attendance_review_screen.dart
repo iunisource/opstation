@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 
 /// Count of unreviewed absences (no punch + no approved leave, on working days)
@@ -512,7 +513,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
   Widget _filterBar() {
     return Container(
       color: AppTheme.card,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: EdgeInsets.symmetric(horizontal: isNarrow(context) ? 12 : 16, vertical: 10),
       child: Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
         OutlinedButton.icon(
           icon: const Icon(Icons.calendar_today_outlined, size: 15),
@@ -533,6 +534,56 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     final total = _pending.length;
     final sel = _selected.length;
     final allSelected = sel == total && total > 0;
+    final narrow = isNarrow(context);
+
+    final excuseBtn = OutlinedButton.icon(
+      onPressed: _working ? null : _bulkExcuse,
+      icon: const Icon(Icons.check, size: 15),
+      label: Text('Approve leave ($sel)', style: const TextStyle(fontSize: 12)),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.green.shade700, visualDensity: VisualDensity.compact,
+        side: BorderSide(color: Colors.green.withOpacity(0.5)),
+      ),
+    );
+    final unapprovedBtn = ElevatedButton.icon(
+      onPressed: _working ? null : _bulkUnapproved,
+      icon: const Icon(Icons.block, size: 15),
+      label: Text('Unapproved ($sel)', style: const TextStyle(fontSize: 12)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.deepOrange, foregroundColor: Colors.white, visualDensity: VisualDensity.compact,
+      ),
+    );
+
+    final selectRow = Row(children: [
+      Checkbox(
+        value: sel == 0 ? false : (allSelected ? true : null),
+        tristate: true,
+        onChanged: _working ? null : (_) => _selectAll(!allSelected),
+      ),
+      Flexible(
+        child: Text(sel == 0 ? 'Select all ($total)' : '$sel selected',
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      ),
+    ]);
+
+    // On phones stack the action buttons under the select row so they never
+    // push the label off-screen; desktop keeps the original single Row.
+    if (narrow) {
+      return Container(
+        color: sel > 0 ? AppTheme.primary.withOpacity(0.06) : AppTheme.card,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          selectRow,
+          if (sel > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 8, right: 4, bottom: 6, top: 2),
+              child: Wrap(spacing: 8, runSpacing: 8, children: [excuseBtn, unapprovedBtn]),
+            ),
+        ]),
+      );
+    }
+
     return Container(
       color: sel > 0 ? AppTheme.primary.withOpacity(0.06) : AppTheme.card,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -546,24 +597,9 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         const Spacer(),
         if (sel > 0) ...[
-          OutlinedButton.icon(
-            onPressed: _working ? null : _bulkExcuse,
-            icon: const Icon(Icons.check, size: 15),
-            label: Text('Approve leave ($sel)', style: const TextStyle(fontSize: 12)),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.green.shade700, visualDensity: VisualDensity.compact,
-              side: BorderSide(color: Colors.green.withOpacity(0.5)),
-            ),
-          ),
+          excuseBtn,
           const SizedBox(width: 8),
-          ElevatedButton.icon(
-            onPressed: _working ? null : _bulkUnapproved,
-            icon: const Icon(Icons.block, size: 15),
-            label: Text('Unapproved ($sel)', style: const TextStyle(fontSize: 12)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.deepOrange, foregroundColor: Colors.white, visualDensity: VisualDensity.compact,
-            ),
-          ),
+          unapprovedBtn,
           const SizedBox(width: 8),
         ],
       ]),
@@ -628,51 +664,92 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     final penaltyNote = p.penaltyDays > 0
         ? '+${p.penaltyDays} penalty absent${p.penaltyDays > 1 ? 's' : ''} on the next working day${p.penaltyDays > 1 ? 's' : ''}'
         : 'no penalty (shift policy off)';
+    final narrow = isNarrow(context);
+
+    final checkbox = Checkbox(
+      value: _selected.contains(_keyOf(p)),
+      onChanged: _working ? null : (v) => _toggle(p, v),
+    );
+    final avatar = CircleAvatar(
+      radius: 18, backgroundColor: AppTheme.background,
+      backgroundImage: (photo != null && photo.isNotEmpty) ? NetworkImage(photo) : null,
+      child: (photo == null || photo.isEmpty)
+          ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(fontSize: 14, color: AppTheme.textSecondary))
+          : null,
+    );
+    // The name/code/dept block. Text must ellipsize so a long name never
+    // overflows or pushes the trailing controls off-screen.
+    final identity = Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+      Text([if (code.isNotEmpty) code, if (dept.isNotEmpty) dept].join('  ·  '),
+          maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+    ]));
+
+    final excuseBtn = OutlinedButton(
+      onPressed: _working ? null : () => _excuse(p),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.green.shade700, visualDensity: VisualDensity.compact,
+        side: BorderSide(color: Colors.green.withOpacity(0.5)),
+      ),
+      child: const Text('Approved leave', style: TextStyle(fontSize: 12)),
+    );
+    final unapprovedBtn = ElevatedButton(
+      onPressed: _working ? null : () => _confirmUnapproved(p),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.deepOrange, foregroundColor: Colors.white, visualDensity: VisualDensity.compact,
+      ),
+      child: const Text('Unapproved', style: TextStyle(fontSize: 12)),
+    );
+    final penaltyText = Text(penaltyNote,
+        style: TextStyle(fontSize: 10, color: p.penaltyDays > 0 ? Colors.deepOrange : AppTheme.textSecondary));
+
+    // On phones stack the action buttons + penalty note below the name row so
+    // nothing gets pushed off-screen; desktop keeps the original single Row.
+    if (narrow) {
+      return Container(
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border, width: 0.5))),
+        padding: const EdgeInsets.only(left: 4, right: 12, top: 10, bottom: 10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            checkbox,
+            const SizedBox(width: 2),
+            avatar,
+            const SizedBox(width: 12),
+            identity,
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: excuseBtn),
+            const SizedBox(width: 8),
+            Expanded(child: unapprovedBtn),
+          ]),
+          const SizedBox(height: 4),
+          Align(alignment: Alignment.centerRight, child: penaltyText),
+        ]),
+      );
+    }
+
     return Container(
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border, width: 0.5))),
       padding: const EdgeInsets.only(left: 4, right: 16, top: 10, bottom: 10),
       child: Row(children: [
-        Checkbox(
-          value: _selected.contains(_keyOf(p)),
-          onChanged: _working ? null : (v) => _toggle(p, v),
-        ),
+        checkbox,
         const SizedBox(width: 2),
-        CircleAvatar(
-          radius: 18, backgroundColor: AppTheme.background,
-          backgroundImage: (photo != null && photo.isNotEmpty) ? NetworkImage(photo) : null,
-          child: (photo == null || photo.isEmpty)
-              ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(fontSize: 14, color: AppTheme.textSecondary))
-              : null,
-        ),
+        avatar,
         const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-          Text([if (code.isNotEmpty) code, if (dept.isNotEmpty) dept].join('  ·  '),
-              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-        ])),
+        identity,
         const SizedBox(width: 8),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Row(mainAxisSize: MainAxisSize.min, children: [
-            OutlinedButton(
-              onPressed: _working ? null : () => _excuse(p),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.green.shade700, visualDensity: VisualDensity.compact,
-                side: BorderSide(color: Colors.green.withOpacity(0.5)),
-              ),
-              child: const Text('Approved leave', style: TextStyle(fontSize: 12)),
-            ),
+            excuseBtn,
             const SizedBox(width: 8),
-            ElevatedButton(
-              onPressed: _working ? null : () => _confirmUnapproved(p),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.deepOrange, foregroundColor: Colors.white, visualDensity: VisualDensity.compact,
-              ),
-              child: const Text('Unapproved', style: TextStyle(fontSize: 12)),
-            ),
+            unapprovedBtn,
           ]),
           Padding(
             padding: const EdgeInsets.only(top: 3),
-            child: Text(penaltyNote, style: TextStyle(fontSize: 10, color: p.penaltyDays > 0 ? Colors.deepOrange : AppTheme.textSecondary)),
+            child: penaltyText,
           ),
         ]),
       ]),
