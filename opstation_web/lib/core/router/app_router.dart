@@ -542,9 +542,18 @@ class _DeferredScreen extends StatelessWidget {
                 body: Center(child: CircularProgressIndicator()));
           }
           if (snap.hasError) {
-            // A deferred code chunk failed to load — almost always a stale
-            // cached bundle after a new deploy. Show a manual reload (never
-            // auto-reload, which can loop against a stale bundle).
+            // A deferred code chunk failed to load. Usual cause: this tab (or
+            // the service-worker cache) is running an older main.dart.js while
+            // the server already has a newer build's chunks — chunk filenames
+            // are not content-hashed, so old code + new chunk don't match.
+            // Recover automatically ONCE per minute with a clean reload
+            // (drops the stale SW); if it happens again right away, fall back
+            // to the manual button so we can never loop.
+            if (_claimAutoReload()) {
+              Future.microtask(_hardReload);
+              return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()));
+            }
             return Scaffold(
               body: Center(
                 child: Padding(
@@ -555,8 +564,8 @@ class _DeferredScreen extends StatelessWidget {
                       const Icon(Icons.refresh, size: 36),
                       const SizedBox(height: 12),
                       const Text(
-                        'This screen could not load — a newer version of '
-                        'Opstation is available.',
+                        'This screen could not load. Opstation may have been '
+                        'updated, or the connection dropped — reload to continue.',
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 16),
@@ -576,8 +585,23 @@ class _DeferredScreen extends StatelessWidget {
       );
 }
 
-/// User-initiated clean reload: drop any app service worker, then reload so
-/// the browser fetches the fresh bundle.
+/// True (and records the attempt) if no automatic chunk-recovery reload has
+/// happened in the last 60 seconds. Guards against reload loops.
+bool _claimAutoReload() {
+  const key = 'op_chunk_autoreload_at';
+  try {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = int.tryParse(html.window.sessionStorage[key] ?? '') ?? 0;
+    if (now - last < 60000) return false;
+    html.window.sessionStorage[key] = '$now';
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Clean reload: drop any app service worker, then reload so the browser
+/// fetches the fresh bundle.
 Future<void> _hardReload() async {
   try {
     final sw = html.window.navigator.serviceWorker;
