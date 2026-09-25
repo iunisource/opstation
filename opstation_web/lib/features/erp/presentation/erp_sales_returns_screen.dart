@@ -380,6 +380,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     final user = ref.read(currentUserProvider);
     final cust = _detail['customers'] as Map?;
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Return Note',
       orgName: user?.orgName ?? 'Opstation',

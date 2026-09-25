@@ -684,6 +684,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     if (vNo != null && vNo.isNotEmpty) refs['Vendor Inv #'] = vNo;
     final vDesc = (_detail['description'] as String?)?.trim();
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Purchase Invoice',
       orgName: user?.orgName ?? 'Opstation',

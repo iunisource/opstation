@@ -436,6 +436,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     final cust = _detail['customers'] as Map?;
     final srnVoucher = _detail['sales_returns']?['voucher_number'] as String?;
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Return Invoice',
       orgName: user?.orgName ?? 'Opstation',

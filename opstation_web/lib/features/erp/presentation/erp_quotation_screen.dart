@@ -812,6 +812,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       if (remarksText.isNotEmpty) refs['Remarks'] = remarksText;
 
       await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_doc),
         voucherNumber: (_doc!['voucher_number']?.toString().isNotEmpty ?? false)
             ? _doc!['voucher_number'].toString()
             : '(unsaved)',

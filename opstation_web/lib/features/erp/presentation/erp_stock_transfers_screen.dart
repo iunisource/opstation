@@ -1528,6 +1528,7 @@ class _StockTransferVoucherScreenState
         ? DateFormat('d MMM yyyy').format(DateTime.parse(t['transfer_date'] as String))
         : null;
     await VoucherPdf.printStockTransfer(
+      watermark: VoucherPdf.voidMark(t),
       voucherNumber: t['voucher_number'] as String? ?? '-',
       orgName: user?.orgName ?? 'Opstation',
       fromBranch: _branchName(t['from_branch_id'] as String?),

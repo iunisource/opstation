@@ -448,6 +448,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     final createdAt = _detail['created_at'] != null
         ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Purchase Return Invoice',
       orgName: user?.orgName ?? 'Opstation',

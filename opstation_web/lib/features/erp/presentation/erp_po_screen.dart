@@ -871,6 +871,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     }).toList();
     final sup = _detail['suppliers'] as Map?;
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Purchase Order',
       orgName: user?.orgName ?? 'Opstation',

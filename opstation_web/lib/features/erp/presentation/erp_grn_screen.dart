@@ -560,6 +560,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     final user = ref.read(currentUserProvider);
     final sup = _detail['suppliers'] as Map?;
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Goods Receipt Note',
       orgName: user?.orgName ?? 'Opstation',

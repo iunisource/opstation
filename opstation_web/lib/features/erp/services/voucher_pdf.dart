@@ -11,6 +11,62 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Shared PDF generator for ERP vouchers (SO, DO, SI, PO, GRN, PI, etc.)
 class VoucherPdf {
+  /// 'VOIDED' when a document map is voided/cancelled, else null. Handles the
+  /// different void markers used across voucher tables.
+  static String? voidMark(Map? d) {
+    if (d == null) return null;
+    final st = (d['status'] ?? '').toString().toLowerCase();
+    final voided = d['is_voided'] == true ||
+        (d['voided_at'] != null && d['voided_at'].toString().isNotEmpty) ||
+        st == 'void' || st == 'voided';
+    if (voided) return 'VOIDED';
+    if (st == 'cancelled' || st == 'canceled') return 'CANCELLED';
+    return null;
+  }
+
+  /// Large, bold diagonal watermark drawn behind every page.
+  static pw.Widget _watermarkLayer(String text) => pw.FullPage(
+        ignoreMargins: true,
+        child: pw.Center(
+          child: pw.Transform.rotate(
+            angle: 0.6,
+            child: pw.Opacity(
+              opacity: 0.28,
+              child: pw.Column(
+                mainAxisSize: pw.MainAxisSize.min,
+                children: [
+                  pw.Container(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.red, width: 8),
+                      borderRadius: pw.BorderRadius.circular(18),
+                    ),
+                    child: pw.Text(
+                      text,
+                      style: pw.TextStyle(
+                        fontSize: 140,
+                        fontWeight: pw.FontWeight.bold,
+                        color: PdfColors.red,
+                        letterSpacing: 6,
+                      ),
+                    ),
+                  ),
+                  pw.SizedBox(height: 10),
+                  pw.Text(
+                    'This document is no longer valid',
+                    style: pw.TextStyle(
+                      fontSize: 26,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
   static const _accent = PdfColor.fromInt(0xFF2563EB);
   static const _muted = PdfColor.fromInt(0xFF64748B);
   static const _border = PdfColor.fromInt(0xFFE2E8F0);
@@ -227,6 +283,7 @@ class VoucherPdf {
     String? generatedBy, String? generatedAt,
     String? dispatchedBy, String? dispatchedAt,
     String? approvedBy, String? approvedAt,
+    String? watermark, // e.g. 'VOIDED' / 'CANCELLED'
   }) async {
     final fileBase = _fileBase('Stock Transfer', voucherNumber, date,
         party: '$fromBranch to $toBranch');
@@ -253,8 +310,13 @@ class VoucherPdf {
     final totalQty = items.fold<double>(0, (s, it) => s + ((it['qty'] as num?)?.toDouble() ?? 0));
 
     doc.addPage(pw.Page(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.all(28),
+      pageTheme: pw.PageTheme(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(28),
+        buildBackground: (watermark == null || watermark.isEmpty)
+            ? null
+            : (ctx) => _watermarkLayer(watermark!),
+      ),
       build: (ctx) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
           pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
@@ -541,38 +603,7 @@ class VoucherPdf {
         margin: const pw.EdgeInsets.fromLTRB(24, 18, 24, 18),
         buildBackground: (watermark == null || watermark.isEmpty)
             ? null
-            : (ctx) => pw.FullPage(
-                  ignoreMargins: true,
-                  child: pw.Center(
-                    child: pw.Transform.rotate(
-                      angle: 0.6,
-                      child: pw.Opacity(
-                        opacity: 0.12,
-                        child: pw.Column(
-                          mainAxisSize: pw.MainAxisSize.min,
-                          children: [
-                            pw.Text(
-                              watermark,
-                              style: pw.TextStyle(
-                                fontSize: 130,
-                                fontWeight: pw.FontWeight.bold,
-                                color: PdfColors.red,
-                              ),
-                            ),
-                            pw.Text(
-                              'This document is no longer valid',
-                              style: pw.TextStyle(
-                                fontSize: 22,
-                                fontWeight: pw.FontWeight.bold,
-                                color: PdfColors.red,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+            : (ctx) => _watermarkLayer(watermark!),
       ),
       header: (ctx) => ctx.pageNumber == 1
           ? pw.SizedBox.shrink()

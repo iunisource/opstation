@@ -603,6 +603,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     final createdAt = _detail['created_at'] != null
         ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Order',
       orgName: user?.orgName ?? 'Opstation',
@@ -1860,6 +1861,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'Collect': 'Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
     };
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Delivery Order',
       checkedByLabel: 'Received By',
@@ -1879,7 +1881,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       createdAt: createdAt,
       footerNote: _meta.doFooter,
       relatedRefs: pdfRefs.isEmpty ? null : pdfRefs,
-      watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
     );
   }
 
@@ -3512,6 +3513,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     if (doVoucher != null) refs['DO #'] = doVoucher;
 
     await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Invoice',
       checkedByLabel: 'Received By',
@@ -3534,7 +3536,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       createdAt: createdAt,
       footerNote: _meta.siFooter,
       relatedRefs: refs.isNotEmpty ? refs : null,
-      watermark: (_detail['is_voided'] == true) ? 'VOIDED' : null,
       approvedBy: _detail['reviewed_by_name'] as String?,
       approvedAt: _detail['reviewed_at'] != null
           ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['reviewed_at'] as String).toLocal()) : null,

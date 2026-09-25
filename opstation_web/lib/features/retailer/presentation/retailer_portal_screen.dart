@@ -802,6 +802,7 @@ class _OrdersTabState extends ConsumerState<_OrdersTab> {
           : null;
 
       await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(header),
         voucherNumber: header['voucher_number'] as String? ?? '-',
         voucherTypeLabel: 'Sales Invoice',
         orgName: orgName,
@@ -1261,6 +1262,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
               .format(DateTime.parse('${header['voucher_date']}'))
           : null;
       await VoucherPdf.printVoucher(
+      watermark: VoucherPdf.voidMark(header),
         voucherNumber: header['voucher_number'] as String? ??
             (e['voucher']?.toString() ?? '-'),
         voucherTypeLabel: isReturn ? 'Sales Return' : 'Sales Invoice',
