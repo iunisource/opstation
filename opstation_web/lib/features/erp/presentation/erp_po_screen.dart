@@ -916,7 +916,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           || (_filter == 'approved' && disp == 'Approved')
           || (_filter == 'open' && (disp == 'Ordered' || disp == 'Approved'))
           || (_filter == 'received' && (disp == 'Received' || disp == 'Partially Received'))
-          || (_filter == 'invoiced' && disp == 'Invoiced');
+          || (_filter == 'invoiced' && disp == 'Invoiced')
+          || (_filter == 'voided' && disp == 'Voided');
       return matchSearch && matchFilter;
     }).toList();
     return Container(
@@ -931,7 +932,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           onChanged: (v) => setState(() => _search = v),
         )),
         const SizedBox(height: 8),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
+        // Wrap (not Row) so all pills stay visible in the narrow list pane.
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Wrap(runSpacing: 6, children: [
             _PoFilterTab(label: 'All',      value: 'all',      current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             if (_orgApprovalRequired) ...[
@@ -945,6 +947,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             _PoFilterTab(label: 'Received', value: 'received', current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 5),
+            _PoFilterTab(label: 'Voided',   value: 'voided',   current: _filter, onTap: (v) => setState(() => _filter = v)),
           ])),
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: BrandSpinner())

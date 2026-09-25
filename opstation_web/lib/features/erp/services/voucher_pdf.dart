@@ -36,26 +36,26 @@ class VoucherPdf {
                 mainAxisSize: pw.MainAxisSize.min,
                 children: [
                   pw.Container(
-                    padding: const pw.EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 18, vertical: 4),
                     decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.red, width: 8),
-                      borderRadius: pw.BorderRadius.circular(18),
+                      border: pw.Border.all(color: PdfColors.red, width: 6),
+                      borderRadius: pw.BorderRadius.circular(14),
                     ),
                     child: pw.Text(
                       text,
                       style: pw.TextStyle(
-                        fontSize: 140,
+                        fontSize: 105,
                         fontWeight: pw.FontWeight.bold,
                         color: PdfColors.red,
-                        letterSpacing: 6,
+                        letterSpacing: 4.5,
                       ),
                     ),
                   ),
-                  pw.SizedBox(height: 10),
+                  pw.SizedBox(height: 8),
                   pw.Text(
                     'This document is no longer valid',
                     style: pw.TextStyle(
-                      fontSize: 26,
+                      fontSize: 20,
                       fontWeight: pw.FontWeight.bold,
                       color: PdfColors.red,
                     ),
