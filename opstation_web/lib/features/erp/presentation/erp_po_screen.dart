@@ -915,7 +915,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           || (_filter == 'pending' && _poIsPending(r, _orgApprovalRequired))
           || (_filter == 'approved' && disp == 'Approved')
           || (_filter == 'open' && (disp == 'Ordered' || disp == 'Approved'))
-          || (_filter == 'received' && (disp == 'Received' || disp == 'Partially Received'))
+          || (_filter == 'partial' && disp == 'Partially Received')
+          || (_filter == 'received' && disp == 'Received')
           || (_filter == 'invoiced' && disp == 'Invoiced')
           || (_filter == 'voided' && disp == 'Voided');
       return matchSearch && matchFilter;
@@ -943,6 +944,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             _PoFilterTab(label: 'Open',     value: 'open',     current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Approved', value: 'approved', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 5),
+            _PoFilterTab(label: 'Partially received', value: 'partial', current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Received', value: 'received', current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
