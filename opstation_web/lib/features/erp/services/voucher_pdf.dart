@@ -24,48 +24,59 @@ class VoucherPdf {
     return null;
   }
 
-  /// Large, bold diagonal watermark drawn behind every page.
-  static pw.Widget _watermarkLayer(String text) => pw.FullPage(
-        ignoreMargins: true,
-        child: pw.Center(
-          child: pw.Transform.rotate(
-            angle: 0.6,
-            child: pw.Opacity(
-              opacity: 0.28,
-              child: pw.Column(
-                mainAxisSize: pw.MainAxisSize.min,
-                children: [
-                  pw.Container(
-                    padding: const pw.EdgeInsets.symmetric(horizontal: 18, vertical: 4),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.red, width: 6),
-                      borderRadius: pw.BorderRadius.circular(14),
-                    ),
-                    child: pw.Text(
-                      text,
-                      style: pw.TextStyle(
-                        fontSize: 105,
-                        fontWeight: pw.FontWeight.bold,
-                        color: PdfColors.red,
-                        letterSpacing: 4.5,
-                      ),
-                    ),
-                  ),
-                  pw.SizedBox(height: 8),
-                  pw.Text(
-                    'This document is no longer valid',
-                    style: pw.TextStyle(
-                      fontSize: 20,
+  /// Tiled grid of small diagonal stamps drawn OVER each page (foreground, low
+  /// opacity). Many small stamps instead of one big one, so several are always
+  /// readable no matter which boxes/text they cross, and filled boxes can't
+  /// hide it (a background watermark was covered by the shaded panels).
+  static pw.Widget _watermarkLayer(String text) {
+    pw.Widget stamp() => pw.Transform.rotate(
+          angle: 0.45,
+          child: pw.Container(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: PdfColors.red, width: 2.2),
+              borderRadius: pw.BorderRadius.circular(6),
+            ),
+            child: pw.Column(mainAxisSize: pw.MainAxisSize.min, children: [
+              pw.Text(text,
+                  style: pw.TextStyle(
+                      fontSize: 24,
                       fontWeight: pw.FontWeight.bold,
                       color: PdfColors.red,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+                      letterSpacing: 2)),
+              pw.Text('NOT VALID',
+                  style: pw.TextStyle(
+                      fontSize: 7,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.red,
+                      letterSpacing: 2)),
+            ]),
           ),
+        );
+    const rows = 7;
+    const cols = 3;
+    return pw.FullPage(
+      ignoreMargins: true,
+      child: pw.Opacity(
+        opacity: 0.22,
+        child: pw.Column(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+          children: [
+            for (var r = 0; r < rows; r++)
+              pw.Padding(
+                // Stagger alternate rows so stamps form a brick pattern.
+                padding: pw.EdgeInsets.only(
+                    left: r.isOdd ? 90 : 0, right: r.isOdd ? 0 : 90),
+                child: pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                  children: [for (var c = 0; c < cols; c++) stamp()],
+                ),
+              ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 
   static const _accent = PdfColor.fromInt(0xFF2563EB);
   static const _muted = PdfColor.fromInt(0xFF64748B);
@@ -313,7 +324,7 @@ class VoucherPdf {
       pageTheme: pw.PageTheme(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(28),
-        buildBackground: (watermark == null || watermark.isEmpty)
+        buildForeground: (watermark == null || watermark.isEmpty)
             ? null
             : (ctx) => _watermarkLayer(watermark!),
       ),
@@ -601,7 +612,7 @@ class VoucherPdf {
       pageTheme: pw.PageTheme(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(24, 18, 24, 18),
-        buildBackground: (watermark == null || watermark.isEmpty)
+        buildForeground: (watermark == null || watermark.isEmpty)
             ? null
             : (ctx) => _watermarkLayer(watermark!),
       ),
