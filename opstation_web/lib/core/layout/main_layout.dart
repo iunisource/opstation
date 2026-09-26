@@ -15,6 +15,7 @@ import '../notifications/notifications_menu_tile.dart';
 import '../notifications/notification_bell.dart';
 import '../notifications/global_job_alert.dart';
 import '../notifications/global_transfer_alert.dart';
+import '../notifications/global_po_reject_alert.dart';
 import '../notifications/user_reminders.dart';
 import '../notifications/global_badge_sync.dart';
 import '../onboarding/first_login_tour.dart';
@@ -244,6 +245,26 @@ final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
         .filter('voided_at', 'is', null)
         .neq('status', 'received')
         .eq('is_locked', true);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
+// Count of MY purchase orders that were rejected and I haven't acknowledged
+// yet (nav badge for the PO's creator). Clears on acknowledge / re-confirm.
+final poRejectedUnackedCountProvider = FutureProvider<int>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('purchase_orders')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('created_by', user.id)
+        .not('rejected_at', 'is', null)
+        .filter('reject_ack_at', 'is', null)
+        .filter('voided_at', 'is', null);
     return (res as List).length;
   } catch (_) {
     return 0;
@@ -798,7 +819,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
+        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
       );
     }
 
@@ -811,7 +832,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
             Expanded(child: Column(children: [const TrialBanner(), Expanded(child: widget.child)])),
           ]),
           const GlobalJobAlert(),
-          const GlobalTransferAlert(), const UserRemindersEngine(),
+          const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
           const GlobalBadgeSync(),
           const FirstLoginTour(),
           const StationMaster(),
@@ -827,7 +848,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           Expanded(child: widget.child),
         ]),
         const GlobalJobAlert(),
-        const GlobalTransferAlert(), const UserRemindersEngine(),
+        const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
         const GlobalBadgeSync(),
         const FirstLoginTour(),
         const StationMaster(),
@@ -901,7 +922,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final supplierPending = ref.watch(supplierPendingCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
-  final poPending = ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0;
+  final poPending = (ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0) +
+      (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0);
   final paPending = ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0;
   final piReviewPending = ref.watch(piReviewPendingProvider).valueOrNull ?? 0;
   final grnPendingInvoice = ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0;

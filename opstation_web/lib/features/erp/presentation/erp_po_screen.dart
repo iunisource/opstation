@@ -152,6 +152,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
   bool get _isVoided => _detail['voided_at'] != null;
+  bool get _isRejected => _detail['rejected_at'] != null && !_isLocked && !_isVoided;
+  bool get _isMyPo => (_detail['created_by'] as String?) != null &&
+      _detail['created_by'] == ref.read(currentUserProvider)?.id;
+  bool get _rejectUnacked => _isRejected && _detail['reject_ack_at'] == null;
   // Line items can be added/deleted while no GRN exists (standalone) and the PO
   // isn't voided. Once a GRN is raised, lines are cascade-locked — even for
   // admins. Editing an approved PO clears its approval (re-approval required).
@@ -224,7 +228,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_orders')
-          .select('id,voucher_number,voucher_date,status,is_locked,voided_at,approved_at,supplier_id,suppliers(name),branches(name)')
+          .select('id,voucher_number,voucher_date,status,is_locked,voided_at,approved_at,rejected_at,reject_ack_at,created_by,supplier_id,suppliers(name),branches(name)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -643,6 +647,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Future<void> _confirmOrder() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before confirming'); return; }
     final userId = ref.read(currentUserProvider)?.id;
+    // Re-submitting a rejected PO counts as acknowledging the rejection.
+    if (_rejectUnacked) await _acknowledgeRejection(silent: true);
     try {
       await Supabase.instance.client.from('purchase_orders').update({
         'status': 'ordered',
@@ -696,6 +702,114 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+  }
+
+  Future<void> _reject() async {
+    if (!_canApprove) { _showSnack('You do not have permission to reject.'); return; }
+    final ctrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dlg) => StatefulBuilder(builder: (dlg, setD) => AlertDialog(
+        title: Text('Reject ${_detail['voucher_number'] ?? 'Purchase Order'}'),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('The PO goes back to its creator as a draft. They are notified with your reason and must acknowledge it.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl, autofocus: true, minLines: 3, maxLines: 6,
+              onChanged: (_) => setD(() {}),
+              decoration: const InputDecoration(labelText: 'Reason for rejection *', border: OutlineInputBorder()),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dlg, rootNavigator: true).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: ctrl.text.trim().isEmpty ? null : () => Navigator.of(dlg, rootNavigator: true).pop(ctrl.text.trim()),
+            child: const Text('Reject'),
+          ),
+        ],
+      )),
+    );
+    if (reason == null || reason.isEmpty) return;
+    final u = ref.read(currentUserProvider);
+    final now = DateTime.now().toUtc().toIso8601String();
+    SavingOverlay.show(context, label: 'Rejecting…');
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'rejected_at': now, 'rejected_by': u?.id, 'rejected_by_name': u?.name,
+        'reject_reason': reason, 'reject_ack_at': null, 'reject_ack_by': null,
+        // Back to the creator as an editable draft.
+        'is_locked': false, 'locked_by': null, 'locked_at': null, 'status': 'draft',
+        'updated_at': now,
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'rejected', 'Rejected by ${u?.name ?? ''}: $reason');
+      _showSnack('Purchase Order rejected — sent back to its creator');
+      ref.invalidate(poPendingApprovalCountProvider);
+      ref.invalidate(poRejectedUnackedCountProvider);
+      _loadDetail(_detail['id'] as String);
+      _loadList();
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    finally { SavingOverlay.hide(); }
+  }
+
+  Future<void> _acknowledgeRejection({bool silent = false}) async {
+    final u = ref.read(currentUserProvider);
+    final now = DateTime.now().toUtc().toIso8601String();
+    try {
+      await Supabase.instance.client.from('purchase_orders').update({
+        'reject_ack_at': now, 'reject_ack_by': u?.id, 'updated_at': now,
+      }).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'rejection_acknowledged',
+          'Rejection acknowledged by ${u?.name ?? ''}${silent ? ' (on re-submit)' : ''}');
+      _detail['reject_ack_at'] = now;
+      ref.invalidate(poRejectedUnackedCountProvider);
+      if (!silent) {
+        _showSnack('Rejection acknowledged');
+        _loadDetail(_detail['id'] as String);
+        _loadList();
+      }
+    } catch (e) { if (!silent) _showSnack(friendlyError('That did not save', e)); }
+  }
+
+  Widget _rejectionBanner() {
+    final at = DateTime.tryParse('${_detail['rejected_at']}')?.toLocal();
+    final acked = _detail['reject_ack_at'] != null;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+      decoration: BoxDecoration(color: Colors.red.withOpacity(0.06), borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.withOpacity(0.35))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.cancel_outlined, size: 18, color: Colors.red.shade700),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Rejected by ${_detail['rejected_by_name'] ?? '—'}'
+              '${at != null ? ' · ${DateFormat('d MMM yyyy, HH:mm').format(at)}' : ''}',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.red.shade800)),
+          const SizedBox(height: 3),
+          Text('${_detail['reject_reason'] ?? ''}', style: const TextStyle(fontSize: 13)),
+          const SizedBox(height: 4),
+          Text(acked
+                  ? 'Acknowledged. Fix the PO and click "Confirm Order" to send it for approval again.'
+                  : 'Fix the PO and click "Confirm Order" to send it for approval again.',
+              style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+        ])),
+        if (!acked && _isMyPo)
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.done_all, size: 16),
+              label: const Text('Acknowledge'),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
+              onPressed: () => _acknowledgeRejection(),
+            ),
+          ),
+      ]),
+    );
   }
 
   Future<void> _approve() async {
@@ -918,7 +1032,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           || (_filter == 'partial' && disp == 'Partially Received')
           || (_filter == 'received' && disp == 'Received')
           || (_filter == 'invoiced' && disp == 'Invoiced')
-          || (_filter == 'voided' && disp == 'Voided');
+          || (_filter == 'voided' && disp == 'Voided')
+          || (_filter == 'rejected' && disp == 'Rejected');
       return matchSearch && matchFilter;
     }).toList();
     return Container(
@@ -950,6 +1065,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             _PoFilterTab(label: 'Received', value: 'received', current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            const SizedBox(width: 5),
+            _PoFilterTab(label: 'Rejected', value: 'rejected', current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Voided',   value: 'voided',   current: _filter, onTap: (v) => setState(() => _filter = v)),
           ])),
@@ -991,6 +1108,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           final actions = <Widget>[
             if (_isDraft && !_isLocked)
               ElevatedButton.icon(icon: const Icon(Icons.check, size: 16), label: const Text('Confirm Order'), onPressed: _confirmOrder),
+            if (_isLocked && _approvalRequired && _detail['approved_at'] == null && !_isVoided && _canApprove)
+              OutlinedButton.icon(icon: const Icon(Icons.close, size: 16), label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)),
+                  onPressed: _reject),
             if (_isLocked && _approvalRequired && _detail['approved_at'] == null && !_isVoided && _canApprove)
               ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve'),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.green), onPressed: _approve),
@@ -1058,6 +1179,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           preparedBy: _meta.preparedBy,
         ),
         const SizedBox(height: 20),
+        if (_isRejected) _rejectionBanner(),
         if (_isDraft && !_isLocked)
           Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(color: Colors.blue.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.25))),
@@ -1359,6 +1481,8 @@ class _PoVoidChip extends StatelessWidget {
 /// Invoiced, with Voided taking precedence.
 String poDisplayStatus(Map<String, dynamic> r) {
   if (r['voided_at'] != null) return 'Voided';
+  // Rejected: sent back to the creator (unlocked) until they re-confirm.
+  if (r['rejected_at'] != null && r['is_locked'] != true) return 'Rejected';
   final s = (r['status'] as String?) ?? 'draft';
   if (s == 'received') return 'Received';
   if (s == 'partially_received') return 'Partially Received';
@@ -1399,6 +1523,7 @@ class _PoStatusBadge extends StatelessWidget {
       case 'Partially Received': bg = Colors.orange.withOpacity(0.12);     fg = Colors.orange;     break;
       case 'Invoiced':           bg = Colors.purple.withOpacity(0.12);     fg = Colors.purple;     break;
       case 'Voided':             bg = AppTheme.danger.withOpacity(0.12);   fg = AppTheme.danger;   break;
+      case 'Rejected':           bg = Colors.red.withOpacity(0.12);         fg = Colors.red.shade700; break;
       default:                   bg = AppTheme.border;                      fg = AppTheme.textSecondary;
     }
     return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

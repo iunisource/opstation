@@ -10,7 +10,6 @@ import 'package:printing/printing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
-import '../../intelligence/widgets/searchable_dropdown.dart';
 
 /// Sales Report — all sales in a date range, from Sales Invoices and/or POS,
 /// filterable by customer Category and Group, broken down Product-wise or
@@ -53,7 +52,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   DateTime _to = DateTime.now();
   String _source = 'both'; // both | invoice | pos
   String _branch = 'all';
-  String _route = 'all';
+  // Route / Market filter: route NAMES selected (empty = all routes).
+  final Set<String> _fRoutes = {};
   String _category = 'all';
   String _group = 'all';
   String _breakdown = 'product'; // product | customer
@@ -266,9 +266,14 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   }
 
   bool _custPassesFilter(String? customerId) {
-    if (_route != 'all') {
+    if (_fRoutes.isNotEmpty) {
       final rids = customerId == null ? null : _custRoutes[customerId];
-      if (rids == null || !rids.contains(_route)) return false;
+      if (rids == null) return false;
+      final names = {
+        for (final r in _routes)
+          if (rids.contains(r['id'])) '${r['name']}'
+      };
+      if (!names.any(_fRoutes.contains)) return false;
     }
     if (_category == 'all' && _group == 'all') return true;
     final cust = customerId == null ? null : _customers[customerId];
@@ -592,16 +597,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           for (final b in _branches) b['id'] as String: '${b['name']}',
         }, (v) => setState(() => _branch = v)),
         if (_routes.isNotEmpty)
-          SizedBox(width: 190, child: SearchableDropdown(
-            label: 'Route / Market',
-            value: _route == 'all' ? null : _route,
-            allLabel: 'All routes',
-            options: [
-              for (final r in _routes)
-                MapEntry(r['id'] as String?, '${r['name']}'),
-            ],
-            onChanged: (v) => setState(() => _route = v ?? 'all'),
-          )),
+          _multiField('Route / Market',
+              [for (final r in _routes) '${r['name']}'].toSet().toList(),
+              _fRoutes),
         _dropdown('Customer Category', _category, {
           'all': 'All categories',
           for (final c in _categories) c: c,
@@ -655,8 +653,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       '${DateFormat('d MMM').format(_from)} – ${DateFormat('d MMM y').format(_to)}',
       '$srcLabel',
       '$branchLabel',
-      if (_route != 'all')
-        'Route: ${_routes.firstWhere((r) => r['id'] == _route, orElse: () => {'name': _route})['name']}',
+      if (_fRoutes.isNotEmpty)
+        _fRoutes.length == 1 ? 'Route: ${_fRoutes.first}' : 'Routes: ${_fRoutes.length}',
       _breakdown == 'product' ? 'Product-wise' : 'Customer-wise',
       if (_category != 'all') 'Cat: $_category',
       if (_group != 'all') 'Grp: $_group',
@@ -1133,8 +1131,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       'Source: $srcLabel',
       if (_branch != 'all')
         'Branch: ${_branches.firstWhere((b) => b['id'] == _branch, orElse: () => {'name': _branch})['name']}',
-      if (_route != 'all')
-        'Route: ${_routes.firstWhere((r) => r['id'] == _route, orElse: () => {'name': _route})['name']}',
+      if (_fRoutes.isNotEmpty)
+        '${_fRoutes.length == 1 ? 'Route' : 'Routes'}: ${_fRoutes.join(', ')}',
       if (_category != 'all') 'Category: $_category',
       if (_group != 'all') 'Group: $_group',
       if (_fMainGroups.isNotEmpty) 'Main Group: ${_fMainGroups.join(', ')}',
