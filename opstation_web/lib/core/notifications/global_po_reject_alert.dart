@@ -11,7 +11,9 @@ import 'package:go_router/go_router.dart';
 import '../layout/main_layout.dart'; // poRejectedUnackedCountProvider
 import '../../features/auth/auth_controller.dart';
 
-/// App-global "your Purchase Order was rejected" alert for the PO's CREATOR.
+/// App-global "Purchase Order was rejected" alert for the designated users
+/// (Admin Settings → "Notify when a Purchase Order is rejected"; falls back to
+/// the PO's creator when no users are designated).
 /// Mounted once in the shell so it works on every screen. When a PO this user
 /// created is rejected (and not yet acknowledged) it plays a short ding and
 /// shows a banner with the approver's reason. "Acknowledge" records the
@@ -86,16 +88,10 @@ class _GlobalPoRejectAlertState extends ConsumerState<GlobalPoRejectAlert> {
     final uid = _uid;
     if (orgId == null || uid == null || !mounted) return;
     try {
-      final res = await Supabase.instance.client
-          .from('purchase_orders')
-          .select('id, voucher_number, rejected_at, rejected_by_name, reject_reason')
-          .eq('org_id', orgId)
-          .eq('created_by', uid)
-          .not('rejected_at', 'is', null)
-          .filter('reject_ack_at', 'is', null)
-          .filter('voided_at', 'is', null)
-          .order('rejected_at', ascending: false);
-      _rows = List<Map<String, dynamic>>.from(res as List);
+      // Gated by Admin Settings (toggle + designated users) — see
+      // poRejectAlertScope. Empty list = this user isn't alerted.
+      _rows = await poRejectAlertRows(orgId, uid,
+          select: 'id, voucher_number, rejected_at, rejected_by_name, reject_reason');
       ref.invalidate(poRejectedUnackedCountProvider);
       final ids = {for (final r in _rows) r['id'] as String};
       final fresh = ids.difference(_dinged);

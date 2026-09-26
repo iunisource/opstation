@@ -251,21 +251,56 @@ final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
-// Count of MY purchase orders that were rejected and I haven't acknowledged
-// yet (nav badge for the PO's creator). Clears on acknowledge / re-confirm.
+/// Who gets PO-rejection alerts, from Admin Settings:
+///   null   -> no alerts for this user (toggle off, approval flow off, or the
+///             user isn't one of the designated recipients)
+///   'all'  -> this user is a designated recipient: every rejected PO in the org
+///   'mine' -> no users designated: fall back to the PO's creator (own POs only)
+Future<String?> poRejectAlertScope(String orgId, String uid) async {
+  try {
+    final rows = await Supabase.instance.client
+        .from('app_config')
+        .select('key, value')
+        .eq('org_id', orgId)
+        .inFilter('key', ['org.po_reject_notify', 'org.po_reject_notify_users', 'org.po_approval_required']);
+    final cfg = <String, String>{
+      for (final r in rows as List) r['key'] as String: ((r['value'] as String?) ?? '').trim()
+    };
+    if (cfg['org.po_reject_notify'] != 'true') return null;
+    if (cfg['org.po_approval_required'] != 'true') return null;
+    final users = (cfg['org.po_reject_notify_users'] ?? '')
+        .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+    if (users.isEmpty) return 'mine';
+    return users.contains(uid) ? 'all' : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Rejected, not-yet-acknowledged POs this user should be alerted about.
+Future<List<Map<String, dynamic>>> poRejectAlertRows(String orgId, String uid,
+    {String select = 'id'}) async {
+  final scope = await poRejectAlertScope(orgId, uid);
+  if (scope == null) return const [];
+  var q = Supabase.instance.client
+      .from('purchase_orders')
+      .select(select)
+      .eq('org_id', orgId)
+      .not('rejected_at', 'is', null)
+      .filter('reject_ack_at', 'is', null)
+      .filter('voided_at', 'is', null);
+  if (scope == 'mine') q = q.eq('created_by', uid);
+  final res = await q.order('rejected_at', ascending: false);
+  return List<Map<String, dynamic>>.from(res as List);
+}
+
+// Count of rejected POs awaiting acknowledgement by this user (nav badge).
+// Gated by the Admin Settings toggle + designated users. Clears on acknowledge.
 final poRejectedUnackedCountProvider = FutureProvider<int>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   try {
-    final res = await Supabase.instance.client
-        .from('purchase_orders')
-        .select('id')
-        .eq('org_id', user.orgId!)
-        .eq('created_by', user.id)
-        .not('rejected_at', 'is', null)
-        .filter('reject_ack_at', 'is', null)
-        .filter('voided_at', 'is', null);
-    return (res as List).length;
+    return (await poRejectAlertRows(user.orgId!, user.id)).length;
   } catch (_) {
     return 0;
   }

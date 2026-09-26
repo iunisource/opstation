@@ -174,6 +174,16 @@ const List<_AdminToggle> _toggles = [
         hint: 'comma-separated email addresses'),
   ),
   _AdminToggle(
+    'org.po_reject_notify',
+    'Notify when a Purchase Order is rejected',
+    'When ON (and the PO approval flow is on), rejecting a PO plays a ding, '
+        'shows a banner with the rejection reason and adds a pendency badge for '
+        'the users selected below, plus a push to their devices. The badge clears '
+        'once one of them acknowledges (logged in the PO audit trail). If no '
+        'users are selected, the PO\'s creator is notified instead.',
+    users: _UsersField('org.po_reject_notify_users', 'Users to notify'),
+  ),
+  _AdminToggle(
     'org.po_show_stock_consumption',
     'Show stock & 3-month consumption on Purchase Order',
     'On the Purchase Order screen, show each line item\'s current on-hand stock '
@@ -600,6 +610,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Purchase & GRN', Icons.shopping_cart_outlined, [
     'org.po_approval_required',
     'org.po_notify_new',
+    'org.po_reject_notify',
     'org.po_show_stock_consumption',
     'org.po_fg_stock',
     'org.pi_updates_cost_price',

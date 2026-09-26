@@ -153,8 +153,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool get _isDraft  => !_isLocked;
   bool get _isVoided => _detail['voided_at'] != null;
   bool get _isRejected => _detail['rejected_at'] != null && !_isLocked && !_isVoided;
-  bool get _isMyPo => (_detail['created_by'] as String?) != null &&
-      _detail['created_by'] == ref.read(currentUserProvider)?.id;
+  // Set on detail load from Admin Settings: may this user acknowledge the
+  // rejection (a designated recipient, or the creator when none designated)?
+  bool _canAckReject = false;
   bool get _rejectUnacked => _isRejected && _detail['reject_ack_at'] == null;
   // Line items can be added/deleted while no GRN exists (standalone) and the PO
   // isn't voided. Once a GRN is raised, lines are cascade-locked — even for
@@ -404,6 +405,18 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         final g = await client.from('purchase_grns').select('id').eq('po_id', id).limit(1);
         hasGrn = (g as List).isNotEmpty;
       } catch (_) {}
+      // Who may acknowledge a rejection (Admin Settings: designated users, or
+      // the creator when none are designated). Off when the toggle is off.
+      bool canAck = false;
+      try {
+        final me = ref.read(currentUserProvider);
+        final org = po['org_id'] as String?;
+        if (me != null && org != null && po['rejected_at'] != null) {
+          final scope = await poRejectAlertScope(org, me.id);
+          canAck = scope == 'all' || (scope == 'mine' && po['created_by'] == me.id);
+        }
+      } catch (_) {}
+      _canAckReject = canAck;
       setState(() { _detail = Map<String, dynamic>.from(po); _items = itemList; _meta = meta;
         _approvalRequired = approvalReq; _showStockConsumption = showSC; _showFgStock = showFg;
         _lineMetrics = metrics; _datesEditable = datesEd;
@@ -705,6 +718,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   Future<void> _reject() async {
+    if (!_approvalRequired) { _showSnack('Rejection needs the PO approval flow to be ON (Admin Settings).'); return; }
     if (!_canApprove) { _showSnack('You do not have permission to reject.'); return; }
     final ctrl = TextEditingController();
     final reason = await showDialog<String>(
@@ -798,7 +812,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   : 'Fix the PO and click "Confirm Order" to send it for approval again.',
               style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
         ])),
-        if (!acked && _isMyPo)
+        if (!acked && _canAckReject)
           Padding(
             padding: const EdgeInsets.only(left: 8),
             child: ElevatedButton.icon(
