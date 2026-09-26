@@ -358,7 +358,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         final rows = await client.from(tbl)
             // Job runs have no voucher_number of their own — the number is
             // built from the parent job card (JOB-xxxx-R<run_no>).
-            .select(tbl == 'job_card_runs' ? '*, job_cards(job_number)' : '*')
+            .select(tbl == 'job_card_runs' ? '*, job_cards(job_number, product_id)' : '*')
             .inFilter('id', ids);
         for (final r in rows as List) {
           final id = r['id'] as String?;
@@ -384,6 +384,15 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
             productionInfo[id] = {
               'product_id': r['product_id'],
               'output_qty': r['output_qty'],
+            };
+          }
+          // Job runs: same "Produced N units of <finished good>" wording, using
+          // the parent job card's finished good and this run's produced qty.
+          if (tbl == 'job_card_runs') {
+            final jc = r['job_cards'];
+            productionInfo[id] = {
+              'product_id': jc is Map ? jc['product_id'] : null,
+              'output_qty': r['produced_qty'],
             };
           }
         }
@@ -541,6 +550,68 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     );
   }
 
+  /// Adds 'product_name' to rows that carry a product_id. (These line tables
+  /// have no FK to products, so a products(...) embed fails — that is why the
+  /// popup used to show "No lines".)
+  Future<List<Map<String, dynamic>>> _withProductNames(List<Map<String, dynamic>> rows) async {
+    final ids = rows.map((r) => r['product_id'] as String?).whereType<String>().toSet().toList();
+    if (ids.isEmpty) return rows;
+    try {
+      final prods = await Supabase.instance.client.from('products').select('id, name, sku').inFilter('id', ids);
+      final byId = {for (final p in prods as List) p['id'] as String: p};
+      for (final r in rows) {
+        final p = byId[r['product_id']];
+        if (p != null) r['product_name'] = p['name'];
+      }
+    } catch (_) { }
+    return rows;
+  }
+
+  /// Popup lines for manufacturing documents: every product this document
+  /// moved in stock, netted per product — materials consumed and the finished
+  /// good produced — with the cost actually booked.
+  Future<List<dynamic>> _movementLines(String refId) async {
+    try {
+      final mv = await Supabase.instance.client
+          .from('inventory_movements')
+          .select('product_id, quantity, unit_cost, total_cost')
+          .eq('reference_id', refId);
+      final agg = <String, Map<String, dynamic>>{};
+      for (final m in mv as List) {
+        final pid = m['product_id'] as String?;
+        if (pid == null) continue;
+        final a = agg.putIfAbsent(pid, () => {'product_id': pid, 'q': 0.0, 'cost': 0.0});
+        final q = (m['quantity'] as num?)?.toDouble() ?? 0;
+        a['q'] = (a['q'] as double) + q;
+        final tc = (m['total_cost'] as num?)?.toDouble() ??
+            (((m['unit_cost'] as num?)?.toDouble() ?? 0) * q.abs());
+        a['cost'] = (a['cost'] as double) + tc.abs();
+      }
+      final rows = <Map<String, dynamic>>[];
+      for (final a in agg.values) {
+        final q = a['q'] as double;
+        if (q == 0) continue;
+        final cost = a['cost'] as double;
+        rows.add({
+          'product_id': a['product_id'],
+          'quantity': q.abs(),
+          'unit_cost': q != 0 && cost > 0 ? cost / q.abs() : null,
+          'line_total': cost > 0 ? cost : null,
+          '_dir': q > 0 ? 'Produced' : 'Consumed',
+        });
+      }
+      // Produced (finished good) first, then consumed materials.
+      rows.sort((x, y) => (x['_dir'] as String).compareTo(y['_dir'] as String) * -1);
+      await _withProductNames(rows);
+      for (final r in rows) {
+        r['product_name'] = '${r['product_name'] ?? r['product_id']} (${r['_dir']})';
+      }
+      return rows;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<void> _openVoucherFromMovement(Map<String, dynamic> m) async {
     final refType = m['reference_type'] as String?;
     final refId = m['reference_id'] as String?;
@@ -640,7 +711,16 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           title = 'Production Voucher';
           voucher = await client.from('production_vouchers').select('*').eq('id', refId).maybeSingle();
           if (voucher != null) {
-            try { lines = await client.from('production_voucher_components').select('*, products(name, sku)').eq('voucher_id', refId); } catch (_) { }
+            // What actually moved (consumed + produced); falls back to the
+            // voucher's component list for an unposted draft.
+            lines = await _movementLines(refId);
+            if (lines.isEmpty) {
+              try {
+                final comps = await client.from('production_voucher_components')
+                    .select().eq('voucher_id', refId).order('line_order');
+                lines = await _withProductNames(List<Map<String, dynamic>>.from(comps as List));
+              } catch (_) { }
+            }
           }
           break;
         case 'job_card_runs':
@@ -649,9 +729,15 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           if (voucher != null) {
             final jn = (voucher['job_cards'] is Map ? voucher['job_cards']['job_number'] as String? : null) ?? 'JOB';
             voucher['voucher_number'] = '$jn-R${voucher['run_no'] ?? ''}';
+            // This run's own consumption/production (not the whole job's plan).
+            lines = await _movementLines(refId);
             final jobId = voucher['job_card_id'] as String?;
-            if (jobId != null) {
-              try { lines = await client.from('job_card_materials').select('*, products(name, sku)').eq('job_card_id', jobId); } catch (_) { }
+            if (lines.isEmpty && jobId != null) {
+              try {
+                final mats = await client.from('job_card_materials')
+                    .select().eq('job_card_id', jobId).order('line_order');
+                lines = await _withProductNames(List<Map<String, dynamic>>.from(mats as List));
+              } catch (_) { }
             }
           }
           break;
