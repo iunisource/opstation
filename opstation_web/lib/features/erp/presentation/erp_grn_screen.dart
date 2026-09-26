@@ -98,8 +98,10 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked;
   // A posted (received) GRN can be re-adjusted once an admin has UNLOCKED it —
   // as long as it hasn't been invoiced (an invoice already cleared GRNI, so a
-  // change here would unbalance the books). This is the real purpose of unlock.
-  bool get _canAdjust => _isConfirmed && !_isLocked && _isAdmin && _linkedPis.isEmpty;
+  // change here would unbalance the books). Only admins can unlock, so the
+  // unlock IS the permission: once unlocked, any user on this screen can
+  // correct the quantities (not just the admin).
+  bool get _canAdjust => _isConfirmed && !_isLocked && _linkedPis.isEmpty;
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -761,7 +763,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.primary.withOpacity(0.25))),
           child: const Row(children: [Icon(Icons.tune, size: 15, color: AppTheme.primary), SizedBox(width: 8),
             Expanded(child: Text('Editing a posted GRN. Changing a received quantity re-posts a correction — stock, cost layer and GL all move by the difference. Then click "Save changes".', style: TextStyle(fontSize: 12, color: AppTheme.primary)))])),
-        if (_isConfirmed && !_isLocked && _linkedPis.isNotEmpty && _isAdmin) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        if (_isConfirmed && !_isLocked && _linkedPis.isNotEmpty) Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(color: Colors.purple.withOpacity(0.06), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.purple.withOpacity(0.25))),
           child: const Row(children: [Icon(Icons.info_outline, size: 15, color: Colors.purple), SizedBox(width: 8),
             Expanded(child: Text('This GRN is invoiced, so quantities are locked to keep GRNI and payables balanced. Adjust or delete the linked invoice first to edit the received quantities.', style: TextStyle(fontSize: 12, color: Colors.purple)))])),
@@ -846,6 +848,10 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
             userId: ref.read(currentUserProvider)?.id,
             userName: ref.read(currentUserProvider)?.name,
             canWrite: true,
+            // New remarks by someone else show as unread with a "Read" button;
+            // they drive the GRN pendency badge until acknowledged here.
+            trackReads: true,
+            onRead: () => ref.invalidate(grnRemarkPendingProvider),
           ),
         ],
         const SizedBox(height: 16),

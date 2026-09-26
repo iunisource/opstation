@@ -711,6 +711,31 @@ final doRemarkPendingProvider = FutureProvider<int>((ref) async {
   }
 });
 
+/// GRN remark pendency: GRNs with an unread remark written by SOMEONE ELSE.
+/// Lights up the GRN menu + Purchase nav badge until the user opens the GRN
+/// and clicks "Read" on the remarks panel. Your own remarks never count.
+final grnRemarkPendingProvider = FutureProvider<int>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('voucher_remarks')
+        .select('voucher_id, user_id')
+        .eq('org_id', user.orgId!)
+        .eq('voucher_type', 'GRN')
+        .eq('is_read', false);
+    final grns = <String>{};
+    for (final r in res as List) {
+      if (r['user_id'] == user.id) continue;
+      final v = r['voucher_id'];
+      if (v != null) grns.add(v as String);
+    }
+    return grns.length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 /// Count of retailer orders awaiting review. A retailer order is a REQUEST in
 /// its own table — nothing exists in sales_orders until staff approve it, which
 /// is what stops a pending request being confirmed by accident from the Sales
@@ -968,7 +993,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
   final doRemarkPending = ref.watch(doRemarkPendingProvider).valueOrNull ?? 0;
   final doSupervisePending = ref.watch(doSupervisePendingProvider).valueOrNull ?? 0;
-  final grnSupervisePending = ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0;
+  final grnSupervisePending = (ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0) +
+      (ref.watch(grnRemarkPendingProvider).valueOrNull ?? 0);
   final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
   final productSupervisePending = ref.watch(productSupervisePendingProvider).valueOrNull ?? 0;
   final siSupervisePending = ref.watch(siSupervisePendingProvider).valueOrNull ?? 0;
