@@ -182,7 +182,16 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     if (!_canWrite) return;
     final now = DateTime.now();
     final s = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-    setState(() { if (isIn) r.checkIn = s; else r.checkOut = s; if (r.status == 'absent' || r.status == 'leave') r.status = 'present'; });
+    // Check-out is pure time-keeping: it never changes the status an admin set.
+    // A check-in on an absent/leave row still flips it to present (they came in).
+    setState(() {
+      if (isIn) {
+        r.checkIn = s;
+        if (r.status == 'absent' || r.status == 'leave') r.status = 'present';
+      } else {
+        r.checkOut = s;
+      }
+    });
     _saveRow(r);
   }
 
@@ -447,6 +456,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     final shift = _shiftFor(r.shiftId);
     final total = (shift?['work_hours'] as num?)?.toDouble();
     final timesEnabled = (r.status == 'present' || r.status == 'half_day') && _canWrite;
+    // Once someone has checked in, their check-out stays recordable whatever
+    // status is set — status and time-keeping are independent.
+    final outEnabled = _canWrite && r.checkIn != null && (timesEnabled || r.checkIn!.isNotEmpty);
     final dirty = r.recordId == null || _diff(r) != null;
     return Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
       decoration: BoxDecoration(border: last ? null : Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
@@ -465,7 +477,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
         const SizedBox(width: 8),
         SizedBox(width: 142, child: _timeCell(r.checkIn, timesEnabled, () => _stampNow(r, true), () => _pickTime(r, true), () => setState(() => r.checkIn = null), 'In', photoUrl: r.inPhoto)),
         const SizedBox(width: 8),
-        SizedBox(width: 142, child: _timeCell(r.checkOut, timesEnabled && r.checkIn != null, () => _stampNow(r, false), () => _pickTime(r, false), () => setState(() => r.checkOut = null), 'Out', photoUrl: r.outPhoto)),
+        SizedBox(width: 142, child: _timeCell(r.checkOut, outEnabled, () => _stampNow(r, false), () => _pickTime(r, false), () => setState(() => r.checkOut = null), 'Out', photoUrl: r.outPhoto)),
         const SizedBox(width: 8),
         SizedBox(width: 52, child: Text(worked != null ? worked.toString() : '\u2014', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
         SizedBox(width: 50, child: Text(total != null ? total.toString() : '\u2014', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
