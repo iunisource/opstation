@@ -10,6 +10,23 @@ import '../../auth/auth_controller.dart';
 /// over the last 7 days ending yesterday. Drives the pendency badge on the
 /// Attendance Review menu item and the HR nav group. Mirrors the review
 /// screen's own pending detection.
+/// First day an employee can have a pending-review absence: the later of the
+/// day they were added to the system and their join date. Review never
+/// back-fills days before an employee existed in Opstation.
+DateTime? _reviewStartFor(Map e) {
+  DateTime? day(dynamic v) {
+    final d = DateTime.tryParse('${v ?? ''}');
+    if (d == null) return null;
+    final l = d.toLocal();
+    return DateTime(l.year, l.month, l.day);
+  }
+  final added = day(e['created_at']);
+  final joined = day(e['join_date']);
+  if (added == null) return joined;
+  if (joined == null) return added;
+  return joined.isAfter(added) ? joined : added;
+}
+
 final attendanceReviewPendingCountProvider = FutureProvider<int>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
@@ -28,9 +45,10 @@ final attendanceReviewPendingCountProvider = FutureProvider<int>((ref) async {
       final v = c?['value'] as String?;
       restDay = (v != null && v.isNotEmpty) ? int.tryParse(v) : null;
     } catch (_) {}
-    final emps = await client.from('hr_employees').select('id')
+    final emps = await client.from('hr_employees').select('id, created_at, join_date')
         .eq('org_id', user.orgId!).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false);
     final empIds = [for (final e in (emps as List)) e['id'] as String];
+    final startById = {for (final e in (emps as List)) e['id'] as String: _reviewStartFor(e as Map)};
     if (empIds.isEmpty) return 0;
     final att = await client.from('hr_attendance')
         .select('employee_id, att_date, status, check_in, is_penalty, review_status')
@@ -46,6 +64,8 @@ final attendanceReviewPendingCountProvider = FutureProvider<int>((ref) async {
       if (restDay != null && (d.weekday % 7) == restDay) continue;
       final ds = fmt(d);
       for (final empId in empIds) {
+        final start = startById[empId];
+        if (start != null && d.isBefore(start)) continue; // not yet added/joined
         final row = map[empId]?[ds];
         final st = row?['status'] as String?;
         final ci = row?['check_in'] as String?;
@@ -137,7 +157,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
       final client = Supabase.instance.client;
       final emps = await client
           .from('hr_employees')
-          .select('id, full_name, employee_code, branch_id, department_id, shift_id, photo_url')
+          .select('id, full_name, employee_code, branch_id, department_id, shift_id, photo_url, created_at, join_date')
           .eq('org_id', orgId).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false)
           .order('full_name');
       _employees = List<Map<String, dynamic>>.from(emps);
@@ -200,6 +220,8 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
       final ds = _fmt(d);
       for (final e in _employees) {
         final empId = e['id'] as String;
+        final start = _reviewStartFor(e);
+        if (start != null && d.isBefore(start)) continue; // before they were added/joined
         final row = _att[empId]?[ds];
         final status = row?['status'] as String?;
         final ci = row?['check_in'] as String?;
