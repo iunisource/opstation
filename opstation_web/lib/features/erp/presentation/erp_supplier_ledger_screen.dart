@@ -47,6 +47,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   @override
   void initState() {
     super.initState();
+    _earlyRestore();
     _loadSuppliers();
     _loadFooterMsg();
     _searchCtrl.addListener(_onSearchChanged);
@@ -66,7 +67,48 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     });
   }
 
+  // Once any account is selected (early restore or by the user) the
+  // post-list restore must not override it.
+  bool _restored = false;
+  int _ledgerSeq = 0;
+
+  /// Opens the target account IMMEDIATELY on open / refresh: the deep-link
+  /// (?focus=<id>) or the last-viewed account is fetched on its own (one row)
+  /// instead of waiting for the full supplier list to page in.
+  Future<void> _earlyRestore() async {
+    try {
+      final orgId = _orgId; if (orgId == null) return;
+      String? id;
+      bool fromStorage = false;
+      final href = html.window.location.href;
+      final qIdx = href.indexOf('?');
+      if (qIdx != -1) {
+        final f = Uri.splitQueryString(href.substring(qIdx + 1))['focus'];
+        if (f != null && f.isNotEmpty) id = f;
+      }
+      final s = html.window.localStorage;
+      if (id == null) {
+        final cid = s['ledger_supplier_id'];
+        if (cid == null || cid.isEmpty) return;
+        id = cid; fromStorage = true;
+      }
+      final row = await Supabase.instance.client.from('suppliers')
+          .select('id, name').eq('org_id', orgId).eq('id', id).maybeSingle();
+      if (row == null || !mounted || _restored) return;
+      if (fromStorage) {
+        final dfStr = s['ledger_date_from'];
+        final dtStr = s['ledger_date_to'];
+        if (dfStr != null && dfStr.isNotEmpty) _dateFrom = DateTime.tryParse(dfStr);
+        if (dtStr != null && dtStr.isNotEmpty) _dateTo = DateTime.tryParse(dtStr);
+        final tf = s['ledger_type_filter'];
+        if (tf != null && _types.contains(tf)) _typeFilter = tf;
+      }
+      _selectSupplier(Map<String, dynamic>.from(row));
+    } catch (_) {/* fall back to the restore after the list loads */}
+  }
+
   void _selectSupplier(Map<String, dynamic> c) {
+    _restored = true;
     setState(() {
       _selectedSupplier = c; _entries = []; _showDropdown = false; _highlightIndex = -1;
       _searchCtrl.text = '${c['name']}${c['code'] != null ? ' (${c['code']})' : ''}';
@@ -118,6 +160,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   }
 
   void _restoreState() {
+    if (_restored) return; // already opened by _earlyRestore
     try {
       // Global-search deep link: /erp/supplier-ledger?focus=<supplier_id>
       // takes priority over the saved (localStorage) selection.
@@ -166,6 +209,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     // which silently hid entries when the user switched branches.)
     final orgId = _orgId;
     if (orgId == null) return;
+    final seq = ++_ledgerSeq;
     setState(() { _loading = true; _entries = []; _errors = []; });
     final client = Supabase.instance.client;
     final List<Map<String, dynamic>> entries = [];
@@ -184,6 +228,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       return '';
     }
 
+    // Sections run IN PARALLEL (they only append to entries/errors).
+    Future<void> secPI() async {
     // 1. Purchase Invoices -> Credit (increases what we owe the supplier)
     // POSTED (locked) invoices only: drafts have no GL and must not appear as
     // liabilities in the ledger (PI-2026-0048 showed while still a draft).
@@ -222,7 +268,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         }
       }
     } catch (e) { errors.add('SI: ' + e.toString()); }
+    }
 
+    Future<void> secPR() async {
     // 3. Purchase Return Invoices -> Debit (reduces what we owe)
     for (final tbl in const ['purchase_return_invoices', 'sale_return_invoices', 'sales_returns', 'sale_returns', 'sri_vouchers', 'srn_vouchers', 'sri']) {
       try {
@@ -244,17 +292,19 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         break;
       } catch (e) { errors.add('PRI: ' + e.toString()); continue; }
     }
+    }
     // A supplier simply having no purchase returns is normal — no banner for that.
 
+    Future<void> secCRV() async {
     // 4. CRV -> Credit (receipt/refund from supplier increases what we owe them)
+    // This party's lines first, then only THEIR posted headers.
     try {
-      final crvVouchers = await client.from('crv_vouchers')
-          .select('*').eq('org_id', orgId).eq('status', 'posted');
-      final crvIds = (crvVouchers as List).map((v) => v['id'] as String).toList();
+      final crvLines = await client.from('crv_voucher_lines')
+          .select('amount, description, voucher_id')
+          .eq('account_id', supplierId).eq('account_type', 'supplier');
+      final crvIds = (crvLines as List).map((l) => l['voucher_id'] as String).toSet().toList();
       if (crvIds.isNotEmpty) {
-        final crvLines = await client.from('crv_voucher_lines')
-            .select('amount, description, voucher_id')
-            .eq('account_id', supplierId).eq('account_type', 'supplier').inFilter('voucher_id', crvIds);
+        final crvVouchers = await _headersById('crv_vouchers', crvIds, orgId);
         final crvMap = {for (final v in crvVouchers) v['id'] as String: v};
         for (final line in crvLines as List) {
           final v = crvMap[line['voucher_id'] as String]; if (v == null) continue;
@@ -269,16 +319,17 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         }
       }
     } catch (e) { errors.add('CRV: ' + e.toString()); }
+    }
 
+    Future<void> secCPV() async {
     // 5. CPV -> Debit (we paid supplier, reducing what we owe)
     try {
-      final cpvVouchers = await client.from('cpv_vouchers')
-          .select('*').eq('org_id', orgId).eq('status', 'posted');
-      final cpvIds = (cpvVouchers as List).map((v) => v['id'] as String).toList();
+      final cpvLines = await client.from('cpv_voucher_lines')
+          .select('amount, description, voucher_id')
+          .eq('account_id', supplierId).eq('account_type', 'supplier');
+      final cpvIds = (cpvLines as List).map((l) => l['voucher_id'] as String).toSet().toList();
       if (cpvIds.isNotEmpty) {
-        final cpvLines = await client.from('cpv_voucher_lines')
-            .select('amount, description, voucher_id')
-            .eq('account_id', supplierId).eq('account_type', 'supplier').inFilter('voucher_id', cpvIds);
+        final cpvVouchers = await _headersById('cpv_vouchers', cpvIds, orgId);
         final cpvMap = {for (final v in cpvVouchers) v['id'] as String: v};
         for (final line in cpvLines as List) {
           final v = cpvMap[line['voucher_id'] as String]; if (v == null) continue;
@@ -293,19 +344,20 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         }
       }
     } catch (e) { errors.add('CPV: ' + e.toString()); }
+    }
 
+    Future<void> secJV() async {
     // 6. Journal Vouchers (JV) touching this party (posted only)
     try {
-      final jvHeaders = await client.from('journal_entries')
-          .select('id, entry_number, entry_date, description, posted_at, created_at, status, reference_type')
-          .eq('org_id', orgId)
-          .inFilter('reference_type', const ['jv', 'opening_jv', 'opening_balance', 'jobwork', 'jobwork_void'])
-          .eq('status', 'posted');
-      final jvMap = {for (final v in jvHeaders as List) v['id'] as String: v};
+      final jvLines = await client.from('journal_lines')
+          .select('entry_id, debit, credit, description, party_id, account_type')
+          .eq('party_id', supplierId);
+      final jvIds = (jvLines as List).map((l) => l['entry_id'] as String).toSet().toList();
+      final jvHeaders = jvIds.isEmpty ? const <Map<String, dynamic>>[] : await _headersById('journal_entries', jvIds, orgId,
+          select: 'id, entry_number, entry_date, description, posted_at, created_at, status, reference_type',
+          refTypes: const ['jv', 'opening_jv', 'opening_balance', 'jobwork', 'jobwork_void']);
+      final jvMap = {for (final v in jvHeaders) v['id'] as String: v};
       if (jvMap.isNotEmpty) {
-        final jvLines = await client.from('journal_lines')
-            .select('entry_id, debit, credit, description, party_id, account_type')
-            .eq('party_id', supplierId).inFilter('entry_id', jvMap.keys.toList());
         for (final line in jvLines as List) {
           final v = jvMap[line['entry_id'] as String]; if (v == null) continue;
           final refType = (v['reference_type'] as String?) ?? 'jv';
@@ -326,6 +378,10 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         }
       }
     } catch (e) { errors.add('JV: ' + e.toString()); }
+    }
+
+    await Future.wait([secPI(), secPR(), secCRV(), secCPV(), secJV()]);
+    if (!mounted || seq != _ledgerSeq) return; // a newer selection took over
 
     entries.sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
     double bal = 0;
@@ -334,6 +390,22 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     // matching the old ERP / how the team reconciles.
     for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
     setState(() { _entries = entries; _loading = false; _errors = errors; });
+  }
+
+  /// Posted voucher headers for [ids], fetched in chunks (keeps URLs short).
+  Future<List<Map<String, dynamic>>> _headersById(String table, List<String> ids, String orgId,
+      {String select = '*', List<String>? refTypes}) async {
+    final client = Supabase.instance.client;
+    final chunks = <List<String>>[];
+    for (var i = 0; i < ids.length; i += 150) {
+      chunks.add(ids.sublist(i, i + 150 > ids.length ? ids.length : i + 150));
+    }
+    final res = await Future.wait(chunks.map((c) {
+      var q = client.from(table).select(select).eq('org_id', orgId).eq('status', 'posted').inFilter('id', c);
+      if (refTypes != null) q = q.inFilter('reference_type', refTypes);
+      return q;
+    }));
+    return [for (final r in res) ...List<Map<String, dynamic>>.from(r as List)];
   }
 
   List<Map<String, dynamic>> get _displayEntries {

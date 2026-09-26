@@ -48,6 +48,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   @override
   void initState() {
     super.initState();
+    _earlyRestore();
     _loadCustomers();
     _loadFooterMsg();
     _searchCtrl.addListener(_onSearchChanged);
@@ -68,7 +69,48 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     });
   }
 
+  // Once any account is selected (early restore or by the user) the
+  // post-list restore must not override it.
+  bool _restored = false;
+  int _ledgerSeq = 0;
+
+  /// Opens the target account IMMEDIATELY on open / refresh: the deep-link
+  /// (?focus=<id>) or the last-viewed account is fetched on its own (one row)
+  /// instead of waiting for the full customer list to page in.
+  Future<void> _earlyRestore() async {
+    try {
+      final orgId = _orgId; if (orgId == null) return;
+      String? id;
+      bool fromStorage = false;
+      final href = html.window.location.href;
+      final qIdx = href.indexOf('?');
+      if (qIdx != -1) {
+        final f = Uri.splitQueryString(href.substring(qIdx + 1))['focus'];
+        if (f != null && f.isNotEmpty) id = f;
+      }
+      final s = html.window.localStorage;
+      if (id == null) {
+        final cid = s['ledger_customer_id'];
+        if (cid == null || cid.isEmpty) return;
+        id = cid; fromStorage = true;
+      }
+      final row = await Supabase.instance.client.from('customers')
+          .select('id, shop_name, code, source').eq('org_id', orgId).eq('id', id).maybeSingle();
+      if (row == null || !mounted || _restored) return;
+      if (fromStorage) {
+        final dfStr = s['ledger_date_from'];
+        final dtStr = s['ledger_date_to'];
+        if (dfStr != null && dfStr.isNotEmpty) _dateFrom = DateTime.tryParse(dfStr);
+        if (dtStr != null && dtStr.isNotEmpty) _dateTo = DateTime.tryParse(dtStr);
+        final tf = s['ledger_type_filter'];
+        if (tf != null && _types.contains(tf)) _typeFilter = tf;
+      }
+      _selectCustomer(Map<String, dynamic>.from(row));
+    } catch (_) {/* fall back to the restore after the list loads */}
+  }
+
   void _selectCustomer(Map<String, dynamic> c) {
+    _restored = true;
     setState(() {
       _selectedCustomer = c; _entries = []; _pendingCheques = []; _showDropdown = false; _highlightIndex = -1;
       _searchCtrl.text = '${c['shop_name']}${c['code'] != null ? ' (${c['code']})' : ''}';
@@ -122,6 +164,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   }
 
   void _restoreState() {
+    if (_restored) return; // already opened by _earlyRestore
     try {
       // Global-search deep link: /erp/customer-ledger?focus=<customer_id>
       // takes priority over the saved (localStorage) selection.
@@ -165,6 +208,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   Future<void> _loadLedger(String customerId) async {
     final orgId = _orgId;
     if (orgId == null) return;
+    final seq = ++_ledgerSeq;
     setState(() { _loading = true; _entries = []; _errors = []; });
     final client = Supabase.instance.client;
     final List<Map<String, dynamic>> entries = [];
@@ -183,6 +227,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       return '';
     }
 
+    // Sections run IN PARALLEL (they only append to entries/errors).
+    Future<void> secSI() async {
     // 1. Sales Invoices -> Debit
     try {
       // Org-wide: a customer's receivable is owed to the org, not a branch.
@@ -209,7 +255,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         }
       }
     } catch (e) { errors.add('SI: ' + e.toString()); }
+    }
 
+    Future<void> secPOS() async {
     // 2. POS Transactions -> Sale or Return
     try {
       final List posTxns = await client.from('pos_transactions').select('*')
@@ -322,7 +370,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         }
       }
     } catch (e) { errors.add('POS: ' + e.toString()); }
+    }
 
+    Future<void> secSRI() async {
     // 3. Sale Return Invoices (SRI) -> Credit
     String? sriTable;
     int sriRows = 0;
@@ -353,21 +403,25 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         break;
       } catch (_) { continue; }
     }
+    }
     // SRI diagnostics removed: a customer with no sale returns is a normal
     // state, not an error worth surfacing in a banner. Real load exceptions are
     // still reported via the catch blocks above. (sriTable/sriRows/sriAdded/
     // firstSriRow remain assigned in the loop but are no longer read -- the
     // resulting analyzer infos are harmless and do not fail the build.)
 
+    Future<void> secCRV() async {
     // 4. CRV -> Credit (customer paid us)
+    // This party's lines first, then only THEIR posted headers (was: every
+    // posted CRV in the org, then an id list in the URL — slow, and capped at
+    // the 1000-row API limit).
     try {
-      final crvVouchers = await client.from('crv_vouchers')
-          .select('*').eq('org_id', orgId).eq('status', 'posted');
-      final crvIds = (crvVouchers as List).map((v) => v['id'] as String).toList();
+      final crvLines = await client.from('crv_voucher_lines')
+          .select('amount, description, voucher_id')
+          .eq('account_id', customerId).eq('account_type', 'customer');
+      final crvIds = (crvLines as List).map((l) => l['voucher_id'] as String).toSet().toList();
       if (crvIds.isNotEmpty) {
-        final crvLines = await client.from('crv_voucher_lines')
-            .select('amount, description, voucher_id')
-            .eq('account_id', customerId).eq('account_type', 'customer').inFilter('voucher_id', crvIds);
+        final crvVouchers = await _headersById('crv_vouchers', crvIds, orgId);
         final crvMap = {for (final v in crvVouchers) v['id'] as String: v};
         Map? firstNoDate;
         for (final line in crvLines as List) {
@@ -391,16 +445,17 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         }
       }
     } catch (e) { errors.add('CRV: ' + e.toString()); }
+    }
 
+    Future<void> secCPV() async {
     // 5. CPV -> Debit (we paid customer)
     try {
-      final cpvVouchers = await client.from('cpv_vouchers')
-          .select('*').eq('org_id', orgId).eq('status', 'posted');
-      final cpvIds = (cpvVouchers as List).map((v) => v['id'] as String).toList();
+      final cpvLines = await client.from('cpv_voucher_lines')
+          .select('amount, description, voucher_id')
+          .eq('account_id', customerId).eq('account_type', 'customer');
+      final cpvIds = (cpvLines as List).map((l) => l['voucher_id'] as String).toSet().toList();
       if (cpvIds.isNotEmpty) {
-        final cpvLines = await client.from('cpv_voucher_lines')
-            .select('amount, description, voucher_id')
-            .eq('account_id', customerId).eq('account_type', 'customer').inFilter('voucher_id', cpvIds);
+        final cpvVouchers = await _headersById('cpv_vouchers', cpvIds, orgId);
         final cpvMap = {for (final v in cpvVouchers) v['id'] as String: v};
         for (final line in cpvLines as List) {
           final v = cpvMap[line['voucher_id'] as String]; if (v == null) continue;
@@ -415,19 +470,20 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         }
       }
     } catch (e) { errors.add('CPV: ' + e.toString()); }
+    }
 
+    Future<void> secJV() async {
     // 6. Journal Vouchers (JV) touching this party (posted only)
     try {
-      final jvHeaders = await client.from('journal_entries')
-          .select('id, entry_number, entry_date, description, posted_at, created_at, status, reference_type')
-          .eq('org_id', orgId)
-          .inFilter('reference_type', const ['jv', 'opening_jv', 'opening_balance'])
-          .eq('status', 'posted');
-      final jvMap = {for (final v in jvHeaders as List) v['id'] as String: v};
+      final jvLines = await client.from('journal_lines')
+          .select('entry_id, debit, credit, description, party_id, account_type')
+          .eq('party_id', customerId);
+      final jvIds = (jvLines as List).map((l) => l['entry_id'] as String).toSet().toList();
+      final jvHeaders = jvIds.isEmpty ? const <Map<String, dynamic>>[] : await _headersById('journal_entries', jvIds, orgId,
+          select: 'id, entry_number, entry_date, description, posted_at, created_at, status, reference_type',
+          refTypes: const ['jv', 'opening_jv', 'opening_balance']);
+      final jvMap = {for (final v in jvHeaders) v['id'] as String: v};
       if (jvMap.isNotEmpty) {
-        final jvLines = await client.from('journal_lines')
-            .select('entry_id, debit, credit, description, party_id, account_type')
-            .eq('party_id', customerId).inFilter('entry_id', jvMap.keys.toList());
         for (final line in jvLines as List) {
           final v = jvMap[line['entry_id'] as String]; if (v == null) continue;
           final refType = (v['reference_type'] as String?) ?? 'jv';
@@ -445,6 +501,10 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         }
       }
     } catch (e) { errors.add('JV: ' + e.toString()); }
+    }
+
+    await Future.wait([secSI(), secPOS(), secSRI(), secCRV(), secCPV(), secJV()]);
+    if (!mounted || seq != _ledgerSeq) return; // a newer selection took over
 
     // Dart's sort is not stable, so entries sharing a timestamp (a POS sale and
     // the payment that settles it are written with the same transacted_at) could
@@ -467,6 +527,22 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     double bal = 0;
     for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
     setState(() { _entries = entries; _loading = false; _errors = errors; });
+  }
+
+  /// Posted voucher headers for [ids], fetched in chunks (keeps URLs short).
+  Future<List<Map<String, dynamic>>> _headersById(String table, List<String> ids, String orgId,
+      {String select = '*', List<String>? refTypes}) async {
+    final client = Supabase.instance.client;
+    final chunks = <List<String>>[];
+    for (var i = 0; i < ids.length; i += 150) {
+      chunks.add(ids.sublist(i, i + 150 > ids.length ? ids.length : i + 150));
+    }
+    final res = await Future.wait(chunks.map((c) {
+      var q = client.from(table).select(select).eq('org_id', orgId).eq('status', 'posted').inFilter('id', c);
+      if (refTypes != null) q = q.inFilter('reference_type', refTypes);
+      return q;
+    }));
+    return [for (final r in res) ...List<Map<String, dynamic>>.from(r as List)];
   }
 
   // Pending post-dated cheques (BRV lines) for the selected customer. These are
