@@ -134,6 +134,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.pa_approval_watermark',
+    'Approval watermark on Payment Advice print',
+    'When ON, an approved Payment Advice prints with a faint grid of '
+        '"Approved by <name> · <date time>" marks (with the approver\'s '
+        'signature, if uploaded) across the page — light enough not to affect '
+        'reading, but on every copy so Accounts can match it to the approval.',
+  ),
+
+  _AdminToggle(
     'org.pa_notify_new',
     'Notify when a new Payment Advice is saved (pending approval)',
     'When ON, saving a new Payment Advice that is pending approval sends a push '
@@ -648,6 +657,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.jv_approve_flow',
     'org.pa_approval_enabled',
     'org.pa_signatures',
+    'org.pa_approval_watermark',
     'org.pa_notify_new',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [

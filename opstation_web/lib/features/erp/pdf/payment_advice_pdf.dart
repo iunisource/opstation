@@ -58,6 +58,10 @@ class PaymentAdvicePdf {
     pw.ImageProvider? createdSignature,
     pw.ImageProvider? approvedSignature,
     pw.ImageProvider? approvedStamp,
+    // Faint grid of "approved by" marks (name, time, signature) across the
+    // page, so a copy can be matched against the approval at a glance.
+    bool approvalWatermark = false,
+    pw.ImageProvider? approvalMarkSignature,
     String? voidedBy,
     DateTime? voidedAt,
     String? voidReason,
@@ -228,12 +232,58 @@ class PaymentAdvicePdf {
           ),
         );
 
+    final showApproval = approvalWatermark && status == 'approved' && approvedBy != null;
+    final approvalLine = showApproval
+        ? 'APPROVED BY ${approvedBy!.toUpperCase()}'
+        : '';
+    final approvalWhen =
+        showApproval && approvedAt != null ? dtFmt.format(approvedAt.toLocal()) : '';
+    pw.Widget approvalMarks() => pw.FullPage(
+          ignoreMargins: true,
+          child: pw.Opacity(
+            opacity: 0.09,
+            child: pw.Column(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+              children: [
+                for (var r = 0; r < 8; r++)
+                  pw.Padding(
+                    padding: pw.EdgeInsets.only(left: r.isOdd ? 60 : 0, right: r.isOdd ? 0 : 60),
+                    child: pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                      children: [
+                        for (var c = 0; c < 3; c++)
+                          pw.Transform.rotate(
+                            angle: 0.35,
+                            child: pw.Column(mainAxisSize: pw.MainAxisSize.min, children: [
+                              if ((approvalMarkSignature ?? approvedSignature) != null)
+                                pw.Image((approvalMarkSignature ?? approvedSignature)!,
+                                    height: 22, width: 70, fit: pw.BoxFit.contain),
+                              pw.Text(approvalLine,
+                                  style: pw.TextStyle(
+                                      fontSize: 8, fontWeight: pw.FontWeight.bold, color: _brand)),
+                              if (approvalWhen.isNotEmpty)
+                                pw.Text(approvalWhen,
+                                    style: const pw.TextStyle(fontSize: 7, color: _brand)),
+                            ]),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+
     doc.addPage(pw.MultiPage(
       pageTheme: pw.PageTheme(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(32, 30, 32, 30),
         theme: theme,
-        buildForeground: isVoid ? (_) => voidStamps() : null,
+        buildForeground: isVoid
+            ? (_) => voidStamps()
+            : showApproval
+                ? (_) => approvalMarks()
+                : null,
       ),
       header: (c) => pw.Container(
         padding: const pw.EdgeInsets.only(bottom: 6),

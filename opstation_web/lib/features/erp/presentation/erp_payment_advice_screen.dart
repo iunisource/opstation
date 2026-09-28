@@ -63,6 +63,11 @@ class _ErpPaymentAdviceScreenState
   bool _approvalEnabled = false;
   // Admin Settings: print signature images on the Payment Advice.
   bool _sigEnabled = false;
+  // Admin Settings: faint "approved by" watermark grid on the print.
+  bool _approvalMarkEnabled = false;
+  // Signature on file per user id — used when an advice has no snapshot
+  // (e.g. approved before signatures were captured).
+  final Map<String, String?> _sigOnFile = {};
   Set<String> _approvers = {};
 
   // Data
@@ -175,13 +180,14 @@ class _ErpPaymentAdviceScreenState
             .from('app_config')
             .select('key, value')
             .eq('org_id', orgId)
-            .inFilter('key', ['org.pa_approval_enabled', 'org.pa_approvers', 'org.pa_signatures']));
+            .inFilter('key', ['org.pa_approval_enabled', 'org.pa_approvers', 'org.pa_signatures', 'org.pa_approval_watermark']));
         final cfg = <String, String>{};
         for (final r in cfgRows as List) {
           cfg[r['key'] as String] = (r['value'] as String?) ?? '';
         }
         _approvalEnabled = cfg['org.pa_approval_enabled'] == 'true';
         _sigEnabled = cfg['org.pa_signatures'] == 'true';
+        _approvalMarkEnabled = cfg['org.pa_approval_watermark'] == 'true';
         final ap = (cfg['org.pa_approvers'] ?? '').trim();
         _approvers = ap.isEmpty
             ? <String>{}
@@ -388,6 +394,14 @@ class _ErpPaymentAdviceScreenState
       }
       if (_lines.isEmpty) _lines.add(_PaLine());
       _current = a;
+      if (_sigEnabled) {
+        for (final k in const ['created_by', 'approved_by']) {
+          final uid = a[k] as String?;
+          if (uid != null && !_sigOnFile.containsKey(uid)) {
+            _sigOnFile[uid] = await _signatureOf(uid);
+          }
+        }
+      }
       _date = DateTime.tryParse(a['advice_date'] as String? ?? '') ?? DateTime.now();
       _noteCtrl.text = (a['note'] as String?) ?? '';
       setState(() {
@@ -1605,7 +1619,13 @@ class _ErpPaymentAdviceScreenState
       }
       final sigs = _sigEnabled
           ? await Future.wait([img(createdSigUrl), img(approvedSigUrl), img(stampUrl)])
-          : const <pw.ImageProvider?>[null, null, null];
+          : <pw.ImageProvider?>[
+              null,
+              // The watermark grid can carry the approver's signature even when
+              // the signature boxes are switched off.
+              _approvalMarkEnabled ? await img(approvedSigUrl) : null,
+              null,
+            ];
       final bytes = await PaymentAdvicePdf.build(
         orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
         adviceNumber: (a['advice_number'] as String?) ?? '',
@@ -1621,8 +1641,10 @@ class _ErpPaymentAdviceScreenState
         approvedAt: DateTime.tryParse(a['approved_at'] as String? ?? ''),
         accountsCopy: accountsCopy,
         createdSignature: sigs[0],
-        approvedSignature: sigs[1],
+        approvedSignature: _sigEnabled ? sigs[1] : null,
         approvedStamp: sigs[2],
+        approvalWatermark: _approvalMarkEnabled,
+        approvalMarkSignature: sigs[1],
         voidedBy: a['voided_by_name'] as String?,
         voidedAt: DateTime.tryParse(a['voided_at'] as String? ?? ''),
         voidReason: a['void_reason'] as String?,
@@ -1720,7 +1742,7 @@ class _ErpPaymentAdviceScreenState
             ],
           ]),
         );
-    return Container(
+    final box = Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1728,7 +1750,8 @@ class _ErpPaymentAdviceScreenState
         border: Border.all(color: AppTheme.border),
       ),
       child: Row(children: [
-        foot('CREATED BY', createdBy, createdAt, a?['created_signature_url'] as String?),
+        foot('CREATED BY', createdBy, createdAt,
+            (a?['created_signature_url'] as String?) ?? _sigOnFile[a?['created_by']]),
         if (status == 'rejected')
           foot(
               'REJECTED BY',
@@ -1740,9 +1763,18 @@ class _ErpPaymentAdviceScreenState
         else
           foot('APPROVED BY', approvedBy ?? '—',
               approvedAt ?? (status == 'pending' ? 'Awaiting approval' : '—'),
-              a?['approved_signature_url'] as String?),
+              (a?['approved_signature_url'] as String?) ??
+                  (isApproved ? _sigOnFile[a?['approved_by']] : null)),
       ]),
     );
+    if (_sigEnabled || !_isAdmin || a == null) return box;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      box,
+      const SizedBox(height: 6),
+      const Text(
+          'Signature images are off. Turn on "Signatures on Payment Advice print" in Admin Settings (Financials).',
+          style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+    ]);
   }
 
   Widget _actionBar(bool readOnly) {
