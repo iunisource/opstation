@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -69,6 +70,11 @@ class _ErpPaymentAdviceScreenState
 
   // Editor state
   bool _editing = false;
+  // Admin is editing an already-approved advice (audit-logged on save).
+  bool _adminEditing = false;
+  // Lines as they were when the advice was opened — for the edit audit diff.
+  List<Map<String, dynamic>> _origLines = [];
+  int _auditTick = 0;
   Map<String, dynamic>? _current; // null = new
   final List<_PaLine> _lines = [];
   DateTime _date = DateTime.now();
@@ -84,7 +90,26 @@ class _ErpPaymentAdviceScreenState
 
   /// Time-box any Supabase query so a stalled request can never hang the load.
   Future<T> _timed<T>(Future<T> f) =>
-      f.timeout(const Duration(seconds: 10));
+      f.timeout(const Duration(seconds: 25));
+
+  /// Saved advices, with one retry — the first request after the page wakes
+  /// can be slow; a second attempt usually returns immediately.
+  Future<List> _loadAdvicesWithRetry(String orgId) async {
+    Future<List> q() async => (await _timed(_db
+        .from('payment_advices')
+        .select()
+        .eq('org_id', orgId)
+        .order('created_at', ascending: false)
+        .limit(500))) as List;
+    try {
+      return await q();
+    } catch (_) {
+      return await q();
+    }
+  }
+
+  static String _short(Object e) =>
+      e is TimeoutException ? 'timed out' : e.toString().split('\n').first;
 
   /// Fetch a party table; if the bank_details column doesn't exist yet
   /// (migration not run), retry without it so the screen still works.
@@ -161,25 +186,18 @@ class _ErpPaymentAdviceScreenState
         _approvers = <String>{};
       }
 
-      // Saved advices (time-boxed so a slow/absent table can't hang the page).
-      _setStage('advices');
-      final adv = await _timed(_db
-          .from('payment_advices')
-          .select()
-          .eq('org_id', orgId)
-          .order('created_at', ascending: false)
-          .limit(500));
-      _advices = List<Map<String, dynamic>>.from(adv as List);
-
-      // Party master — resilient to the bank_details column not existing yet
-      // (falls back to a select without it) and time-boxed.
+      // Saved advices + party master load IN PARALLEL, and none of them is
+      // fatal: a slow query yields an empty list + a warning banner instead of
+      // replacing the whole screen with a TimeoutException.
       _parties.clear();
       _partyById.clear();
-      // Load both party tables IN PARALLEL and never let one block the other:
-      // a slow/locked table just yields an empty list + a warning banner.
-      _setStage('customers & suppliers');
+      _setStage('advices, customers & suppliers');
       _partyWarning = null;
       final results = await Future.wait<List>([
+        _loadAdvicesWithRetry(orgId).catchError((e) {
+          _partyWarning = 'Saved payment advices could not be loaded (${_short(e)}).';
+          return <dynamic>[];
+        }),
         _selectParties('customers', 'id, shop_name, bank_details', 'id, shop_name',
                 orgId, 'shop_name')
             .catchError((e) {
@@ -193,8 +211,9 @@ class _ErpPaymentAdviceScreenState
           return <dynamic>[];
         }),
       ]);
-      final custs = results[0];
-      final sups = results[1];
+      _advices = List<Map<String, dynamic>>.from(results[0]);
+      final custs = results[1];
+      final sups = results[2];
 
       // Build parties immediately with balance 0 so the page renders fast.
       // Balances come from heavy org-wide RPCs — fetch them in the background
@@ -328,6 +347,8 @@ class _ErpPaymentAdviceScreenState
       ..clear()
       ..add(_PaLine());
     _current = null;
+    _adminEditing = false;
+    _origLines = [];
     _date = DateTime.now();
     _noteCtrl.text = '';
     setState(() => _editing = true);
@@ -345,7 +366,9 @@ class _ErpPaymentAdviceScreenState
         l.dispose();
       }
       _lines.clear();
-      for (final r in lines as List) {
+      _adminEditing = false;
+      _origLines = List<Map<String, dynamic>>.from(lines as List);
+      for (final r in lines) {
         final ln = _PaLine()
           ..partyId = r['party_id'] as String?
           ..partyType = (r['party_type'] as String?) ?? 'supplier'
@@ -376,8 +399,17 @@ class _ErpPaymentAdviceScreenState
 
   bool get _isApproved => (_current?['status'] as String?) == 'approved';
   bool get _isRejected => (_current?['status'] as String?) == 'rejected';
-  // Approved and rejected advices are both final — read-only, archive only.
-  bool get _isLocked => _isApproved || _isRejected;
+  bool get _isVoid => (_current?['status'] as String?) == 'void';
+  // Approved, rejected and voided advices are final — read-only.
+  bool get _isLocked => _isApproved || _isRejected || _isVoid;
+  // An admin can reopen an APPROVED advice for editing (audit-logged).
+  bool get _readOnly => _isLocked && !_adminEditing;
+  bool get _canAdminEdit => _isApproved && _isAdmin && !_adminEditing;
+  // Pending or approved advices can be voided by admins / approvers.
+  bool get _canVoid {
+    final st = _current?['status'] as String?;
+    return _current != null && _canModerate && (st == 'pending' || st == 'approved');
+  }
 
   String _numStr(dynamic v) {
     final d = (v as num?)?.toDouble() ?? 0;
@@ -387,7 +419,7 @@ class _ErpPaymentAdviceScreenState
 
   // ── Party picker ───────────────────────────────────────────────────────
   Future<void> _pickParty(_PaLine line) async {
-    if (_isLocked) return;
+    if (_readOnly) return;
     final picked = await showDialog<_Party>(
       context: context,
       builder: (_) => _PartyPickerDialog(parties: _parties),
@@ -433,7 +465,7 @@ class _ErpPaymentAdviceScreenState
       final isNew = _current == null;
       final total = _grandTotal;
       String adviceId;
-      String number;
+      String number = (_current?['advice_number'] as String?) ?? '';
       if (isNew) {
         number = await _nextNumber(orgId);
         adviceId = 'pa_${DateTime.now().millisecondsSinceEpoch}';
@@ -500,13 +532,23 @@ class _ErpPaymentAdviceScreenState
         }
       }
 
+      final wasAdminEdit = _adminEditing;
+      await _audit(
+        adviceId,
+        isNew ? 'created' : (wasAdminEdit ? 'edited_after_approval' : 'saved'),
+        isNew
+            ? '$number created · ${valid.length} part${valid.length == 1 ? 'y' : 'ies'} · Rs ${_numStr(total)}'
+            : _editDiff(valid, total),
+      );
+
       if (!mounted) return;
       setState(() {
         _editing = false;
+        _adminEditing = false;
         _saving = false;
       });
       await _loadAll();
-      _snack('Payment advice saved.');
+      _snack(wasAdminEdit ? 'Approved advice updated (logged in audit trail).' : 'Payment advice saved.');
     } catch (e) {
       setState(() => _saving = false);
       _snack('Save failed: $e');
@@ -524,6 +566,7 @@ class _ErpPaymentAdviceScreenState
         'approved_by_name': me?.name,
         'approved_at': DateTime.now().toIso8601String(),
       }).eq('id', _current!['id']);
+      await _audit(_current!['id'] as String, 'approved', 'Approved by ${me?.name ?? ''}');
       if (!mounted) return;
       setState(() {
         _editing = false;
@@ -557,6 +600,8 @@ class _ErpPaymentAdviceScreenState
         'reject_reason': reason.trim().isEmpty ? null : reason.trim(),
         'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', _current!['id']);
+      await _audit(_current!['id'] as String, 'rejected',
+          reason.trim().isEmpty ? 'Rejected' : 'Rejected: ${reason.trim()}');
       if (!mounted) return;
       setState(() {
         _editing = false;
@@ -567,6 +612,135 @@ class _ErpPaymentAdviceScreenState
     } catch (e) {
       setState(() => _saving = false);
       _snack('Reject failed: $e');
+    }
+  }
+
+  /// Best-effort audit entry in voucher_audit_log (type 'PA').
+  Future<void> _audit(String adviceId, String action, String details) async {
+    final me = ref.read(currentUserProvider);
+    try {
+      await _db.from('voucher_audit_log').insert({
+        'id': 'val_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': me?.orgId,
+        'voucher_id': adviceId,
+        'voucher_type': 'PA',
+        'action': action,
+        'details': details,
+        'performed_by': me?.id,
+        'performed_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    } catch (_) {/* logging must never block the action */}
+    _auditTick++;
+  }
+
+  /// Human-readable summary of what changed vs. the lines as opened.
+  String _editDiff(List<_PaLine> now, double newTotal) {
+    double n(dynamic v) => (v as num?)?.toDouble() ?? 0;
+    final before = <String, Map<String, dynamic>>{
+      for (final r in _origLines) '${r['party_type']}:${r['party_id']}': r,
+    };
+    final after = <String, _PaLine>{
+      for (final l in now) '${l.partyType}:${l.partyId}': l,
+    };
+    final parts = <String>[];
+    for (final e in after.entries) {
+      final o = before[e.key];
+      final pay = double.tryParse(e.value.payCtrl.text.trim()) ?? 0;
+      final due = double.tryParse(e.value.dueCtrl.text.trim()) ?? 0;
+      if (o == null) {
+        parts.add('+ ${e.value.partyName} (pay ${_numStr(pay)})');
+        continue;
+      }
+      final ch = <String>[];
+      if ((n(o['amount_to_pay']) - pay).abs() >= 0.005) {
+        ch.add('pay ${_numStr(o['amount_to_pay'])} → ${_numStr(pay)}');
+      }
+      if ((n(o['amount_due']) - due).abs() >= 0.005) {
+        ch.add('due ${_numStr(o['amount_due'])} → ${_numStr(due)}');
+      }
+      if (((o['bank_details'] as String?) ?? '').trim() != e.value.bankCtrl.text.trim()) {
+        ch.add('bank details changed');
+      }
+      if (ch.isNotEmpty) parts.add('${e.value.partyName}: ${ch.join(', ')}');
+    }
+    for (final e in before.entries) {
+      if (!after.containsKey(e.key)) parts.add('− ${e.value['party_name'] ?? ''}');
+    }
+    final oldTotal = n(_current?['grand_total']);
+    if ((oldTotal - newTotal).abs() >= 0.005) {
+      parts.add('Total ${_numStr(oldTotal)} → ${_numStr(newTotal)}');
+    }
+    final oldDate = (_current?['advice_date'] as String?) ?? '';
+    final newDate = DateFormat('yyyy-MM-dd').format(_date);
+    if (oldDate.isNotEmpty && !oldDate.startsWith(newDate)) parts.add('Date $oldDate → $newDate');
+    if (((_current?['note'] as String?) ?? '').trim() != _noteCtrl.text.trim()) parts.add('Note changed');
+    return parts.isEmpty ? 'No changes' : parts.join(' · ');
+  }
+
+  Future<void> _void() async {
+    if (_current == null || _saving || !_canVoid) return;
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dlg) => StatefulBuilder(
+        builder: (dlg, setDlg) => AlertDialog(
+          title: Text('Void ${_current!['advice_number'] ?? 'payment advice'}?'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text(
+                'A voided advice stays on record (marked VOIDED) but can no longer be edited or paid against.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 4,
+              onChanged: (_) => setDlg(() {}),
+              decoration: const InputDecoration(
+                  labelText: 'Reason (required)', border: OutlineInputBorder()),
+            ),
+          ]),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dlg, false),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: ctrl.text.trim().isEmpty ? null : () => Navigator.pop(dlg, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              child: const Text('Void'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final reason = ctrl.text.trim();
+    final me = ref.read(currentUserProvider);
+    final now = DateTime.now().toIso8601String();
+    setState(() => _saving = true);
+    try {
+      await _db.from('payment_advices').update({
+        'status': 'void',
+        'voided_by': me?.id,
+        'voided_by_name': me?.name,
+        'voided_at': now,
+        'void_reason': reason,
+        'updated_at': now,
+      }).eq('id', _current!['id']);
+      await _audit(_current!['id'] as String, 'voided', 'Voided: $reason');
+      if (!mounted) return;
+      setState(() {
+        _editing = false;
+        _adminEditing = false;
+        _saving = false;
+      });
+      await _loadAll();
+      _snack('Payment advice voided.');
+    } catch (e) {
+      setState(() => _saving = false);
+      _snack(e.toString().contains('voided_')
+          ? 'Void needs the database update — run 286_payment_advice_void.sql.'
+          : 'Void failed: $e');
     }
   }
 
@@ -633,6 +807,7 @@ class _ErpPaymentAdviceScreenState
         'is_archived': archived,
         'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', a['id']);
+      await _audit(a['id'] as String, archived ? 'archived' : 'unarchived', '');
       if (!mounted) return;
       setState(() => a['is_archived'] = archived);
       _snack(archived ? 'Archived.' : 'Unarchived.');
@@ -746,8 +921,17 @@ class _ErpPaymentAdviceScreenState
           decoration: BoxDecoration(
               color: AppTheme.warning.withOpacity(0.12),
               borderRadius: BorderRadius.circular(8)),
-          child: Text(_partyWarning!,
-              style: const TextStyle(fontSize: 12, color: AppTheme.warning)),
+          child: Row(children: [
+            Expanded(
+              child: Text(_partyWarning!,
+                  style: const TextStyle(fontSize: 12, color: AppTheme.warning)),
+            ),
+            TextButton.icon(
+              onPressed: _loading ? null : _loadAll,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Retry'),
+            ),
+          ]),
         ),
       ],
       const SizedBox(height: 16),
@@ -796,11 +980,17 @@ class _ErpPaymentAdviceScreenState
     final status = (a['status'] as String?) ?? 'approved';
     final pending = status == 'pending';
     final rejected = status == 'rejected';
-    final statusColor = rejected
-        ? AppTheme.danger
-        : (pending ? AppTheme.warning : AppTheme.success);
-    final statusLabel =
-        rejected ? 'Rejected' : (pending ? 'Pending' : 'Approved');
+    final voided = status == 'void';
+    final statusColor = voided
+        ? AppTheme.textSecondary
+        : rejected
+            ? AppTheme.danger
+            : (pending ? AppTheme.warning : AppTheme.success);
+    final statusLabel = voided
+        ? 'Voided'
+        : rejected
+            ? 'Rejected'
+            : (pending ? 'Pending' : 'Approved');
     final date = a['advice_date'] != null
         ? DateFormat('d MMM yyyy')
             .format(DateTime.tryParse(a['advice_date'] as String) ?? DateTime.now())
@@ -844,12 +1034,7 @@ class _ErpPaymentAdviceScreenState
                     fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: 4),
-          IconButton(
-            onPressed: () => _print(a),
-            icon: const Icon(Icons.print_outlined, size: 20),
-            color: AppTheme.textSecondary,
-            tooltip: 'Print / PDF',
-          ),
+          _printMenu(a, size: 20),
           if (_canModerate)
           IconButton(
             onPressed: () => _setArchived(a, !((a['is_archived'] as bool?) ?? false)),
@@ -870,12 +1055,15 @@ class _ErpPaymentAdviceScreenState
 
   // ── Editor view ────────────────────────────────────────────────────────
   Widget _editor() {
-    final readOnly = _isLocked;
+    final readOnly = _readOnly;
     final narrow = MediaQuery.of(context).size.width < 760;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         IconButton(
-          onPressed: () => setState(() => _editing = false),
+          onPressed: () => setState(() {
+            _editing = false;
+            _adminEditing = false;
+          }),
           icon: const Icon(Icons.arrow_back),
           tooltip: 'Back',
         ),
@@ -884,16 +1072,11 @@ class _ErpPaymentAdviceScreenState
             _current == null
                 ? 'New Payment Advice'
                 : '${_current!['advice_number']}'
-                    '${readOnly ? ' (Approved)' : _current!['status'] == 'pending' ? ' (Pending)' : ''}',
+                    '${_isVoid ? ' (Voided)' : _isRejected ? ' (Rejected)' : _adminEditing ? ' (Approved — admin edit)' : _isApproved ? ' (Approved)' : _current!['status'] == 'pending' ? ' (Pending)' : ''}',
             style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
           ),
         ),
-        if (_current != null)
-          IconButton(
-            onPressed: () => _print(_current!),
-            icon: const Icon(Icons.print_outlined),
-            tooltip: 'Print / PDF',
-          ),
+        if (_current != null) _printMenu(_current!),
       ]),
       const SizedBox(height: 8),
       Expanded(
@@ -921,16 +1104,14 @@ class _ErpPaymentAdviceScreenState
                   ),
                 ]),
                 const SizedBox(height: 18),
-                // Parked (collapsed) parties: one line each, above the entry area.
+                // Parties in their own order: a parked party opens IN PLACE
+                // (where it sits in the list), not at the bottom.
                 for (var i = 0; i < _lines.length; i++)
                   if (_lines[i].collapsed) ...[
                     _collapsedRow(i, readOnly),
                     const SizedBox(height: 6),
-                  ],
-                // Open entry cards (normally just one).
-                for (var i = 0; i < _lines.length; i++)
-                  if (!_lines[i].collapsed) ...[
-                    const SizedBox(height: 6),
+                  ] else ...[
+                    const SizedBox(height: 4),
                     _lineCard(i, readOnly, narrow),
                     const SizedBox(height: 10),
                   ],
@@ -953,6 +1134,12 @@ class _ErpPaymentAdviceScreenState
                 _grandTotalBar(),
                 const SizedBox(height: 20),
                 _footprints(),
+                if (_current != null) ...[
+                  const SizedBox(height: 12),
+                  _PaAuditTrail(
+                      key: ValueKey('pa_audit_${_current!['id']}_$_auditTick'),
+                      adviceId: _current!['id'] as String),
+                ],
                 const SizedBox(height: 24),
               ]),
         ),
@@ -1148,7 +1335,7 @@ class _ErpPaymentAdviceScreenState
   /// add the selected ones as parked lines (bank / due / pay / last-paid
   /// pre-filled). Amounts stay editable afterwards.
   Future<void> _suggestParties() async {
-    if (_isLocked) return;
+    if (_readOnly) return;
     // Pull balances LIVE right now so the suggestion reflects current
     // outstanding amounts (a payment made elsewhere since this screen opened
     // would otherwise show stale). Last-payment dates are reference only.
@@ -1207,6 +1394,9 @@ class _ErpPaymentAdviceScreenState
                 // only one card is open at a time.
                 _lines.removeWhere((x) =>
                     !x.collapsed && x.partyId == null && x != l);
+                for (final x in _lines) {
+                  if (x != l && !x.collapsed) x.collapsed = true;
+                }
                 l.collapsed = false;
               }),
       borderRadius: BorderRadius.circular(8),
@@ -1269,7 +1459,36 @@ class _ErpPaymentAdviceScreenState
   }
 
   // ── Print / PDF ────────────────────────────────────────────────────────
-  Future<void> _print(Map<String, dynamic> a) async {
+  /// Print button with two copies: the standard slip, and an Accounts copy
+  /// that leaves out the party's current balance / payable (Amount due).
+  Widget _printMenu(Map<String, dynamic> a, {double size = 24}) =>
+      PopupMenuButton<bool>(
+        tooltip: 'Print / PDF',
+        icon: Icon(Icons.print_outlined, size: size, color: AppTheme.textSecondary),
+        onSelected: (acc) => _print(a, accountsCopy: acc),
+        itemBuilder: (_) => const [
+          PopupMenuItem(
+            value: false,
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.print_outlined),
+              title: Text('Print'),
+              subtitle: Text('With amount due'),
+            ),
+          ),
+          PopupMenuItem(
+            value: true,
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.account_balance_outlined),
+              title: Text('Accounts copy'),
+              subtitle: Text('Without balance / payable'),
+            ),
+          ),
+        ],
+      );
+
+  Future<void> _print(Map<String, dynamic> a, {bool accountsCopy = false}) async {
     try {
       final rows = await _db
           .from('payment_advice_lines')
@@ -1301,9 +1520,13 @@ class _ErpPaymentAdviceScreenState
         createdAt: DateTime.tryParse(a['created_at'] as String? ?? ''),
         approvedBy: a['approved_by_name'] as String?,
         approvedAt: DateTime.tryParse(a['approved_at'] as String? ?? ''),
+        accountsCopy: accountsCopy,
+        voidedBy: a['voided_by_name'] as String?,
+        voidedAt: DateTime.tryParse(a['voided_at'] as String? ?? ''),
+        voidReason: a['void_reason'] as String?,
       );
       await Printing.layoutPdf(
-          name: 'Payment Advice ${a['advice_number'] ?? ''}',
+          name: 'Payment Advice ${a['advice_number'] ?? ''}${accountsCopy ? ' (Accounts copy)' : ''}',
           onLayout: (_) async => bytes);
     } catch (e) {
       _snack('Print failed: $e');
@@ -1415,15 +1638,50 @@ class _ErpPaymentAdviceScreenState
       child: Padding(
         padding: const EdgeInsets.only(top: 8),
         child: Row(children: [
-          if (readOnly)
+          if (readOnly) ...[
             Expanded(
               child: Text(
-                  _isRejected
-                      ? 'This advice was rejected — it can only be archived.'
-                      : 'This advice is approved and locked.',
+                  _isVoid
+                      ? 'Voided${_current?['voided_by_name'] != null ? ' by ${_current!['voided_by_name']}' : ''}'
+                          '${(_current?['void_reason'] as String?)?.isNotEmpty == true ? ' — ${_current!['void_reason']}' : ''}'
+                      : _isRejected
+                          ? 'This advice was rejected — it can only be archived.'
+                          : 'This advice is approved and locked.',
                   style: const TextStyle(color: AppTheme.textSecondary)),
-            )
-          else ...[
+            ),
+            if (_canVoid) ...[
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _void,
+                icon: const Icon(Icons.block, size: 18),
+                label: const Text('Void'),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.danger,
+                    side: const BorderSide(color: AppTheme.danger),
+                    minimumSize: const Size(0, 48)),
+              ),
+            ],
+            if (_canAdminEdit) ...[
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: _saving ? null : () => setState(() => _adminEditing = true),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: const Text('Edit (admin)'),
+                style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
+              ),
+            ],
+          ] else ...[
+            if (_adminEditing) ...[
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _saving ? null : () => _openAdvice(_current!),
+                  icon: const Icon(Icons.undo, size: 18),
+                  label: const Text('Cancel edit'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: _saving ? null : _save,
@@ -1434,9 +1692,11 @@ class _ErpPaymentAdviceScreenState
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.save_outlined, size: 18),
-                label: Text(_approvalEnabled && _current == null
-                    ? 'Save & send for approval'
-                    : 'Save'),
+                label: Text(_adminEditing
+                    ? 'Save changes (logged)'
+                    : _approvalEnabled && _current == null
+                        ? 'Save & send for approval'
+                        : 'Save'),
                 style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
               ),
             ),
@@ -1452,6 +1712,18 @@ class _ErpPaymentAdviceScreenState
                       side: const BorderSide(color: AppTheme.danger),
                       minimumSize: const Size(0, 48)),
                 ),
+              ),
+            ],
+            if (pending && _canVoid) ...[
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _void,
+                icon: const Icon(Icons.block, size: 18),
+                label: const Text('Void'),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.danger,
+                    side: const BorderSide(color: AppTheme.danger),
+                    minimumSize: const Size(0, 48)),
               ),
             ],
             if (pending && _canApprove) ...[
@@ -1804,5 +2076,111 @@ class _SuggestDialogState extends State<_SuggestDialog> {
                 color: sel ? Colors.white : AppTheme.textPrimary)),
       ),
     );
+  }
+}
+
+
+// ── Audit trail ──────────────────────────────────────────────────────────
+class _PaAuditTrail extends StatelessWidget {
+  final String adviceId;
+  const _PaAuditTrail({super.key, required this.adviceId});
+
+  static const _labels = {
+    'created': 'Created',
+    'saved': 'Edited',
+    'approved': 'Approved',
+    'rejected': 'Rejected',
+    'edited_after_approval': 'Edited after approval (admin)',
+    'voided': 'Voided',
+    'archived': 'Archived',
+    'unarchived': 'Unarchived',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<dynamic>>(
+      future: Supabase.instance.client
+          .from('voucher_audit_log')
+          .select('action, details, performed_by, performed_at')
+          .eq('voucher_id', adviceId)
+          .eq('voucher_type', 'PA')
+          .order('performed_at', ascending: false)
+          .limit(50),
+      builder: (ctx, snap) {
+        final rows = snap.hasData ? List<Map<String, dynamic>>.from(snap.data!) : const <Map<String, dynamic>>[];
+        return FutureBuilder<Map<String, String>>(
+          future: _names(rows),
+          builder: (ctx, ns) {
+            final names = ns.data ?? const <String, String>{};
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('AUDIT TRAIL',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                        color: AppTheme.textSecondary)),
+                const SizedBox(height: 8),
+                if (rows.isEmpty)
+                  Text(snap.connectionState == ConnectionState.waiting ? 'Loading…' : 'No activity logged yet.',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))
+                else
+                  for (final r in rows)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Icon(Icons.history,
+                            size: 14,
+                            color: (r['action'] == 'voided' || r['action'] == 'rejected')
+                                ? AppTheme.danger
+                                : r['action'] == 'edited_after_approval'
+                                    ? AppTheme.warning
+                                    : AppTheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(
+                              '${_labels[r['action']] ?? r['action']}'
+                              '${names[r['performed_by']] != null ? ' · ${names[r['performed_by']]}' : ''}',
+                              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                            ),
+                            if (((r['details'] as String?) ?? '').isNotEmpty)
+                              Text(r['details'] as String,
+                                  style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                          ]),
+                        ),
+                        Text(
+                          r['performed_at'] == null
+                              ? ''
+                              : DateFormat('d MMM yyyy, HH:mm').format(
+                                  DateTime.parse(r['performed_at'] as String).toLocal()),
+                          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                        ),
+                      ]),
+                    ),
+              ]),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  static Future<Map<String, String>> _names(List<Map<String, dynamic>> rows) async {
+    final ids = rows.map((r) => r['performed_by'] as String?).whereType<String>().toSet().toList();
+    if (ids.isEmpty) return {};
+    try {
+      final us = await Supabase.instance.client.from('users').select('id, name').inFilter('id', ids);
+      return {for (final u in us as List) u['id'] as String: (u['name'] as String?) ?? ''};
+    } catch (_) {
+      return {};
+    }
   }
 }

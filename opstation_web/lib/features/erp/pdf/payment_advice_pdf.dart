@@ -51,7 +51,14 @@ class PaymentAdvicePdf {
     required DateTime? createdAt,
     required String? approvedBy,
     required DateTime? approvedAt,
+    // Accounts copy: same slip WITHOUT the party's current balance / payable
+    // ("Amount due") column.
+    bool accountsCopy = false,
+    String? voidedBy,
+    DateTime? voidedAt,
+    String? voidReason,
   }) async {
+    final isVoid = status == 'void';
     // Use a Unicode TTF so em-dashes, bullets (•) in bank details, middots
     // and non-Latin text all render instead of the missing-glyph box that
     // the built-in Helvetica shows. Falls back to Helvetica if the font
@@ -94,7 +101,8 @@ class PaymentAdvicePdf {
           cell('Party', bold: true),
           cell('Bank details', bold: true),
           cell('Last paid', bold: true, align: pw.TextAlign.center),
-          cell('Amount due', bold: true, align: pw.TextAlign.right),
+          if (!accountsCopy)
+            cell('Amount due', bold: true, align: pw.TextAlign.right),
           cell('Amount to pay', bold: true, align: pw.TextAlign.right),
         ],
       ),
@@ -126,7 +134,8 @@ class PaymentAdvicePdf {
                     : dShort.format(lines[i].lastPayment!),
                 align: pw.TextAlign.center,
                 size: 8.5),
-            cell(_money(lines[i].amountDue), align: pw.TextAlign.right),
+            if (!accountsCopy)
+              cell(_money(lines[i].amountDue), align: pw.TextAlign.right),
             cell(_money(lines[i].amountToPay),
                 align: pw.TextAlign.right, bold: true),
           ],
@@ -161,9 +170,53 @@ class PaymentAdvicePdf {
               ]),
         );
 
+    // Voided slips carry a grid of small "VOIDED" stamps over every page, so
+    // at least some stay readable whatever is printed underneath.
+    pw.Widget voidStamps() => pw.FullPage(
+          ignoreMargins: true,
+          child: pw.Opacity(
+            opacity: 0.2,
+            child: pw.Column(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+              children: [
+                for (var r = 0; r < 7; r++)
+                  pw.Padding(
+                    padding: pw.EdgeInsets.only(left: r.isOdd ? 70 : 0, right: r.isOdd ? 0 : 70),
+                    child: pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                      children: [
+                        for (var c = 0; c < 3; c++)
+                          pw.Transform.rotate(
+                            angle: 0.45,
+                            child: pw.Container(
+                              padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: pw.BoxDecoration(
+                                border: pw.Border.all(color: PdfColors.red800, width: 2),
+                                borderRadius: pw.BorderRadius.circular(4),
+                              ),
+                              child: pw.Text('VOIDED',
+                                  style: pw.TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: pw.FontWeight.bold,
+                                      color: PdfColors.red800,
+                                      letterSpacing: 2)),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+
     doc.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.fromLTRB(32, 30, 32, 30),
+      pageTheme: pw.PageTheme(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(32, 30, 32, 30),
+        theme: theme,
+        buildForeground: isVoid ? (_) => voidStamps() : null,
+      ),
       header: (c) => pw.Container(
         padding: const pw.EdgeInsets.only(bottom: 6),
         margin: const pw.EdgeInsets.only(bottom: 12),
@@ -179,9 +232,18 @@ class PaymentAdvicePdf {
                     fontWeight: pw.FontWeight.bold,
                     letterSpacing: 2,
                     color: _brand)),
-            pw.Text('Payment Advice',
-                style: pw.TextStyle(
-                    fontSize: 18, fontWeight: pw.FontWeight.bold, color: _ink)),
+            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+              pw.Text('Payment Advice',
+                  style: pw.TextStyle(
+                      fontSize: 18, fontWeight: pw.FontWeight.bold, color: _ink)),
+              if (accountsCopy)
+                pw.Text('ACCOUNTS COPY',
+                    style: pw.TextStyle(
+                        fontSize: 8.5,
+                        letterSpacing: 1.5,
+                        fontWeight: pw.FontWeight.bold,
+                        color: _muted)),
+            ]),
           ],
         ),
       ),
@@ -225,18 +287,22 @@ class PaymentAdvicePdf {
                 padding:
                     const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: pw.BoxDecoration(
-                    color: status == 'approved'
-                        ? const PdfColor.fromInt(0xFFDCFCE7)
-                        : const PdfColor.fromInt(0xFFFEF3C7),
+                    color: isVoid
+                        ? const PdfColor.fromInt(0xFFFEE2E2)
+                        : status == 'approved'
+                            ? const PdfColor.fromInt(0xFFDCFCE7)
+                            : const PdfColor.fromInt(0xFFFEF3C7),
                     borderRadius: pw.BorderRadius.circular(4)),
-                child: pw.Text(status.toUpperCase(),
+                child: pw.Text(isVoid ? 'VOIDED' : status.toUpperCase(),
                     style: pw.TextStyle(
                         fontSize: 9,
                         fontWeight: pw.FontWeight.bold,
                         letterSpacing: 1,
-                        color: status == 'approved'
-                            ? const PdfColor.fromInt(0xFF166534)
-                            : const PdfColor.fromInt(0xFF92400E))),
+                        color: isVoid
+                            ? const PdfColor.fromInt(0xFF991B1B)
+                            : status == 'approved'
+                                ? const PdfColor.fromInt(0xFF166534)
+                                : const PdfColor.fromInt(0xFF92400E))),
               ),
             ]),
         pw.SizedBox(height: 14),
@@ -244,14 +310,22 @@ class PaymentAdvicePdf {
           border: const pw.TableBorder(
               top: pw.BorderSide(color: _rule, width: 0.6),
               bottom: pw.BorderSide(color: _rule, width: 0.6)),
-          columnWidths: {
-            0: const pw.FixedColumnWidth(22),
-            1: const pw.FlexColumnWidth(2.1),
-            2: const pw.FlexColumnWidth(2.9),
-            3: const pw.FlexColumnWidth(1.1),
-            4: const pw.FlexColumnWidth(1.3),
-            5: const pw.FlexColumnWidth(1.3),
-          },
+          columnWidths: accountsCopy
+              ? {
+                  0: const pw.FixedColumnWidth(22),
+                  1: const pw.FlexColumnWidth(2.3),
+                  2: const pw.FlexColumnWidth(3.4),
+                  3: const pw.FlexColumnWidth(1.1),
+                  4: const pw.FlexColumnWidth(1.4),
+                }
+              : {
+                  0: const pw.FixedColumnWidth(22),
+                  1: const pw.FlexColumnWidth(2.1),
+                  2: const pw.FlexColumnWidth(2.9),
+                  3: const pw.FlexColumnWidth(1.1),
+                  4: const pw.FlexColumnWidth(1.3),
+                  5: const pw.FlexColumnWidth(1.3),
+                },
           children: rows,
         ),
         pw.SizedBox(height: 10),
@@ -275,6 +349,17 @@ class PaymentAdvicePdf {
             ]),
           ),
         ]),
+        if (isVoid) ...[
+          pw.SizedBox(height: 12),
+          pw.Text(
+              'VOIDED${voidedBy != null && voidedBy.isNotEmpty ? ' by $voidedBy' : ''}'
+              '${voidedAt != null ? ' on ${dtFmt.format(voidedAt.toLocal())}' : ''}'
+              '${voidReason != null && voidReason.trim().isNotEmpty ? ' - Reason: ${voidReason.trim()}' : ''}',
+              style: pw.TextStyle(
+                  fontSize: 9.5,
+                  fontWeight: pw.FontWeight.bold,
+                  color: const PdfColor.fromInt(0xFF991B1B))),
+        ],
         pw.SizedBox(height: 28),
         pw.Row(children: [
           foot('CREATED BY', createdBy,
