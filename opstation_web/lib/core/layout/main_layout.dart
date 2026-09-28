@@ -1062,6 +1062,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/supplier-ledger')) _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
       if (show('/erp/supplier-aging')) _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
       if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
+      if (show('/erp/supplier-balance-report')) _menuItem(context, 'Supplier Balance Report', Icons.account_balance_outlined, '/erp/supplier-balance-report', location),
     ];
     final purchaseItems = <Widget>[
       if (modules.contains('purchase')) ...[
@@ -1091,7 +1092,9 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     final salesLedgersReports = <Widget>[
       if (show('/erp/customer-ledger')) _menuItem(context, 'Customer Ledger', Icons.store_outlined, '/erp/customer-ledger', location),
       if (show('/erp/customer-aging')) _menuItem(context, 'Customer Aging', Icons.hourglass_bottom_outlined, '/erp/customer-aging', location),
+      if (show('/erp/customer-balance-report')) _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/erp/customer-balance-report', location),
       if (show('/erp/sales-report')) _menuItem(context, 'Sales Report',         Icons.assessment_outlined,        '/erp/sales-report',          location),
+      if (show('/erp/sale-vs-recovery')) _menuItem(context, 'Sale vs Recovery', Icons.compare_arrows_outlined, '/erp/sale-vs-recovery', location),
       if (show('/erp/sales-return-report')) _menuItem(context, 'Sales Return Report',  Icons.summarize_outlined,         '/erp/sales-return-report',    location),
       if (show('/erp/dispatch-summary')) _menuItem(context, 'Dispatch Summary',     Icons.local_shipping_outlined,    '/erp/dispatch-summary',       location),
       if (show('/erp/schemes-report')) _menuItem(context, 'Scheme Performance',   Icons.local_offer_outlined,       '/erp/schemes-report',         location),
@@ -1132,18 +1135,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     ];
 
     // Reports section items — gated per-user via show() like every other menu.
-    final repBalances = <Widget>[
-      if (show('/reports/customer-balance')) _menuItem(context, 'Customer Balance Report', Icons.account_balance_wallet_outlined, '/reports/customer-balance', location),
-      if (show('/reports/supplier-balance')) _menuItem(context, 'Supplier Balance Report', Icons.account_balance_outlined, '/reports/supplier-balance', location),
-    ];
     final repAnalysis = <Widget>[
       if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
       if (show('/reports/skipped-receipts')) _menuItem(context, 'Skipped Receipts Report', Icons.receipt_long_outlined, '/reports/skipped-receipts', location),
     ];
     final reportItems = <Widget>[
       if (show('/reports/center')) _menuItem(context, 'Reports Center', Icons.grid_view_outlined, '/reports/center', location),
-      if (repBalances.isNotEmpty) _menuLabel('Balances'),
-      ...repBalances,
       if (repAnalysis.isNotEmpty) _menuLabel('Analysis'),
       ...repAnalysis,
     ];
@@ -1261,20 +1258,20 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
            '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
-           '/erp/supplier-ledger', '/erp/supplier-aging'],
+           '/erp/supplier-ledger', '/erp/supplier-aging', '/erp/supplier-balance-report'],
           _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice + piSupervisePending),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/delivery-orders', '/erp/sales-invoices', '/erp/schemes',
            '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report', '/erp/dispatch-summary', '/erp/schemes-report',
-           '/erp/customer-ledger', '/erp/customer-aging'],
+           '/erp/customer-ledger', '/erp/customer-aging', '/erp/customer-balance-report', '/erp/sale-vs-recovery'],
           _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
       if (_hasItems(reportItems))
         _navMenu(context, 'Reports', Icons.summarize_outlined, location,
-          ['/reports/margin', '/reports/customer-balance', '/reports/supplier-balance', '/reports/skipped-receipts', '/reports/center'],
+          ['/reports/margin', '/reports/skipped-receipts', '/reports/center'],
           reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,

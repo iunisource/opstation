@@ -32,10 +32,11 @@ class _Cat {
 const List<_Cat> _kCatalog = [
   _Cat('Sales & Customers', Icons.trending_up, [
     _Card('Sales Report', '/erp/sales-report', Icons.assessment_outlined, 'Sales by product, customer or period'),
+    _Card('Sale vs Recovery', '/erp/sale-vs-recovery', Icons.compare_arrows_outlined, 'Sales, recoveries & receivables by salesman and market'),
     _Card('Sales Dashboard', '/erp/sales-dashboard', Icons.space_dashboard_outlined, 'Headline sales KPIs at a glance'),
     _Card('Customer Ledger', '/erp/customer-ledger', Icons.menu_book_outlined, 'Every transaction for a customer'),
     _Card('Customer Aging', '/erp/customer-aging', Icons.hourglass_bottom_outlined, 'Receivables by age bucket'),
-    _Card('Customer Balance', '/reports/customer-balance', Icons.account_balance_wallet_outlined, 'Outstanding balance per customer'),
+    _Card('Customer Balance', '/erp/customer-balance-report', Icons.account_balance_wallet_outlined, 'Outstanding balance per customer'),
     _Card('Margin Report', '/reports/margin', Icons.percent_outlined, 'Gross margin by product / sale'),
   ]),
   _Cat('Purchases & Suppliers', Icons.shopping_cart_outlined, [
@@ -43,7 +44,7 @@ const List<_Cat> _kCatalog = [
     _Card('Purchase Dashboard', '/erp/purchase-dashboard', Icons.space_dashboard_outlined, 'Headline purchasing KPIs'),
     _Card('Supplier Ledger', '/erp/supplier-ledger', Icons.menu_book_outlined, 'Every transaction for a supplier'),
     _Card('Supplier Aging', '/erp/supplier-aging', Icons.hourglass_bottom_outlined, 'Payables by age bucket'),
-    _Card('Supplier Balance', '/reports/supplier-balance', Icons.account_balance_outlined, 'Outstanding balance per supplier'),
+    _Card('Supplier Balance', '/erp/supplier-balance-report', Icons.account_balance_outlined, 'Outstanding balance per supplier'),
   ]),
   _Cat('Inventory', Icons.inventory_2_outlined, [
     _Card('Stock Levels', '/erp/stock', Icons.inventory_outlined, 'Live on-hand by product & branch'),

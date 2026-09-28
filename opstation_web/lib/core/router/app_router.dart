@@ -64,6 +64,7 @@ import '../../features/routes/presentation/bulk_import_routes_screen.dart' defer
 import '../../features/reports/presentation/reports_screen.dart' deferred as _s058;
 import '../../features/reports/presentation/combined_trip_summary_screen.dart' deferred as _s140;
 import '../../features/erp/presentation/erp_payment_advice_screen.dart' deferred as _s141;
+import '../../features/erp/presentation/erp_sale_vs_recovery_screen.dart' deferred as _s142;
 import '../../features/deliveries/presentation/deliveries_screen.dart' deferred as _s059;
 import '../../features/deliveries/presentation/delivery_detail_screen.dart' deferred as _s060;
 import '../../features/dispatch_orders/presentation/dispatch_orders_screen.dart' deferred as _s061;
@@ -175,6 +176,18 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       if (auth.isLoading || rAuth.isLoading) return null;
 
       final loc = state.matchedLocation;
+
+      // Balance reports moved from Reports to Sales / Purchase — keep old
+      // bookmarks and links working.
+      const moved = {
+        '/reports/customer-balance': '/erp/customer-balance-report',
+        '/reports/supplier-balance': '/erp/supplier-balance-report',
+      };
+      final movedTo = moved[loc];
+      if (movedTo != null) {
+        final q = state.uri.query;
+        return q.isEmpty ? movedTo : '$movedTo?$q';
+      }
 
       // Public job-card QR page (/f/<token>) — a factory worker scans the printed
       // job order and lands here with NO login. Always allow it through, whatever
@@ -427,8 +440,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/intelligence/report-builder', builder: (_, __) => _deferred(_s023.loadLibrary(), () => _s023.ErpReportBuilderScreen())),
       GoRoute(path: '/reports/center', builder: (_, __) => _deferred(_s024.loadLibrary(), () => _s024.ReportsCenterScreen())),
       GoRoute(path: '/reports/margin', builder: (_, __) => _deferred(_s025.loadLibrary(), () => _s025.ErpMarginReportScreen())),
-      GoRoute(path: '/reports/customer-balance', builder: (_, __) => _deferred(_s026.loadLibrary(), () => _s026.ErpCustomerBalanceReportScreen())),
-      GoRoute(path: '/reports/supplier-balance', builder: (_, __) => _deferred(_s027.loadLibrary(), () => _s027.ErpSupplierBalanceReportScreen())),
+      GoRoute(path: '/erp/customer-balance-report', builder: (_, __) => _deferred(_s026.loadLibrary(), () => _s026.ErpCustomerBalanceReportScreen())),
+      GoRoute(path: '/erp/supplier-balance-report', builder: (_, __) => _deferred(_s027.loadLibrary(), () => _s027.ErpSupplierBalanceReportScreen())),
       GoRoute(path: '/reports/skipped-receipts', builder: (_, __) => _deferred(_s028.loadLibrary(), () => _s028.ErpSkippedReceiptsReportScreen())),
       GoRoute(path: '/manufacturing/production-inverse-voucher', builder: (_, __) => _deferred(_s012.loadLibrary(), () => _s012.ErpProductionInverseVoucherScreen())),
       GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => _deferred(_s013.loadLibrary(), () => _s013.ErpDamageStockVoucherScreen())),
@@ -477,6 +490,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/field-orders', builder: (_, __) => _deferred(_s094.loadLibrary(), () => _s094.ErpFieldOrdersScreen())),
           GoRoute(path: '/erp/retailer-orders', builder: (_, __) => _deferred(_s095.loadLibrary(), () => _s095.ErpRetailerOrdersScreen())),
           GoRoute(path: '/erp/sales-report', builder: (_, __) => _deferred(_s096.loadLibrary(), () => _s096.ErpSalesReportScreen())),
+          GoRoute(path: '/erp/sale-vs-recovery', builder: (_, __) => _deferred(_s142.loadLibrary(), () => _s142.ErpSaleVsRecoveryScreen())),
           GoRoute(path: '/erp/sales-return-report', builder: (_, __) => _deferred(_s097.loadLibrary(), () => _s097.ErpSalesReturnReportScreen())),
           GoRoute(path: '/erp/sales-dashboard', builder: (_, __) => _deferred(_s098.loadLibrary(), () => _s098.ErpSalesDashboardScreen())),
           GoRoute(path: '/erp/purchase-dashboard', builder: (_, __) => _deferred(_s098.loadLibrary(), () => _s098.ErpPurchaseDashboardScreen())),

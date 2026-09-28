@@ -72,6 +72,8 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('purchase', 'Purchase', Icons.shopping_cart_outlined, [
     PermItem('purchase_dashboard', 'Purchase Dashboard', PermKind.report, '/erp/purchase-dashboard'),
     PermItem('purchase_report', 'Purchase Report', PermKind.report, '/erp/purchase-report'),
+    // Same key as before (moved from Reports & Ledgers) so existing grants carry over.
+    PermItem('supplier_balance_report', 'Supplier Balance Report', PermKind.report, '/erp/supplier-balance-report'),
     PermItem('suppliers', 'Suppliers', PermKind.doc, '/erp/suppliers'),
     PermItem('po', 'Purchase Orders', PermKind.doc, '/erp/purchase'),
     PermItem('grn', 'GRN', PermKind.doc, '/erp/grn'),
@@ -91,6 +93,9 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('sales_return', 'Sales Return Notes', PermKind.doc, '/erp/sales-returns'),
     PermItem('sales_return_invoice', 'Sales Return Invoices', PermKind.doc, '/erp/sales-return-invoices'),
     PermItem('sales_report', 'Sales Report', PermKind.report, '/erp/sales-report'),
+    PermItem('sale_vs_recovery', 'Sale vs Recovery', PermKind.report, '/erp/sale-vs-recovery'),
+    // Same key as before (moved from Reports & Ledgers) so existing grants carry over.
+    PermItem('customer_balance_report', 'Customer Balance Report', PermKind.report, '/erp/customer-balance-report'),
     PermItem('sales_return_report', 'Sales Return Report', PermKind.report, '/erp/sales-return-report'),
     PermItem('dispatch_summary', 'Dispatch Summary', PermKind.report, '/erp/dispatch-summary'),
     PermItem('schemes', 'Schemes & Offers', PermKind.doc, '/erp/schemes'),
@@ -111,8 +116,6 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('customer_aging', 'Customer Aging', PermKind.report, '/erp/customer-aging', module: 'sales'),
     PermItem('supplier_aging', 'Supplier Aging', PermKind.report, '/erp/supplier-aging', module: 'purchase'),
     PermItem('margin_report', 'Margin Report', PermKind.report, '/reports/margin', module: 'sales'),
-    PermItem('customer_balance_report', 'Customer Balance Report', PermKind.report, '/reports/customer-balance', module: 'sales'),
-    PermItem('supplier_balance_report', 'Supplier Balance Report', PermKind.report, '/reports/supplier-balance', module: 'purchase'),
     PermItem('skipped_receipts_report', 'Skipped Receipts Report', PermKind.report, '/reports/skipped-receipts', module: 'sales'),
     // Report Builder and Files are cross-cutting tools, not tied to a single
     // licensable module — left permission-gated only.

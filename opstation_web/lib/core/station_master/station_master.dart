@@ -678,6 +678,8 @@ const List<_Feature> _features = [
   _Feature('Customer Ledger', 'Sales', '/erp/customer-ledger', ['customer ledger']),
   _Feature('Customer Aging', 'Sales', '/erp/customer-aging', ['customer aging', 'receivable aging']),
   _Feature('Sales Report', 'Sales', '/erp/sales-report', ['sales report']),
+  _Feature('Sale vs Recovery', 'Sales', '/erp/sale-vs-recovery', ['sale vs recovery', 'recovery', 'collection', 'salesman recovery']),
+  _Feature('Customer Balance Report', 'Sales', '/erp/customer-balance-report', ['customer balance']),
   _Feature('Sales Returns', 'Sales', '/erp/sales-returns', ['sales return', 'sale return']),
   // Purchase
   _Feature('Purchase Orders', 'Purchase', '/erp/purchase', ['purchase order', 'po']),
@@ -687,6 +689,7 @@ const List<_Feature> _features = [
   _Feature('Supplier Ledger', 'Purchase', '/erp/supplier-ledger', ['supplier ledger']),
   _Feature('Purchase Returns', 'Purchase', '/erp/purchase-returns', ['purchase return']),
   _Feature('Purchase Report', 'Purchase', '/erp/purchase-report', ['purchase report']),
+  _Feature('Supplier Balance Report', 'Purchase', '/erp/supplier-balance-report', ['supplier balance']),
   // Inventory
   _Feature('Products', 'Inventory', '/erp/products', ['product', 'item', 'sku']),
   _Feature('Stock Levels', 'Inventory', '/erp/stock', ['stock', 'stock level', 'on hand', 'inventory']),
@@ -719,8 +722,6 @@ const List<_Feature> _features = [
   _Feature('Opening Journal', 'Financials', '/financials/opening-journal', ['opening journal', 'opening balance']),
   _Feature('PDC Voucher', 'Financials', '/erp/pdc-voucher', ['pdc', 'post dated cheque', 'cheque']),
   // Reports
-  _Feature('Customer Balance Report', 'Reports', '/reports/customer-balance', ['customer balance']),
-  _Feature('Supplier Balance Report', 'Reports', '/reports/supplier-balance', ['supplier balance']),
   _Feature('Margin Report', 'Reports', '/reports/margin', ['margin']),
   _Feature('Reports Center', 'Reports', '/reports/center', ['reports center', 'report builder', 'reports']),
   _Feature('Skipped Receipts Report', 'Reports', '/reports/skipped-receipts', ['skipped receipt', 'skipped receipts']),
@@ -1169,7 +1170,7 @@ Future<_Msg> _stock(String q, _Ctx c) async {
 // ─── Intent: customer balance ───────────────────────────────────────────────
 
 Future<_Msg> _customerBalance(String q, _Ctx c) async {
-  if (!c.can('/reports/customer-balance') && !c.can('/erp/customer-ledger')) {
+  if (!c.can('/erp/customer-balance-report') && !c.can('/erp/customer-ledger')) {
     return const _Msg(false, _noPerm);
   }
   final term = _term(q, ['balance', 'receivable', 'owes', 'owe us', 'owe',
@@ -1219,14 +1220,14 @@ Future<_Msg> _customerBalance(String q, _Ctx c) async {
   return _Msg(
     false,
     'As of today:\n\n${buf.toString().trimRight()}',
-    links: [_Link('Customer balances', '/reports/customer-balance')],
+    links: [_Link('Customer balances', '/erp/customer-balance-report')],
   );
 }
 
 // ─── Intent: supplier balance ───────────────────────────────────────────────
 
 Future<_Msg> _supplierBalance(String q, _Ctx c) async {
-  if (!c.can('/reports/supplier-balance') && !c.can('/erp/supplier-ledger')) {
+  if (!c.can('/erp/supplier-balance-report') && !c.can('/erp/supplier-ledger')) {
     return const _Msg(false, _noPerm);
   }
   final term = _term(q, ['balance', 'payable', 'we owe', 'owe', 'outstanding',
@@ -1279,7 +1280,7 @@ Future<_Msg> _supplierBalance(String q, _Ctx c) async {
     false,
     'AP control, as of today (advances not folded in):\n\n'
     '${buf.toString().trimRight()}',
-    links: [_Link('Supplier balances', '/reports/supplier-balance')],
+    links: [_Link('Supplier balances', '/erp/supplier-balance-report')],
   );
 }
 
