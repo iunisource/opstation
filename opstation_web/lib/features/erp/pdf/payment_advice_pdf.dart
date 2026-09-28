@@ -54,6 +54,10 @@ class PaymentAdvicePdf {
     // Accounts copy: same slip WITHOUT the party's current balance / payable
     // ("Amount due") column.
     bool accountsCopy = false,
+    // Pictorial signatures (and the company stamp next to the approver's).
+    pw.ImageProvider? createdSignature,
+    pw.ImageProvider? approvedSignature,
+    pw.ImageProvider? approvedStamp,
     String? voidedBy,
     DateTime? voidedAt,
     String? voidReason,
@@ -142,7 +146,8 @@ class PaymentAdvicePdf {
         ),
     ];
 
-    pw.Widget foot(String label, String who, String when) => pw.Expanded(
+    pw.Widget foot(String label, String who, String when,
+            {pw.ImageProvider? sig, pw.ImageProvider? stamp}) => pw.Expanded(
           child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
@@ -158,7 +163,20 @@ class PaymentAdvicePdf {
                         fontSize: 10, fontWeight: pw.FontWeight.bold)),
                 pw.Text(when,
                     style: const pw.TextStyle(fontSize: 8, color: _muted)),
-                pw.SizedBox(height: 22),
+                if (sig != null || stamp != null)
+                  pw.SizedBox(
+                    height: 46,
+                    child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+                      if (sig != null)
+                        pw.Image(sig, height: 40, width: 110, fit: pw.BoxFit.contain),
+                      if (stamp != null) ...[
+                        pw.SizedBox(width: 6),
+                        pw.Image(stamp, height: 46, width: 46, fit: pw.BoxFit.contain),
+                      ],
+                    ]),
+                  )
+                else
+                  pw.SizedBox(height: 22),
                 pw.Container(
                     width: 150,
                     decoration: const pw.BoxDecoration(
@@ -363,13 +381,16 @@ class PaymentAdvicePdf {
         pw.SizedBox(height: 28),
         pw.Row(children: [
           foot('CREATED BY', createdBy,
-              createdAt == null ? '-' : dtFmt.format(createdAt.toLocal())),
+              createdAt == null ? '-' : dtFmt.format(createdAt.toLocal()),
+              sig: createdSignature),
           foot(
               'APPROVED BY',
               approvedBy ?? '-',
               approvedAt == null
                   ? (status == 'pending' ? 'Awaiting approval' : '-')
-                  : dtFmt.format(approvedAt.toLocal())),
+                  : dtFmt.format(approvedAt.toLocal()),
+              sig: status == 'pending' ? null : approvedSignature,
+              stamp: status == 'pending' ? null : approvedStamp),
           foot('RECEIVED BY', '', ''),
         ]),
       ],

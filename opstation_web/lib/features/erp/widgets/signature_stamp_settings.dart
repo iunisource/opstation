@@ -24,6 +24,11 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
   bool _loading = true;
   bool _busySig = false;
   bool _busyStamp = false;
+  // Other users' signatures (admin uploads on their behalf) — used on the
+  // Payment Advice print and anywhere a user's signature is printed.
+  List<Map<String, dynamic>> _users = [];
+  String? _pickedUserId;
+  bool _busyOther = false;
 
   @override
   void initState() { super.initState(); _load(); }
@@ -42,6 +47,12 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
       }
       final s = await client.from('app_config').select('value').eq('org_id', widget.orgId).eq('key', 'org.stamp_url').maybeSingle();
       _stampUrl = s?['value'] as String?;
+      final us = await client.from('users').select('id, name, signature_url')
+          .eq('org_id', widget.orgId).order('name');
+      _users = [
+        for (final u in us as List)
+          if (u['id'] != widget.userId) Map<String, dynamic>.from(u as Map),
+      ];
     } catch (_) {}
     if (mounted) setState(() => _loading = false);
   }
@@ -94,6 +105,80 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
     if (mounted) setState(() => _busySig = false);
   }
 
+  Future<void> _uploadFor(Map<String, dynamic> u) async {
+    setState(() => _busyOther = true);
+    try {
+      final bytes = await _pick();
+      if (bytes != null) {
+        final client = Supabase.instance.client;
+        final uid = u['id'] as String;
+        final path = '${widget.orgId}/sig_$uid.png';
+        await client.storage.from('signatures').uploadBinary(path, bytes, fileOptions: const FileOptions(upsert: true, contentType: 'image/png'));
+        final url = '${client.storage.from('signatures').getPublicUrl(path)}?v=${DateTime.now().millisecondsSinceEpoch}';
+        final res = await client.from('users').update({'signature_url': url}).eq('id', uid).select('id');
+        if ((res as List).isEmpty) {
+          throw 'You do not have permission to change this user\'s signature';
+        }
+        if (mounted) setState(() => u['signature_url'] = url);
+        _snack('Signature saved for ${u['name'] ?? 'user'}');
+      }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
+    if (mounted) setState(() => _busyOther = false);
+  }
+
+  Future<void> _removeFor(Map<String, dynamic> u) async {
+    setState(() => _busyOther = true);
+    try {
+      await Supabase.instance.client.from('users').update({'signature_url': null}).eq('id', u['id'] as String);
+      if (mounted) setState(() => u['signature_url'] = null);
+      _snack('Signature removed');
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
+    if (mounted) setState(() => _busyOther = false);
+  }
+
+  Widget _otherUsers() {
+    final picked = _users.where((u) => u['id'] == _pickedUserId).toList();
+    final u = picked.isEmpty ? null : picked.first;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Divider(height: 28),
+      const Text("Other users' signatures", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 4),
+      const Text('Upload a signature for any user. It prints on the Payment Advice (Created by / Approved by) and is captured at the moment they create or approve it.',
+          style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.35)),
+      const SizedBox(height: 10),
+      SizedBox(
+        width: 320,
+        child: DropdownButtonFormField<String>(
+          value: _pickedUserId,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'User', isDense: true, border: OutlineInputBorder()),
+          items: [
+            for (final x in _users)
+              DropdownMenuItem(
+                value: x['id'] as String,
+                child: Text('${x['name'] ?? x['id']}${x['signature_url'] != null ? '  ✓' : ''}',
+                    overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: (v) => setState(() => _pickedUserId = v),
+        ),
+      ),
+      if (u != null) ...[
+        const SizedBox(height: 12),
+        Wrap(spacing: 12, crossAxisAlignment: WrapCrossAlignment.end, children: [
+          _slot('Signature — ${u['name'] ?? ''}', u['signature_url'] as String?, _busyOther, () => _uploadFor(u)),
+          if (u['signature_url'] != null)
+            TextButton.icon(
+              onPressed: _busyOther ? null : () => _removeFor(u),
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('Remove', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            ),
+        ]),
+      ],
+    ]);
+  }
+
   Future<void> _uploadStamp() async {
     setState(() => _busyStamp = true);
     try {
@@ -120,7 +205,7 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Signature & Company Stamp', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
-        const Text('Your signature and the company stamp print in the Approved By box when you approve an invoice under the review flow.',
+        const Text('Your signature and the company stamp print in the Approved By box when you approve an invoice under the review flow, and on Payment Advice prints.',
             style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
         const SizedBox(height: 14),
         if (_loading)
@@ -130,6 +215,7 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
             _slot('My signature', _sigUrl, _busySig, _uploadSignature),
             _slot('Company stamp', _stampUrl, _busyStamp, _uploadStamp),
           ]),
+        if (!_loading && _users.isNotEmpty) _otherUsers(),
       ]),
     );
   }

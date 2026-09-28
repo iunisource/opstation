@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart' show networkImage;
 import '../pdf/payment_advice_pdf.dart';
 import '../../../core/pdf/pdf_output.dart';
 
@@ -509,6 +511,12 @@ class _ErpPaymentAdviceScreenState
           if (autoApproved) 'approved_by_name': me?.name,
           if (autoApproved) 'approved_at': DateTime.now().toIso8601String(),
         });
+        final mySig = await _signatureOf(me?.id);
+        await _stampSignatures(adviceId, {
+          'created_signature_url': mySig,
+          if (autoApproved) 'approved_signature_url': mySig,
+          if (autoApproved) 'approved_stamp_url': await _orgStamp(orgId),
+        });
       } else {
         adviceId = _current!['id'] as String;
         await _db.from('payment_advices').update({
@@ -588,6 +596,10 @@ class _ErpPaymentAdviceScreenState
         'approved_by_name': me?.name,
         'approved_at': DateTime.now().toIso8601String(),
       }).eq('id', _current!['id']);
+      await _stampSignatures(_current!['id'] as String, {
+        'approved_signature_url': await _signatureOf(me?.id),
+        'approved_stamp_url': await _orgStamp(me?.orgId),
+      });
       await _audit(_current!['id'] as String, 'approved', 'Approved by ${me?.name ?? ''}');
       if (!mounted) return;
       setState(() {
@@ -795,6 +807,42 @@ class _ErpPaymentAdviceScreenState
       ),
     );
     return ok == true ? ctrl.text : null;
+  }
+
+  /// Signature + stamp are SNAPSHOTTED onto the advice when the user acts, so
+  /// the printed slip carries the signature that was on file at that moment
+  /// (typed names alone are too easy to alter).
+  Future<String?> _signatureOf(String? userId) async {
+    if (userId == null) return null;
+    try {
+      final u = await _db.from('users').select('signature_url').eq('id', userId).maybeSingle();
+      final v = (u?['signature_url'] as String?)?.trim();
+      return (v == null || v.isEmpty) ? null : v;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _orgStamp(String? orgId) async {
+    if (orgId == null) return null;
+    try {
+      final s = await _db.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', 'org.stamp_url').maybeSingle();
+      final v = (s?['value'] as String?)?.trim();
+      return (v == null || v.isEmpty) ? null : v;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Best-effort write of the signature columns (skipped quietly if the
+  /// migration adding them hasn't been run yet).
+  Future<void> _stampSignatures(String adviceId, Map<String, dynamic> cols) async {
+    final clean = {for (final e in cols.entries) if (e.value != null) e.key: e.value};
+    if (clean.isEmpty) return;
+    try {
+      await _db.from('payment_advices').update(clean).eq('id', adviceId);
+    } catch (_) {}
   }
 
   Future<String> _nextNumber(String orgId) async {
@@ -1533,6 +1581,26 @@ class _ErpPaymentAdviceScreenState
                 DateTime.tryParse((r['last_payment_date'] as String?) ?? ''),
           ),
       ];
+      // Signatures: the snapshot taken when the user acted; for advices made
+      // before signatures existed, fall back to the user's signature on file.
+      final status = (a['status'] as String?) ?? 'approved';
+      final createdSigUrl = (a['created_signature_url'] as String?) ??
+          await _signatureOf(a['created_by'] as String?);
+      final approvedSigUrl = (a['approved_signature_url'] as String?) ??
+          (status == 'approved' || status == 'void'
+              ? await _signatureOf(a['approved_by'] as String?)
+              : null);
+      final stampUrl = (a['approved_stamp_url'] as String?) ??
+          (a['approved_by'] != null ? await _orgStamp(a['org_id'] as String?) : null);
+      Future<pw.ImageProvider?> img(String? url) async {
+        if (url == null || url.isEmpty) return null;
+        try {
+          return await networkImage(url);
+        } catch (_) {
+          return null;
+        }
+      }
+      final sigs = await Future.wait([img(createdSigUrl), img(approvedSigUrl), img(stampUrl)]);
       final bytes = await PaymentAdvicePdf.build(
         orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
         adviceNumber: (a['advice_number'] as String?) ?? '',
@@ -1547,6 +1615,9 @@ class _ErpPaymentAdviceScreenState
         approvedBy: a['approved_by_name'] as String?,
         approvedAt: DateTime.tryParse(a['approved_at'] as String? ?? ''),
         accountsCopy: accountsCopy,
+        createdSignature: sigs[0],
+        approvedSignature: sigs[1],
+        approvedStamp: sigs[2],
         voidedBy: a['voided_by_name'] as String?,
         voidedAt: DateTime.tryParse(a['voided_at'] as String? ?? ''),
         voidReason: a['void_reason'] as String?,
@@ -1618,7 +1689,7 @@ class _ErpPaymentAdviceScreenState
         ? DateFormat('d MMM yyyy, HH:mm')
             .format(DateTime.tryParse(a!['approved_at'] as String)!.toLocal())
         : (isApproved ? createdAt : null);
-    Widget foot(String label, String who, String when) => Expanded(
+    Widget foot(String label, String who, String when, [String? sigUrl]) => Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label,
                 style: const TextStyle(
@@ -1631,6 +1702,17 @@ class _ErpPaymentAdviceScreenState
             Text(when,
                 style: const TextStyle(
                     fontSize: 11, color: AppTheme.textSecondary)),
+            if (sigUrl != null && sigUrl.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              SizedBox(
+                height: 44,
+                width: 140,
+                child: Image.network(sigUrl,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.centerLeft,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+              ),
+            ],
           ]),
         );
     return Container(
@@ -1641,7 +1723,7 @@ class _ErpPaymentAdviceScreenState
         border: Border.all(color: AppTheme.border),
       ),
       child: Row(children: [
-        foot('CREATED BY', createdBy, createdAt),
+        foot('CREATED BY', createdBy, createdAt, a?['created_signature_url'] as String?),
         if (status == 'rejected')
           foot(
               'REJECTED BY',
@@ -1652,7 +1734,8 @@ class _ErpPaymentAdviceScreenState
                   : '—')
         else
           foot('APPROVED BY', approvedBy ?? '—',
-              approvedAt ?? (status == 'pending' ? 'Awaiting approval' : '—')),
+              approvedAt ?? (status == 'pending' ? 'Awaiting approval' : '—'),
+              a?['approved_signature_url'] as String?),
       ]),
     );
   }
