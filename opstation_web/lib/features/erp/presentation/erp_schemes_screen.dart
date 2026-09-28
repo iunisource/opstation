@@ -50,7 +50,7 @@ class _ErpSchemesScreenState extends ConsumerState<ErpSchemesScreen> {
         client.from('products').select('id, name, sku, base_uom_id').eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
         client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(10000),
         client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name'),
-        client.from('users').select('id, name, email').eq('org_id', orgId).order('name'),
+        client.from('users').select('id, name, email').eq('org_id', orgId).or('role.is.null,role.neq.retailer').order('name'),
       ]);
       if (!mounted) return;
       final cfg = {for (final r in results[0] as List) r['key'] as String: (r['value'] as String? ?? '')};

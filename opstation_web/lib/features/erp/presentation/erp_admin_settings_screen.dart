@@ -125,6 +125,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.pa_signatures',
+    'Signatures on Payment Advice print',
+    'When ON, the Payment Advice print shows the creator\'s and approver\'s '
+        'signature images (and the company stamp with the approval) above their '
+        'names. Signatures are captured at the moment each person creates or '
+        'approves the advice. Upload them under "Signatures & Company Stamp" below.',
+  ),
+
+  _AdminToggle(
     'org.pa_notify_new',
     'Notify when a new Payment Advice is saved (pending approval)',
     'When ON, saving a new Payment Advice that is pending approval sends a push '
@@ -638,6 +647,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.jv_supervise_flow',
     'org.jv_approve_flow',
     'org.pa_approval_enabled',
+    'org.pa_signatures',
     'org.pa_notify_new',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
@@ -764,7 +774,7 @@ class _ErpAdminSettingsScreenState
         orgUsers = List<Map<String, dynamic>>.from(await Supabase.instance.client
             .from('users')
             .select('id, name, role')
-            .eq('org_id', orgId)
+            .eq('org_id', orgId).or('role.is.null,role.neq.retailer')
             .order('name'));
       } catch (_) {}
       // Serious Zone: negative-stock guard lives on inventory_settings.

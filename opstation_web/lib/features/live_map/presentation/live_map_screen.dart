@@ -161,7 +161,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       final allUsers = await client
           .from('users')
           .select('id, name, role')
-          .eq('org_id', orgId);
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer');
       final users = (allUsers as List)
           .where((u) => u['role'] == 'salesperson' || u['role'] == 'driver')
           .toList();
@@ -317,7 +317,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       final allUsers = await client
           .from('users')
           .select('id, name, role')
-          .eq('org_id', orgId);
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer');
       final users = (allUsers as List)
           .where((u) => u['role'] == 'salesperson' || u['role'] == 'driver')
           .toList();

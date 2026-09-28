@@ -82,7 +82,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
           .eq('is_active', true)
           .order('name');
       final users =
-          await c.from('users').select('id, name').eq('org_id', orgId).order('name');
+          await c.from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer').order('name');
       final assignees = await c
           .from('facility_assignees')
           .select()

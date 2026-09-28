@@ -3470,7 +3470,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
-  Future<void> _printSI() async {
+  Future<void> _printSI({bool share = false}) async {
     final user = ref.read(currentUserProvider);
     final lines = _items.where((it) => it['is_foc'] != true).map((it) {
       final qty = (it['qty_delivered'] as num?)?.toDouble() ?? 0;
@@ -3513,6 +3513,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     if (doVoucher != null) refs['DO #'] = doVoucher;
 
     await VoucherPdf.printVoucher(
+      share: share,
       watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
       voucherTypeLabel: 'Sales Invoice',
@@ -4199,8 +4200,13 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           ],
           IconButton(
             icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
-            tooltip: 'Print / PDF',
+            tooltip: 'Print preview',
             onPressed: _printSI,
+          ),
+          IconButton(
+            icon: Icon(Icons.share_outlined, color: Colors.teal.shade700),
+            tooltip: 'Share PDF',
+            onPressed: () => _printSI(share: true),
           ),
           if (_canDelete && !(_detail['is_voided'] as bool? ?? false))
             TextButton.icon(

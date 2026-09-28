@@ -5,6 +5,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../share/share_file.dart';
+import 'pdf_output.dart';
 
 /// One row of a party price list, pre-formatted by the caller.
 class PriceListRow {
@@ -166,28 +167,5 @@ Future<void> sharePriceListPdf(PriceListDoc d) async {
 /// Print / Save-as-PDF. Uses the SAME bytes as [sharePriceListPdf].
 Future<void> printPriceListPdf(PriceListDoc d) async {
   final bytes = await buildPriceListPdfBytes(d);
-  final fileName = d.fileBase + '.pdf';
-  final ua = html.window.navigator.userAgent.toLowerCase();
-  final isMobile = ua.contains('android') ||
-      ua.contains('iphone') ||
-      ua.contains('ipad') ||
-      ua.contains('mobile');
-  if (isMobile) {
-    await shareFileOnly(bytes, fileName);
-  } else if (ua.contains('firefox')) {
-    final blob = html.Blob([bytes], 'application/pdf');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    final a = html.AnchorElement(href: url)
-      ..download = fileName
-      ..style.display = 'none';
-    html.document.body!.append(a);
-    a.click();
-    Future.delayed(const Duration(seconds: 5), () {
-      a.remove();
-      html.Url.revokeObjectUrl(url);
-    });
-  } else {
-    await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async => bytes, name: fileName);
-  }
+  await showPdf(bytes, d.fileBase + '.pdf');
 }

@@ -61,6 +61,8 @@ class _ErpPaymentAdviceScreenState
 
   // Settings
   bool _approvalEnabled = false;
+  // Admin Settings: print signature images on the Payment Advice.
+  bool _sigEnabled = false;
   Set<String> _approvers = {};
 
   // Data
@@ -173,12 +175,13 @@ class _ErpPaymentAdviceScreenState
             .from('app_config')
             .select('key, value')
             .eq('org_id', orgId)
-            .inFilter('key', ['org.pa_approval_enabled', 'org.pa_approvers']));
+            .inFilter('key', ['org.pa_approval_enabled', 'org.pa_approvers', 'org.pa_signatures']));
         final cfg = <String, String>{};
         for (final r in cfgRows as List) {
           cfg[r['key'] as String] = (r['value'] as String?) ?? '';
         }
         _approvalEnabled = cfg['org.pa_approval_enabled'] == 'true';
+        _sigEnabled = cfg['org.pa_signatures'] == 'true';
         final ap = (cfg['org.pa_approvers'] ?? '').trim();
         _approvers = ap.isEmpty
             ? <String>{}
@@ -1600,7 +1603,9 @@ class _ErpPaymentAdviceScreenState
           return null;
         }
       }
-      final sigs = await Future.wait([img(createdSigUrl), img(approvedSigUrl), img(stampUrl)]);
+      final sigs = _sigEnabled
+          ? await Future.wait([img(createdSigUrl), img(approvedSigUrl), img(stampUrl)])
+          : const <pw.ImageProvider?>[null, null, null];
       final bytes = await PaymentAdvicePdf.build(
         orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
         adviceNumber: (a['advice_number'] as String?) ?? '',
@@ -1702,7 +1707,7 @@ class _ErpPaymentAdviceScreenState
             Text(when,
                 style: const TextStyle(
                     fontSize: 11, color: AppTheme.textSecondary)),
-            if (sigUrl != null && sigUrl.isNotEmpty) ...[
+            if (_sigEnabled && sigUrl != null && sigUrl.isNotEmpty) ...[
               const SizedBox(height: 6),
               SizedBox(
                 height: 44,

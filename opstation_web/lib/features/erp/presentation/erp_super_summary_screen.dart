@@ -140,7 +140,7 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
   // conversational usage read the Team 360 profile shows, per salesperson.
   Future<List<_Usage>> _loadUsage(SupabaseClient client, String orgId) async {
     // Org users (id -> {name, role}); we only surface field roles with visits.
-    final urows = await client.from('users').select('id, name, role').eq('org_id', orgId);
+    final urows = await client.from('users').select('id, name, role').eq('org_id', orgId).or('role.is.null,role.neq.retailer');
     final uname = <String, String>{}; final urole = <String, String>{};
     for (final u in urows as List) {
       final id = u['id'] as String?; if (id == null) continue;

@@ -354,7 +354,7 @@ class _IntelligenceDashboardScreenState
                 .select('user_id, route_id')
                 .inFilter('route_id', orgRouteIds)
                 .range(f, t)),
-        client.from('users').select('id, name').eq('org_id', orgId),
+        client.from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer'),
         pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
         usedCompRpc
             ? Future.value(const <Map<String, dynamic>>[])

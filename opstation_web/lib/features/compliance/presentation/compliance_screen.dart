@@ -95,7 +95,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
         client
             .from('users')
             .select('id, name')
-            .eq('org_id', orgId)
+            .eq('org_id', orgId).or('role.is.null,role.neq.retailer')
             .limit(5000),
         client
             .from('trips')

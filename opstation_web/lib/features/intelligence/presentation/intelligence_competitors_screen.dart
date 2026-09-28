@@ -62,7 +62,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
       final allUsers = await client
           .from('users')
           .select('id, name')
-          .eq('org_id', orgId);
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer');
       final names = <String, String>{
         for (final u in allUsers)
           u['id'] as String: (u['name'] as String?) ?? 'Unknown',

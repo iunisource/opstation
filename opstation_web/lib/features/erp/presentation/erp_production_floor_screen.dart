@@ -56,7 +56,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
     try {
       final client = Supabase.instance.client;
       final prods = await client.from('products').select('id, name, sku').eq('org_id', orgId).limit(10000);
-      final users = await client.from('users').select('id, name').eq('org_id', orgId).limit(2000);
+      final users = await client.from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer').limit(2000);
       final custs = await client.from('customers').select('id, shop_name, code').eq('org_id', orgId).limit(10000);
       final jobs = await client.from('job_cards').select().eq('org_id', orgId)
           .order('priority', ascending: false).order('created_at', ascending: false).limit(1000);

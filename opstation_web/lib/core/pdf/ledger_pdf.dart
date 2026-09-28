@@ -7,6 +7,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../share/share_file.dart';
+import 'pdf_output.dart';
 
 /// One posted ledger line, pre-formatted by the caller (so this builder stays
 /// decoupled from the app's money/date formatting).
@@ -442,28 +443,5 @@ Future<void> shareLedgerPdf(LedgerDoc d) async {
 /// other desktop browsers open the native print preview.
 Future<void> printLedgerPdf(LedgerDoc d) async {
   final bytes = await buildLedgerPdfBytes(d);
-  final fileName = d.fileBase + '.pdf';
-  final ua = html.window.navigator.userAgent.toLowerCase();
-  final isMobile = ua.contains('android') ||
-      ua.contains('iphone') ||
-      ua.contains('ipad') ||
-      ua.contains('mobile');
-  if (isMobile) {
-    await shareFileOnly(bytes, fileName);
-  } else if (ua.contains('firefox')) {
-    final blob = html.Blob([bytes], 'application/pdf');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    final a = html.AnchorElement(href: url)
-      ..download = fileName
-      ..style.display = 'none';
-    html.document.body!.append(a);
-    a.click();
-    Future.delayed(const Duration(seconds: 5), () {
-      a.remove();
-      html.Url.revokeObjectUrl(url);
-    });
-  } else {
-    await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async => bytes, name: fileName);
-  }
+  await showPdf(bytes, d.fileBase + '.pdf');
 }

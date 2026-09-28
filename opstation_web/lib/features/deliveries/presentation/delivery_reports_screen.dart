@@ -59,7 +59,7 @@ class _DeliveryReportsScreenState
       final usersResp = await client
           .from('users')
           .select('id, name, role')
-          .eq('org_id', orgId);
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer');
       final drivers = (usersResp as List)
           .cast<Map<String, dynamic>>()
           .where((u) => u['role'] == 'driver')

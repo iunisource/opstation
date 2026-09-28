@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 import 'dart:typed_data';
 
 import 'package:intl/intl.dart';
@@ -8,27 +9,53 @@ import 'package:printing/printing.dart';
 
 import '../share/share_file.dart';
 
-/// Show / save a generated PDF with a proper file name, the same way voucher
-/// PDFs do:
-///   • Mobile web: share / download the file directly (named).
-///   • Firefox: its PDF.js viewer ignores the print-job name and saves the file
-///     as "PDF.js viewer.pdf", so download it directly with the right name.
-///   • Other desktop browsers: normal print preview.
-/// File name convention: "Doc Name_d MMM yyyy.pdf", e.g.
-/// "Trial Balance_28 Sep 2026.pdf". [date] defaults to today.
-Future<void> outputPdf(Uint8List bytes, String docName, {DateTime? date}) async {
-  final fileBase = '${docName.trim()}_${DateFormat('d MMM yyyy').format(date ?? DateTime.now())}';
-  final safe = fileBase.replaceAll(RegExp(r'[\\/:*?"<>|]+'), '-').trim();
-  final name = '${safe.isEmpty ? 'document' : safe}.pdf';
+bool get _isMobileWeb {
   final ua = html.window.navigator.userAgent.toLowerCase();
-  final mobile = ua.contains('android') ||
+  return ua.contains('android') ||
       ua.contains('iphone') ||
       ua.contains('ipad') ||
       ua.contains('mobile');
-  if (mobile) {
+}
+
+String _safeName(String fileName) {
+  final base = fileName.toLowerCase().endsWith('.pdf')
+      ? fileName.substring(0, fileName.length - 4)
+      : fileName;
+  final safe = base.replaceAll(RegExp(r'[\\/:*?"<>|]+'), '-').trim();
+  return '${safe.isEmpty ? 'document' : safe}.pdf';
+}
+
+/// PRINT: show a PDF preview only — never downloads on its own; saving is the
+/// user's choice from the preview (or the Share button).
+///   • Desktop Chrome/Edge/Safari: the browser print preview.
+///   • Desktop Firefox: opens the PDF in a new tab (Firefox's viewer, with its
+///     own Print and Download buttons). Only if the browser blocks the new tab
+///     do we fall back to downloading it.
+///   • Mobile web: phones cannot show a print preview, so the file is handed to
+///     the share sheet / saved (the only way to print from a phone browser).
+Future<void> showPdf(Uint8List bytes, String fileName) async {
+  final name = _safeName(fileName);
+  if (_isMobileWeb) {
     await shareFileOnly(bytes, name);
-  } else if (ua.contains('firefox')) {
-    final url = html.Url.createObjectUrlFromBlob(html.Blob([bytes], 'application/pdf'));
+    return;
+  }
+  final ua = html.window.navigator.userAgent.toLowerCase();
+  if (!ua.contains('firefox')) {
+    await Printing.layoutPdf(onLayout: (PdfPageFormat _) async => bytes, name: name);
+    return;
+  }
+  // A named File (not a bare Blob) so Firefox's viewer offers the proper file
+  // name when the user chooses Download / Save from the preview.
+  final file = html.File([bytes], name, {'type': 'application/pdf'});
+  final url = html.Url.createObjectUrlFromBlob(file);
+  Object? win;
+  try {
+    win = js_util.callMethod(html.window, 'open', [url, '_blank']);
+  } catch (_) {
+    win = null;
+  }
+  if (win == null) {
+    // New tab blocked — download so the user still gets the document.
     final a = html.AnchorElement(href: url)
       ..download = name
       ..style.display = 'none';
@@ -38,7 +65,16 @@ Future<void> outputPdf(Uint8List bytes, String docName, {DateTime? date}) async 
       a.remove();
       html.Url.revokeObjectUrl(url);
     });
-  } else {
-    await Printing.layoutPdf(onLayout: (PdfPageFormat _) async => bytes, name: name);
   }
 }
+
+/// SHARE: hand the PDF to the device share sheet (WhatsApp, email…); on
+/// desktop browsers without Web Share this saves it with the proper name.
+Future<void> sharePdf(Uint8List bytes, String fileName) =>
+    shareFileOnly(bytes, _safeName(fileName));
+
+/// Report prints: preview with the name convention "Doc Name_d MMM yyyy",
+/// e.g. "Trial Balance_28 Sep 2026.pdf". [date] defaults to today.
+Future<void> outputPdf(Uint8List bytes, String docName, {DateTime? date}) =>
+    showPdf(bytes,
+        '${docName.trim()}_${DateFormat('d MMM yyyy').format(date ?? DateTime.now())}');

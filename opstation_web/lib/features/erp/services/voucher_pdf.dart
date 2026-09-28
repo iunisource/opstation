@@ -6,6 +6,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../../core/share/share_file.dart';
+import '../../../core/pdf/pdf_output.dart';
 import '../../../core/pdf/rtl_text_image.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -191,31 +192,18 @@ class VoucherPdf {
   ///   • Desktop: browser print preview (Print or Save-as-PDF, named [fileBase]).
   ///   • Mobile: the print preview cannot open, so DOWNLOAD the PDF directly —
   ///     sharePdf triggers the browser download / share sheet with the filename.
-  static Future<void> _output(Uint8List bytes, String fileBase) async {
-    final ua = html.window.navigator.userAgent.toLowerCase();
-    if (_isMobileWeb) {
-      // Share ONLY the PDF file (no text/link) so WhatsApp attaches just the doc.
-      await shareFileOnly(bytes, '$fileBase.pdf');
-    } else if (ua.contains('firefox')) {
-      // Firefox routes layoutPdf through its PDF.js viewer, which ignores the
-      // print-job name and defaults the saved file to "PDF.js viewer". Download
-      // the PDF directly with the proper filename instead.
-      final blob = html.Blob([bytes], 'application/pdf');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final a = html.AnchorElement(href: url)
-        ..download = '$fileBase.pdf'
-        ..style.display = 'none';
-      html.document.body!.append(a);
-      a.click();
-      Future.delayed(const Duration(seconds: 5), () { a.remove(); html.Url.revokeObjectUrl(url); });
+  static Future<void> _output(Uint8List bytes, String fileBase, {bool share = false}) async {
+    // Print = preview only (no automatic download); Share = share sheet /
+    // named save. See core/pdf/pdf_output.dart.
+    if (share) {
+      await sharePdf(bytes, '$fileBase.pdf');
     } else {
-      await Printing.layoutPdf(
-          onLayout: (PdfPageFormat format) async => bytes,
-          name: '$fileBase.pdf');
+      await showPdf(bytes, '$fileBase.pdf');
     }
   }
 
   static Future<void> printVoucher({
+    bool share = false, // true = Share button: share sheet / save instead of print preview
     required String voucherNumber,
     required String voucherTypeLabel,
     required String orgName,
@@ -277,7 +265,7 @@ class VoucherPdf {
       footerNote: footerNote, relatedRefs: relatedRefs,
       watermark: watermark, docTitle: fileBase, logoImage: logoImage,
     );
-    await _output(await doc.save(), fileBase);
+    await _output(await doc.save(), fileBase, share: share);
   }
 
   /// Stock transfer voucher (internal branch-to-branch; no pricing). Includes an

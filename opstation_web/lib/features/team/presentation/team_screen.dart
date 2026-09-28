@@ -379,7 +379,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       final org = await client.from('orgs').select('max_users').eq('id', orgId).maybeSingle();
       final max = (org?['max_users'] as num?)?.toInt();
       if (max == null || max <= 0) return true;
-      final rows = await client.from('users').select('id').eq('org_id', orgId);
+      final rows = await client.from('users').select('id').eq('org_id', orgId).or('role.is.null,role.neq.retailer');
       return (rows as List).length < max;
     } catch (_) {
       return true;

@@ -132,7 +132,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       final users = await client
           .from('users')
           .select('id, name, role')
-          .eq('org_id', orgId)
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer')
           .order('name');
       final custodians = await client
           .from('asset_custodians')

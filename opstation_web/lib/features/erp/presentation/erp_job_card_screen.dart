@@ -281,7 +281,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   Future<void> _loadUsers() async {
     final orgId = _orgId; if (orgId == null) return;
     try {
-      final rows = await Supabase.instance.client.from('users').select('id, name').eq('org_id', orgId).order('name').limit(500);
+      final rows = await Supabase.instance.client.from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer').order('name').limit(500);
       if (mounted) setState(() => _users = List<Map<String, dynamic>>.from(rows));
     } catch (_) {}
   }
@@ -617,8 +617,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final dateStr = DateFormat('yyyy-MM-dd').format(_date);
       final prio = int.tryParse(_priorityCtrl.text.trim()) ?? 0;
       if (_current == null) {
-        final cnt = await client.from('job_cards').select('id').eq('org_id', orgId);
-        num = 'JOB-${_date.year}-' + ((cnt as List).length + 1).toString().padLeft(4, '0');
+        final ex = await client.from('job_cards').select('job_number').eq('org_id', orgId)
+            .like('job_number', 'JOB-${_date.year}-%');
+        int mx = 0;
+        for (final r in (ex as List)) {
+          final n = int.tryParse((r['job_number'] as String? ?? '').split('-').last) ?? 0;
+          if (n > mx) mx = n;
+        }
+        num = 'JOB-${_date.year}-' + (mx + 1).toString().padLeft(4, '0');
         jId = 'job_' + DateTime.now().millisecondsSinceEpoch.toString();
         await client.from('job_cards').insert({
           'id': jId, 'org_id': orgId, 'branch_id': _branchId, 'job_number': num,

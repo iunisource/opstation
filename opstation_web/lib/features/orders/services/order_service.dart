@@ -79,7 +79,7 @@ class OrderService {
     final rows = await _client
         .from('users')
         .select('id, name, role')
-        .eq('org_id', orgId);
+        .eq('org_id', orgId).or('role.is.null,role.neq.retailer');
     return (rows as List)
         .cast<Map<String, dynamic>>()
         .where((u) => u['role'] == 'salesperson')

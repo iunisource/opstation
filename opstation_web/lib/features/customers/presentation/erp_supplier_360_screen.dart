@@ -328,7 +328,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     setState(() { _loadingActs = true; });
     try {
       final client = Supabase.instance.client;
-      final users = await client.from('users').select('id, name, role').eq('org_id', orgId).order('name');
+      final users = await client.from('users').select('id, name, role').eq('org_id', orgId).or('role.is.null,role.neq.retailer').order('name');
       final names = <String, String>{};
       for (final u in users) { names[u['id'] as String] = (u['name'] as String?) ?? 'Unknown'; }
       final rows = await client.from('customer_activities')

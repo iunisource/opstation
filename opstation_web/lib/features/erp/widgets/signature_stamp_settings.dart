@@ -48,11 +48,13 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
       final s = await client.from('app_config').select('value').eq('org_id', widget.orgId).eq('key', 'org.stamp_url').maybeSingle();
       _stampUrl = s?['value'] as String?;
       final us = await client.from('users').select('id, name, signature_url')
-          .eq('org_id', widget.orgId).order('name');
+          .eq('org_id', widget.orgId).or('role.is.null,role.neq.retailer').order('name');
+      // Staff only (retailer portal accounts are not users). Includes the
+      // signed-in admin — one list, one flow, for everyone's signature.
       _users = [
-        for (final u in us as List)
-          if (u['id'] != widget.userId) Map<String, dynamic>.from(u as Map),
+        for (final u in us as List) Map<String, dynamic>.from(u as Map),
       ];
+      _pickedUserId ??= widget.userId;
     } catch (_) {}
     if (mounted) setState(() => _loading = false);
   }
@@ -119,7 +121,12 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
         if ((res as List).isEmpty) {
           throw 'You do not have permission to change this user\'s signature';
         }
-        if (mounted) setState(() => u['signature_url'] = url);
+        if (mounted) {
+          setState(() {
+            u['signature_url'] = url;
+            if (uid == widget.userId) _sigUrl = url;
+          });
+        }
         _snack('Signature saved for ${u['name'] ?? 'user'}');
       }
     } catch (e) { _snack(friendlyError('That did not save', e)); }
@@ -130,7 +137,12 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
     setState(() => _busyOther = true);
     try {
       await Supabase.instance.client.from('users').update({'signature_url': null}).eq('id', u['id'] as String);
-      if (mounted) setState(() => u['signature_url'] = null);
+      if (mounted) {
+        setState(() {
+          u['signature_url'] = null;
+          if (u['id'] == widget.userId) _sigUrl = null;
+        });
+      }
       _snack('Signature removed');
     } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _busyOther = false);
@@ -140,10 +152,9 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
     final picked = _users.where((u) => u['id'] == _pickedUserId).toList();
     final u = picked.isEmpty ? null : picked.first;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Divider(height: 28),
-      const Text("Other users' signatures", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      const Text('User signatures', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
       const SizedBox(height: 4),
-      const Text('Upload a signature for any user. It prints on the Payment Advice (Created by / Approved by) and is captured at the moment they create or approve it.',
+      const Text('Pick a user (you included) and upload their signature. The same signature is used on invoices under the review flow and on the Payment Advice print.',
           style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.35)),
       const SizedBox(height: 10),
       SizedBox(
@@ -156,7 +167,7 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
             for (final x in _users)
               DropdownMenuItem(
                 value: x['id'] as String,
-                child: Text('${x['name'] ?? x['id']}${x['signature_url'] != null ? '  ✓' : ''}',
+                child: Text('${x['name'] ?? x['id']}${x['id'] == widget.userId ? ' (you)' : ''}${x['signature_url'] != null ? '  ✓' : ''}',
                     overflow: TextOverflow.ellipsis),
               ),
           ],
@@ -203,19 +214,21 @@ class _SignatureStampSettingsState extends State<SignatureStampSettings> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Signature & Company Stamp', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        const Text('Signatures & Company Stamp', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
-        const Text('Your signature and the company stamp print in the Approved By box when you approve an invoice under the review flow, and on Payment Advice prints.',
+        const Text('The company stamp prints next to the approver\'s signature.',
             style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
         const SizedBox(height: 14),
         if (_loading)
           const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
-        else
-          Wrap(spacing: 24, runSpacing: 16, children: [
+        else ...[
+          if (_users.isNotEmpty)
+            _otherUsers()
+          else
             _slot('My signature', _sigUrl, _busySig, _uploadSignature),
-            _slot('Company stamp', _stampUrl, _busyStamp, _uploadStamp),
-          ]),
-        if (!_loading && _users.isNotEmpty) _otherUsers(),
+          const Divider(height: 28),
+          _slot('Company stamp', _stampUrl, _busyStamp, _uploadStamp),
+        ],
       ]),
     );
   }

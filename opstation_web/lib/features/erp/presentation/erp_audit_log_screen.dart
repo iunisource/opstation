@@ -56,7 +56,7 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
       final users = await client
           .from('users')
           .select('id, name')
-          .eq('org_id', orgId)
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer')
           .order('name');
       final userList = List<Map<String, dynamic>>.from(users);
 

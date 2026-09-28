@@ -57,7 +57,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
         client.from('sales_routes').select().eq('org_id', orgId).order('name'),
         client.from('route_stops').select('route_id, customer_id, position').eq('org_id', orgId),
         client.from('route_assignments').select('route_id, user_id'),
-        client.from('users').select('id, name').eq('org_id', orgId),
+        client.from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer'),
       ]);
       final routes = res[0] as List;
       final stops = res[1] as List;

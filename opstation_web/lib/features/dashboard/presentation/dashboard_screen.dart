@@ -308,7 +308,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
     }
 
     final results = await Future.wait<dynamic>([
-      qCount(client.from('users').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
+      qCount(client.from('users').select('id').eq('org_id', widget.orgId).or('role.is.null,role.neq.retailer').count(CountOption.exact)),
       qCount(client.from('customers').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
       qCount(client.from('sales_routes').select('id').eq('org_id', widget.orgId).count(CountOption.exact)),
       // Active = ended_at IS NULL, regardless of start date. Only meaningful for

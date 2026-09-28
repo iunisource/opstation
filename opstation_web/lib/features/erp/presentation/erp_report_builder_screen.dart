@@ -320,7 +320,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     List<Map<String, dynamic>> users = [];
     try {
       final rows = await Supabase.instance.client
-          .from('users').select('id, name').eq('org_id', orgId).order('name');
+          .from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer').order('name');
       users = List<Map<String, dynamic>>.from(rows);
     } catch (_) {}
 
