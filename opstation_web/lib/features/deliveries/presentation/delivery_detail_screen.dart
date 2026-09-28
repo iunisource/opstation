@@ -9,6 +9,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../../core/storage/photo_url.dart';
 import '../../../core/theme/app_theme.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Read-only-ish detail page for a single delivery. Pulls the
 /// delivery row plus its stops from Supabase, shows everything that
@@ -315,7 +316,8 @@ class _DeliveryDetailScreenState
         ],
       ],
     ));
-    await Printing.layoutPdf(onLayout: (f) => doc.save());
+    await outputPdf(await doc.save(), 'Job Sheet - ${d['driver_name'] ?? 'Delivery'}',
+        date: DateTime.tryParse('${d['created_at'] ?? ''}')?.toLocal());
   }
 
   static pw.Widget _pdfCell(String text, {bool bold = false}) => pw.Padding(

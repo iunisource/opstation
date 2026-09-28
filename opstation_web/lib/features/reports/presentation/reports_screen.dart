@@ -7,6 +7,7 @@ import '../../auth/auth_controller.dart';
 import '../pdf/report_pdf_builder.dart';
 import '../../../core/widgets/responsive.dart';
 import 'package:printing/printing.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
   const ReportsScreen({super.key});
@@ -177,7 +178,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         orgName: orgName,
         duplicate: duplicate,
       );
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
+      await outputPdf(bytes, 'Trip Summary',
+          date: DateTime.tryParse('${trip['started_at'] ?? ''}')?.toLocal());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -200,7 +202,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         ctx: ctx,
         orgName: orgName,
       );
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
+      await outputPdf(bytes, 'Visit Report',
+          date: DateTime.tryParse('${trip['started_at'] ?? ''}')?.toLocal());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -10,6 +10,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Production Material Planner (BOM explosion / raw-material MRP).
 ///
@@ -560,10 +561,7 @@ class _ErpProductionPlanScreenState extends ConsumerState<ErpProductionPlanScree
         ),
       ],
     ));
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat f) async => doc.save(),
-      name: 'production-material-plan-${_ymd(DateTime.now())}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Production Material Plan');
   }
 
   // ── Excel ─────────────────────────────────────────────────────────────────────

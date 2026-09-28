@@ -19,6 +19,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
 import 'package:barcode/barcode.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class HrEmployeesScreen extends ConsumerStatefulWidget {
   const HrEmployeesScreen({super.key, this.focusId});
@@ -634,7 +635,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         );
       },
     ));
-    await Printing.layoutPdf(onLayout: (PdfPageFormat f) async => doc.save(), name: 'employee-card-' + code + '.pdf');
+    await outputPdf(await doc.save(), 'Employee Card - ' + code);
   }
 
   void _printProfile() {

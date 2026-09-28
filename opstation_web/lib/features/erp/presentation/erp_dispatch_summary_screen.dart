@@ -10,6 +10,7 @@ import '../../../core/widgets/saving_overlay.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Dispatch Summary — what left the warehouse (Delivery Orders) over a period,
 /// summarised customer-wise and product-wise. Quantities only: DO lines carry
@@ -255,7 +256,7 @@ class _ErpDispatchSummaryScreenState extends ConsumerState<ErpDispatchSummaryScr
         pw.Text('Total dispatched: ${_qtyFmt.format(totalQty)} (incl. FOC ${_qtyFmt.format(totalFoc)})', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
       ],
     ));
-    await Printing.layoutPdf(onLayout: (PdfPageFormat f) async => doc.save(), name: 'dispatch-summary-${_ymd(_from)}_${_ymd(_to)}.pdf');
+    await outputPdf(await doc.save(), 'Dispatch Summary', date: _to);
   }
 
   @override

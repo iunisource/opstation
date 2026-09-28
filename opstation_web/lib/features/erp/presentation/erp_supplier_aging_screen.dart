@@ -10,6 +10,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Supplier Aging: outstanding payables grouped by supplier with 0-30 /
 /// 31-60 / 61-90 / 91-120 / 120+ day buckets. Reads the GL Accounts-Payable
@@ -308,7 +309,7 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
         ],
       ],
     ));
-    await Printing.layoutPdf(onLayout: (f) async => doc.save(), name: 'supplier_aging_${DateFormat('yyyyMMdd').format(_asOf)}.pdf');
+    await outputPdf(await doc.save(), 'Supplier Aging', date: _asOf);
   }
 
   @override

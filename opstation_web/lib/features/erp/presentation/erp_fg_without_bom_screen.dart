@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Finished Goods without BOM — products that ought to be produced (grouped as
 /// finished goods) but have no *active* Product Assembly (BOM). Such an item
@@ -258,10 +259,7 @@ class _ErpFgWithoutBomScreenState extends ConsumerState<ErpFgWithoutBomScreen> {
         ),
       ],
     ));
-    await Printing.layoutPdf(
-      onLayout: (f) async => doc.save(),
-      name: 'fg-without-bom-${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Goods without BOM');
   }
 
   @override

@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../pdf/report_pdf_builder.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Combined Trip Summary — a multi-date, distance-only reimbursement sheet.
 /// Pick a salesperson (or all) and a date range; each day's total road
@@ -224,7 +225,7 @@ class _CombinedTripSummaryScreenState
         grandTotalKm: _grandKm,
         duplicate: duplicate,
       );
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
+      await outputPdf(bytes, 'Combined Trip Summary');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

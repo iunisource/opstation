@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../widgets/searchable_dropdown.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class IntelligenceCompetitorsScreen extends ConsumerStatefulWidget {
   const IntelligenceCompetitorsScreen({super.key});
@@ -292,10 +293,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
         categories: _categories,
         latest: _latest,
       );
-      await Printing.layoutPdf(
-        onLayout: (_) async => bytes,
-        name: 'competitor_spotting_${DateTime.now().toIso8601String().split('T').first}.pdf',
-      );
+      await outputPdf(bytes, 'Competitor Spotting');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

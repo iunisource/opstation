@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../widgets/searchable_dropdown.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class IntelligencePlacementScreen extends ConsumerStatefulWidget {
   const IntelligencePlacementScreen({super.key});
@@ -310,10 +311,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
         products: _filteredProducts,
         latest: _latest,
       );
-      await Printing.layoutPdf(
-        onLayout: (_) async => bytes,
-        name: 'placement_audit_${DateTime.now().toIso8601String().split('T').first}.pdf',
-      );
+      await outputPdf(bytes, 'Placement Audit');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -13,6 +13,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'salesperson_history_screen.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Expand a receipt-number field into every slip number it represents.
 /// Salespeople routinely staple several slips to one collection and type
@@ -2130,11 +2131,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
               }
           ],
         );
-        await Printing.layoutPdf(
-          onLayout: (_) async => vbytes,
-          name:
-              'team_visits_${_visitTypeFilter}_${_uname.replaceAll(' ', '_')}_${DateFormat('yyyyMMdd').format(_visitsTo)}.pdf',
-        );
+        await outputPdf(vbytes, 'Team Visits $_visitTypeFilter - $_uname', date: _visitsTo);
         return;
       }
       final bytes = await TeamReportPdf.periodReport(
@@ -2145,11 +2142,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
         trips: _isSurveyMode ? const [] : _tripsFiltered(),
         surveyDays: _isSurveyMode ? _surveyDayRows() : const [],
       );
-      await Printing.layoutPdf(
-        onLayout: (_) async => bytes,
-        name:
-            'team_report_${_uname.replaceAll(' ', '_')}_${DateFormat('yyyyMMdd').format(_visitsTo)}.pdf',
-      );
+      await outputPdf(bytes, 'Team Report - $_uname', date: _visitsTo);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -2193,10 +2186,8 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       );
       final dateStr =
           (t['started_at'] as String? ?? '').split('T').first.replaceAll('-', '');
-      await Printing.layoutPdf(
-        onLayout: (_) async => bytes,
-        name: 'market_visit_report_$dateStr.pdf',
-      );
+      await outputPdf(bytes, 'Market Visit Report - $_uname',
+          date: DateTime.tryParse((t['started_at'] as String? ?? ''))?.toLocal());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)

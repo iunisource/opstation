@@ -11,6 +11,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../intelligence/widgets/searchable_dropdown.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Customer Aging: outstanding receivables grouped by customer with 0-30 /
 /// 31-60 / 61-90 / 90+ day buckets. Sources unpaid sales_invoices.
@@ -335,7 +336,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
         ],
       ],
     ));
-    await Printing.layoutPdf(onLayout: (f) async => doc.save(), name: 'customer_aging_${DateFormat('yyyyMMdd').format(_asOf)}.pdf');
+    await outputPdf(await doc.save(), 'Customer Aging', date: _asOf);
   }
 
   @override

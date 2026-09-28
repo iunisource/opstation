@@ -10,6 +10,7 @@ import 'package:excel/excel.dart' as xls;
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class ErpPurchaseReportScreen extends ConsumerStatefulWidget {
   const ErpPurchaseReportScreen({super.key});
@@ -257,10 +258,7 @@ class _ErpPurchaseReportScreenState extends ConsumerState<ErpPurchaseReportScree
       ],
     ));
 
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat f) async => doc.save(),
-      name: 'purchase-report-${_ymd(_from)}_${_ymd(_to)}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Purchase Report', date: _to);
   }
 
   // ─────────────────────────────── Excel export ──────────────────────────────

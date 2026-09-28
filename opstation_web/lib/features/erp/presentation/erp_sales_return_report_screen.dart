@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 import '../../intelligence/widgets/searchable_dropdown.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Sales Return Report — all returns in a date range, from Sales Return
 /// (credit) Invoices and/or POS returns — a mirror of the Sales Report in reverse.
@@ -1223,9 +1224,6 @@ class _ErpSalesReturnReportScreenState extends ConsumerState<ErpSalesReturnRepor
       ],
     ));
 
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat f) async => doc.save(),
-      name: 'sales-return-report-${_ymd(_from)}_${_ymd(_to)}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Sales Return Report', date: _to);
   }
 }

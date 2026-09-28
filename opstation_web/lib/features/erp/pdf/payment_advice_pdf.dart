@@ -122,7 +122,7 @@ class PaymentAdvicePdf {
                     pw.Text(lines[i].partyName,
                         style: pw.TextStyle(
                             fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
-                    pw.Text(lines[i].partyType,
+                    pw.Text(lines[i].partyType == 'other' ? 'free text' : lines[i].partyType,
                         style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
                   ]),
             ),

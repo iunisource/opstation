@@ -10,6 +10,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Field Orders review queue. Salespeople submit orders from the mobile app;
 /// an admin reviews here, may edit qty / remove / add lines, then Approves
@@ -464,7 +465,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
         ),
       ],
     ));
-    await Printing.layoutPdf(onLayout: (PdfPageFormat f) async => doc.save(), name: 'field_orders_$_filter');
+    await outputPdf(await doc.save(), 'Field Orders');
   }
 
   Future<void> _editQty(Map<String, dynamic> line) async {

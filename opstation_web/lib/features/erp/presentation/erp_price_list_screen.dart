@@ -9,6 +9,7 @@ import 'package:excel/excel.dart' as xls;
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Price List Generator — pick Main Group / Group / Sub Group (each All or a
 /// multi-select), a margin %, and a cost source (Purchase = cost price,
@@ -379,10 +380,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         ),
       ],
     ));
-    await Printing.layoutPdf(
-      onLayout: (f) async => doc.save(),
-      name: 'price-list-${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Price List');
   }
 
   Future<void> _exportExcel() async {

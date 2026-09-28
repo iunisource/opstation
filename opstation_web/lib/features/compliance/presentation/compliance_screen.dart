@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 import 'package:excel/excel.dart' as xls;
 
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Compliance report — surfaces three classes of anomaly across the
 /// last 90 days, scoped to the current user's organization:
@@ -498,10 +499,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
         ),
       ],
     ));
-    await Printing.layoutPdf(
-      onLayout: (f) async => doc.save(),
-      name: 'compliance-${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Compliance Report');
   }
 
   Future<void> _exportExcel() async {

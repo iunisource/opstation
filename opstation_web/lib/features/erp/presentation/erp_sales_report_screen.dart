@@ -10,6 +10,7 @@ import 'package:printing/printing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Sales Report — all sales in a date range, from Sales Invoices and/or POS,
 /// filterable by customer Category and Group, broken down Product-wise or
@@ -1220,9 +1221,6 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       ],
     ));
 
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat f) async => doc.save(),
-      name: 'sales-report-${_ymd(_from)}_${_ymd(_to)}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Sales Report', date: _to);
   }
 }

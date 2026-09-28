@@ -10,6 +10,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Demand & Replenishment Planner.
 ///
@@ -615,10 +616,7 @@ class _ErpDemandPlanScreenState extends ConsumerState<ErpDemandPlanScreen> {
         ),
       ],
     ));
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat f) async => doc.save(),
-      name: 'demand-plan-${_ymd(DateTime.now())}.pdf',
-    );
+    await outputPdf(await doc.save(), 'Demand Plan');
   }
 
   // ── Excel ─────────────────────────────────────────────────────────────────────

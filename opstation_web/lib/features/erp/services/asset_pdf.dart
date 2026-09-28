@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 /// Printable asset datasheet — spec, placement, custody history and the
 /// maintenance log for a single asset. Styled to match VoucherPdf.
@@ -214,10 +215,7 @@ class AssetPdf {
       ],
     ));
 
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => doc.save(),
-      name: '$code.pdf',
-    );
+    await outputPdf(await doc.save(), 'Asset $code');
   }
 
   /// A small, print-ready QR label (~70x50mm) to stick on the physical asset.
@@ -271,10 +269,7 @@ class AssetPdf {
             ]),
       ),
     ));
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => doc.save(),
-      name: '$code-label.pdf',
-    );
+    await outputPdf(await doc.save(), 'Asset Label $code');
   }
 
   static pw.Widget _qr(String data, double size) => pw.BarcodeWidget(
@@ -314,10 +309,7 @@ class AssetPdf {
       margin: const pw.EdgeInsets.all(24),
       build: (ctx) => rows,
     ));
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => doc.save(),
-      name: 'asset-qr-labels.pdf',
-    );
+    await outputPdf(await doc.save(), 'Asset QR Labels');
   }
 
   static pw.Widget _labelCard(Map<String, String> l, String? orgName, String caption) {

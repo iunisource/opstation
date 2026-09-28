@@ -10,6 +10,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../../core/format/money.dart';
 import '../../../core/reports/branch_scope.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class ErpTrialBalanceScreen extends ConsumerStatefulWidget {
   const ErpTrialBalanceScreen({super.key});
@@ -106,7 +107,7 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
         ),
       ],
     ));
-    await Printing.layoutPdf(onLayout: (_) async => doc.save(), name: 'trial_balance.pdf');
+    await outputPdf(await doc.save(), 'Trial Balance', date: _to);
   }
 
 

@@ -2,12 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../pdf/payment_advice_pdf.dart';
+import '../../../core/pdf/pdf_output.dart';
 
 /// Payment Advice — a non-financial processing slip listing parties to pay,
 /// their bank details, amount due and amount to be paid, with a grand total.
@@ -24,7 +24,7 @@ class ErpPaymentAdviceScreen extends ConsumerStatefulWidget {
 class _Party {
   final String id;
   final String name;
-  final String type; // 'customer' | 'supplier'
+  final String type; // 'customer' | 'supplier' | 'other' (free text)
   final String bank;
   final double balance;
   final DateTime? lastPayment;
@@ -420,11 +420,20 @@ class _ErpPaymentAdviceScreenState
   // ── Party picker ───────────────────────────────────────────────────────
   Future<void> _pickParty(_PaLine line) async {
     if (_readOnly) return;
+    // Parties already on this advice (other lines) can't be picked again.
+    final taken = <String>{
+      for (final l in _lines)
+        if (l != line && l.partyId != null) _lineKey(l),
+    };
     final picked = await showDialog<_Party>(
       context: context,
-      builder: (_) => _PartyPickerDialog(parties: _parties),
+      builder: (_) => _PartyPickerDialog(parties: _parties, taken: taken),
     );
     if (picked == null) return;
+    if (taken.contains(_partyKey(picked.type, picked.id, picked.name))) {
+      _snack('${picked.name} is already on this advice.');
+      return;
+    }
     setState(() {
       line.partyId = picked.id;
       line.partyType = picked.type;
@@ -437,6 +446,12 @@ class _ErpPaymentAdviceScreenState
       }
     });
   }
+
+  /// Identity of a party on the advice: master parties by id, free-text
+  /// parties by (case-insensitive) name.
+  static String _partyKey(String type, String? id, String name) =>
+      type == 'other' ? 'other:${name.trim().toLowerCase()}' : '$type:$id';
+  static String _lineKey(_PaLine l) => _partyKey(l.partyType, l.partyId, l.partyName);
 
   void _insertBullet(TextEditingController c) {
     final t = c.text;
@@ -459,6 +474,13 @@ class _ErpPaymentAdviceScreenState
     if (valid.isEmpty) {
       _snack('Add at least one party.');
       return;
+    }
+    final seen = <String>{};
+    for (final l in valid) {
+      if (!seen.add(_lineKey(l))) {
+        _snack('${l.partyName} is on this advice twice — remove one before saving.');
+        return;
+      }
     }
     setState(() => _saving = true);
     try {
@@ -1214,7 +1236,9 @@ class _ErpPaymentAdviceScreenState
                   Icon(
                       l.partyType == 'customer'
                           ? Icons.store_outlined
-                          : Icons.local_shipping_outlined,
+                          : l.partyType == 'other'
+                              ? Icons.edit_note_outlined
+                              : Icons.local_shipping_outlined,
                       size: 18,
                       color: AppTheme.primary),
                   const SizedBox(width: 8),
@@ -1236,7 +1260,7 @@ class _ErpPaymentAdviceScreenState
                       decoration: BoxDecoration(
                           color: AppTheme.background,
                           borderRadius: BorderRadius.circular(4)),
-                      child: Text(l.partyType,
+                      child: Text(l.partyType == 'other' ? 'free text' : l.partyType,
                           style: const TextStyle(
                               fontSize: 10, color: AppTheme.textSecondary)),
                     ),
@@ -1355,7 +1379,7 @@ class _ErpPaymentAdviceScreenState
     }
     final existing = <String>{
       for (final l in _lines)
-        if (l.partyId != null) '${l.partyType}:${l.partyId}',
+        if (l.partyId != null) _lineKey(l),
     };
     final picked = await showDialog<List<_Party>>(
       context: context,
@@ -1411,7 +1435,9 @@ class _ErpPaymentAdviceScreenState
           Icon(
               l.partyType == 'customer'
                   ? Icons.store_outlined
-                  : Icons.local_shipping_outlined,
+                  : l.partyType == 'other'
+                      ? Icons.edit_note_outlined
+                      : Icons.local_shipping_outlined,
               size: 16,
               color: AppTheme.primary),
           const SizedBox(width: 8),
@@ -1525,9 +1551,9 @@ class _ErpPaymentAdviceScreenState
         voidedAt: DateTime.tryParse(a['voided_at'] as String? ?? ''),
         voidReason: a['void_reason'] as String?,
       );
-      await Printing.layoutPdf(
-          name: 'Payment Advice ${a['advice_number'] ?? ''}${accountsCopy ? ' (Accounts copy)' : ''}',
-          onLayout: (_) async => bytes);
+      await outputPdf(bytes,
+          'Payment Advice ${a['advice_number'] ?? ''}${accountsCopy ? ' Accounts copy' : ''}',
+          date: DateTime.tryParse(a['advice_date'] as String? ?? ''));
     } catch (e) {
       _snack('Print failed: $e');
     }
@@ -1749,7 +1775,9 @@ class _ErpPaymentAdviceScreenState
 // ── Party picker dialog ────────────────────────────────────────────────────
 class _PartyPickerDialog extends StatefulWidget {
   final List<_Party> parties;
-  const _PartyPickerDialog({required this.parties});
+  // Keys of parties already on the advice — shown greyed out, not pickable.
+  final Set<String> taken;
+  const _PartyPickerDialog({required this.parties, this.taken = const {}});
 
   @override
   State<_PartyPickerDialog> createState() => _PartyPickerDialogState();
@@ -1767,6 +1795,12 @@ class _PartyPickerDialogState extends State<_PartyPickerDialog> {
       if (q.isEmpty) return true;
       return p.name.toLowerCase().contains(q);
     }).toList();
+    final typed = _q.trim();
+    // Offer the typed text as a free-text party (someone not in the customer
+    // or supplier master), unless it exactly matches a master party.
+    final showFree = typed.isNotEmpty &&
+        !widget.parties.any((p) => p.name.trim().toLowerCase() == typed.toLowerCase());
+    final freeTaken = widget.taken.contains('other:${typed.toLowerCase()}');
     final mq = MediaQuery.of(context).size;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -1789,7 +1823,7 @@ class _PartyPickerDialogState extends State<_PartyPickerDialog> {
               TextField(
                 autofocus: true,
                 decoration: InputDecoration(
-                  hintText: 'Search parties…',
+                  hintText: 'Search, or type a new name…',
                   prefixIcon: const Icon(Icons.search, size: 18),
                   isDense: true,
                   border:
@@ -1808,15 +1842,34 @@ class _PartyPickerDialogState extends State<_PartyPickerDialog> {
             ]),
           ),
           const Divider(height: 1),
+          if (showFree)
+            ListTile(
+              dense: true,
+              enabled: !freeTaken,
+              tileColor: AppTheme.primary.withOpacity(0.06),
+              leading: const Icon(Icons.edit_note_outlined, size: 20, color: AppTheme.primary),
+              title: Text('Add "$typed" as a free-text party',
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                  freeTaken ? 'Already on this advice' : 'Not linked to a customer or supplier — enter bank details and amounts yourself',
+                  style: const TextStyle(fontSize: 11)),
+              onTap: freeTaken
+                  ? null
+                  : () => Navigator.pop(
+                      context,
+                      _Party('ft_${DateTime.now().microsecondsSinceEpoch}', typed, 'other', '', 0)),
+            ),
           Expanded(
             child: shown.isEmpty
-                ? const Center(child: Text('No matches'))
+                ? Center(child: Text(showFree ? 'No matching customer or supplier' : 'No matches'))
                 : ListView.builder(
                     itemCount: shown.length,
                     itemBuilder: (_, i) {
                       final p = shown[i];
+                      final isTaken = widget.taken.contains('${p.type}:${p.id}');
                       return ListTile(
                         dense: true,
+                        enabled: !isTaken,
                         leading: Icon(
                             p.type == 'customer'
                                 ? Icons.store_outlined
@@ -1825,12 +1878,14 @@ class _PartyPickerDialogState extends State<_PartyPickerDialog> {
                             color: AppTheme.primary),
                         title: Text(p.name),
                         subtitle: Text(
-                          p.balance != 0
-                              ? '${p.type} · due Rs ${p.balance.toStringAsFixed(0)}'
-                              : p.type,
+                          isTaken
+                              ? 'Already on this advice'
+                              : p.balance != 0
+                                  ? '${p.type} · due Rs ${p.balance.toStringAsFixed(0)}'
+                                  : p.type,
                           style: const TextStyle(fontSize: 11),
                         ),
-                        onTap: () => Navigator.pop(context, p),
+                        onTap: isTaken ? null : () => Navigator.pop(context, p),
                       );
                     },
                   ),
