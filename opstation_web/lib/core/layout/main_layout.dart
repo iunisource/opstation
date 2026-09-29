@@ -73,11 +73,19 @@ final orgModulesProvider = FutureProvider<Set<String>>((ref) async {
 final selectedBranchProvider = StateProvider<Map<String, dynamic>?>((ref) => null);
 
 // Branches available to this user
+// Supabase auth events (sign-in, token refresh, session restored on reload).
+// Branch loading re-runs on these, so a query that raced the session restore
+// (and came back empty under RLS) is repeated once the session is ready.
+final _authEventsProvider = StreamProvider<AuthChangeEvent>((ref) =>
+    Supabase.instance.client.auth.onAuthStateChange.map((d) => d.event));
+
 final userBranchesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   final user = ref.watch(currentUserProvider);
+  ref.watch(_authEventsProvider);
   if (user == null || user.orgId == null) return [];
-  try {
-    final client = Supabase.instance.client;
+  final client = Supabase.instance.client;
+
+  Future<List<Map<String, dynamic>>> fetch() async {
     if (user.role == WebUserRole.erpUser) {
       final res = await client
           .from('erp_user_branches')
@@ -91,20 +99,30 @@ final userBranchesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
               !((r['branches'] as Map)['is_virtual'] as bool? ?? false))
           .map((r) => Map<String, dynamic>.from(r['branches'] as Map))
           .toList();
-    } else {
-      final orgId = user.orgId!;
-      return List<Map<String, dynamic>>.from(
-          await client
-              .from('branches')
-              .select()
-              .eq('org_id', orgId)
-              .eq('is_active', true)
-              .eq('is_virtual', false)
-              .order('name'));
     }
-  } catch (_) {
-    return [];
+    return List<Map<String, dynamic>>.from(await client
+        .from('branches')
+        .select()
+        .eq('org_id', user.orgId!)
+        .eq('is_active', true)
+        .eq('is_virtual', false)
+        .order('name'));
   }
+
+  // After reopening the browser / signing in, the first request can run before
+  // the auth session is attached: RLS then returns ZERO rows (not an error),
+  // and the branch selector disappeared until something happened to reload
+  // it. Retry a few times, then keep checking in the background.
+  for (var attempt = 0; attempt < 4; attempt++) {
+    try {
+      final rows = await fetch();
+      if (rows.isNotEmpty) return rows;
+    } catch (_) {}
+    await Future.delayed(Duration(milliseconds: 700 * (attempt + 1)));
+  }
+  final t = Timer(const Duration(seconds: 20), ref.invalidateSelf);
+  ref.onDispose(t.cancel);
+  return [];
 });
 
 // Count of overdue open CRM follow-ups for the current org (sidebar badge).
