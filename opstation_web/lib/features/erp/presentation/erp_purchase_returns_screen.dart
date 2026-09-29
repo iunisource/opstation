@@ -11,6 +11,7 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// Purchase Return Notes (SRN) — open-ended return documents.
 ///
@@ -603,7 +604,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
           child: _listLoading
               ? const Center(child: CircularProgressIndicator())
               : filtered.isEmpty
-                  ? const Center(child: Text('No PRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
+                  ? const Center(child: BranchEmptyHint('No PRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
                   : ListView.separated(
                       itemCount: filtered.length,
                       separatorBuilder: (_, __) => const Divider(height: 1),

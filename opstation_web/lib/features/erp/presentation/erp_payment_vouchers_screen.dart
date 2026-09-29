@@ -8,6 +8,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class ErpPaymentVouchersScreen extends ConsumerStatefulWidget {
   const ErpPaymentVouchersScreen({super.key});
@@ -210,7 +211,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
               const Divider(height: 1),
               Expanded(
                 child: _vouchers.isEmpty
-                    ? const Center(child: Text('No payment vouchers yet.', style: TextStyle(color: AppTheme.textSecondary)))
+                    ? const Center(child: BranchEmptyHint('No payment vouchers yet.', style: TextStyle(color: AppTheme.textSecondary)))
                     : ListView.separated(
                         itemCount: _vouchers.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),

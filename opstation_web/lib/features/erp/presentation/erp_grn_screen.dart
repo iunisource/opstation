@@ -16,6 +16,7 @@ import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// GRN — Goods Receipt Note.
 /// Acts like DO but in reverse: receives stock from supplier against a confirmed PO.
@@ -643,7 +644,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       ],
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: BrandSpinner())
-          : filtered.isEmpty ? const Center(child: Text('No GRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
+          : filtered.isEmpty ? const Center(child: BranchEmptyHint('No GRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final r = filtered[i]; final sel = r['id'] == _selectedId;

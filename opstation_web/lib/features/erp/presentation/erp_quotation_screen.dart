@@ -12,6 +12,7 @@ import '../services/voucher_pdf.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 // ============================================================================
 // QUOTATION VOUCHER  (Sales module)
@@ -939,7 +940,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         ),
         const Divider(height: 1),
         Expanded(child: rows.isEmpty
-          ? const Center(child: Text('No quotations', style: TextStyle(color: AppTheme.textSecondary)))
+          ? const Center(child: BranchEmptyHint('No quotations', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(
               itemCount: rows.length,
               separatorBuilder: (_, __) => const Divider(height: 1),

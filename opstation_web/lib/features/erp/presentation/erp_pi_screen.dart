@@ -14,6 +14,7 @@ import '../services/voucher_meta.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// Purchase Invoice (PI) — Stage 3 of purchase flow.
 /// Created from a saved GRN. User enters unit cost + discount per line.
@@ -791,7 +792,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       ],
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: BrandSpinner())
-          : filtered.isEmpty ? const Center(child: Text('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
+          : filtered.isEmpty ? const Center(child: BranchEmptyHint('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final r = filtered[i]; final sel = r['id'] == _selectedId;

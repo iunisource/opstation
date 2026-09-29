@@ -17,6 +17,7 @@ import '../../../core/widgets/product_picker.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -1203,7 +1204,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               child: _listLoading
                   ? const Center(child: BrandSpinner())
                   : _filteredOrders.isEmpty
-                      ? const Center(child: Text('No orders', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
+                      ? const Center(child: BranchEmptyHint('No orders', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : ListView.separated(
                           itemCount: _filteredOrders.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
@@ -2654,7 +2655,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               child: _listLoading
                   ? const Center(child: BrandSpinner())
                   : _filteredOrders.isEmpty
-                      ? const Center(child: Text('No DOs', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
+                      ? const Center(child: BranchEmptyHint('No DOs', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : ListView.separated(
                           itemCount: _filteredOrders.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
@@ -4057,7 +4058,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               child: _listLoading
                   ? const Center(child: BrandSpinner())
                   : _filteredInvoices.isEmpty
-                      ? const Center(child: Text('No invoices', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
+                      ? const Center(child: BranchEmptyHint('No invoices', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : ListView.separated(
                           itemCount: _filteredInvoices.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),

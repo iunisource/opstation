@@ -11,6 +11,7 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// Sales Return Invoice (SRI) — Stage 2 of sales return flow.
 /// Created from a confirmed SRN. User sets price + discount per item.
@@ -531,7 +532,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       ],
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
-          : filtered.isEmpty ? const Center(child: Text('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
+          : filtered.isEmpty ? const Center(child: BranchEmptyHint('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final r = filtered[i]; final sel = r['id'] == _selectedId;

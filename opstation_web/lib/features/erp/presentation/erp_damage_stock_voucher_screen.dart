@@ -8,6 +8,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class _DLine {
   static int _seq = 0;
@@ -274,7 +275,7 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
                 onChanged: (v) => setState(() => _listSearch = v)),
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            : filtered.isEmpty ? const Center(child: Text('No damage vouchers yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : filtered.isEmpty ? const Center(child: BranchEmptyHint('No damage vouchers yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
             : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
                 final v = filtered[i]; final sel = _current?['id'] == v['id'];
                 final posted = (v['status'] as String? ?? 'draft') == 'posted';

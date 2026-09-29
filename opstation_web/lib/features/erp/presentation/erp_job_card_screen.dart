@@ -20,6 +20,7 @@ import '../../../core/notifications/global_job_alert.dart';
 import '../../../core/permissions/access_control.dart';
 import 'package:go_router/go_router.dart';
 import 'running_dot.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class _JobMat {
   static int _seq = 0;
@@ -2123,7 +2124,7 @@ $runSection
               ),
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            : filtered.isEmpty ? Center(child: Text(_jobs.isEmpty ? 'No job cards yet' : 'No jobs match this filter', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : filtered.isEmpty ? Center(child: BranchEmptyHint(_jobs.isEmpty ? 'No job cards yet' : 'No jobs match this filter', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
             : ListView(children: [
                 // Active jobs (queued / in progress). When the filter itself is a
                 // finished status, activeJobs is empty and only the section below shows.

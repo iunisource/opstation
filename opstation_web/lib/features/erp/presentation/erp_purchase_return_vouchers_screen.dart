@@ -11,6 +11,7 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// Purchase Return Invoices (PRI) — stage 2 of the purchase return flow.
 ///
@@ -528,7 +529,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
             : filtered.isEmpty
-                ? const Center(child: Text('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
+                ? const Center(child: BranchEmptyHint('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
                 : ListView.separated(
                     itemCount: filtered.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),

@@ -14,6 +14,7 @@ import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/product_picker.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class ErpPurchaseScreen extends ConsumerStatefulWidget {
   const ErpPurchaseScreen({super.key, this.focusId, this.seedProductId, this.seedQty, this.seedBranchId});
@@ -1086,7 +1087,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           ])),
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: BrandSpinner())
-            : filtered.isEmpty ? const Center(child: Text('No POs yet.', style: TextStyle(color: AppTheme.textSecondary)))
+            : filtered.isEmpty ? const Center(child: BranchEmptyHint('No POs yet.', style: TextStyle(color: AppTheme.textSecondary)))
             : ListView.separated(
                 itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (_, i) {

@@ -10,6 +10,7 @@ import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 String _stStatusLabel(String s) {
   switch (s) {
@@ -355,7 +356,7 @@ class _ErpStockTransfersScreenState
                       Expanded(
                         child: filtered.isEmpty
                             ? Center(
-                                child: Text(
+                                child: BranchEmptyHint(
                                     _transfers.isEmpty
                                         ? 'No stock transfers yet.'
                                         : 'No transfers match this filter.',

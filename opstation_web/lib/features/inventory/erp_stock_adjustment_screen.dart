@@ -25,6 +25,7 @@ import '../../core/format/money.dart';
 import '../../core/search/text_search.dart';
 import '../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../auth/auth_controller.dart';        // exposes currentUserProvider (WebUser: id, orgId)
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class ErpStockAdjustmentScreen extends ConsumerStatefulWidget {
   const ErpStockAdjustmentScreen({super.key});
@@ -708,7 +709,7 @@ class _ErpStockAdjustmentScreenState
                 ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
                 : filtered.isEmpty
                     ? const Center(
-                        child: Text('No vouchers yet',
+                        child: BranchEmptyHint('No vouchers yet',
                             style:
                                 TextStyle(fontSize: 12, color: Colors.black54)))
                     : ListView.builder(

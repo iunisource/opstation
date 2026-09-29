@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// Field Orders review queue. Salespeople submit orders from the mobile app;
 /// an admin reviews here, may edit qty / remove / add lines, then Approves
@@ -538,7 +539,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
 
   Widget _queueList() {
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_orders.isEmpty) return Center(child: Text('No $_filter orders', style: const TextStyle(color: AppTheme.textSecondary)));
+    if (_orders.isEmpty) return Center(child: BranchEmptyHint('No $_filter orders', style: const TextStyle(color: AppTheme.textSecondary)));
     return ListView.separated(
       itemCount: _orders.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),

@@ -9,6 +9,7 @@ import '../../../core/widgets/product_picker.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// Processor Job-work — a transformed return: input(s) sitting at a processor are
 /// consumed and different output product(s) come back to a home branch. Cost
@@ -704,7 +705,7 @@ class _ErpProcessorJobworkScreenState
       const SizedBox(height: 20),
       Expanded(
         child: _list.isEmpty
-            ? const Center(child: Text('No job-work receipts yet.',
+            ? const Center(child: BranchEmptyHint('No job-work receipts yet.',
                 style: TextStyle(color: AppTheme.textSecondary)))
             : Container(
                 decoration: BoxDecoration(
