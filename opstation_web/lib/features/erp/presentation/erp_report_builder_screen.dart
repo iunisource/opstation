@@ -24,6 +24,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   final List<String> _cols = [];
   final List<String> _values = [];
   final Map<String, _Cond> _filters = {};
+  // User-arranged display order of the result table's columns (drag headers).
+  // Empty = default (Rows, Columns, then Values).
+  List<String> _colOrder = [];
   DateTime? _dateFrom;
   DateTime? _dateTo;
   String _view = 'table'; // table | pivot | chart
@@ -106,6 +109,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     setState(() {
       _source = src;
       _rows.clear(); _cols.clear(); _values.clear(); _filters.clear();
+      _colOrder = [];
       _result = []; _error = null;
     });
   }
@@ -122,6 +126,49 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       else if (zone == 'cols') _cols.add(field);
       else if (zone == 'values') { _filters.remove(field); _values.add(field); }
     });
+  }
+
+  /// Put [field] into [zone] at [index] (drag & drop). Same rules as
+  /// [_assign]: a field lives in one of Rows/Columns/Values at a time.
+  void _assignAt(String field, String zone, int index) {
+    setState(() {
+      for (final l in [_rows, _cols, _values]) {
+        final i = l.indexOf(field);
+        if (i >= 0) {
+          l.removeAt(i);
+          // Moving later in the SAME list shifts the target index down by one.
+          if (identical(l, _zoneList(zone)) && i < index) index--;
+        }
+      }
+      final list = _zoneList(zone);
+      if (list == null) return;
+      if (zone == 'values') _filters.remove(field);
+      list.insert(index.clamp(0, list.length), field);
+    });
+  }
+
+  List<String>? _zoneList(String zone) =>
+      zone == 'rows' ? _rows : zone == 'cols' ? _cols : zone == 'values' ? _values : null;
+
+  bool _isMeasureField(String f) => _measures.any((m) => m['field'] == f);
+
+  /// Result-table columns in the user's arranged order (dragged headers first,
+  /// in their order; anything new appended in the default order).
+  List<String> get _orderedCols {
+    final base = [..._rows, ..._cols, ..._values];
+    final out = <String>[for (final c in _colOrder) if (base.contains(c)) c];
+    for (final c in base) {
+      if (!out.contains(c)) out.add(c);
+    }
+    return out;
+  }
+
+  void _moveColumn(String dragged, String before) {
+    if (dragged == before) return;
+    final order = [..._orderedCols]..remove(dragged);
+    final i = order.indexOf(before);
+    order.insert(i < 0 ? order.length : i, dragged);
+    setState(() => _colOrder = order);
   }
 
   static const Map<String, String> _opLabels = {
@@ -376,6 +423,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         'created_by': ref.read(currentUserProvider)?.id,
         'config': {
           'rows': _rows, 'cols': _cols, 'values': _values, 'filters': _filters.map((k, v) => MapEntry(k, {'op': v.op, 'vals': v.vals})), 'view': _view,
+          'col_order': _orderedCols,
           'date_from': _dateFrom != null ? DateFormat('yyyy-MM-dd').format(_dateFrom!) : null,
           'date_to': _dateTo != null ? DateFormat('yyyy-MM-dd').format(_dateTo!) : null,
         },
@@ -413,6 +461,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         });
       }
       _view = cfg['view'] as String? ?? 'table';
+      _colOrder = List<String>.from((cfg['col_order'] as List?) ?? const []);
       _dateFrom = cfg['date_from'] != null ? DateTime.tryParse(cfg['date_from']) : null;
       _dateTo = cfg['date_to'] != null ? DateTime.tryParse(cfg['date_to']) : null;
     });
@@ -480,6 +529,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
           onChanged: (v) { if (v != null) setState(() => _chartType = v); }),
         if (_isAdmin) OutlinedButton.icon(onPressed: _saveTemplate, icon: const Icon(Icons.bookmark_add_outlined, size: 16), label: const Text('Save')),
         OutlinedButton.icon(onPressed: _result.isEmpty ? null : _export, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
+        if (_colOrder.isNotEmpty && _view == 'table')
+          TextButton.icon(onPressed: () => setState(() => _colOrder = []),
+              icon: const Icon(Icons.view_column_outlined, size: 16), label: const Text('Reset column order')),
         if (_templates.isNotEmpty) PopupMenuButton<Map<String, dynamic>>(
           tooltip: 'Load template',
           onSelected: _loadTemplate,
@@ -518,6 +570,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
           onChanged: (v) => setState(() => _fieldSearch = v),
         ),
         const SizedBox(height: 6),
+        const Text('Drag fields into Rows, Columns, Values or Filters — or use the buttons. Drag chips to reorder or move them.',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        const SizedBox(height: 6),
         // Legend so the R / C / Σ / filter buttons aren't cryptic.
         Wrap(spacing: 10, runSpacing: 2, children: const [
           _LegendChip('R', 'Rows'), _LegendChip('C', 'Columns'),
@@ -537,18 +592,75 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     );
   }
 
+  bool _zoneAccepts(String zone, _DragField d) =>
+      zone == 'values' ? d.isMeasure : !d.isMeasure;
+
+  Widget _dragFeedback(String text, Color c) => Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(14),
+              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3))]),
+          child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+        ),
+      );
+
   Widget _zone(String title, List<String> items, Color c, [String? hint]) {
+    final zone = title == 'Rows' ? 'rows' : title == 'Columns' ? 'cols' : 'values';
+    Widget chip(String f, int i) {
+      final ch = Chip(
+        avatar: Icon(Icons.drag_indicator, size: 14, color: c.withOpacity(0.7)),
+        label: Text(_label(f), style: const TextStyle(fontSize: 11)),
+        visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        onDeleted: () => setState(() { _rows.remove(f); _cols.remove(f); _values.remove(f); }),
+      );
+      // Each chip is draggable (reorder / move to another zone) and is itself a
+      // drop spot: dropping on it inserts BEFORE it.
+      return DragTarget<_DragField>(
+        onWillAcceptWithDetails: (d) => _zoneAccepts(zone, d.data) && d.data.field != f,
+        onAcceptWithDetails: (d) => _assignAt(d.data.field, zone, i),
+        builder: (ctx, cand, _) => Container(
+          decoration: BoxDecoration(
+            border: Border(left: BorderSide(color: cand.isNotEmpty ? c : Colors.transparent, width: 3)),
+          ),
+          child: Draggable<_DragField>(
+            data: _DragField(f, _isMeasureField(f)),
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: _dragFeedback(_label(f), c),
+            childWhenDragging: Opacity(opacity: 0.35, child: ch),
+            child: MouseRegion(cursor: SystemMouseCursors.grab, child: ch),
+          ),
+        ),
+      );
+    }
     return Padding(padding: const EdgeInsets.only(bottom: 10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(title, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
       const SizedBox(height: 4),
-      Container(width: double.infinity, constraints: const BoxConstraints(minHeight: 36), padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(color: c.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: c.withOpacity(0.25))),
-        child: items.isEmpty ? Text(hint ?? '—', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))
-          : Wrap(spacing: 4, runSpacing: 4, children: items.map((f) => Chip(
-              label: Text(_label(f), style: const TextStyle(fontSize: 11)),
-              visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              onDeleted: () => setState(() { _rows.remove(f); _cols.remove(f); _values.remove(f); }),
-            )).toList())),
+      DragTarget<_DragField>(
+        onWillAcceptWithDetails: (d) => _zoneAccepts(zone, d.data),
+        onAcceptWithDetails: (d) => _assignAt(d.data.field, zone, items.length),
+        builder: (ctx, cand, rejected) {
+          final hot = cand.isNotEmpty;
+          final bad = rejected.isNotEmpty;
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: double.infinity, constraints: const BoxConstraints(minHeight: 36), padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: hot ? c.withOpacity(0.14) : c.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                  color: bad ? Colors.red.withOpacity(0.5) : hot ? c : c.withOpacity(0.25),
+                  width: hot || bad ? 1.6 : 1),
+            ),
+            child: items.isEmpty
+                ? Text(bad ? (zone == 'values' ? 'Only numbers (measures) go here' : 'Numbers go to Values') : (hot ? 'Drop here' : (hint ?? '—')),
+                    style: TextStyle(fontSize: 11, color: bad ? Colors.red : AppTheme.textSecondary))
+                : Wrap(spacing: 4, runSpacing: 4, children: [
+                    for (var i = 0; i < items.length; i++) chip(items[i], i),
+                  ]),
+          );
+        },
+      ),
     ]));
   }
 
@@ -556,9 +668,11 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     return Padding(padding: const EdgeInsets.only(bottom: 10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('Filters', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.orange)),
       const SizedBox(height: 4),
-      Container(width: double.infinity, constraints: const BoxConstraints(minHeight: 36), padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(color: Colors.orange.withOpacity(0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.25))),
-        child: _filters.isEmpty ? const Text('—', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
+      DragTarget<_DragField>(
+        onAcceptWithDetails: (d) => _addFilter(d.data.field),
+        builder: (ctx, cand, _) => Container(width: double.infinity, constraints: const BoxConstraints(minHeight: 36), padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(color: Colors.orange.withOpacity(cand.isNotEmpty ? 0.14 : 0.05), borderRadius: BorderRadius.circular(6), border: Border.all(color: cand.isNotEmpty ? Colors.orange : Colors.orange.withOpacity(0.25), width: cand.isNotEmpty ? 1.6 : 1)),
+        child: _filters.isEmpty ? Text(cand.isNotEmpty ? 'Drop to add a condition' : 'Drag a field here to filter', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))
           : Wrap(spacing: 4, runSpacing: 4, children: _filters.entries.map((e) {
               final cond = e.value;
               final opl = _opLabels[cond.op] ?? cond.op;
@@ -568,14 +682,14 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
                 visualDensity: VisualDensity.compact, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 onDeleted: () => setState(() => _filters.remove(e.key)),
               );
-            }).toList())),
+            }).toList()))),
     ]));
   }
 
   Widget _dimRow(String field, String label) {
     final used = _rows.contains(field) || _cols.contains(field);
     return Padding(padding: const EdgeInsets.symmetric(vertical: 1), child: Row(children: [
-      Expanded(child: Text(label, style: TextStyle(fontSize: 12, color: used ? AppTheme.textSecondary : AppTheme.textPrimary))),
+      Expanded(child: _draggableField(field, label, false, used)),
       _miniBtn('R', 'Add to Rows', () => _assign(field, 'rows')),
       _miniBtn('C', 'Add to Columns', () => _assign(field, 'cols')),
       IconButton(icon: const Icon(Icons.filter_alt_outlined, size: 16), tooltip: 'Add filter', visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 26, minHeight: 26), onPressed: () => _addFilter(field)),
@@ -585,10 +699,26 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
   Widget _measureRow(String field, String label) {
     final used = _values.contains(field);
     return Padding(padding: const EdgeInsets.symmetric(vertical: 1), child: Row(children: [
-      Expanded(child: Text(label, style: TextStyle(fontSize: 12, color: used ? AppTheme.textSecondary : AppTheme.textPrimary))),
+      Expanded(child: _draggableField(field, label, true, used)),
       _miniBtn('Σ', 'Add to Values', () => _assign(field, 'values')),
       IconButton(icon: const Icon(Icons.filter_alt_outlined, size: 16), tooltip: 'Filter measure (after totals)', visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 26, minHeight: 26), onPressed: () => _addFilter(field)),
     ]));
+  }
+
+  Widget _draggableField(String field, String label, bool isMeasure, bool used) {
+    final row = Row(children: [
+      Icon(Icons.drag_indicator, size: 14, color: AppTheme.textSecondary.withOpacity(0.6)),
+      const SizedBox(width: 2),
+      Expanded(child: Text(label, overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 12, color: used ? AppTheme.textSecondary : AppTheme.textPrimary))),
+    ]);
+    return Draggable<_DragField>(
+      data: _DragField(field, isMeasure),
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      feedback: _dragFeedback(label, isMeasure ? Colors.deepPurple : AppTheme.primary),
+      childWhenDragging: Opacity(opacity: 0.4, child: row),
+      child: MouseRegion(cursor: SystemMouseCursors.grab, child: row),
+    );
   }
 
   Widget _miniBtn(String t, String tip, VoidCallback onTap) => Tooltip(message: tip, child: InkWell(onTap: onTap,
@@ -675,7 +805,8 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
   Widget _table() {
     final dims = [..._rows, ..._cols];
-    final cols = [...dims, ..._values];
+    final cols = _orderedCols;
+    final labelCol = cols.firstWhere((c) => !_values.contains(c), orElse: () => cols.first);
 
     // Sort a display copy by the dimensions so each group is contiguous — that
     // lets us drop a subtotal row after every group, plus a grand total.
@@ -698,20 +829,14 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
     DataRow totalRow(String label, Iterable<Map<String, dynamic>> group, {required bool grand}) {
       final weight = grand ? FontWeight.w800 : FontWeight.w700;
-      final cells = <DataCell>[];
-      for (var i = 0; i < dims.length; i++) {
-        cells.add(DataCell(Text(i == 0 ? label : '', style: TextStyle(fontSize: 12, fontWeight: weight))));
-      }
-      if (dims.isEmpty) {
-        cells.add(DataCell(Text(label, style: TextStyle(fontSize: 12, fontWeight: weight))));
-      }
-      for (var j = 0; j < _values.length; j++) {
-        final m = _values[j];
-        // When there are no dimension columns, the label already used the first
-        // measure cell — keep alignment by leaving that first measure blank.
-        if (dims.isEmpty && j == 0) { cells.add(const DataCell(Text(''))); continue; }
-        cells.add(DataCell(Text(_fmt(_sumMeasure(group, m)), style: TextStyle(fontSize: 12, fontWeight: weight))));
-      }
+      // Follows the arranged column order: totals under measures, the label in
+      // the first dimension column.
+      final cells = <DataCell>[
+        for (final c in cols)
+          DataCell(Text(
+              _values.contains(c) ? _fmt(_sumMeasure(group, c)) : (c == labelCol ? label : ''),
+              style: TextStyle(fontSize: 12, fontWeight: weight))),
+      ];
       return DataRow(
         color: MaterialStateProperty.all(grand ? AppTheme.background : AppTheme.background.withOpacity(0.45)),
         cells: cells,
@@ -748,10 +873,38 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: DataTable(
         headingRowHeight: 42, dataRowMinHeight: 38, dataRowMaxHeight: 48,
-        columns: cols.map((c) => DataColumn(label: Text(_label(c), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)), numeric: _values.contains(c))).toList(),
+        columns: cols.map((c) => DataColumn(label: _headerCell(c), numeric: _values.contains(c))).toList(),
         rows: rows,
       ),
     )));
+  }
+
+  /// Table header that can be dragged onto another header to move the column
+  /// there (drop = insert before that column).
+  Widget _headerCell(String c) {
+    final text = Row(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.drag_indicator, size: 13, color: AppTheme.textSecondary),
+      const SizedBox(width: 2),
+      Text(_label(c), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+    ]);
+    return DragTarget<_ColDrag>(
+      onWillAcceptWithDetails: (d) => d.data.key != c,
+      onAcceptWithDetails: (d) => _moveColumn(d.data.key, c),
+      builder: (ctx, cand, _) => Container(
+        padding: const EdgeInsets.only(left: 4),
+        decoration: BoxDecoration(
+          border: Border(left: BorderSide(color: cand.isNotEmpty ? AppTheme.primary : Colors.transparent, width: 3)),
+        ),
+        child: Draggable<_ColDrag>(
+          data: _ColDrag(c),
+          axis: Axis.horizontal,
+          dragAnchorStrategy: pointerDragAnchorStrategy,
+          feedback: _dragFeedback(_label(c), AppTheme.primary),
+          childWhenDragging: Opacity(opacity: 0.35, child: text),
+          child: MouseRegion(cursor: SystemMouseCursors.grab, child: text),
+        ),
+      ),
+    );
   }
 
   Widget _pivot() {
@@ -924,7 +1077,8 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     if (_view == 'pivot' && _rows.isNotEmpty && _values.isNotEmpty) {
       buf.write(_crosstabHtml());
     } else {
-      final cols = [...dims, ..._values];
+      final cols = _orderedCols;
+      final labelCol = cols.firstWhere((c) => !_values.contains(c), orElse: () => cols.first);
       // Sort by dimensions so groups are contiguous for subtotals (mirrors the
       // on-screen Table view).
       final data = [..._result];
@@ -939,13 +1093,12 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       }
       void totalTr(String label, Iterable<Map<String, dynamic>> group) {
         buf.write('<tr class="total">');
-        for (var i = 0; i < dims.length; i++) {
-          buf.write('<td>${i == 0 ? _esc(label) : ''}</td>');
-        }
-        if (dims.isEmpty) buf.write('<td>${_esc(label)}</td>');
-        for (var j = 0; j < _values.length; j++) {
-          if (dims.isEmpty && j == 0) { buf.write('<td class="num"></td>'); continue; }
-          buf.write('<td class="num">${_esc(_fmt(_sumMeasure(group, _values[j])))}</td>');
+        for (final c in cols) {
+          if (_values.contains(c)) {
+            buf.write('<td class="num">${_esc(_fmt(_sumMeasure(group, c)))}</td>');
+          } else {
+            buf.write('<td>${c == labelCol ? _esc(label) : ''}</td>');
+          }
         }
         buf.write('</tr>');
       }
@@ -1028,6 +1181,19 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     b.write('<td class="num">${_esc(_fmt(grand))}</td></tr></tbody></table>');
     return b.toString();
   }
+}
+
+/// Drag payload: a field (from the field list or a zone chip).
+class _DragField {
+  final String field;
+  final bool isMeasure;
+  const _DragField(this.field, this.isMeasure);
+}
+
+/// Drag payload: a result-table column header.
+class _ColDrag {
+  final String key;
+  const _ColDrag(this.key);
 }
 
 class _Cond {
