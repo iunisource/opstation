@@ -14,6 +14,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'salesperson_history_screen.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import 'package:opstation_web/features/reports/pdf/report_pdf_builder.dart';
 
 /// Expand a receipt-number field into every slip number it represents.
 /// Salespeople routinely staple several slips to one collection and type
@@ -1953,7 +1954,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                       child: IconButton(
                         icon: const Icon(Icons.picture_as_pdf_outlined,
                             size: 18, color: AppTheme.primary),
-                        tooltip: 'Market Visit Report',
+                        tooltip: 'Visit Report',
                         onPressed: () => _marketVisitReport(t),
                       ),
                     ),
@@ -2177,16 +2178,18 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
           custs[c['id'] as String] = Map<String, dynamic>.from(c);
         }
       }
-      final bytes = await TeamReportPdf.marketVisitReport(
-        orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
-        salesperson: _uname,
+      // Same builder as the Reports screen and the mobile app, so the Visit
+      // Report is identical wherever it is generated.
+      final ctx = TripReportContext.build(
         trip: t,
         visits: visits,
-        customers: custs,
+        customersById: custs,
       );
-      final dateStr =
-          (t['started_at'] as String? ?? '').split('T').first.replaceAll('-', '');
-      await outputPdf(bytes, 'Market Visit Report - $_uname',
+      final bytes = await ReportPdfBuilder.buildVisitReport(
+        ctx: ctx,
+        orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      );
+      await outputPdf(bytes, 'Visit Report',
           date: DateTime.tryParse((t['started_at'] as String? ?? ''))?.toLocal());
     } catch (e) {
       if (mounted) {

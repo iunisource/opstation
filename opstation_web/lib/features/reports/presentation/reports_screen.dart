@@ -19,6 +19,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   List<Map<String, dynamic>> _trips = [];
   List<Map<String, dynamic>> _users = [];
   bool _loading = true;
+  // Visits + customers arrive after the trip list; counts and PDFs wait on it.
+  bool _visitsReady = false;
   // Holds the reason a load failed. Previously every error was swallowed by a
   // bare `catch (_)`, so a timed-out or rejected query looked identical to
   // "there are genuinely no trips" — which sent us hunting a data bug that
@@ -48,23 +50,25 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
     setState(() {
       _loading = true;
+      _visitsReady = false;
       _error = null;
     });
     try {
       final client = Supabase.instance.client;
-      final users = await client.from('users').select('id, name').eq('org_id', orgId).eq('role', 'salesperson');
-      List<Map<String, dynamic>> trips;
-      if (_selectedUserId != null) {
-        trips = await client.from('trips').select().eq('org_id', orgId)
-            .eq('user_id', _selectedUserId!)
-            .gte('started_at', _range!.start.toIso8601String())
-            .lte('started_at', _range!.end.add(const Duration(days: 1)).toIso8601String())
-            .order('started_at', ascending: false);
-      } else {
-        trips = await client.from('trips').select().eq('org_id', orgId)
-            .gte('started_at', _range!.start.toIso8601String())
-            .lte('started_at', _range!.end.add(const Duration(days: 1)).toIso8601String())
-            .order('started_at', ascending: false);
+      // Salespeople and trips load in parallel.
+      var tripsQ = client.from('trips').select().eq('org_id', orgId)
+          .gte('started_at', _range!.start.toIso8601String())
+          .lte('started_at', _range!.end.add(const Duration(days: 1)).toIso8601String());
+      if (_selectedUserId != null) tripsQ = tripsQ.eq('user_id', _selectedUserId!);
+      final first = await Future.wait<List<Map<String, dynamic>>>([
+        client.from('users').select('id, name').eq('org_id', orgId).eq('role', 'salesperson'),
+        tripsQ.order('started_at', ascending: false),
+      ]);
+      final users = first[0];
+      final trips = first[1];
+      if (mounted) {
+        // Trips show immediately; stop counts fill in once visits arrive.
+        setState(() => _loading = false);
       }
       // Pre-fetch visits + customers for displayed trips so we can
       // show stop counts inline + power the per-row PDF buttons.
@@ -89,15 +93,16 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         // overruns the server's URL limit and comes back as a bare
         // 400 Bad Request. Once a week held enough trips the whole screen
         // started failing. Fetch in batches and merge.
+        // Batches run IN PARALLEL (they used to run one after another).
         final v = <Map<String, dynamic>>[];
+        final vBatches = <Future<List<Map<String, dynamic>>>>[];
         for (var i = 0; i < tripIds.length; i += 40) {
           final batch = tripIds.sublist(
               i, i + 40 > tripIds.length ? tripIds.length : i + 40);
-          final rows = await client
-              .from('visits')
-              .select()
-              .inFilter('trip_id', batch);
-          v.addAll(List<Map<String, dynamic>>.from(rows));
+          vBatches.add(client.from('visits').select().inFilter('trip_id', batch));
+        }
+        for (final rows in await Future.wait(vBatches)) {
+          v.addAll(rows);
         }
         for (final row in v) {
           final m = Map<String, dynamic>.from(row);
@@ -109,13 +114,16 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
             .toSet()
             .toList();
         if (custIds.isNotEmpty) {
-          for (var i = 0; i < custIds.length; i += 40) {
+          final cBatches = <Future<List<Map<String, dynamic>>>>[];
+          for (var i = 0; i < custIds.length; i += 100) {
             final batch = custIds.sublist(
-                i, i + 40 > custIds.length ? custIds.length : i + 40);
-            final c = await client
+                i, i + 100 > custIds.length ? custIds.length : i + 100);
+            cBatches.add(client
                 .from('customers')
                 .select('id, shop_name, code')
-                .inFilter('id', batch);
+                .inFilter('id', batch));
+          }
+          for (final c in await Future.wait(cBatches)) {
             for (final row in c) {
               final m = Map<String, dynamic>.from(row);
               customersById[m['id'] as String] = m;
@@ -130,6 +138,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         _visitsByTrip = visitsByTrip;
         _customersById = customersById;
         _loading = false;
+        _visitsReady = true;
       });
     } catch (e) {
       setState(() {
@@ -161,6 +170,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 
   Future<void> _generateTripSummary(Map<String, dynamic> trip) async {
+    if (!_visitsReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Still loading visits — try again in a moment.')));
+      return;
+    }
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
       final ctx = TripReportContext.build(
@@ -189,6 +203,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 
   Future<void> _generateVisitReport(Map<String, dynamic> trip) async {
+    if (!_visitsReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Still loading visits — try again in a moment.')));
+      return;
+    }
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
       final ctx = TripReportContext.build(
@@ -311,9 +330,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                           Expanded(flex: 2, child: Text(date, style: const TextStyle(fontSize: 13))),
                           Expanded(flex: 2, child: Text(t['user_name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600))),
                           Expanded(flex: 2, child: Text(t['route_name'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
-                          Expanded(flex: 1, child: Text('${(_visitsByTrip[t['id']] ?? const []).length}', style: const TextStyle(fontSize: 13))),
-                          Expanded(flex: 1, child: Text('${(_visitsByTrip[t['id']] ?? const []).where((v) => v['status'] == 'verified').length}', style: const TextStyle(fontSize: 13))),
-                          Expanded(flex: 2, child: Text('Rs ${(_visitsByTrip[t['id']] ?? const []).fold<int>(0, (s, v) => s + ((v['amount'] as int?) ?? 0))}', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.success))),
+                          Expanded(flex: 1, child: Text(_visitsReady ? '${(_visitsByTrip[t['id']] ?? const []).length}' : '…', style: const TextStyle(fontSize: 13))),
+                          Expanded(flex: 1, child: Text(_visitsReady ? '${(_visitsByTrip[t['id']] ?? const []).where((v) => v['status'] == 'verified').length}' : '…', style: const TextStyle(fontSize: 13))),
+                          Expanded(flex: 2, child: Text(_visitsReady ? 'Rs ${(_visitsByTrip[t['id']] ?? const []).fold<int>(0, (s, v) => s + ((v['amount'] as int?) ?? 0))}' : '…', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.success))),
                           Expanded(flex: 1, child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(color: isCompleted ? AppTheme.success.withOpacity(0.1) : AppTheme.warning.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
