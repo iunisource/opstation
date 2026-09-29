@@ -70,6 +70,10 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   Timer? _scanLoop;
   bool _cameraOn = false;
   bool _cameraSupported = false;
+  // 'environment' (rear, default) or 'user' (front). Remembered per device so
+  // a wall-mounted tablet keeps the camera that faces the employees.
+  String _facing = 'environment';
+  int _cameraCount = 0; // how many cameras the device has (toggle only if >1)
   DateTime _camCooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -218,6 +222,9 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
         ..style.width = '100%'
         ..style.height = '100%'
         ..style.objectFit = 'cover'
+        // Taps go to the Flutter layer (camera-switch button, refocus), not
+        // the <video> element sitting underneath it.
+        ..style.pointerEvents = 'none'
         ..style.borderRadius = '12px';
       ui_web.platformViewRegistry.registerViewFactory(_viewType, (int _) => _video!);
     } catch (_) { }
@@ -232,7 +239,12 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
         js_util.jsify({'formats': ['qr_code']})
       ]);
       _cameraSupported = true;
+      try {
+        final saved = html.window.localStorage['kiosk_camera_facing'];
+        if (saved == 'user' || saved == 'environment') _facing = saved!;
+      } catch (_) {}
       await _startCamera();
+      _countCameras();
     } catch (_) {
       setState(() => _cameraSupported = false);
     }
@@ -244,9 +256,12 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
       final media = html.window.navigator.mediaDevices;
       if (media == null) { setState(() => _cameraSupported = false); return; }
       final stream = await media.getUserMedia({
-        'video': {'facingMode': 'environment'}
+        'video': {'facingMode': _facing}
       });
       _video?.srcObject = stream;
+      // Mirror the FRONT camera preview so it feels like a mirror (QR reading
+      // uses the raw frames, so it is unaffected).
+      _video?.style.transform = _facing == 'user' ? 'scaleX(-1)' : 'none';
       await _video?.play();
       _cameraOn = true;
       _scanLoop?.cancel();
@@ -256,6 +271,25 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
       _cameraOn = false;
       if (mounted) setState(() => _cameraSupported = false);
     }
+  }
+
+  Future<void> _countCameras() async {
+    try {
+      final devices = await html.window.navigator.mediaDevices?.enumerateDevices() ?? const [];
+      var n = 0;
+      for (final d in devices) {
+        if (d is html.MediaDeviceInfo && d.kind == 'videoinput') n++;
+      }
+      if (mounted) setState(() => _cameraCount = n);
+    } catch (_) {}
+  }
+
+  Future<void> _switchCamera() async {
+    _facing = _facing == 'user' ? 'environment' : 'user';
+    try { html.window.localStorage['kiosk_camera_facing'] = _facing; } catch (_) {}
+    _stopCamera();
+    if (mounted) setState(() {});
+    await _startCamera();
   }
 
   void _stopCamera() {
@@ -404,6 +438,10 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
             opacity: 0,
             child: TextField(
               controller: _wedgeCtrl, focusNode: _wedgeFocus, autofocus: true,
+              // inputmode="none": keeps focus for USB/Bluetooth scanners but
+              // never pops the on-screen keyboard on phones / tablets. The
+              // keyboard only appears via "Enter code manually".
+              keyboardType: TextInputType.none,
               onSubmitted: _onWedgeSubmitted,
             ),
           ),
@@ -462,9 +500,26 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
         border: Border.all(color: Colors.white24),
       ),
       clipBehavior: Clip.antiAlias,
-      child: _cameraOn
-          ? const HtmlElementView(viewType: _viewType)
-          : const Center(child: CircularProgressIndicator(color: Colors.white54)),
+      child: Stack(children: [
+        Positioned.fill(
+          child: _cameraOn
+              ? const HtmlElementView(viewType: _viewType)
+              : const Center(child: CircularProgressIndicator(color: Colors.white54)),
+        ),
+        if (_cameraCount > 1)
+          Positioned(
+            right: 10, bottom: 10,
+            child: Material(
+              color: Colors.black54,
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: _facing == 'user' ? 'Switch to rear camera' : 'Switch to front camera',
+                icon: const Icon(Icons.cameraswitch_outlined, color: Colors.white),
+                onPressed: _switchCamera,
+              ),
+            ),
+          ),
+      ]),
     );
   }
 
