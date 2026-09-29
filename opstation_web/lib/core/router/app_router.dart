@@ -151,6 +151,7 @@ import '../../features/erp/presentation/erp_purchase_returns_screen.dart' deferr
 import '../../features/erp/presentation/erp_sales_return_invoices_screen.dart' deferred as _s138;
 import '../../features/erp/presentation/erp_purchase_return_vouchers_screen.dart' deferred as _s139;
 import '../../features/erp/presentation/payment_advice_public_screen.dart' deferred as _s143;
+import '../../features/erp/presentation/email_action_screen.dart' deferred as _s144;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -196,6 +197,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       if (loc.startsWith('/f/')) return null;
       // Public Payment Advice copy (QR on the printed slip) — no login.
       if (loc.startsWith('/pa/')) return null;
+      // Approve / Reject link from a PO or PA notification email — no login.
+      if (loc.startsWith('/act/')) return null;
 
       // Public attendance kiosk — a bookmarked tablet/PC opens this with no
       // login; the punch RPC resolves the employee's org itself.
@@ -329,6 +332,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/pa/:token',
         builder: (_, state) => _deferred(_s143.loadLibrary(), () => _s143.PaymentAdvicePublicScreen(token: state.pathParameters['token'] ?? '')),
+      ),
+      GoRoute(
+        path: '/act/:token',
+        builder: (_, state) => _deferred(_s144.loadLibrary(), () => _s144.EmailActionScreen(
+            token: state.pathParameters['token'] ?? '',
+            action: state.uri.queryParameters['a'])),
       ),
       GoRoute(
         path: '/f/:token',

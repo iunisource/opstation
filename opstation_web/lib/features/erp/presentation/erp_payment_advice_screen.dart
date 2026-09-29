@@ -528,7 +528,7 @@ class _ErpPaymentAdviceScreenState
           // the creator as the approver instead of leaving "Approved by" blank.
           if (autoApproved) 'approved_by': me?.id,
           if (autoApproved) 'approved_by_name': me?.name,
-          if (autoApproved) 'approved_at': DateTime.now().toUtc().toIso8601String(),
+          if (autoApproved) 'approved_at': DateTime.now().toIso8601String(),
         });
         final mySig = await _signatureOf(me?.id);
         await _stampSignatures(adviceId, {
@@ -542,7 +542,7 @@ class _ErpPaymentAdviceScreenState
           'advice_date': DateFormat('yyyy-MM-dd').format(_date),
           'note': _noteCtrl.text.trim(),
           'grand_total': total,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
         }).eq('id', adviceId);
         await _db.from('payment_advice_lines').delete().eq('advice_id', adviceId);
       }
@@ -613,7 +613,7 @@ class _ErpPaymentAdviceScreenState
         'status': 'approved',
         'approved_by': me?.id,
         'approved_by_name': me?.name,
-        'approved_at': DateTime.now().toUtc().toIso8601String(),
+        'approved_at': DateTime.now().toIso8601String(),
       }).eq('id', _current!['id']);
       await _stampSignatures(_current!['id'] as String, {
         'approved_signature_url': await _signatureOf(me?.id),
@@ -649,9 +649,9 @@ class _ErpPaymentAdviceScreenState
         'status': 'rejected',
         'rejected_by': me?.id,
         'rejected_by_name': me?.name,
-        'rejected_at': DateTime.now().toUtc().toIso8601String(),
+        'rejected_at': DateTime.now().toIso8601String(),
         'reject_reason': reason.trim().isEmpty ? null : reason.trim(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', _current!['id']);
       await _audit(_current!['id'] as String, 'rejected',
           reason.trim().isEmpty ? 'Rejected' : 'Rejected: ${reason.trim()}');
@@ -769,7 +769,7 @@ class _ErpPaymentAdviceScreenState
     if (ok != true) return;
     final reason = ctrl.text.trim();
     final me = ref.read(currentUserProvider);
-    final now = DateTime.now().toUtc().toIso8601String();
+    final now = DateTime.now().toIso8601String();
     setState(() => _saving = true);
     try {
       await _db.from('payment_advices').update({
@@ -894,7 +894,7 @@ class _ErpPaymentAdviceScreenState
     try {
       await _db.from('payment_advices').update({
         'is_archived': archived,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', a['id']);
       await _audit(a['id'] as String, archived ? 'archived' : 'unarchived', '');
       if (!mounted) return;
