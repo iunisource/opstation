@@ -18,6 +18,7 @@ import '../notifications/global_transfer_alert.dart';
 import '../notifications/global_po_reject_alert.dart';
 import '../notifications/user_reminders.dart';
 import '../notifications/global_badge_sync.dart';
+import '../auth/active_org_guard.dart';
 import '../onboarding/first_login_tour.dart';
 import '../widgets/org_switch_overlay.dart';
 import '../station_master/station_master.dart';
@@ -897,7 +898,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
+        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const ActiveOrgGuard(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
       );
     }
 
@@ -911,7 +912,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ]),
           const GlobalJobAlert(),
           const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
-          const GlobalBadgeSync(),
+          const GlobalBadgeSync(), const ActiveOrgGuard(),
           const FirstLoginTour(),
           const StationMaster(),
           const SupportButtons(),
@@ -927,7 +928,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         ]),
         const GlobalJobAlert(),
         const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
-        const GlobalBadgeSync(),
+        const GlobalBadgeSync(), const ActiveOrgGuard(),
         const FirstLoginTour(),
         const StationMaster(),
         const SupportButtons(),

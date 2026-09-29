@@ -116,10 +116,33 @@ class AuthController extends AsyncNotifier<WebUser?> {
         }
       }
 
-      return WebUser.fromJson(jsonDecode(raw));
+      final cached = WebUser.fromJson(jsonDecode(raw));
+      // The ACTIVE org lives on the server (user_active_org, read by RLS via
+      // current_user_org_id) and is shared by every tab / device of this login.
+      // If another tab or device switched org since this one was last open,
+      // RLS would now scope every query to THAT org while this tab still shows
+      // this one — menus vanish (no modules) and screens come back empty. Put
+      // the server back on this tab's org before anything else loads.
+      await reassertActiveOrg(cached.orgId);
+      return cached;
     } catch (_) {
       await prefs.remove(_kSessionKey);
       return null;
+    }
+  }
+
+  /// Makes the server-side active org match [orgId] (this tab's org). Cheap:
+  /// one read, and a write only when they differ. Best-effort.
+  static Future<bool> reassertActiveOrg(String? orgId) async {
+    if (orgId == null) return false;
+    final client = Supabase.instance.client;
+    try {
+      final server = await client.rpc('current_org') as String?;
+      if (server == orgId) return false;
+      await client.rpc('set_active_org', params: {'p_org': orgId});
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
