@@ -150,6 +150,7 @@ import '../../features/erp/presentation/erp_sales_returns_screen.dart' deferred 
 import '../../features/erp/presentation/erp_purchase_returns_screen.dart' deferred as _s137;
 import '../../features/erp/presentation/erp_sales_return_invoices_screen.dart' deferred as _s138;
 import '../../features/erp/presentation/erp_purchase_return_vouchers_screen.dart' deferred as _s139;
+import '../../features/erp/presentation/payment_advice_public_screen.dart' deferred as _s143;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -193,6 +194,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       // job order and lands here with NO login. Always allow it through, whatever
       // the auth state, so it never bounces to /login.
       if (loc.startsWith('/f/')) return null;
+      // Public Payment Advice copy (QR on the printed slip) — no login.
+      if (loc.startsWith('/pa/')) return null;
 
       // Public attendance kiosk — a bookmarked tablet/PC opens this with no
       // login; the punch RPC resolves the employee's org itself.
@@ -322,6 +325,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/subscription-expired',
         builder: (_, __) => _deferred(_s068.loadLibrary(), () => _s068.SubscriptionExpiredScreen()),
+      ),
+      GoRoute(
+        path: '/pa/:token',
+        builder: (_, state) => _deferred(_s143.loadLibrary(), () => _s143.PaymentAdvicePublicScreen(token: state.pathParameters['token'] ?? '')),
       ),
       GoRoute(
         path: '/f/:token',

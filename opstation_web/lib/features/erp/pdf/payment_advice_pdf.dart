@@ -54,6 +54,8 @@ class PaymentAdvicePdf {
     // Accounts copy: same slip WITHOUT the party's current balance / payable
     // ("Amount due") column.
     bool accountsCopy = false,
+    // Link encoded in the QR code (public read-only copy of this advice).
+    String? qrUrl,
     // Pictorial signatures (and the company stamp next to the approver's).
     pw.ImageProvider? createdSignature,
     pw.ImageProvider? approvedSignature,
@@ -353,27 +355,44 @@ class PaymentAdvicePdf {
                               const pw.TextStyle(fontSize: 9, color: _muted)),
                     ],
                   ]),
+              pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
               pw.Container(
-                padding:
-                    const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: pw.BoxDecoration(
-                    color: isVoid
-                        ? const PdfColor.fromInt(0xFFFEE2E2)
-                        : status == 'approved'
-                            ? const PdfColor.fromInt(0xFFDCFCE7)
-                            : const PdfColor.fromInt(0xFFFEF3C7),
-                    borderRadius: pw.BorderRadius.circular(4)),
-                child: pw.Text(isVoid ? 'VOIDED' : status.toUpperCase(),
-                    style: pw.TextStyle(
-                        fontSize: 9,
-                        fontWeight: pw.FontWeight.bold,
-                        letterSpacing: 1,
-                        color: isVoid
-                            ? const PdfColor.fromInt(0xFF991B1B)
-                            : status == 'approved'
-                                ? const PdfColor.fromInt(0xFF166534)
-                                : const PdfColor.fromInt(0xFF92400E))),
-              ),
+                  padding:
+                      const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: pw.BoxDecoration(
+                      color: isVoid
+                          ? const PdfColor.fromInt(0xFFFEE2E2)
+                          : status == 'approved'
+                              ? const PdfColor.fromInt(0xFFDCFCE7)
+                              : const PdfColor.fromInt(0xFFFEF3C7),
+                      borderRadius: pw.BorderRadius.circular(4)),
+                  child: pw.Text(isVoid ? 'VOIDED' : status.toUpperCase(),
+                      style: pw.TextStyle(
+                          fontSize: 9,
+                          fontWeight: pw.FontWeight.bold,
+                          letterSpacing: 1,
+                          color: isVoid
+                              ? const PdfColor.fromInt(0xFF991B1B)
+                              : status == 'approved'
+                                  ? const PdfColor.fromInt(0xFF166534)
+                                  : const PdfColor.fromInt(0xFF92400E))),
+                ),
+                // Scan to open this advice online (read-only, no login) and
+                // check it against the live system record.
+                if (qrUrl != null && qrUrl.isNotEmpty) ...[
+                  pw.SizedBox(height: 8),
+                  pw.BarcodeWidget(
+                    barcode: pw.Barcode.qrCode(),
+                    data: qrUrl,
+                    width: 64,
+                    height: 64,
+                    drawText: false,
+                  ),
+                  pw.SizedBox(height: 2),
+                  pw.Text('Scan to verify',
+                      style: const pw.TextStyle(fontSize: 7, color: _muted)),
+                ],
+              ]),
             ]),
         pw.SizedBox(height: 14),
         pw.Table(

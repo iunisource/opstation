@@ -1,4 +1,6 @@
 import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -1640,6 +1642,9 @@ class _ErpPaymentAdviceScreenState
         approvedBy: a['approved_by_name'] as String?,
         approvedAt: DateTime.tryParse(a['approved_at'] as String? ?? ''),
         accountsCopy: accountsCopy,
+        qrUrl: (a['public_token'] as String?)?.isNotEmpty == true
+            ? '${html.window.location.origin}/#/pa/${a['public_token']}'
+            : null,
         createdSignature: sigs[0],
         approvedSignature: _sigEnabled ? sigs[1] : null,
         approvedStamp: sigs[2],
