@@ -6,6 +6,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../../core/permissions/permission_registry.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'package:opstation_web/core/users/user_status.dart';
 
 class ErpUsersScreen extends ConsumerStatefulWidget {
   const ErpUsersScreen({super.key});
@@ -16,6 +17,10 @@ class ErpUsersScreen extends ConsumerStatefulWidget {
 class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
   List<Map<String, dynamic>> _users = [];
   bool _loading = true;
+  bool _showArchived = false;
+  // Archived users are hidden unless "Show archived" is on.
+  List<Map<String, dynamic>> get _visibleUsers =>
+      _users.where((u) => isArchivedUser(u) == _showArchived).toList();
 
   @override
   void initState() {
@@ -239,16 +244,40 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
 
   Future<void> _toggleActive(Map<String, dynamic> user) async {
     final newVal = !(user['is_active'] as bool? ?? true);
-    try {
-      await Supabase.instance.client
-          .from('users')
-          .update({'is_active': newVal})
-          .eq('id', user['id']);
-      _showSnack(newVal ? 'User activated' : 'User deactivated');
-      _load();
-    } catch (e) {
-      _showSnack(friendlyError('That did not save', e));
+    final err = await setUserActive(user['id'] as String, newVal);
+    if (err != null) {
+      _showSnack('That did not save: $err');
+      return;
     }
+    _showSnack(newVal ? 'User activated' : 'User deactivated');
+    _load();
+  }
+
+  Future<void> _toggleArchived(Map<String, dynamic> user) async {
+    final archive = !isArchivedUser(user);
+    if (archive) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dlg) => AlertDialog(
+          title: Text('Archive ${user['name'] ?? 'user'}?'),
+          content: const Text(
+              'The user is deactivated (cannot sign in) and hidden from this list. '
+              'Their history stays. You can find them under "Show archived" and restore them later.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dlg, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(dlg, true), child: const Text('Archive')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    final err = await setUserArchived(user['id'] as String, archive);
+    if (err != null) {
+      _showSnack(err);
+      return;
+    }
+    _showSnack(archive ? 'User archived' : 'User unarchived — still inactive until you activate them');
+    _load();
   }
 
   // ── Permission editor widgets ───────────────────────────────────────────
@@ -739,21 +768,37 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
           ),
         ]),
         const SizedBox(height: 8),
-        Text('${_users.length} ERP users', style: const TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 24),
+        Row(children: [
+          Text(
+              _showArchived
+                  ? '${_visibleUsers.length} archived'
+                  : '${_visibleUsers.length} ERP users',
+              style: const TextStyle(color: AppTheme.textSecondary)),
+          const SizedBox(width: 12),
+          FilterChip(
+            label: Text(_showArchived
+                ? 'Showing archived'
+                : 'Show archived (${_users.where(isArchivedUser).length})'),
+            selected: _showArchived,
+            onSelected: (v) => setState(() => _showArchived = v),
+            avatar: Icon(_showArchived ? Icons.inventory_2 : Icons.inventory_2_outlined, size: 16),
+          ),
+        ]),
+        const SizedBox(height: 16),
         if (_loading)
           const Center(child: CircularProgressIndicator())
-        else if (_users.isEmpty)
-          const Expanded(
-            child: Center(child: Text('No ERP users yet.', style: TextStyle(color: AppTheme.textSecondary))),
+        else if (_visibleUsers.isEmpty)
+          Expanded(
+            child: Center(child: Text(_showArchived ? 'No archived users.' : 'No ERP users yet.',
+                style: const TextStyle(color: AppTheme.textSecondary))),
           )
         else if (narrow)
           // Phone: stacked cards instead of a crushed 5-column table.
           Expanded(
             child: ListView.separated(
-              itemCount: _users.length,
+              itemCount: _visibleUsers.length,
               separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (_, i) => _userCardNarrow(_users[i]),
+              itemBuilder: (_, i) => _userCardNarrow(_visibleUsers[i]),
             ),
           )
         else
@@ -776,16 +821,16 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                     Expanded(flex: 3, child: Text('Email', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 3, child: Text('Branches', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                     Expanded(flex: 1, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                    SizedBox(width: 120),
+                    SizedBox(width: 160),
                   ]),
                 ),
                 const Divider(height: 1),
                 Expanded(
                   child: ListView.separated(
-                          itemCount: _users.length,
+                          itemCount: _visibleUsers.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (_, i) {
-                            final u = _users[i];
+                            final u = _visibleUsers[i];
                             final isActive = u['is_active'] as bool? ?? true;
                             final branches = (u['_branches'] as List<String>).join(', ');
                             return Opacity(
@@ -798,7 +843,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                                   Expanded(flex: 3, child: Text(branches.isEmpty ? 'No branches' : branches,
                                       style: TextStyle(fontSize: 13, color: branches.isEmpty ? AppTheme.danger : AppTheme.textSecondary))),
                                   Expanded(flex: 1, child: _statusChip(isActive)),
-                                  SizedBox(width: 120, child: _userActions(u, isActive)),
+                                  SizedBox(width: 160, child: _userActions(u, isActive)),
                                 ]),
                               ),
                             );
@@ -831,7 +876,14 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
         IconButton(
           icon: Icon(isActive ? Icons.block : Icons.check_circle_outline, size: 18,
               color: isActive ? AppTheme.danger : AppTheme.success),
+          tooltip: isActive ? 'Deactivate' : 'Activate',
           onPressed: () => _toggleActive(u),
+        ),
+        IconButton(
+          icon: Icon(isArchivedUser(u) ? Icons.unarchive_outlined : Icons.archive_outlined,
+              size: 18, color: AppTheme.textSecondary),
+          tooltip: isArchivedUser(u) ? 'Unarchive' : 'Archive',
+          onPressed: () => _toggleArchived(u),
         ),
       ]);
 

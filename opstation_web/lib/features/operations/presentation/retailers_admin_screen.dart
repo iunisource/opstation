@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/users/user_status.dart';
 
 /// Admin "Retailers" screen (Operations). Search a customer, create a retailer
 /// login for them (calls the provision-retailer Edge Function), and toggle
@@ -284,14 +285,12 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
     }
     final prev = login['is_active'] == true;
     setState(() => login['is_active'] = val); // optimistic
-    try {
-      await Supabase.instance.client
-          .from('users')
-          .update({'is_active': val}).eq('id', userId);
+    final err = await setUserActive(userId, val);
+    if (err == null) {
       _snack(val ? 'Login enabled' : 'Login blocked');
-    } catch (e) {
+    } else {
       setState(() => login['is_active'] = prev); // roll back on failure
-      _snack('Could not update: ${e.toString().split('\n').first}');
+      _snack('Could not update: $err');
     }
   }
 

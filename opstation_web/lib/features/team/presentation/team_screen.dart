@@ -7,6 +7,7 @@ import 'salesperson_history_screen.dart';
 import 'driver_history_screen.dart';
 import 'team_member_360_screen.dart';
 import '../../../core/widgets/responsive.dart';
+import 'package:opstation_web/core/users/user_status.dart';
 
 class TeamScreen extends ConsumerStatefulWidget {
   const TeamScreen({super.key});
@@ -19,10 +20,14 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
   bool _loading = true;
   String _search = '';
 
+  bool _showArchived = false;
+
   List<Map<String, dynamic>> get _filteredUsers {
     final q = _search.trim().toLowerCase();
-    if (q.isEmpty) return _users;
-    return _users.where((u) {
+    // Archived members are hidden unless "Show archived" is on.
+    final base = _users.where((u) => isArchivedUser(u) == _showArchived).toList();
+    if (q.isEmpty) return base;
+    return base.where((u) {
       final hay = [
         u['name'], u['email'], u['role'], u['phone'],
       ].map((v) => (v as String? ?? '').toLowerCase()).join(' ');
@@ -182,8 +187,22 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
               ),
           ]),
           const SizedBox(height: 8),
-          Text('${_filteredUsers.length} of ${_users.length} members',
-              style: const TextStyle(color: AppTheme.textSecondary)),
+          Row(children: [
+            Text(
+                _showArchived
+                    ? '${_filteredUsers.length} archived'
+                    : '${_filteredUsers.length} of ${_users.where((u) => !isArchivedUser(u)).length} members',
+                style: const TextStyle(color: AppTheme.textSecondary)),
+            const SizedBox(width: 12),
+            FilterChip(
+              label: Text(_showArchived
+                  ? 'Showing archived'
+                  : 'Show archived (${_users.where(isArchivedUser).length})'),
+              selected: _showArchived,
+              onSelected: (v) => setState(() => _showArchived = v),
+              avatar: Icon(_showArchived ? Icons.inventory_2 : Icons.inventory_2_outlined, size: 16),
+            ),
+          ]),
           const SizedBox(height: 16),
           TextField(
             decoration: const InputDecoration(
@@ -218,7 +237,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                         Expanded(flex: 2, child: Text('Role', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Phone', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 1, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        SizedBox(width: 170),
+                        SizedBox(width: 260),
                       ]),
                     ),
                     const Divider(height: 1),
@@ -264,7 +283,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                 child: Text(isActive ? 'Active' : 'Inactive',
                                   style: TextStyle(color: isActive ? AppTheme.success : AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w600)),
                               )),
-                              SizedBox(width: 220, child: Row(children: [
+                              SizedBox(width: 260, child: SingleChildScrollView(scrollDirection: Axis.horizontal, reverse: true, child: Row(mainAxisSize: MainAxisSize.min, children: [
                                 IconButton(
                                   icon: const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary),
                                   onPressed: () => Navigator.of(context).push(MaterialPageRoute(
@@ -301,13 +320,20 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                     onPressed: () => _toggleActive(u),
                                     tooltip: isActive ? 'Deactivate' : 'Activate',
                                   ),
+                                if (canDeactivate)
+                                  IconButton(
+                                    icon: Icon(isArchivedUser(u) ? Icons.unarchive_outlined : Icons.archive_outlined,
+                                        size: 18, color: AppTheme.textSecondary),
+                                    onPressed: () => _toggleArchived(u),
+                                    tooltip: isArchivedUser(u) ? 'Unarchive' : 'Archive',
+                                  ),
                                 if (canDelete)
                                   IconButton(
                                     icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
                                     onPressed: () => _delete(u),
                                     tooltip: 'Delete',
                                   ),
-                              ])),
+                              ]))),
                             ]),
                           );
                         },
@@ -330,13 +356,45 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       return;
     }
     final newVal = !(u['is_active'] as bool? ?? true);
-    try {
-      await Supabase.instance.client.from('users').update({'is_active': newVal}).eq('id', u['id']);
-      _showSnack(newVal ? 'User activated' : 'User deactivated');
-      _load();
-    } catch (e) {
-      _showSnack('Failed: ${e.toString().split('\n').first}');
+    final err = await setUserActive(u['id'] as String, newVal);
+    if (err != null) {
+      _showSnack('Failed: $err');
+      return;
     }
+    _showSnack(newVal ? 'User activated' : 'User deactivated');
+    _load();
+  }
+
+  Future<void> _toggleArchived(Map<String, dynamic> u) async {
+    final viewer = ref.read(authControllerProvider).valueOrNull;
+    if (viewer != null && u['id'] == viewer.id) {
+      _showSnack("You can't archive yourself.");
+      return;
+    }
+    final archive = !isArchivedUser(u);
+    if (archive) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dlg) => AlertDialog(
+          title: Text('Archive ${u['name'] ?? 'member'}?'),
+          content: const Text(
+              'They are deactivated (cannot sign in) and hidden from the team list. '
+              'Their visits, orders and history stay. Find them under "Show archived" to restore.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dlg, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(dlg, true), child: const Text('Archive')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    final err = await setUserArchived(u['id'] as String, archive);
+    if (err != null) {
+      _showSnack(err);
+      return;
+    }
+    _showSnack(archive ? 'Member archived' : 'Member unarchived — still inactive until you activate them');
+    _load();
   }
 
   Future<void> _delete(Map<String, dynamic> u) async {
