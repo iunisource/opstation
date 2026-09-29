@@ -255,13 +255,17 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
 
   Future<void> _toggleArchived(Map<String, dynamic> user) async {
     final archive = !isArchivedUser(user);
+    if (archive && (user['is_active'] as bool? ?? true)) {
+      _showSnack('Deactivate the user first — only deactivated users can be archived.');
+      return;
+    }
     if (archive) {
       final ok = await showDialog<bool>(
         context: context,
         builder: (dlg) => AlertDialog(
           title: Text('Archive ${user['name'] ?? 'user'}?'),
           content: const Text(
-              'The user is deactivated (cannot sign in) and hidden from this list. '
+              'The user is hidden from this list (they stay deactivated). '
               'Their history stays. You can find them under "Show archived" and restore them later.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dlg, false), child: const Text('Cancel')),
@@ -879,12 +883,14 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
           tooltip: isActive ? 'Deactivate' : 'Activate',
           onPressed: () => _toggleActive(u),
         ),
-        IconButton(
-          icon: Icon(isArchivedUser(u) ? Icons.unarchive_outlined : Icons.archive_outlined,
-              size: 18, color: AppTheme.textSecondary),
-          tooltip: isArchivedUser(u) ? 'Unarchive' : 'Archive',
-          onPressed: () => _toggleArchived(u),
-        ),
+        // Only deactivated users can be archived.
+        if (!isActive || isArchivedUser(u))
+          IconButton(
+            icon: Icon(isArchivedUser(u) ? Icons.unarchive_outlined : Icons.archive_outlined,
+                size: 18, color: AppTheme.textSecondary),
+            tooltip: isArchivedUser(u) ? 'Unarchive' : 'Archive',
+            onPressed: () => _toggleArchived(u),
+          ),
       ]);
 
   // Phone card: name + status on top, email, branches, then actions.

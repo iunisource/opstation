@@ -320,7 +320,8 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                     onPressed: () => _toggleActive(u),
                                     tooltip: isActive ? 'Deactivate' : 'Activate',
                                   ),
-                                if (canDeactivate)
+                                // Only deactivated members can be archived.
+                                if (canDeactivate && (!isActive || isArchivedUser(u)))
                                   IconButton(
                                     icon: Icon(isArchivedUser(u) ? Icons.unarchive_outlined : Icons.archive_outlined,
                                         size: 18, color: AppTheme.textSecondary),
@@ -372,13 +373,17 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       return;
     }
     final archive = !isArchivedUser(u);
+    if (archive && (u['is_active'] as bool? ?? true)) {
+      _showSnack('Deactivate the member first — only deactivated members can be archived.');
+      return;
+    }
     if (archive) {
       final ok = await showDialog<bool>(
         context: context,
         builder: (dlg) => AlertDialog(
           title: Text('Archive ${u['name'] ?? 'member'}?'),
           content: const Text(
-              'They are deactivated (cannot sign in) and hidden from the team list. '
+              'They are hidden from the team list (they stay deactivated). '
               'Their visits, orders and history stay. Find them under "Show archived" to restore.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dlg, false), child: const Text('Cancel')),
