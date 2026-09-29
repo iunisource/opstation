@@ -41,7 +41,17 @@ Future<void> showPdf(Uint8List bytes, String fileName) async {
   }
   final ua = html.window.navigator.userAgent.toLowerCase();
   if (!ua.contains('firefox')) {
-    await Printing.layoutPdf(onLayout: (PdfPageFormat _) async => bytes, name: name);
+    // Chrome / Edge / Safari name "Save as PDF" after the PAGE TITLE (it came
+    // out as "Opstation Admin.pdf"), not the print-job name. Borrow the page
+    // title for the document name while the print dialog is open.
+    final oldTitle = html.document.title;
+    html.document.title = name.substring(0, name.length - 4); // without .pdf
+    try {
+      await Printing.layoutPdf(onLayout: (PdfPageFormat _) async => bytes, name: name);
+    } finally {
+      // Restore after the dialog has closed (the save reads the title late).
+      Future.delayed(const Duration(seconds: 2), () => html.document.title = oldTitle);
+    }
     return;
   }
   // A named File (not a bare Blob) so Firefox's viewer offers the proper file
