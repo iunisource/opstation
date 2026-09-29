@@ -130,8 +130,10 @@ class PaymentAdvicePdf {
                     pw.Text(lines[i].partyName,
                         style: pw.TextStyle(
                             fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
-                    pw.Text(lines[i].partyType == 'other' ? 'free text' : lines[i].partyType,
-                        style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+                    // Free-text parties print by name only (no type label).
+                    if (lines[i].partyType != 'other')
+                      pw.Text(lines[i].partyType,
+                          style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
                   ]),
             ),
             cell(lines[i].bankDetails.isEmpty ? '-' : lines[i].bankDetails,
@@ -442,6 +444,27 @@ class PaymentAdvicePdf {
               sig: status == 'pending' ? null : approvedSignature,
               stamp: status == 'pending' ? null : approvedStamp),
           foot('RECEIVED BY', '', ''),
+        ]),
+        pw.SizedBox(height: 22),
+        // Authenticity note with a verified (tick-in-circle) mark.
+        pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+          pw.SvgImage(
+            width: 18,
+            height: 18,
+            svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+                '<circle cx="12" cy="12" r="10.5" fill="#16A34A"/>'
+                '<path d="M7 12.5l3.2 3.2L17.2 8.8" fill="none" stroke="#FFFFFF" '
+                'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+          ),
+          pw.SizedBox(width: 8),
+          pw.Expanded(
+            child: pw.Text(
+              'System-generated document; no physical signature required. '
+              'Authenticity is confirmed when the approval signatures match the watermarks, '
+              'including date and time.',
+              style: const pw.TextStyle(fontSize: 8.5, color: _muted),
+            ),
+          ),
         ]),
       ],
     ));
