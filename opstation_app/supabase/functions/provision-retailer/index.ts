@@ -21,6 +21,28 @@ interface Payload {
   customerId: string
 }
 
+
+// Caller's role IN a given org. A login can belong to several orgs (users rows
+// linked by account_id), each with its own role; an email-only lookup picked an
+// arbitrary membership (or failed when there were several).
+async function callerRoleInOrg(admin: any, email: string, orgId: string | null) {
+  const { data: rows } = await admin
+    .from('users').select('id, role, org_id, account_id, is_active')
+    .ilike('email', email).limit(5)
+  const list = (rows ?? []) as any[]
+  if (list.some((r) => r.role === 'superAdmin')) return { role: 'superAdmin', org_id: orgId }
+  const accountId = list[0]?.account_id ?? list[0]?.id
+  if (accountId && orgId) {
+    const { data: mem } = await admin
+      .from('users').select('role, org_id, is_active')
+      .eq('account_id', accountId).eq('org_id', orgId).limit(1)
+    const m = (mem ?? [])[0]
+    if (m && m.is_active !== false) return { role: m.role as string, org_id: m.org_id as string }
+  }
+  const same = list.find((r) => r.org_id === orgId && r.is_active !== false)
+  return same ? { role: same.role as string, org_id: same.org_id as string } : null
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
@@ -32,12 +54,6 @@ serve(async (req) => {
     if (!token) return json({ error: 'missing_auth' }, 401)
     const { data: callerAuth, error: callerErr } = await admin.auth.getUser(token)
     if (callerErr || !callerAuth?.user?.email) return json({ error: 'invalid_auth' }, 401)
-    const { data: callerRow } = await admin
-      .from('users').select('role, org_id')
-      .ilike('email', callerAuth.user.email).maybeSingle()
-    const isSuperAdmin = callerRow?.role === 'superAdmin'
-    const isMasterAdmin = callerRow?.role === 'masterAdmin'
-    if (!isSuperAdmin && !isMasterAdmin) return json({ error: 'forbidden' }, 403)
 
     let p: Payload
     try { p = await req.json() } catch { return json({ error: 'bad_json' }, 400) }
@@ -51,6 +67,11 @@ serve(async (req) => {
       .maybeSingle()
     if (!customer) return json({ error: 'customer_not_found' }, 404)
     if (!customer.code) return json({ error: 'customer_has_no_code' }, 400)
+
+    const callerRow = await callerRoleInOrg(admin, callerAuth.user.email, customer.org_id ?? null)
+    const isSuperAdmin = callerRow?.role === 'superAdmin'
+    const isMasterAdmin = callerRow?.role === 'masterAdmin'
+    if (!isSuperAdmin && !isMasterAdmin) return json({ error: 'forbidden' }, 403)
 
     // masterAdmin can only provision within their own org
     if (isMasterAdmin && callerRow?.org_id !== customer.org_id)

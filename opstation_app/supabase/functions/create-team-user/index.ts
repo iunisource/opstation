@@ -40,17 +40,41 @@ serve(async (req) => {
     const { data: callerAuth, error: callerErr } = await admin.auth.getUser(token)
     if (callerErr || !callerAuth?.user?.email) return json({ error: 'invalid_auth' }, 401)
 
-    const { data: callerRow } = await admin
-      .from('users').select('role, org_id')
-      .ilike('email', callerAuth.user.email).maybeSingle()
+    let p: Payload
+    try { p = await req.json() } catch { return json({ error: 'bad_json' }, 400) }
+
+    // Resolve the caller's role IN THE TARGET ORG. A login can belong to
+    // several orgs (users rows linked by account_id), and each membership has
+    // its own role. Looking the caller up by email alone picked one arbitrary
+    // row (or failed outright when there were several), so an admin of the
+    // org being edited got "You do not have permission" because the row found
+    // was their membership in a different org.
+    const { data: loginRows } = await admin
+      .from('users').select('id, role, org_id, account_id, is_active')
+      .ilike('email', callerAuth.user.email).limit(5)
+    const login = (loginRows ?? [])[0]
+    const accountId = login?.account_id ?? login?.id
+    let callerRow: { role: string; org_id: string } | null = null
+    if ((loginRows ?? []).some((r) => r.role === 'superAdmin')) {
+      callerRow = { role: 'superAdmin', org_id: p?.orgId }
+    } else if (accountId) {
+      const { data: mem } = await admin
+        .from('users').select('role, org_id, is_active')
+        .eq('account_id', accountId).eq('org_id', p?.orgId ?? '')
+        .limit(1)
+      const m = (mem ?? [])[0]
+      if (m && m.is_active !== false) callerRow = { role: m.role, org_id: m.org_id }
+    }
+    if (!callerRow) {
+      // Fallback: an email-matched row in the target org (pre-linking accounts).
+      const same = (loginRows ?? []).find((r) => r.org_id === p?.orgId && r.is_active !== false)
+      if (same) callerRow = { role: same.role, org_id: same.org_id }
+    }
 
     const isSuperAdmin = callerRow?.role === 'superAdmin'
     const isMasterAdmin = callerRow?.role === 'masterAdmin'
     const isAdmin = callerRow?.role === 'admin'
     if (!isSuperAdmin && !isMasterAdmin && !isAdmin) return json({ error: 'forbidden' }, 403)
-
-    let p: Payload
-    try { p = await req.json() } catch { return json({ error: 'bad_json' }, 400) }
     if (!p.name || !p.email || !p.password || !p.role || !p.orgId)
       return json({ error: 'missing_fields' }, 400)
     if (p.password.length < 6) return json({ error: 'weak_password' }, 400)
