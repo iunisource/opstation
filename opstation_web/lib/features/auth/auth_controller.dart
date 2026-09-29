@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/auth/org_header.dart';
 
 const _kSessionKey = 'opstation_web_session';
 
@@ -117,13 +118,9 @@ class AuthController extends AsyncNotifier<WebUser?> {
       }
 
       final cached = WebUser.fromJson(jsonDecode(raw));
-      // The ACTIVE org lives on the server (user_active_org, read by RLS via
-      // current_user_org_id) and is shared by every tab / device of this login.
-      // If another tab or device switched org since this one was last open,
-      // RLS would now scope every query to THAT org while this tab still shows
-      // this one — menus vanish (no modules) and screens come back empty. Put
-      // the server back on this tab's org before anything else loads.
-      await reassertActiveOrg(cached.orgId);
+      // This tab works in ITS org: every request carries it (x-org-id), so a
+      // switch in another tab or on the phone no longer re-scopes this one.
+      applyOrgHeader(cached.orgId);
       return cached;
     } catch (_) {
       await prefs.remove(_kSessionKey);
@@ -131,20 +128,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
     }
   }
 
-  /// Makes the server-side active org match [orgId] (this tab's org). Cheap:
-  /// one read, and a write only when they differ. Best-effort.
-  static Future<bool> reassertActiveOrg(String? orgId) async {
-    if (orgId == null) return false;
-    final client = Supabase.instance.client;
-    try {
-      final server = await client.rpc('current_org') as String?;
-      if (server == orgId) return false;
-      await client.rpc('set_active_org', params: {'p_org': orgId});
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
+
 
   /// Called by screens when an RLS error (42501) is detected mid-session.
   /// Attempts a silent refresh; if that fails, forces re-login.
@@ -325,6 +309,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
     if (m['org_id'] != activeOrg) {
       await client.rpc('set_active_org', params: {'p_org': m['org_id']});
     }
+    applyOrgHeader(m['org_id'] as String?);
 
     // Org gate on the active org.
     bool subExpired = false;
@@ -481,6 +466,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
   }
 
   Future<void> signOut() async {
+    applyOrgHeader(null);
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (_) {}
