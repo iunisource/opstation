@@ -131,7 +131,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
         for (final slice in chunk(customerIds))
           client
               .from('visits')
-              .select('id, customer_id, trip_id, amount, status, timestamp, user_id')
+              .select('id, customer_id, trip_id, amount, status, timestamp, user_id, distance_meters')
               .inFilter('customer_id', slice)
               .gte('timestamp', cutoffIso)
               .limit(5000),
@@ -264,13 +264,28 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
               .map((t) => userNames[t['user_id']] ?? 'Unknown')
               .toSet()
               .toList();
-          if (verifiedCount == 0) {
+          // The two lists are exclusive: skipped on ALL three trips is a
+          // "Skipped" anomaly only. "No Visit" is for the rest — never
+          // verified on any of the three (not reached, or reached on some
+          // trips and skipped on others). Previously a skipped visit also
+          // counted as "not visited", so the same shop showed in both.
+          if (verifiedCount == 0 && skippedCount < 3) {
             noVis.add(_AnomalyRow(
                 id: cid, code: code, name: name, group: grp, dates: dates, salespeople: people));
           }
           if (skippedCount == 3) {
+            // Flag skips marked more than 200 m from the shop, e.g.
+            // "2026-09-24 (1.4km away)".
+            final skipDates = recent.map((t) {
+              final v = visitByTripCust['${t['id']}|$cid'];
+              final d = (v?['distance_meters'] as num?)?.toDouble();
+              final date = _fmtDate(t['started_at'] as String);
+              if (d == null || d <= 200) return date;
+              final away = d >= 1000 ? '${(d / 1000).toStringAsFixed(1)}km' : '${d.round()}m';
+              return '$date ($away away)';
+            }).toList();
             skipped.add(_AnomalyRow(
-                id: cid, code: code, name: name, group: grp, dates: dates, salespeople: people));
+                id: cid, code: code, name: name, group: grp, dates: skipDates, salespeople: people));
           }
         }
       }
@@ -541,7 +556,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
           _section(
             title: 'No Visit in Last 3 Routes',
             description:
-                'Customer was on the planned route on three trips, but never verified.',
+                'Customer was on the planned route on three trips but never verified (not reached, or partly skipped). Shops skipped on all three trips are listed under Skipped.',
             rows: _fNoVisit,
             empty: 'No anomalies — every customer is being visited.',
           ),
