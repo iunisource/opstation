@@ -437,7 +437,7 @@ begin
   select app_url into v_app from public.email_action_config where id = 1;
   v_app := coalesce(v_app, 'https://opstation-f06c7.web.app');
   v_open := v_app || case when p_kind = 'po' then '/#/erp/purchase?focus=' || p_id
-                          else '/#/financials/payment-advice' end;
+                          else '/#/financials/payment-advice?focus=' || p_id end;
 
   v_subj := 'Approval needed: ' || coalesce(d->>'number', d->>'title')
          || case when p_kind = 'po' and coalesce(d->>'supplier_name', '') <> '' then ' · ' || (d->>'supplier_name') else '' end

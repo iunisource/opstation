@@ -18,7 +18,10 @@ import '../../../core/pdf/pdf_output.dart';
 /// Optional approval flow (toggle + approver list in Admin Settings). Nothing
 /// posts to the general ledger.
 class ErpPaymentAdviceScreen extends ConsumerStatefulWidget {
-  const ErpPaymentAdviceScreen({super.key});
+  const ErpPaymentAdviceScreen({super.key, this.focusId});
+
+  /// Opens this advice straight away (e.g. "Go to screen" in the approval email).
+  final String? focusId;
 
   @override
   ConsumerState<ErpPaymentAdviceScreen> createState() =>
@@ -148,7 +151,35 @@ class _ErpPaymentAdviceScreenState
   @override
   void initState() {
     super.initState();
-    _loadAll();
+    _loadAll().then((_) => _openFocused());
+  }
+
+  bool _focusDone = false;
+
+  /// Deep link (?focus=<advice id>): open that advice once the screen loads.
+  Future<void> _openFocused() async {
+    final id = widget.focusId;
+    if (_focusDone || id == null || id.isEmpty || !mounted) return;
+    _focusDone = true;
+    Map<String, dynamic>? a;
+    for (final x in _advices) {
+      if (x['id'] == id) {
+        a = x;
+        break;
+      }
+    }
+    if (a == null) {
+      try {
+        final r = await _db.from('payment_advices').select().eq('id', id).maybeSingle();
+        if (r != null) a = Map<String, dynamic>.from(r);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (a == null) {
+      _snack('That payment advice was not found in this organization.');
+      return;
+    }
+    await _openAdvice(a);
   }
 
   @override
@@ -528,7 +559,7 @@ class _ErpPaymentAdviceScreenState
           // the creator as the approver instead of leaving "Approved by" blank.
           if (autoApproved) 'approved_by': me?.id,
           if (autoApproved) 'approved_by_name': me?.name,
-          if (autoApproved) 'approved_at': DateTime.now().toIso8601String(),
+          if (autoApproved) 'approved_at': DateTime.now().toUtc().toIso8601String(),
         });
         final mySig = await _signatureOf(me?.id);
         await _stampSignatures(adviceId, {
@@ -542,7 +573,7 @@ class _ErpPaymentAdviceScreenState
           'advice_date': DateFormat('yyyy-MM-dd').format(_date),
           'note': _noteCtrl.text.trim(),
           'grand_total': total,
-          'updated_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', adviceId);
         await _db.from('payment_advice_lines').delete().eq('advice_id', adviceId);
       }
@@ -613,7 +644,7 @@ class _ErpPaymentAdviceScreenState
         'status': 'approved',
         'approved_by': me?.id,
         'approved_by_name': me?.name,
-        'approved_at': DateTime.now().toIso8601String(),
+        'approved_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _current!['id']);
       await _stampSignatures(_current!['id'] as String, {
         'approved_signature_url': await _signatureOf(me?.id),
@@ -649,9 +680,9 @@ class _ErpPaymentAdviceScreenState
         'status': 'rejected',
         'rejected_by': me?.id,
         'rejected_by_name': me?.name,
-        'rejected_at': DateTime.now().toIso8601String(),
+        'rejected_at': DateTime.now().toUtc().toIso8601String(),
         'reject_reason': reason.trim().isEmpty ? null : reason.trim(),
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _current!['id']);
       await _audit(_current!['id'] as String, 'rejected',
           reason.trim().isEmpty ? 'Rejected' : 'Rejected: ${reason.trim()}');
@@ -769,7 +800,7 @@ class _ErpPaymentAdviceScreenState
     if (ok != true) return;
     final reason = ctrl.text.trim();
     final me = ref.read(currentUserProvider);
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     setState(() => _saving = true);
     try {
       await _db.from('payment_advices').update({
@@ -894,7 +925,7 @@ class _ErpPaymentAdviceScreenState
     try {
       await _db.from('payment_advices').update({
         'is_archived': archived,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', a['id']);
       await _audit(a['id'] as String, archived ? 'archived' : 'unarchived', '');
       if (!mounted) return;

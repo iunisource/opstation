@@ -219,7 +219,14 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       final user = auth.valueOrNull;
       final loggedIn = user != null;
       final onLogin = loc == '/login' || loc == '/signup';
-      if (!loggedIn && !onLogin) return '/login';
+      if (!loggedIn && !onLogin) {
+        // Remember where the user was going (e.g. "Go to screen" from an
+        // email) so they land on that exact voucher after signing in.
+        final target = state.uri.toString();
+        return (target.isEmpty || target == '/')
+            ? '/login'
+            : '/login?from=${Uri.encodeComponent(target)}';
+      }
       if (loggedIn) {
         final role = user.role;
         final access = ref.read(accessSyncProvider);
@@ -301,7 +308,13 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           // admin / masterAdmin — everything except super admin's /orgs
           return loc != '/orgs';
         }
-        if (onLogin) return home();
+        if (onLogin) {
+          final from = state.uri.queryParameters['from'];
+          return (from != null && from.startsWith('/') && !from.startsWith('//') &&
+                  !from.startsWith('/login') && !from.startsWith('/signup'))
+              ? from
+              : home();
+        }
         // Processor tracker + job-work are Manufacturing-module features — hold
         // them behind that module for every role (admins included).
         if (loc == '/erp/processor-tracker' || loc == '/erp/processor-jobwork') {
@@ -433,7 +446,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => _deferred(_s001.loadLibrary(), () => _s001.ErpStockAdjustmentScreen())),
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => _deferred(_s080.loadLibrary(), () => _s080.ErpPaymentVoucherScreen())),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => _deferred(_s117.loadLibrary(), () => _s117.ErpReceiptVouchersScreen())),
-      GoRoute(path: '/financials/payment-advice', builder: (_, __) => _deferred(_s141.loadLibrary(), () => _s141.ErpPaymentAdviceScreen())),
+      GoRoute(path: '/financials/payment-advice', builder: (_, state) => _deferred(_s141.loadLibrary(), () => _s141.ErpPaymentAdviceScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/pdc-voucher', builder: (_, __) => _deferred(_s110.loadLibrary(), () => _s110.ErpPdcVoucherScreen())),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => _deferred(_s118.loadLibrary(), () => _s118.ErpSupplierLedgerScreen())),
                 GoRoute(path: '/financials/journal-vouchers', builder: (_, __) => _deferred(_s003.loadLibrary(), () => _s003.ErpJournalVoucherScreen())),
