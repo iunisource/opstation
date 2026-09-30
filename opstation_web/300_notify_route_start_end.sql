@@ -1,6 +1,6 @@
 -- 300 — Notifications centre: salesperson Route started / Route ended (Operations).
---   route_started   a salesperson started a route in the field app   → tap opens Live Map
---   route_ended     a salesperson ended a route (visits, sales, time) → tap opens their route history
+--   route_started   a salesperson started a route in the field app   → tap opens that route run on the Live Map
+--   route_ended     a salesperson ended a route (visits, sales, time) → tap opens that route run on the Live Map
 -- Fires only when the org has the Operations module switched on, and — like every
 -- event — only to the people the master admin adds in Admin Settings → Notifications.
 -- The mobile app's own route notifications are NOT touched.
@@ -47,7 +47,7 @@ begin
       perform notify_event(v_org, 'route_started', null, v_uid,
         'Route started',
         v_line || ' · started ' || to_char(((n->>'started_at')::timestamptz) at time zone 'Asia/Karachi', 'HH12:MI AM'),
-        '/live-map');
+        '/live-map?trip=' || (n->>'id'));
     else
       begin
         select count(*), coalesce(sum(coalesce(amount, 0)), 0)
@@ -66,7 +66,7 @@ begin
         || case when coalesce(n->>'distance_meters', '') ~ '^[0-9.]+$'
                 then ' · ' || to_char((n->>'distance_meters')::numeric / 1000, 'FM999,990.0') || ' km' else '' end;
       perform notify_event(v_org, 'route_ended', null, v_uid,
-        'Route ended', v_body, '/team?history=' || v_uid);
+        'Route ended', v_body, '/live-map?trip=' || (n->>'id'));
     end if;
   exception when others then
     null;  -- never block the field app

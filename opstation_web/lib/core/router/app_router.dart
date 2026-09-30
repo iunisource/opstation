@@ -417,7 +417,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             path: '/deliveries/:id',
             builder: (_, state) => _deferred(_s060.loadLibrary(), () => _s060.DeliveryDetailScreen(deliveryId: state.pathParameters['id']!)),
           ),
-          GoRoute(path: '/live-map', builder: (_, __) => _deferred(_s069.loadLibrary(), () => _s069.LiveMapScreen())),
+          GoRoute(path: '/live-map', builder: (_, state) => _deferred(_s069.loadLibrary(), () => _s069.LiveMapScreen(tripId: state.uri.queryParameters['trip']))),
           GoRoute(path: '/dispatch-orders', builder: (_, __) => _deferred(_s061.loadLibrary(), () => _s061.DispatchOrdersScreen())),
           GoRoute(path: '/orders', builder: (_, __) => _deferred(_s062.loadLibrary(), () => _s062.OrdersScreen())),
           GoRoute(path: '/reports', builder: (_, __) => _deferred(_s058.loadLibrary(), () => _s058.ReportsScreen())),

@@ -83,10 +83,10 @@ const kNotifEvents = <NotifEvent>[
   NotifEvent('payroll_paid', 'HR', 'Payroll marked paid', 'A payroll run was marked paid.',
       perm: 'hr_payroll', branchScoped: false),
   NotifEvent('route_started', 'Operations', 'Salesperson started a route',
-      'A salesperson started a route in the field app. Tap opens the Live Map.',
+      'A salesperson started a route in the field app. Tap opens that route on the Live Map (start point).',
       branchScoped: false, module: 'operations'),
   NotifEvent('route_ended', 'Operations', 'Salesperson ended a route',
-      'A salesperson ended a route (visits, sales and distance in the message). Tap opens their route history.',
+      'A salesperson ended a route (visits, sales and time in the message). Tap opens that route on the Live Map: start, stops in order, end.',
       branchScoped: false, module: 'operations'),
 ];
 
