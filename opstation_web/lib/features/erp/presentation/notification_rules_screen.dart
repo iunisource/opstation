@@ -97,6 +97,8 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
   bool _loading = true;
   String? _error;
   bool _byUser = false;
+  String _q = '';
+  final Set<String> _testing = {};
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _branches = [];
   final Map<String, Set<String>> _userBranches = {}; // user -> allocated branches
@@ -414,7 +416,26 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
                               style: const TextStyle(fontSize: 12.5, height: 1.45),
                             ),
                           ),
-                          const SizedBox(height: 14),
+                          const SizedBox(height: 12),
+                          TextField(
+                            onChanged: (v) => setState(() => _q = v.trim().toLowerCase()),
+                            decoration: InputDecoration(
+                              isDense: true,
+                              filled: true,
+                              fillColor: Colors.white,
+                              prefixIcon: const Icon(Icons.search, size: 20),
+                              hintText: _byUser
+                                  ? 'Search people or notifications…'
+                                  : 'Search notifications, groups or recipients…',
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(color: AppTheme.border)),
+                              enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(color: AppTheme.border)),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
                           if (_byUser) ..._buildByUser() else ..._buildByEvent(),
                         ]),
                       ),
@@ -424,10 +445,57 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
     );
   }
 
+  String _recipientLabel(Map<String, dynamic> r) {
+    final uid = r['user_id'] as String?;
+    if (uid == _creator) return 'document creator';
+    if (uid == null) return '${r['email'] ?? ''}';
+    final u = _user(uid);
+    return '${u?['name'] ?? ''} ${u?['email'] ?? ''} ${u?['role'] ?? ''}';
+  }
+
+  bool _matchesEvent(NotifEvent ev) {
+    if (_q.isEmpty) return true;
+    final hay = '${ev.title} ${ev.desc} ${ev.group} '
+            '${_rulesFor(ev.key).map(_recipientLabel).join(' ')}'
+        .toLowerCase();
+    return _q.split(RegExp(r'\s+')).every(hay.contains);
+  }
+
+  Future<void> _sendTest(NotifEvent ev) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dlg) => AlertDialog(
+        title: const Text('Send a test?'),
+        content: Text('A test notification for "${ev.title}" will go to everyone added here, on the channels ticked '
+            '(push and/or email), ignoring branch limits. "Document creator" gets it as you.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dlg, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(dlg, rootNavigator: true).pop(true), child: const Text('Send test')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _testing.add(ev.key));
+    try {
+      final res = await _db.rpc('notify_test_event',
+          params: {'p_org': widget.orgId, 'p_event': ev.key, 'p_title': ev.title});
+      final m = res is Map ? res : const {};
+      if (m['ok'] == true) {
+        _snack('Test sent — push to ${m['push'] ?? 0} user(s), email to ${m['email'] ?? 0} address(es).');
+      } else {
+        _snack('${m['message'] ?? 'Test could not be sent.'}');
+      }
+    } catch (e) {
+      _snack('Test failed: $e');
+    } finally {
+      if (mounted) setState(() => _testing.remove(ev.key));
+    }
+  }
+
   List<Widget> _buildByEvent() {
     final out = <Widget>[];
     String? group;
-    for (final ev in kNotifEvents) {
+    for (final ev in kNotifEvents.where(_matchesEvent)) {
       if (ev.group != group) {
         group = ev.group;
         out.add(Padding(
@@ -522,14 +590,22 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
         ]),
         if (rules.isNotEmpty) const Divider(height: 14),
         for (final r in rules) _ruleRow(ev, r),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
+        Row(children: [
+          TextButton.icon(
             onPressed: () => _addRecipients(ev),
             icon: const Icon(Icons.person_add_alt, size: 16),
             label: const Text('Add recipient'),
           ),
-        ),
+          const Spacer(),
+          if (rules.isNotEmpty)
+            TextButton.icon(
+              onPressed: _testing.contains(ev.key) ? null : () => _sendTest(ev),
+              icon: _testing.contains(ev.key)
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.send_outlined, size: 16),
+              label: const Text('Send test'),
+            ),
+        ]),
       ]),
     );
   }
@@ -622,6 +698,18 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
           child: Center(child: Text('Nobody receives any notifications yet.')),
         )
       ];
+    }
+    final byKeyTitle = {for (final e in kNotifEvents) e.key: e.title};
+    if (_q.isNotEmpty) {
+      entries.removeWhere((k, rs) {
+        final who = k == _creator
+            ? 'document creator'
+            : k.startsWith('mail:')
+                ? k.substring(5)
+                : '${_user(k)?['name'] ?? ''} ${_user(k)?['email'] ?? ''}';
+        final hay = '$who ${rs.map((r) => byKeyTitle[r['event_key']] ?? '').join(' ')}'.toLowerCase();
+        return !_q.split(RegExp(r'\s+')).every(hay.contains);
+      });
     }
     final keys = entries.keys.toList()
       ..sort((a, b) {
