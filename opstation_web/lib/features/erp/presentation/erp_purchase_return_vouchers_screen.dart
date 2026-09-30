@@ -10,6 +10,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../widgets/void_flow.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
@@ -80,6 +81,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isDraft  => (_detail['status'] as String? ?? 'draft') == 'draft';
+  bool get _isVoided => isVoidedRow(_detail);
   bool get _canDelete {
     final role = ref.read(currentUserProvider)?.role;
     return role == WebUserRole.masterAdmin || role == WebUserRole.admin;
@@ -114,7 +116,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_return_invoices')
-          .select('id, voucher_number, voucher_date, grand_total, status, supplier_id, prn_id, suppliers(name), purchase_returns(voucher_number)')
+          .select('id, voucher_number, voucher_date, grand_total, status, is_voided, supplier_id, prn_id, suppliers(name), purchase_returns(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q
@@ -177,6 +179,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       final prns = await Supabase.instance.client.from('purchase_returns')
           .select('id, voucher_number, voucher_date, supplier_id, suppliers(name)')
           .eq('org_id', orgId).eq('branch_id', branchId).eq('status', 'saved')
+          .not('is_voided', 'is', true)
           .order('voucher_date', ascending: false);
       if ((prns as List).isEmpty) {
         _showSnack('No saved PRNs available — save a PRN first');
@@ -398,11 +401,31 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
+  Future<void> _void() async {
+    if (!_canDelete) return;
+    final reason = await askVoidReason(context,
+        docLabel: 'Purchase Return Invoice', number: '${_detail['voucher_number'] ?? ''}',
+        effect: 'Its ledger entry (supplier credit, inventory at cost, variance) is reversed and the return note is released so it can be invoiced again. The returned stock stays returned.');
+    if (reason == null) return;
+    final id = _detail['id'] as String;
+    final err = await runVoidRpc('void_purchase_return_invoice', id, ref.read(currentUserProvider)?.id, reason);
+    if (err != null) { _showSnack(err); return; }
+    _showSnack('Return invoice voided — ledger reversed');
+    await _loadList();
+    await _loadDetail(id);
+  }
+
   Future<void> _delete() async {
     if (!_canDelete) return;
+    // Posted once (then unlocked)? It must be voided, not deleted.
+    try {
+      final je = await Supabase.instance.client.from('journal_entries').select('id')
+          .eq('reference_id', _detail['id'] as String).limit(1);
+      if ((je as List).isNotEmpty) { await _void(); return; }
+    } catch (_) {}
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Purchase Return Invoice?'),
-      content: Text('Delete ${_detail['voucher_number']}? The source PRN will be restored to saved (its stock stays returned).'),
+      title: const Text('Delete draft Purchase Return Invoice?'),
+      content: Text('Delete draft ${_detail['voucher_number']}? The return note goes back to awaiting an invoice (its stock stays returned).'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
@@ -543,7 +566,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
                         title: Row(children: [
                           Expanded(child: Text(r['voucher_number'] as String? ?? '-',
                               style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null))),
-                          _PriStatusBadge(r['status'] as String? ?? 'draft'),
+                          if (r['is_voided'] == true) const VoidedPill() else _PriStatusBadge(r['status'] as String? ?? 'draft'),
                         ]),
                         subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                           Text(r['suppliers']?['name'] as String? ?? 'Cash Supplier', style: const TextStyle(fontSize: 11)),
@@ -576,24 +599,27 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
             const Text('Purchase Return Invoice',
                 style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
-          if (_isDraft) ...[
-            ElevatedButton.icon(
-              icon: const Icon(Icons.check_circle_outline, size: 16),
-              label: const Text('Issue Invoice'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-              onPressed: _issueInvoice,
+          if (_isVoided)
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print)
+          else ...[
+            if (_isDraft) ...[
+              ElevatedButton.icon(
+                icon: const Icon(Icons.check_circle_outline, size: 16),
+                label: const Text('Issue Invoice'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+                onPressed: _issueInvoice,
+              ),
+              const SizedBox(width: 8),
+            ],
+            IconButton(
+              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
+                  color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+              tooltip: _isLocked ? 'Unlock' : 'Lock',
+              onPressed: _toggleLock,
             ),
-            const SizedBox(width: 8),
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print),
+            if (_canDelete) deleteOrVoidButton(draft: _isDraft && !_isLocked, onDelete: _delete, onVoid: _void),
           ],
-          IconButton(
-            icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
-                color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-            tooltip: _isLocked ? 'Unlock' : 'Lock',
-            onPressed: _toggleLock,
-          ),
-          IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print),
-          if (_canDelete)
-            IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), tooltip: 'Delete', onPressed: _delete),
         ]),
       ),
       Expanded(
@@ -601,6 +627,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
           padding: const EdgeInsets.all(24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // Info chips
+            if (_isVoided) VoidedBanner(_detail),
             Wrap(spacing: 12, runSpacing: 8, children: [
               _Chip(label: 'Supplier', value: sup?['name'] as String? ?? 'Cash Supplier'),
               _Chip(label: 'Date', value: _detail['voucher_date'] != null

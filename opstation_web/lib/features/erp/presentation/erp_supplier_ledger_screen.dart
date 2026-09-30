@@ -236,7 +236,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     try {
       final siQ = client.from('purchase_invoices').select('*')
           .eq('org_id', orgId).eq('supplier_id', supplierId)
-          .eq('is_locked', true);
+          .eq('is_locked', true).not('is_voided', 'is', true);
       final sis = await siQ;
       for (final si in sis as List) {
         final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;

@@ -10,6 +10,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../widgets/void_flow.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
@@ -105,7 +106,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_returns')
-          .select('id, voucher_number, voucher_date, grand_total, status, supplier_id, suppliers(name)')
+          .select('id, voucher_number, voucher_date, grand_total, status, is_voided, supplier_id, suppliers(name)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final returns = await q
@@ -167,6 +168,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isDraft  => (_detail['status'] as String? ?? 'draft') == 'draft';
   bool get _canEdit  => !_isLocked;
+  bool get _isVoided => isVoidedRow(_detail);
 
   // ── Create new SRN (open-ended) ────────────────────────────────────────────
   Future<void> _createNew() async {
@@ -467,6 +469,20 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
+  Future<void> _void() async {
+    if (!_canDelete) return;
+    final reason = await askVoidReason(context,
+        docLabel: 'Purchase Return Note', number: '${_detail['voucher_number'] ?? ''}',
+        effect: 'The returned stock is put back into inventory. Any return invoice for this note must be voided first.');
+    if (reason == null) return;
+    final id = _detail['id'] as String;
+    final err = await runVoidRpc('void_purchase_return', id, ref.read(currentUserProvider)?.id, reason);
+    if (err != null) { _showSnack(err); return; }
+    _showSnack('Return note voided — stock put back');
+    await _loadList();
+    await _loadDetail(id);
+  }
+
   Future<void> _delete() async {
     if (!_canDelete) return;
     // Cascade check: no PRV should reference this PRN
@@ -480,8 +496,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (e) { _showSnack('Failed to check: $e'); return; }
 
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Purchase Return Note?'),
-      content: Text('Permanently delete ${_detail['voucher_number']}? This cannot be undone.'),
+      title: const Text('Delete draft Purchase Return Note?'),
+      content: Text('Delete draft ${_detail['voucher_number']}? No stock has moved yet.'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
@@ -618,7 +634,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                           title: Row(children: [
                             Expanded(child: Text(r['voucher_number'] as String? ?? '-',
                                 style: TextStyle(fontWeight: FontWeight.w700, color: selected ? AppTheme.primary : null))),
-                            _PrnStatusBadge(r['status'] as String? ?? 'draft'),
+                            if (r['is_voided'] == true) const VoidedPill() else _PrnStatusBadge(r['status'] as String? ?? 'draft'),
                           ]),
                           subtitle: Text(r['suppliers']?['name'] as String? ?? 'Cash Supplier',
                               style: const TextStyle(fontSize: 11)),
@@ -650,38 +666,42 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
             const Text('Purchase Return Note',
                 style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
-          if (_isDraft && !_isLocked) ...[
-            ElevatedButton.icon(
-              icon: const Icon(Icons.check, size: 16),
-              label: const Text('Save'),
-              onPressed: _saveNote,
+          if (_isVoided)
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print)
+          else ...[
+            if (_isDraft && !_isLocked) ...[
+              ElevatedButton.icon(
+                icon: const Icon(Icons.check, size: 16),
+                label: const Text('Save'),
+                onPressed: _saveNote,
+              ),
+              const SizedBox(width: 8),
+            ],
+            if (!_isDraft && (_detail['status'] as String? ?? '') == 'saved') ...[
+              ElevatedButton.icon(
+                icon: const Icon(Icons.description, size: 16),
+                label: const Text('Generate Return Invoice'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+                onPressed: _generateInvoice,
+              ),
+              const SizedBox(width: 8),
+            ],
+            IconButton(
+              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
+                  color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+              tooltip: _isLocked ? 'Unlock' : 'Lock',
+              onPressed: _toggleLock,
             ),
-            const SizedBox(width: 8),
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print),
+            if (_canDelete) deleteOrVoidButton(draft: _isDraft, onDelete: _delete, onVoid: _void),
           ],
-          if (!_isDraft && (_detail['status'] as String? ?? '') == 'saved') ...[
-            ElevatedButton.icon(
-              icon: const Icon(Icons.description, size: 16),
-              label: const Text('Generate Return Invoice'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-              onPressed: _generateInvoice,
-            ),
-            const SizedBox(width: 8),
-          ],
-          IconButton(
-            icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline,
-                color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-            tooltip: _isLocked ? 'Unlock' : 'Lock',
-            onPressed: _toggleLock,
-          ),
-          IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _print),
-          if (_canDelete)
-            IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), tooltip: 'Delete', onPressed: _delete),
         ]),
       ),
       Expanded(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (_isVoided) VoidedBanner(_detail),
             // Supplier chip + dates
             Wrap(spacing: 12, runSpacing: 8, children: [
               _Chip(label: 'Supplier', value: sup?['name'] as String? ?? 'Cash Supplier'),

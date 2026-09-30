@@ -380,6 +380,7 @@ final grnPendingInvoiceCountProvider = FutureProvider<int>((ref) async {
         .select('id')
         .eq('org_id', user.orgId!)
         .eq('is_locked', true)
+        .not('is_voided', 'is', true)
         .inFilter('status', ['received', 'partially_received', 'saved']);
     if (branchId != null) q = q.eq('branch_id', branchId);
     final res = await q;
@@ -404,6 +405,7 @@ final grnSupervisePendingProvider = FutureProvider<int>((ref) async {
     final res = await client.from('purchase_grns').select('id')
         .eq('org_id', user.orgId!)
         .filter('supervised_at', 'is', null)
+        .not('is_voided', 'is', true)
         .neq('status', 'draft');
     return (res as List).length;
   } catch (_) { return 0; }
@@ -508,6 +510,7 @@ final piSupervisePendingProvider = FutureProvider<int>((ref) async {
     if (!isAdmin) return 0;
     final res = await client.from('purchase_invoices').select('id')
         .eq('org_id', user.orgId!)
+        .not('is_voided', 'is', true)
         .filter('supervised_at', 'is', null);
     return (res as List).length;
   } catch (_) { return 0; }

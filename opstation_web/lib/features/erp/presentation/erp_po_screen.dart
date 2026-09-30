@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
+import '../widgets/void_flow.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/permissions/access_control.dart';
@@ -153,6 +154,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
   bool get _isVoided => _detail['voided_at'] != null;
+  // Never submitted (never locked / approved / rejected) and nothing received:
+  // the only state in which a PO may still be deleted. Anything else is voided.
+  bool get _isUnsubmittedDraft => !_isLocked && _detail['approved_at'] == null &&
+      _detail['rejected_at'] == null && !_hasGrn;
   bool get _isRejected => _detail['rejected_at'] != null && !_isLocked && !_isVoided;
   // Set on detail load from Admin Settings: may this user acknowledge the
   // rejection (a designated recipient, or the creator when none designated)?
@@ -699,7 +704,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     if (!_canDelete) return;
     try {
       final grns = await Supabase.instance.client.from('purchase_grns').select('id,voucher_number').eq('po_id', _detail['id'] as String);
-      if ((grns as List).isNotEmpty) { _showSnack('Cannot delete: GRN ${grns.first['voucher_number']} exists. Delete GRN first.'); return; }
+      if ((grns as List).isNotEmpty) { _showSnack('Cannot delete: GRN ${grns.first['voucher_number']} exists. Void the PO instead.'); return; }
     } catch (e) { _showSnack('Check error: $e'); return; }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete Purchase Order?'),
@@ -865,27 +870,19 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   // Approved POs are voided instead of hard-deleted (keeps the audit record).
   Future<void> _void() async {
     if (!_canDelete) return;
-    if (_hasGrn) { _showSnack('Cannot void: a GRN exists against this PO. Delete the GRN first.'); return; }
-    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Void Purchase Order?'),
-      content: Text('Void ${_detail['voucher_number']}? It will be kept for the record but marked void and cannot be received.'),
-      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade800), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Void'))],
-    ));
-    if (ok != true) return;
-    final u = ref.read(currentUserProvider);
-    try {
-      await Supabase.instance.client.from('purchase_orders').update({
-        'voided_by': u?.id, 'voided_by_name': u?.name,
-        'voided_at': DateTime.now().toUtc().toIso8601String(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'voided', 'PO ${_detail['voucher_number']} voided by ${u?.name ?? ''}');
-      _showSnack('Purchase Order voided');
-      ref.invalidate(poPendingApprovalCountProvider);
-      _loadDetail(_detail['id'] as String);
-      _loadList();
-    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    final reason = await askVoidReason(context,
+        docLabel: 'Purchase Order', number: '${_detail['voucher_number'] ?? ''}',
+        effect: 'The PO is cancelled and can no longer be received. Any GRN against it must be voided first.');
+    if (reason == null) return;
+    final id = _detail['id'] as String;
+    SavingOverlay.show(context, label: 'Voiding…');
+    final err = await runVoidRpc('void_purchase_order', id, ref.read(currentUserProvider)?.id, reason);
+    SavingOverlay.hide();
+    if (err != null) { _showSnack(err); return; }
+    _showSnack('Purchase Order voided');
+    ref.invalidate(poPendingApprovalCountProvider);
+    _loadDetail(id);
+    _loadList();
   }
 
   // Outstanding = ordered minus received across all lines. Drives the
@@ -1144,11 +1141,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
             IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print', onPressed: _print),
             if (_canDelete && !_isVoided)
-              IconButton(
-                icon: Icon(_detail['approved_at'] != null ? Icons.block : Icons.delete_outline,
-                    color: _detail['approved_at'] != null ? Colors.orange.shade800 : AppTheme.danger),
-                tooltip: _detail['approved_at'] != null ? 'Void (approved PO cannot be deleted)' : 'Delete',
-                onPressed: _detail['approved_at'] != null ? _void : _delete),
+              deleteOrVoidButton(draft: _isUnsubmittedDraft, onDelete: _delete, onVoid: _void),
           ];
           if (narrow) {
             return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1186,6 +1179,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           if (_isLocked) const _PoLockedChip(),
           if (_isVoided) const _PoVoidChip(),
         ]),
+        if (_isVoided) Padding(padding: const EdgeInsets.only(top: 12), child: VoidedBanner(_detail)),
         if (sup != null) _PoInfoStrip(
           address: sup['address'] as String?,
           contact: sup['contact_person'] as String?,

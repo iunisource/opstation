@@ -13,6 +13,7 @@ import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
+import '../widgets/void_flow.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
@@ -82,7 +83,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
-  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked;
+  bool get _isVoided => isVoidedRow(_detail);
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked && !_isVoided;
   // Review-flow state
   String? get _reviewStatus => _detail['review_status'] as String?;
   bool get _isPendingReview => _reviewStatus == 'pending';
@@ -132,7 +134,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     setState(() => _listLoading = true);
     try {
       var q = Supabase.instance.client.from('purchase_invoices')
-          .select('id,voucher_number,voucher_date,grand_total,is_locked,review_status,supervised_at,supplier_id,grn_id,vendor_invoice_no,description,suppliers(name),purchase_grns(voucher_number)')
+          .select('id,voucher_number,voucher_date,grand_total,is_locked,is_voided,review_status,supervised_at,supplier_id,grn_id,vendor_invoice_no,description,suppliers(name),purchase_grns(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -217,6 +219,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       final grns = await Supabase.instance.client.from('purchase_grns')
           .select('id,voucher_number,voucher_date,supplier_id,po_id,remarks,copy_remarks,suppliers(name),purchase_orders(voucher_number)')
           .eq('org_id', orgId).eq('branch_id', branchId).inFilter('status', ['received', 'partially_received', 'saved']).eq('is_locked', true)
+          .not('is_voided', 'is', true)
           .order('voucher_date', ascending: false);
       if ((grns as List).isEmpty) { _showSnack('No confirmed GRNs available. Confirm a GRN first.'); return; }
       final picked = await showDialog<Map<String, dynamic>?>(context: context,
@@ -232,7 +235,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     setState(() => _detailLoading = true);
     try {
       // Check not already invoiced
-      final existing = await Supabase.instance.client.from('purchase_invoices').select('id,voucher_number').eq('grn_id', grn['id'] as String);
+      final existing = await Supabase.instance.client.from('purchase_invoices').select('id,voucher_number').eq('grn_id', grn['id'] as String).not('is_voided', 'is', true);
       if ((existing as List).isNotEmpty) { setState(() => _detailLoading = false); _showSnack('PI ${existing.first['voucher_number']} already exists for this GRN'); return; }
       final grnItems = await Supabase.instance.client.from('purchase_grn_items').select('*').eq('grn_id', grn['id'] as String);
       if ((grnItems as List).isEmpty) { setState(() => _detailLoading = false); _showSnack('GRN has no items'); return; }
@@ -589,9 +592,15 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
 
   Future<void> _delete() async {
     if (!_canDelete) return;
+    // An invoice that was posted once (then unlocked) must be voided, not deleted.
+    try {
+      final je = await Supabase.instance.client.from('journal_entries').select('id')
+          .eq('reference_id', _detail['id'] as String).limit(1);
+      if ((je as List).isNotEmpty) { await _void(); return; }
+    } catch (_) {}
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete Purchase Invoice?'),
-      content: Text('Delete ${_detail['voucher_number']}? The GRN will be restored to its received state.'),
+      title: const Text('Delete draft Purchase Invoice?'),
+      content: Text('Delete draft ${_detail['voucher_number']}? It was never posted; the GRN goes back to awaiting an invoice.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete'))],
     ));
@@ -616,6 +625,22 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+  }
+
+  Future<void> _void() async {
+    if (!_canDelete) return;
+    final reason = await askVoidReason(context,
+        docLabel: 'Purchase Invoice', number: '${_detail['voucher_number'] ?? ''}',
+        effect: 'Its ledger entry (payable, GRNI clearing, cost true-up) is reversed and the GRN is released so it can be invoiced again.');
+    if (reason == null) return;
+    final id = _detail['id'] as String;
+    SavingOverlay.show(context, label: 'Voiding…');
+    final err = await runVoidRpc('void_purchase_invoice', id, ref.read(currentUserProvider)?.id, reason);
+    SavingOverlay.hide();
+    if (err != null) { _showSnack(err); return; }
+    _showSnack('Purchase Invoice voided — ledger reversed, GRN released');
+    _loadDetail(id);
+    _loadList();
   }
 
   // ── Supervision: a NON-BLOCKING admin review mark (org.pi_supervise_flow).
@@ -805,6 +830,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
                       const Tooltip(message: 'Awaiting supervision', child: Icon(Icons.verified_user_outlined, size: 14, color: Colors.orange)),
                       const SizedBox(width: 4),
                     ],
+                    if (r['is_voided'] == true) const VoidedPill() else
                     Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(color: st.color.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
                       child: Text(st.label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: st.color))),
@@ -830,38 +856,42 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
           const Text('Purchase Invoice', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
         ]);
         final actions = <Widget>[
-          if (_isDraft && !_reviewFlow)
-            ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 16), label: const Text('Save Invoice'), onPressed: _saveInvoice),
-          if (_isDraft && _reviewFlow && !_isPendingReview)
-            ElevatedButton.icon(icon: const Icon(Icons.send_outlined, size: 16), label: const Text('Send for Review'), onPressed: _sendForReview),
-          if (_isDraft && _reviewFlow && _isPendingReview && _isAdmin) ...[
-            OutlinedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 16), label: const Text('Reject'),
-                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)), onPressed: _reject),
-            ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve & Post'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _approveAndPost),
+          if (_isVoided)
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print)
+          else ...[
+            if (_isDraft && !_reviewFlow)
+              ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 16), label: const Text('Save Invoice'), onPressed: _saveInvoice),
+            if (_isDraft && _reviewFlow && !_isPendingReview)
+              ElevatedButton.icon(icon: const Icon(Icons.send_outlined, size: 16), label: const Text('Send for Review'), onPressed: _sendForReview),
+            if (_isDraft && _reviewFlow && _isPendingReview && _isAdmin) ...[
+              OutlinedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 16), label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)), onPressed: _reject),
+              ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve & Post'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _approveAndPost),
+            ],
+            if (_isDraft && _reviewFlow && _isPendingReview && !_isAdmin)
+              Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.hourglass_top, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Pending review', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
+            if (_canEditDate)
+              IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
+            if (!_isDraft || _canUnlock)
+              IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+                  tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
+            if (_superviseFlow && _isAdmin) ...[
+              if (_detail['supervised_at'] == null)
+                OutlinedButton.icon(
+                  icon: _superviseBusy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                  label: const Text('Supervise'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                  onPressed: _superviseBusy ? null : _supervise)
+              else
+                TextButton.icon(icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                  label: const Text('Supervised', style: TextStyle(color: AppTheme.success)), onPressed: _clearSupervision),
+            ],
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
+            if (_canDelete) deleteOrVoidButton(draft: !_isLocked, onDelete: _delete, onVoid: _void),
           ],
-          if (_isDraft && _reviewFlow && _isPendingReview && !_isAdmin)
-            Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.hourglass_top, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Pending review', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
-          if (_canEditDate)
-            IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
-          if (!_isDraft || _canUnlock)
-            IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-                tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
-          if (_superviseFlow && _isAdmin) ...[
-            if (_detail['supervised_at'] == null)
-              OutlinedButton.icon(
-                icon: _superviseBusy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
-                label: const Text('Supervise'),
-                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
-                onPressed: _superviseBusy ? null : _supervise)
-            else
-              TextButton.icon(icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
-                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)), onPressed: _clearSupervision),
-          ],
-          IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
-          if (_canDelete) IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), onPressed: _delete),
         ];
         return Container(
           padding: EdgeInsets.fromLTRB(mobile ? 16 : 24, 16, mobile ? 12 : 24, mobile ? 12 : 16),
@@ -879,6 +909,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         );
       }),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_isVoided) VoidedBanner(_detail),
         Wrap(spacing: 12, runSpacing: 8, children: [
           _PiChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),
           _PiChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),

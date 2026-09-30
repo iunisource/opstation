@@ -16,6 +16,7 @@ import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
+import '../widgets/void_flow.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 /// GRN — Goods Receipt Note.
@@ -96,7 +97,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
-  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked;
+  bool get _isVoided => isVoidedRow(_detail);
+  bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked && !_isVoided;
   // A posted (received) GRN can be re-adjusted once an admin has UNLOCKED it —
   // as long as it hasn't been invoiced (an invoice already cleared GRNI, so a
   // change here would unbalance the books). Only admins can unlock, so the
@@ -140,7 +142,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.grn_supervise_flow').maybeSingle(); _superviseEnabled = (c?['value'] as String?) == 'true'; } catch (_) {}
     try {
       var q = Supabase.instance.client.from('purchase_grns')
-          .select('id,voucher_number,voucher_date,status,is_locked,supplier_id,po_id,supervised_at,suppliers(name),purchase_orders(voucher_number)')
+          .select('id,voucher_number,voucher_date,status,is_locked,is_voided,supplier_id,po_id,supervised_at,suppliers(name),purchase_orders(voucher_number)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -163,7 +165,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       // Linked purchase invoice(s) — shown as a clickable chip when invoiced.
       List<Map<String, dynamic>> pis = [];
       try {
-        final r = await client.from('purchase_invoices').select('id,voucher_number').eq('grn_id', id);
+        final r = await client.from('purchase_invoices').select('id,voucher_number').eq('grn_id', id).not('is_voided', 'is', true);
         pis = List<Map<String, dynamic>>.from(r as List);
       } catch (_) {}
       setState(() {
@@ -538,8 +540,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       if ((pis as List).isNotEmpty) { _showSnack('Cannot delete: PI ${pis.first['voucher_number']} exists. Delete PI first.'); return; }
     } catch (e) { _showSnack('Check error: $e'); return; }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Delete GRN?'),
-      content: Text('Delete ${_detail['voucher_number']}? Stock will be reversed if already confirmed.'),
+      title: const Text('Delete draft GRN?'),
+      content: Text('Delete draft ${_detail['voucher_number']}? No stock has moved yet, so nothing needs reversing.'),
       actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Delete'))],
     ));
@@ -557,6 +559,22 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       setState(() { _selectedId = null; _detail = {}; _items = []; });
       _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+  }
+
+  Future<void> _void() async {
+    if (!_canDelete) return;
+    final reason = await askVoidReason(context,
+        docLabel: 'GRN', number: '${_detail['voucher_number'] ?? ''}',
+        effect: 'The received stock is taken back out, its cost layers and ledger entries are reversed, and the PO goes back to awaiting these goods.');
+    if (reason == null) return;
+    final id = _detail['id'] as String;
+    SavingOverlay.show(context, label: 'Voiding…');
+    final err = await runVoidRpc('void_purchase_grn', id, ref.read(currentUserProvider)?.id, reason);
+    SavingOverlay.hide();
+    if (err != null) { _showSnack(err); return; }
+    _showSnack('GRN voided — stock and ledger reversed');
+    _loadDetail(id);
+    _loadList();
   }
 
   Future<void> _print() async {
@@ -657,7 +675,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                       const _GrnSupListBadge(),
                       const SizedBox(width: 4),
                     ],
-                    _GrnBadge(status: status, locked: locked),
+                    if (r['is_voided'] == true) const VoidedPill() else _GrnBadge(status: status, locked: locked),
                   ]),
                   subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                     Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
@@ -679,52 +697,57 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
             Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             const Text('Goods Receipt Note', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
           ])),
-          if (_isDraft && !_isLocked) ...[
-            ElevatedButton.icon(icon: const Icon(Icons.check_circle_outline, size: 16),
-                label: Text(_confirmBusy ? 'Confirming…' : 'Confirm Receipt'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-                onPressed: _confirmBusy ? null : _confirmReceipt),
-            const SizedBox(width: 8),
+          if (_isVoided)
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print)
+          else ...[
+            if (_isDraft && !_isLocked) ...[
+              ElevatedButton.icon(icon: const Icon(Icons.check_circle_outline, size: 16),
+                  label: Text(_confirmBusy ? 'Confirming…' : 'Confirm Receipt'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+                  onPressed: _confirmBusy ? null : _confirmReceipt),
+              const SizedBox(width: 8),
+            ],
+            if (_adjustMode) ...[
+              ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 16),
+                  label: Text(_adjustBusy ? 'Saving…' : 'Save changes'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+                  onPressed: _adjustBusy ? null : _saveAdjustments),
+              const SizedBox(width: 6),
+              TextButton(onPressed: _adjustBusy ? null : _cancelAdjust, child: const Text('Cancel')),
+              const SizedBox(width: 8),
+            ] else if (_canAdjust) ...[
+              OutlinedButton.icon(icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Edit quantities'),
+                  onPressed: _enterAdjust),
+              const SizedBox(width: 8),
+            ],
+            if (_superviseEnabled && _isAdmin) ...[
+              if (_detail['supervised_at'] == null)
+                OutlinedButton.icon(
+                  icon: _superviseBusy
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                  label: const Text('Supervise'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                  onPressed: _superviseBusy ? null : _supervise)
+              else
+                TextButton.icon(
+                  icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                  label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+                  onPressed: _clearSupervision),
+              const SizedBox(width: 8),
+            ],
+            if (_canEditDate)
+              IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
+            if (!_isDraft || !_isLocked || _canUnlock)
+              IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+                  tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
+            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
+            if (_canDelete) deleteOrVoidButton(draft: !_isConfirmed, onDelete: _delete, onVoid: _void),
           ],
-          if (_adjustMode) ...[
-            ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 16),
-                label: Text(_adjustBusy ? 'Saving…' : 'Save changes'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-                onPressed: _adjustBusy ? null : _saveAdjustments),
-            const SizedBox(width: 6),
-            TextButton(onPressed: _adjustBusy ? null : _cancelAdjust, child: const Text('Cancel')),
-            const SizedBox(width: 8),
-          ] else if (_canAdjust) ...[
-            OutlinedButton.icon(icon: const Icon(Icons.edit_outlined, size: 16),
-                label: const Text('Edit quantities'),
-                onPressed: _enterAdjust),
-            const SizedBox(width: 8),
-          ],
-          if (_superviseEnabled && _isAdmin) ...[
-            if (_detail['supervised_at'] == null)
-              OutlinedButton.icon(
-                icon: _superviseBusy
-                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
-                label: const Text('Supervise'),
-                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
-                onPressed: _superviseBusy ? null : _supervise)
-            else
-              TextButton.icon(
-                icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
-                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
-                onPressed: _clearSupervision),
-            const SizedBox(width: 8),
-          ],
-          if (_canEditDate)
-            IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
-          if (!_isDraft || !_isLocked || _canUnlock)
-            IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-                tooltip: _isLocked ? 'Unlock (admin)' : 'Lock', onPressed: _toggleLock),
-          IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
-          if (_canDelete) IconButton(icon: const Icon(Icons.delete_outline, color: AppTheme.danger), onPressed: _delete),
         ])),
       Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_isVoided) VoidedBanner(_detail),
         Wrap(spacing: 12, runSpacing: 8, children: [
           _GrnChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),
           _GrnChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),

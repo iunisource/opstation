@@ -1497,6 +1497,7 @@ Future<_Msg> _purchaseSummary(String q, _Ctx c) async {
       .from('purchase_invoices')
       .select('grand_total, branch_id')
       .eq('org_id', c.orgId)
+      .not('is_voided', 'is', true)
       .gte('voucher_date', p.d2)
       .lte('voucher_date', p.d1);
   if (c.branchId != null) query = query.eq('branch_id', c.branchId!);

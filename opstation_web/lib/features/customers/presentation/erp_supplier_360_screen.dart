@@ -213,7 +213,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
       for (int f = 0; ; f += 1000) {
         final page = List.from(await client.from('purchase_invoices')
             .select('id, voucher_number, voucher_date, grand_total')
-            .eq('org_id', orgId).eq('supplier_id', sid)
+            .eq('org_id', orgId).eq('supplier_id', sid).not('is_voided', 'is', true)
             .lte('voucher_date', asOfStr).range(f, f + 999));
         invs.addAll(page);
         if (page.length < 1000 || f > 200000) break;
@@ -297,7 +297,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     try {
       final rows = await Supabase.instance.client.from('purchase_invoices')
           .select('id, voucher_number, voucher_date, grand_total')
-          .eq('org_id', orgId).eq('supplier_id', sid)
+          .eq('org_id', orgId).eq('supplier_id', sid).not('is_voided', 'is', true)
           .order('voucher_date', ascending: false);
       final list = List<Map<String, dynamic>>.from(rows);
       double total = 0;
