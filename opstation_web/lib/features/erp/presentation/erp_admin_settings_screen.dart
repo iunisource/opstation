@@ -10,6 +10,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
 import '../widgets/company_logo_settings.dart';
+import 'notification_rules_screen.dart';
 import '../../../core/utils/friendly_error.dart';
 
 /// An optional numeric parameter attached to a toggle. Shown (and saved) only
@@ -143,18 +144,6 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
-    'org.pa_notify_new',
-    'Notify when a new Payment Advice is saved (pending approval)',
-    'When ON, saving a new Payment Advice that is pending approval sends a push '
-        'notification to the selected users (on their devices) and an email to '
-        'the addresses below — so you are alerted even when you are away from a '
-        'device. Fires once per advice, when it is first created.',
-    users: _UsersField('org.pa_notify_users', 'Users to notify (push)'),
-    text: _TextSetting('org.pa_notify_emails', 'Email recipients',
-        hint: 'comma-separated email addresses'),
-  ),
-
-  _AdminToggle(
     'org.si_price_editable',
     'Editable prices on Sales Invoices',
     'When ON, the unit price on a Sales Invoice can be edited before it is saved/posted '
@@ -181,24 +170,14 @@ const List<_AdminToggle> _toggles = [
         'trail and shown on the printed PO.',
   ),
   _AdminToggle(
-    'org.po_notify_new',
-    'Notify when a new Purchase Order is saved (pending approval)',
-    'When ON, saving a new Purchase Order that is pending approval sends a push '
-        'notification to the selected users (on their devices) and an email to '
-        'the addresses below — so you are alerted even when you are away from a '
-        'device. Fires once per PO, when it is first created.',
-    users: _UsersField('org.po_notify_users', 'Users to notify (push)'),
-    text: _TextSetting('org.po_notify_emails', 'Email recipients',
-        hint: 'comma-separated email addresses'),
-  ),
-  _AdminToggle(
     'org.po_reject_notify',
-    'Notify when a Purchase Order is rejected',
+    'On-screen alert when a Purchase Order is rejected',
     'When ON (and the PO approval flow is on), rejecting a PO plays a ding, '
         'shows a banner with the rejection reason and adds a pendency badge for '
-        'the users selected below, plus a push to their devices. The badge clears '
-        'once one of them acknowledges (logged in the PO audit trail). If no '
-        'users are selected, the PO\'s creator is notified instead.',
+        'the users selected below. The badge clears once one of them '
+        'acknowledges (logged in the PO audit trail). If no users are selected, '
+        'the PO\'s creator is alerted instead. Push / email for rejections are '
+        'set in Notifications above.',
     users: _UsersField('org.po_reject_notify_users', 'Users to notify'),
   ),
   _AdminToggle(
@@ -627,7 +606,6 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Purchase & GRN', Icons.shopping_cart_outlined, [
     'org.po_approval_required',
-    'org.po_notify_new',
     'org.po_reject_notify',
     'org.po_show_stock_consumption',
     'org.po_fg_stock',
@@ -658,7 +636,6 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.pa_approval_enabled',
     'org.pa_signatures',
     'org.pa_approval_watermark',
-    'org.pa_notify_new',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
     'org.show_org_name_sales',
@@ -1672,6 +1649,9 @@ class _ErpAdminSettingsScreenState
                   ]),
                   const SizedBox(height: 18),
                   _GoLivePanel(orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                  if (ref.read(currentUserProvider)?.role == WebUserRole.masterAdmin ||
+                      ref.read(currentUserProvider)?.role == WebUserRole.superAdmin)
+                    _NotificationsEntry(orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   // Search
                   Container(
                     constraints: const BoxConstraints(maxWidth: 1040),
@@ -2918,6 +2898,49 @@ class _GoLivePanelState extends ConsumerState<_GoLivePanel> {
             label: const Text('We\'re live — start transacting'),
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB4791A), foregroundColor: Colors.white),
           ),
+        ),
+      ]),
+    );
+  }
+}
+
+
+/// Entry card: opens Admin Settings → Notifications (master admin only).
+class _NotificationsEntry extends StatelessWidget {
+  final String orgId;
+  const _NotificationsEntry({required this.orgId});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 1040),
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(children: [
+        Container(
+          width: 38, height: 38,
+          decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+          child: const Icon(Icons.notifications_active_outlined, color: AppTheme.primary),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Notifications', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+            SizedBox(height: 2),
+            Text('Choose who gets push / email alerts for approvals, reviews, supervision, orders and transfers — per user and branch.',
+                style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          ]),
+        ),
+        const SizedBox(width: 12),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.tune, size: 16),
+          label: const Text('Configure'),
+          onPressed: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute(
+              builder: (_) => NotificationRulesScreen(orgId: orgId))),
         ),
       ]),
     );
