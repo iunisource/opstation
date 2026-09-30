@@ -18,6 +18,10 @@ class OpstationWebApp extends ConsumerStatefulWidget {
 class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
   StreamSubscription<AuthState>? _authSub;
   StreamSubscription<html.MessageEvent>? _swSub;
+  StreamSubscription<html.MessageEvent>? _bcSub;
+  html.BroadcastChannel? _pushChannel;
+  String? _lastPushPath;
+  DateTime? _lastPushAt;
   bool _recoveryOpen = false;
 
   @override
@@ -36,22 +40,39 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
       }
     });
     // A click on a push notification while Opstation is already open: the
-    // service worker posts "opstation-open:<path>" and we route to that exact
-    // screen / document (e.g. /hr/leave?focus=lv_123) without reloading.
+    // service worker sends "opstation-open:<path>" (directly, or on the
+    // "opstation-push" channel) and we route to that exact screen / document
+    // (e.g. /hr/leave?focus=lv_123) without reloading, then confirm with "ack".
     try {
-      _swSub = html.window.navigator.serviceWorker?.onMessage.listen((e) {
-        final d = e.data;
-        if (d is String && d.startsWith('opstation-open:')) {
-          final path = d.substring('opstation-open:'.length);
-          if (path.startsWith('/')) ref.read(webRouterProvider).go(path);
-        }
-      });
+      _pushChannel = html.BroadcastChannel('opstation-push');
+    } catch (_) {}
+    void handle(dynamic d) {
+      if (d is! String || !d.startsWith('opstation-open:')) return;
+      final path = d.substring('opstation-open:'.length);
+      final now = DateTime.now();
+      if (path == _lastPushPath && _lastPushAt != null &&
+          now.difference(_lastPushAt!) < const Duration(seconds: 3)) {
+        try { _pushChannel?.postMessage('ack'); } catch (_) {}
+        return; // same click delivered twice
+      }
+      _lastPushPath = path;
+      _lastPushAt = now;
+      if (path.startsWith('/')) ref.read(webRouterProvider).go(path);
+      try { _pushChannel?.postMessage('ack'); } catch (_) {}
+    }
+    try {
+      _swSub = html.window.navigator.serviceWorker?.onMessage.listen((e) => handle(e.data));
+    } catch (_) {}
+    try {
+      _bcSub = _pushChannel?.onMessage.listen((e) => handle(e.data));
     } catch (_) {}
   }
 
   @override
   void dispose() {
     _swSub?.cancel();
+    _bcSub?.cancel();
+    try { _pushChannel?.close(); } catch (_) {}
     _authSub?.cancel();
     super.dispose();
   }

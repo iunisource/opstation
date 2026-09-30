@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
+import '../../../core/layout/main_layout.dart' show leavePendingCountProvider;
 
 class HrLeaveScreen extends ConsumerStatefulWidget {
   const HrLeaveScreen({super.key, this.focusId});
@@ -65,6 +66,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
   }
 
   String? _focusDone;
+  bool _mobileDetail = false; // phone: showing the open request instead of the list
   @override
   void didUpdateWidget(covariant HrLeaveScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -112,6 +114,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
     final orgId = _orgId; if (orgId == null) return;
     final rows = await Supabase.instance.client.from('hr_leave_requests').select().eq('org_id', orgId).order('from_date', ascending: false);
     if (mounted) setState(() => _requests = List<Map<String, dynamic>>.from(rows));
+    ref.invalidate(leavePendingCountProvider); // keep the menu badge in step
   }
 
   List<Map<String, dynamic>> get _activeTypes => _types.where((t) => t['is_active'] != false).toList();
@@ -126,11 +129,12 @@ class _State extends ConsumerState<HrLeaveScreen> {
   String _dStr(double v) { final r = (v * 100).roundToDouble() / 100; return r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toString(); }
 
   void _newRequest() {
-    setState(() { _current = null; _empId = null; _typeId = null; _from = null; _to = null; _halfDay = false; _reason.clear(); });
+    setState(() { _mobileDetail = true; _current = null; _empId = null; _typeId = null; _from = null; _to = null; _halfDay = false; _reason.clear(); });
   }
 
   void _loadRequest(Map<String, dynamic> r) {
     setState(() {
+      _mobileDetail = true;
       _current = r;
       _empId = r['employee_id'] as String?;
       _typeId = r['leave_type_id'] as String?;
@@ -346,8 +350,20 @@ class _State extends ConsumerState<HrLeaveScreen> {
       return nm.contains(q) || tp.contains(q);
     }).toList();
 
+    final narrow = MediaQuery.of(context).size.width < 700;
+    if (narrow) {
+      // Phone: one panel at a time — the list, or the open request with a back arrow.
+      return Container(color: AppTheme.background,
+          child: _mobileDetail ? _detailPane(narrow) : _listPane(filtered, null));
+    }
     return Container(color: AppTheme.background, child: Row(children: [
-      if (_drawerOpen) Container(width: 320,
+      if (_drawerOpen) _listPane(filtered, 320),
+      Expanded(child: _detailPane(narrow)),
+    ]));
+  }
+
+  Widget _listPane(List<Map<String, dynamic>> filtered, double? width) =>
+      Container(width: width,
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
           Container(padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
@@ -392,15 +408,15 @@ class _State extends ConsumerState<HrLeaveScreen> {
                   ]),
                 ));
               })),
-        ])),
+        ]));
 
-      Expanded(child: Column(children: [
+  Widget _detailPane(bool narrow) => Column(children: [
         Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+          child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, runSpacing: 6, children: [
+            IconButton(icon: Icon(narrow ? Icons.arrow_back : (_drawerOpen ? Icons.chevron_left : Icons.chevron_right), size: 18), onPressed: () => setState(() { if (narrow) { _mobileDetail = false; } else { _drawerOpen = !_drawerOpen; } }), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
             const SizedBox(width: 8),
-            Expanded(child: Text(_current == null ? 'New Leave Request' : (_empName[_empId] ?? 'Leave Request'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+            ConstrainedBox(constraints: BoxConstraints(maxWidth: narrow ? 220 : 420), child: Text(_current == null ? 'New Leave Request' : (_empName[_empId] ?? 'Leave Request'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
             if (_isAdmin) TextButton.icon(icon: const Icon(Icons.category_outlined, size: 15), label: const Text('Leave types', style: TextStyle(fontSize: 12)), onPressed: _manageTypes),
             if (_current != null) _statusChip(),
             if (_isAdmin && _isPending) Padding(padding: const EdgeInsets.only(left: 6), child: ElevatedButton.icon(
@@ -421,15 +437,15 @@ class _State extends ConsumerState<HrLeaveScreen> {
           ])),
         Expanded(child: _loading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          : SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _card('Request', [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              _rowOrCol(narrow, [
                 Expanded(child: _labeled('Employee', _empDropdown())),
                 const SizedBox(width: 12),
                 Expanded(child: _labeled('Leave type', _typeDropdown())),
               ]),
               const SizedBox(height: 12),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              _rowOrCol(narrow, [
                 Expanded(child: _labeled('From', _dateField(_from, (d) => setState(() { _from = d; if (_to == null || _to!.isBefore(d)) _to = d; })))),
                 const SizedBox(width: 12),
                 Expanded(child: _labeled('To', _dateField(_to, (d) => setState(() => _to = d)))),
@@ -452,8 +468,19 @@ class _State extends ConsumerState<HrLeaveScreen> {
             const SizedBox(height: 16),
             if (_empId != null) _balancesCard(),
           ]))),
-      ])),
-    ]));
+      ]);
+
+  /// Side-by-side on wide screens; stacked (full width) on phones.
+  Widget _rowOrCol(bool narrow, List<Widget> children) {
+    if (!narrow) return Row(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    final out = <Widget>[];
+    for (final c in children) {
+      if (c is SizedBox && c.height == null) continue;          // horizontal gaps
+      out.add(c is Expanded ? c.child : c);
+      out.add(const SizedBox(height: 10));
+    }
+    if (out.isNotEmpty) out.removeLast();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: out);
   }
 
   Widget _statusChip() {

@@ -57,6 +57,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     'retailer_orders', // retailerOrderPendingCountProvider
     'products', // productSupervisePendingProvider
     'voucher_remarks', // doRemarkPendingProvider (DO remark pendency)
+    'hr_leave_requests', // leavePendingCountProvider
   ];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -207,6 +208,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(retailerOrderPendingCountProvider);
     ref.invalidate(productSupervisePendingProvider);
     ref.invalidate(doRemarkPendingProvider);
+    ref.invalidate(leavePendingCountProvider);
     _checkPoPing(); // ping admins if a new PO just landed
   }
 

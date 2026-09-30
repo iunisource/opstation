@@ -1,6 +1,11 @@
 // Opstation push service worker.
 // Handles incoming Web Push messages and notification clicks.
-// Deployed at the web root and registered from index.html (see integration notes).
+// Registered from index.html.
+
+// Take over straight away when a new version is deployed (no waiting for
+// every tab to close), so notification clicks always use the latest logic.
+self.addEventListener('install', function () { self.skipWaiting(); });
+self.addEventListener('activate', function (event) { event.waitUntil(self.clients.claim()); });
 
 // Turn whatever the server sent ("/hr/leave?focus=lv_1", "/#/...", a full URL)
 // into a full app address. The app uses hash routing, so screens live after
@@ -36,30 +41,49 @@ self.addEventListener('push', function (event) {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
+// Wait up to [ms] for an open Opstation tab to confirm it routed itself.
+function waitForAck(channel, ms) {
+  return new Promise(function (resolve) {
+    var done = false;
+    var t = setTimeout(function () { if (!done) { done = true; resolve(false); } }, ms);
+    channel.onmessage = function (e) {
+      if (!done && e.data === 'ack') { done = true; clearTimeout(t); resolve(true); }
+    };
+  });
+}
+
 self.addEventListener('notificationclick', function (event) {
   event.notification.close();
   const url = appUrl(event.notification.data && event.notification.data.url);
   const path = url.split('#')[1] || '/';
 
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
-      // An Opstation tab is already open: bring it forward and tell the app
-      // which screen / document to open (the app routes itself — no reload).
-      let best = null;
-      for (const c of clientList) {
-        if (c.url && c.url.indexOf(self.location.origin) === 0) {
-          if (!best || c.focused || c.visibilityState === 'visible') best = c;
-        }
+  event.waitUntil((async function () {
+    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    let best = null;
+    for (const c of clientList) {
+      if (c.url && c.url.indexOf(self.location.origin) === 0) {
+        if (!best || c.focused || c.visibilityState === 'visible') best = c;
       }
-      if (best) {
-        best.postMessage('opstation-open:' + path);
-        if ('focus' in best) return best.focus();
+    }
+
+    if (best) {
+      try { if ('focus' in best) await best.focus(); } catch (e) {}
+      const bc = ('BroadcastChannel' in self) ? new BroadcastChannel('opstation-push') : null;
+      // 1) Tell that tab directly; 2) if it doesn't confirm, broadcast to every
+      // Opstation tab; 3) if still nothing, open the exact screen in a new window.
+      best.postMessage('opstation-open:' + path);
+      if (bc) {
+        if (await waitForAck(bc, 1500)) { bc.close(); return; }
+        bc.postMessage('opstation-open:' + path);
+        if (await waitForAck(bc, 1500)) { bc.close(); return; }
+        bc.close();
+      } else {
         return;
       }
-      // Nothing open: open the exact screen in a new window.
-      if (self.clients.openWindow) return self.clients.openWindow(url);
-    })
-  );
+      try { if ('navigate' in best) { await best.navigate(url); return; } } catch (e) {}
+    }
+    if (self.clients.openWindow) return self.clients.openWindow(url);
+  })());
 });
 
 // Push services can rotate a subscription; when they do, this fires and the app
