@@ -17,7 +17,8 @@ import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 /// an admin reviews here, may edit qty / remove / add lines, then Approves
 /// (-> a draft Sales Order via approve_field_order) or Rejects.
 class ErpFieldOrdersScreen extends ConsumerStatefulWidget {
-  const ErpFieldOrdersScreen({super.key});
+  const ErpFieldOrdersScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpFieldOrdersScreen> createState() => _ErpFieldOrdersScreenState();
 }
@@ -52,7 +53,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     _installAudio();
     _restoreSoundPref();
     _loadProducts();
-    _loadOrders();
+    _loadOrders().then((_) => _openFocus());
     _loadBranches();
     _subscribe();
   }
@@ -252,6 +253,30 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       }
       setState(() { _orders = orders; _loading = false; });
     } catch (e) { _snack('Load error: $e'); setState(() => _loading = false); }
+  }
+
+
+  String? _focusDone;
+  @override
+  void didUpdateWidget(covariant ErpFieldOrdersScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusId != oldWidget.focusId) _openFocus();
+  }
+
+  /// Deep link (?focus=<id>) from a notification / email: open that record.
+  Future<void> _openFocus() async {
+    final id = widget.focusId;
+    if (id == null || id.isEmpty || id == _focusDone || !mounted) return;
+    _focusDone = id;
+    Map<String, dynamic>? o;
+    for (final x in _orders) { if (x['id'] == id) { o = x; break; } }
+    if (o == null) {
+      try {
+        final row = await Supabase.instance.client.from('field_orders').select('*').eq('id', id).maybeSingle();
+        if (row != null) o = Map<String, dynamic>.from(row);
+      } catch (_) {}
+    }
+    if (o != null && mounted) await _openOrder(o);
   }
 
   Future<void> _openOrder(Map<String, dynamic> o) async {

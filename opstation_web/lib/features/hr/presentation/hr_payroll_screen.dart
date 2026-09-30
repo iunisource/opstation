@@ -16,7 +16,8 @@ import '../../auth/auth_controller.dart';
 /// holidays and the weekly rest day are paid. Runs have a Draft → Finalized →
 /// Paid lifecycle; recompute and edits are allowed only while Draft.
 class HrPayrollScreen extends ConsumerStatefulWidget {
-  const HrPayrollScreen({super.key});
+  const HrPayrollScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<HrPayrollScreen> createState() => _State();
 }
@@ -44,7 +45,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) => _openFocus());
   }
 
   String _fmt(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
@@ -73,6 +74,24 @@ class _State extends ConsumerState<HrPayrollScreen> {
       return;
     }
     if (mounted) setState(() => _loading = false);
+  }
+
+
+  String? _focusDone;
+  @override
+  void didUpdateWidget(covariant HrPayrollScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusId != oldWidget.focusId) _openFocus();
+  }
+
+  /// Deep link (?focus=<id>) from a notification / email: open that record.
+  Future<void> _openFocus() async {
+    final id = widget.focusId;
+    if (id == null || id.isEmpty || id == _focusDone || !mounted) return;
+    _focusDone = id;
+    Map<String, dynamic>? r;
+    for (final x in _runs) { if (x['id'] == id) { r = x; break; } }
+    if (r != null && mounted) await _selectRun(r);
   }
 
   Future<void> _selectRun(Map<String, dynamic> run) async {

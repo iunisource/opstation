@@ -18,7 +18,8 @@ import 'package:opstation_web/core/widgets/voucher_sort.dart';
 /// Created from a confirmed SRN. User sets price + discount per item.
 /// "Issue Invoice" → stock added back to inventory + SRN locked.
 class ErpSalesReturnInvoicesScreen extends ConsumerStatefulWidget {
-  const ErpSalesReturnInvoicesScreen({super.key});
+  const ErpSalesReturnInvoicesScreen({super.key, this.focusId});
+  final String? focusId;
   @override ConsumerState<ErpSalesReturnInvoicesScreen> createState() => _ErpSalesReturnInvoicesScreenState();
 }
 
@@ -39,7 +40,23 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   bool _superviseBusy = false;
   final Set<String> _supSelected = {}; // SRI ids ticked for selected-bulk supervise
 
-  @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); _loadSuperviseFlow(); }
+  @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); _loadSuperviseFlow(); WidgetsBinding.instance.addPostFrameCallback((_) => _openFocus()); }
+
+  String? _focusDone;
+  @override
+  void didUpdateWidget(covariant ErpSalesReturnInvoicesScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusId != oldWidget.focusId) _openFocus();
+  }
+
+  /// Deep link (?focus=<id>) from a notification / email: open that record.
+  Future<void> _openFocus() async {
+    final id = widget.focusId;
+    if (id == null || id.isEmpty || id == _focusDone || !mounted) return;
+    _focusDone = id;
+    await _loadDetail(id);
+  }
+
   @override void dispose() { for (final c in _priceCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;

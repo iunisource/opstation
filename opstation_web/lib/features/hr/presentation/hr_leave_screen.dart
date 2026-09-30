@@ -8,7 +8,8 @@ import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
 
 class HrLeaveScreen extends ConsumerStatefulWidget {
-  const HrLeaveScreen({super.key});
+  const HrLeaveScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<HrLeaveScreen> createState() => _State();
 }
@@ -60,6 +61,30 @@ class _State extends ConsumerState<HrLeaveScreen> {
       await _loadRequests();
     } catch (e) { _snack('Load error: $e'); }
     if (mounted) setState(() => _loading = false);
+    _openFocus();
+  }
+
+  String? _focusDone;
+  @override
+  void didUpdateWidget(covariant HrLeaveScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusId != oldWidget.focusId) _openFocus();
+  }
+
+  /// Deep link (?focus=<id>) from a notification / email: open that record.
+  Future<void> _openFocus() async {
+    final id = widget.focusId;
+    if (id == null || id.isEmpty || id == _focusDone || !mounted) return;
+    _focusDone = id;
+    Map<String, dynamic>? r;
+    for (final x in _requests) { if (x['id'] == id) { r = x; break; } }
+    if (r == null) {
+      try {
+        final row = await Supabase.instance.client.from('hr_leave_requests').select().eq('id', id).maybeSingle();
+        if (row != null) r = Map<String, dynamic>.from(row);
+      } catch (_) {}
+    }
+    if (r != null && mounted) _loadRequest(r);
   }
 
   Future<void> _loadEmployees() async {

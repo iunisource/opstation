@@ -23,7 +23,8 @@ import '../../auth/auth_controller.dart';
 /// Full parity with Field Orders: live nav badge, realtime arrival, new-order
 /// chime, and editable lines before approval.
 class ErpRetailerOrdersScreen extends ConsumerStatefulWidget {
-  const ErpRetailerOrdersScreen({super.key});
+  const ErpRetailerOrdersScreen({super.key, this.focusId});
+  final String? focusId;
   @override
   ConsumerState<ErpRetailerOrdersScreen> createState() =>
       _ErpRetailerOrdersScreenState();
@@ -61,7 +62,7 @@ class _ErpRetailerOrdersScreenState
     _restoreSoundPref();
     _loadProducts();
     _loadBranches();
-    _loadOrders();
+    _loadOrders().then((_) => _openFocus());
     _subscribe();
   }
 
@@ -307,6 +308,30 @@ class _ErpRetailerOrdersScreenState
       setState(() => _loading = false);
       _snack('Load failed: $e');
     }
+  }
+
+
+  String? _focusDone;
+  @override
+  void didUpdateWidget(covariant ErpRetailerOrdersScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusId != oldWidget.focusId) _openFocus();
+  }
+
+  /// Deep link (?focus=<id>) from a notification / email: open that record.
+  Future<void> _openFocus() async {
+    final id = widget.focusId;
+    if (id == null || id.isEmpty || id == _focusDone || !mounted) return;
+    _focusDone = id;
+    Map<String, dynamic>? o;
+    for (final x in _orders) { if (x['id'] == id) { o = x; break; } }
+    if (o == null) {
+      try {
+        final row = await Supabase.instance.client.from('retailer_orders').select('*').eq('id', id).maybeSingle();
+        if (row != null) o = Map<String, dynamic>.from(row);
+      } catch (_) {}
+    }
+    if (o != null && mounted) await _openOrder(o);
   }
 
   Future<void> _openOrder(Map<String, dynamic> o) async {

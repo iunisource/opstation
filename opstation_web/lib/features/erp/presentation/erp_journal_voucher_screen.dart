@@ -30,7 +30,9 @@ class _JvLine {
 }
 
 class ErpJournalVoucherScreen extends ConsumerStatefulWidget {
-  const ErpJournalVoucherScreen({super.key});
+  const ErpJournalVoucherScreen({super.key, this.focusId});
+  /// Changing this (a new ?focus= link while the screen is open) re-runs the deep link.
+  final String? focusId;
   @override ConsumerState<ErpJournalVoucherScreen> createState() => _State();
 }
 
@@ -71,6 +73,11 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); _ensureAccessReady(); _loadJvFlag(); });
   }
   @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
+  @override
+  void didUpdateWidget(covariant ErpJournalVoucherScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusId != oldWidget.focusId && widget.focusId != null) _loadVouchersAndAutoSelect();
+  }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
   Future<void> _loadJvFlag([int tries = 0]) async {

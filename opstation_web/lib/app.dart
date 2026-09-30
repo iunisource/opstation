@@ -1,4 +1,6 @@
 import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -15,6 +17,7 @@ class OpstationWebApp extends ConsumerStatefulWidget {
 
 class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
   StreamSubscription<AuthState>? _authSub;
+  StreamSubscription<html.MessageEvent>? _swSub;
   bool _recoveryOpen = false;
 
   @override
@@ -32,10 +35,23 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
             .addPostFrameCallback((_) => _promptSetNewPassword());
       }
     });
+    // A click on a push notification while Opstation is already open: the
+    // service worker posts "opstation-open:<path>" and we route to that exact
+    // screen / document (e.g. /hr/leave?focus=lv_123) without reloading.
+    try {
+      _swSub = html.window.navigator.serviceWorker?.onMessage.listen((e) {
+        final d = e.data;
+        if (d is String && d.startsWith('opstation-open:')) {
+          final path = d.substring('opstation-open:'.length);
+          if (path.startsWith('/')) ref.read(webRouterProvider).go(path);
+        }
+      });
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    _swSub?.cancel();
     _authSub?.cancel();
     super.dispose();
   }
