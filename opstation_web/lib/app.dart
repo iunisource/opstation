@@ -1,6 +1,8 @@
 import 'dart:async';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:convert';
+import 'dart:js_util' as jsu;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -21,6 +23,8 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
   StreamSubscription<html.MessageEvent>? _bcSub;
   html.BroadcastChannel? _pushChannel;
   String? _lastPushPath;
+  StreamSubscription<html.Event>? _focusSub;
+  StreamSubscription<html.Event>? _visSub;
   DateTime? _lastPushAt;
   bool _recoveryOpen = false;
 
@@ -58,6 +62,7 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
       _lastPushPath = path;
       _lastPushAt = now;
       if (path.startsWith('/')) ref.read(webRouterProvider).go(path);
+      _takePendingPushPath(); // consumed — don't re-open it on the next focus
       try { _pushChannel?.postMessage('ack'); } catch (_) {}
     }
     try {
@@ -66,15 +71,52 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
     try {
       _bcSub = _pushChannel?.onMessage.listen((e) => handle(e.data));
     } catch (_) {}
+    // Most reliable path: the service worker also leaves the destination in
+    // Cache Storage; pick it up whenever Opstation gets focus / becomes
+    // visible (and once at start-up).
+    Future<void> checkPending() async {
+      final path = await _takePendingPushPath();
+      if (path != null) handle('opstation-open:$path');
+    }
+    try { _focusSub = html.window.onFocus.listen((_) => checkPending()); } catch (_) {}
+    try {
+      _visSub = html.document.onVisibilityChange.listen((_) {
+        if (html.document.visibilityState == 'visible') checkPending();
+      });
+    } catch (_) {}
+    WidgetsBinding.instance.addPostFrameCallback((_) => checkPending());
   }
 
   @override
   void dispose() {
     _swSub?.cancel();
     _bcSub?.cancel();
+    _focusSub?.cancel();
+    _visSub?.cancel();
     try { _pushChannel?.close(); } catch (_) {}
     _authSub?.cancel();
     super.dispose();
+  }
+
+  /// Reads (and clears) the notification target the push service worker left
+  /// in Cache Storage. Only honoured for 2 minutes after the tap.
+  Future<String?> _takePendingPushPath() async {
+    try {
+      final caches = jsu.getProperty(html.window, 'caches');
+      if (caches == null) return null;
+      final cache = await jsu.promiseToFuture<dynamic>(jsu.callMethod(caches, 'open', ['opstation-push']));
+      final resp = await jsu.promiseToFuture<dynamic>(jsu.callMethod(cache, 'match', ['/__pending_open']));
+      if (resp == null) return null;
+      final text = await jsu.promiseToFuture<dynamic>(jsu.callMethod(resp, 'text', []));
+      await jsu.promiseToFuture<dynamic>(jsu.callMethod(cache, 'delete', ['/__pending_open']));
+      final m = jsonDecode('$text') as Map<String, dynamic>;
+      final t = (m['t'] as num?)?.toInt() ?? 0;
+      if (DateTime.now().millisecondsSinceEpoch - t > 120000) return null;
+      final path = m['path'] as String?;
+      return (path != null && path.startsWith('/')) ? path : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _promptSetNewPassword() async {

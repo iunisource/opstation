@@ -41,15 +41,16 @@ self.addEventListener('push', function (event) {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// Wait up to [ms] for an open Opstation tab to confirm it routed itself.
-function waitForAck(channel, ms) {
-  return new Promise(function (resolve) {
-    var done = false;
-    var t = setTimeout(function () { if (!done) { done = true; resolve(false); } }, ms);
-    channel.onmessage = function (e) {
-      if (!done && e.data === 'ack') { done = true; clearTimeout(t); resolve(true); }
-    };
-  });
+// Leave the destination where the app can always find it (Cache Storage is
+// shared by every Opstation page, whatever service worker controls it). The
+// app picks it up the moment it is focused / becomes visible, so a tap works
+// even when the page can't receive messages from this worker (e.g. iPhone).
+function rememberTarget(path) {
+  if (!self.caches) return Promise.resolve();
+  return caches.open('opstation-push').then(function (c) {
+    return c.put('/__pending_open', new Response(JSON.stringify({ path: path, t: Date.now() }),
+      { headers: { 'Content-Type': 'application/json' } }));
+  }).catch(function () {});
 }
 
 self.addEventListener('notificationclick', function (event) {
@@ -58,7 +59,10 @@ self.addEventListener('notificationclick', function (event) {
   const path = url.split('#')[1] || '/';
 
   event.waitUntil((async function () {
-    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    // Bring Opstation forward FIRST (browsers only allow this right after the
+    // tap), then tell it where to go.
+    let clientList = [];
+    try { clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true }); } catch (e) {}
     let best = null;
     for (const c of clientList) {
       if (c.url && c.url.indexOf(self.location.origin) === 0) {
@@ -66,23 +70,26 @@ self.addEventListener('notificationclick', function (event) {
       }
     }
 
-    if (best) {
-      try { if ('focus' in best) await best.focus(); } catch (e) {}
-      const bc = ('BroadcastChannel' in self) ? new BroadcastChannel('opstation-push') : null;
-      // 1) Tell that tab directly; 2) if it doesn't confirm, broadcast to every
-      // Opstation tab; 3) if still nothing, open the exact screen in a new window.
-      best.postMessage('opstation-open:' + path);
-      if (bc) {
-        if (await waitForAck(bc, 1500)) { bc.close(); return; }
-        bc.postMessage('opstation-open:' + path);
-        if (await waitForAck(bc, 1500)) { bc.close(); return; }
-        bc.close();
-      } else {
-        return;
-      }
-      try { if ('navigate' in best) { await best.navigate(url); return; } } catch (e) {}
+    let focused = false;
+    if (best && 'focus' in best) {
+      try { await best.focus(); focused = true; } catch (e) { focused = false; }
     }
-    if (self.clients.openWindow) return self.clients.openWindow(url);
+
+    if (!focused) {
+      // No open window (or it can't be focused): open the exact screen.
+      try { if (self.clients.openWindow) { await self.clients.openWindow(url); return; } } catch (e) {}
+    }
+
+    // An Opstation window is in front: route it to the document.
+    await rememberTarget(path);
+    try { best && best.postMessage('opstation-open:' + path); } catch (e) {}
+    try {
+      if ('BroadcastChannel' in self) {
+        const bc = new BroadcastChannel('opstation-push');
+        bc.postMessage('opstation-open:' + path);
+        bc.close();
+      }
+    } catch (e) {}
   })());
 });
 
