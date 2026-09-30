@@ -41,6 +41,15 @@ final orgSosProvider = StreamProvider<Map<String, dynamic>?>((ref) {
       .map((rows) => rows.isEmpty ? null : rows.first);
 });
 
+/// Menu badge counts are nice-to-have, so they wait until the landing screen
+/// has had the network to itself. Each gate completes once per app session,
+/// so later refreshes of a badge (after an approve, etc.) run immediately.
+final badgeGateProvider = FutureProvider<void>(
+    (ref) => Future<void>.delayed(const Duration(milliseconds: 2500)));
+/// The Inventory Integrity badge runs a full integrity check — start it last.
+final heavyBadgeGateProvider = FutureProvider<void>(
+    (ref) => Future<void>.delayed(const Duration(seconds: 8)));
+
 final orgModulesProvider = FutureProvider<Set<String>>((ref) async {
   // Await full auth resolution so the restored session's JWT is attached before
   // querying; otherwise a cold-start refresh races and returns empty modules,
@@ -127,6 +136,7 @@ final userBranchesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
 
 // Count of overdue open CRM follow-ups for the current org (sidebar badge).
 final crmOverdueCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -154,6 +164,7 @@ final crmOverdueCountProvider = FutureProvider<int>((ref) async {
 // supplier complaints — for the current org. Badges CRM → Suppliers and rolls
 // into the CRM nav, mirroring the customer follow-ups badge.
 final supplierPendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -201,6 +212,7 @@ final customerTargetsEnabledProvider = FutureProvider<bool>((ref) async {
 
 // Count of assets with maintenance overdue for the current org (nav badge).
 final assetsDueCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -223,6 +235,7 @@ final assetsDueCountProvider = FutureProvider<int>((ref) async {
 
 // Count of facility tasks open & overdue for the current org (nav badge).
 final facilityDueCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -244,6 +257,7 @@ final facilityDueCountProvider = FutureProvider<int>((ref) async {
 
 // Count of purchase orders awaiting approval for the current org (nav badge).
 final poPendingApprovalCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -315,6 +329,7 @@ Future<List<Map<String, dynamic>>> poRejectAlertRows(String orgId, String uid,
 // Count of rejected POs awaiting acknowledgement by this user (nav badge).
 // Gated by the Admin Settings toggle + designated users. Clears on acknowledge.
 final poRejectedUnackedCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   try {
@@ -326,6 +341,7 @@ final poRejectedUnackedCountProvider = FutureProvider<int>((ref) async {
 
 // Count of Payment Advices awaiting approval for the current org (nav badge).
 final paPendingApprovalCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -346,6 +362,7 @@ final paPendingApprovalCountProvider = FutureProvider<int>((ref) async {
 /// gets its own badge; the parent menu sums them. Invalidated by the invoice
 /// screens on send/approve/reject.
 FutureProvider<int> _reviewPendingProvider(String table, String configKey) => FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -371,6 +388,7 @@ final siReviewPendingProvider  = _reviewPendingProvider('sales_invoices', 'org.d
 // always agree. When a branch is selected we scope to it; with no branch we
 // fall back to an org-wide count so the badge still means something.
 final grnPendingInvoiceCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final branchId = ref.watch(selectedBranchProvider)?['id'] as String?;
@@ -393,6 +411,7 @@ final grnPendingInvoiceCountProvider = FutureProvider<int>((ref) async {
 // Count of received GRNs still awaiting admin supervision (non-blocking review
 // layer), gated by org.grn_supervise_flow. Drives the GRN menu pendency badge.
 final grnSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -414,6 +433,7 @@ final grnSupervisePendingProvider = FutureProvider<int>((ref) async {
 // Count of newly-created customers still awaiting admin supervision, gated by
 // org.customer_supervise_flow. Drives the Customers menu pendency badge.
 final customerSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -433,6 +453,7 @@ final customerSupervisePendingProvider = FutureProvider<int>((ref) async {
 // Count of newly-created products still awaiting admin supervision, gated by
 // org.product_supervise_flow. Drives the Inventory → Products pendency badge.
 final productSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -452,6 +473,7 @@ final productSupervisePendingProvider = FutureProvider<int>((ref) async {
 // Count of Sales Invoices still awaiting admin supervision (non-blocking review
 // layer), gated by org.si_supervise_flow. Drives the Sales Invoice menu badge.
 final siSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -476,6 +498,7 @@ final siSupervisePendingProvider = FutureProvider<int>((ref) async {
 // Count of Delivery Orders still awaiting supervision (non-blocking review
 // layer), gated by org.do_supervise_flow. Drives the Delivery Orders menu badge.
 final doSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -499,6 +522,7 @@ final doSupervisePendingProvider = FutureProvider<int>((ref) async {
 // Count of Purchase Invoices still awaiting admin supervision, gated by
 // org.pi_supervise_flow. Drives the Purchase Invoices menu badge.
 final piSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -519,6 +543,7 @@ final piSupervisePendingProvider = FutureProvider<int>((ref) async {
 // Count of Sales Return Invoices still awaiting admin supervision, gated by
 // org.sri_supervise_flow. Drives the Sales Return Invoice menu badge.
 final sriSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -540,6 +565,7 @@ final sriSupervisePendingProvider = FutureProvider<int>((ref) async {
 // current org, gated by org.job_ack_flow. Drives the Manufacturing → Job Card
 // pendency badge. Invalidated by the Job Card screen on acknowledge + realtime.
 final jobAckPendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -577,6 +603,7 @@ final userBranchIdsProvider = FutureProvider<Set<String>?>((ref) async {
 // a branch this user can see — either endpoint on the transfer. Drives the
 // Inventory -> Stock Transfers pendency badge.
 final transferPendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final branchIds = await ref.watch(userBranchIdsProvider.future);
@@ -604,6 +631,7 @@ final transferPendingCountProvider = FutureProvider<int>((ref) async {
 // pendency badge. Scoped to the sending (home) branch for branch users; org-wide
 // for admins.
 final processorOverdueCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final branchIds = await ref.watch(userBranchIdsProvider.future);
@@ -624,6 +652,7 @@ final processorOverdueCountProvider = FutureProvider<int>((ref) async {
 // Inventory -> Inventory Integrity menu item so anyone with access can see at a
 // glance that there are items to fix, without opening the report.
 final inventoryIntegrityCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(heavyBadgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   try {
@@ -690,6 +719,7 @@ final inventoryIntegrityCountProvider = FutureProvider<int>((ref) async {
 /// Drives the live nav badge on the Field Orders menu item. Invalidated by
 /// erp_field_orders_screen on approve/reject and realtime arrival.
 final fieldOrderPendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
@@ -711,6 +741,7 @@ final fieldOrderPendingCountProvider = FutureProvider<int>((ref) async {
 /// marks the DO's remarks read and clears this count). A user's own remark
 /// never counts against them.
 final doRemarkPendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = ref.watch(currentUserProvider);
   if (user == null || user.orgId == null) return 0;
   try {
@@ -736,6 +767,7 @@ final doRemarkPendingProvider = FutureProvider<int>((ref) async {
 /// Lights up the GRN menu + Purchase nav badge until the user opens the GRN
 /// and clicks "Read" on the remarks panel. Your own remarks never count.
 final grnRemarkPendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = ref.watch(currentUserProvider);
   if (user == null || user.orgId == null) return 0;
   try {
@@ -762,6 +794,7 @@ final grnRemarkPendingProvider = FutureProvider<int>((ref) async {
 /// is what stops a pending request being confirmed by accident from the Sales
 /// Orders screen. Invalidated on approve/reject and on realtime arrival.
 final retailerOrderPendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;

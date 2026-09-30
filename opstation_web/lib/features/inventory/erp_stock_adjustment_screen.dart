@@ -26,6 +26,7 @@ import '../../core/search/text_search.dart';
 import '../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../auth/auth_controller.dart';        // exposes currentUserProvider (WebUser: id, orgId)
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 class ErpStockAdjustmentScreen extends ConsumerStatefulWidget {
   const ErpStockAdjustmentScreen({super.key});
@@ -712,10 +713,10 @@ class _ErpStockAdjustmentScreenState
                         child: BranchEmptyHint('No vouchers yet',
                             style:
                                 TextStyle(fontSize: 12, color: Colors.black54)))
-                    : ListView.builder(
-                        itemCount: filtered.length,
+                    : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(
+                        itemCount: vsRows.length,
                         itemBuilder: (_, i) {
-                          final v = filtered[i];
+                          final v = vsRows[i];
                           final sel = _voucherId == v['id'];
                           final voided = v['is_voided'] == true;
                           final posted = !voided &&
@@ -783,7 +784,7 @@ class _ErpStockAdjustmentScreenState
                             ),
                           );
                         },
-                      ),
+                      )),
           ),
         ],
       ),

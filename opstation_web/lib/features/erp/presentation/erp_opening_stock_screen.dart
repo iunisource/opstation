@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 class _OsLine {
   static int _seq = 0;
@@ -361,8 +362,8 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
             : filtered.isEmpty ? const Center(child: BranchEmptyHint('No opening stock vouchers yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-            : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
-                final v = filtered[i]; final sel = _current?['id'] == v['id'];
+            : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(itemCount: vsRows.length, itemBuilder: (_, i) {
+                final v = vsRows[i]; final sel = _current?['id'] == v['id'];
                 final st = (v['status'] as String? ?? 'draft');
                 final voided = v['is_voided'] == true || st == 'voided';
                 final posted = !voided && st == 'posted';
@@ -383,7 +384,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
                     Text('${v['voucher_date'] ?? ''}  \u00b7  ${_money((v['total_value'] as num? ?? 0))}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                   ]),
                 ));
-              })),
+              }))),
         ])),
 
       Expanded(child: Column(children: [

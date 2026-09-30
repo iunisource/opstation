@@ -13,6 +13,7 @@ import '../../../core/widgets/product_picker.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 // ============================================================================
 // QUOTATION VOUCHER  (Sales module)
@@ -941,11 +942,11 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         const Divider(height: 1),
         Expanded(child: rows.isEmpty
           ? const Center(child: BranchEmptyHint('No quotations', style: TextStyle(color: AppTheme.textSecondary)))
-          : ListView.separated(
-              itemCount: rows.length,
+          : VoucherSortedList(items: rows, builder: (vsRows) => ListView.separated(
+              itemCount: vsRows.length,
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
-                final r = rows[i];
+                final r = vsRows[i];
                 final status = _isExpired(r) ? 'expired' : (r['status'] as String? ?? 'saved');
                 return InkWell(
                   onTap: () => _openDoc(r),
@@ -973,7 +974,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                   ),
                 );
               },
-            )),
+            ))),
         ])))
       ]),
     );

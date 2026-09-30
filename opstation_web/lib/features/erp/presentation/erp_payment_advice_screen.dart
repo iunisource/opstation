@@ -12,6 +12,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart' show networkImage;
 import '../pdf/payment_advice_pdf.dart';
 import '../../../core/pdf/pdf_output.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// Payment Advice — a non-financial processing slip listing parties to pay,
 /// their bank details, amount due and amount to be paid, with a grand total.
@@ -1087,11 +1088,11 @@ class _ErpPaymentAdviceScreenState
                         ? 'No archived payment advices.'
                         : 'No payment advices yet.',
                     style: const TextStyle(color: AppTheme.textSecondary)))
-            : ListView.separated(
-                itemCount: shown.length,
+            : VoucherSortedList(items: shown, builder: (vsRows) => ListView.separated(
+                itemCount: vsRows.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (_, i) => _adviceCard(shown[i]),
-              ),
+                itemBuilder: (_, i) => _adviceCard(vsRows[i]),
+              )),
       ),
     ]);
   }

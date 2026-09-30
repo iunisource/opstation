@@ -16,6 +16,7 @@ import '../services/voucher_meta.dart';
 import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/product_picker.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 class ErpPurchaseScreen extends ConsumerStatefulWidget {
   const ErpPurchaseScreen({super.key, this.focusId, this.seedProductId, this.seedQty, this.seedBranchId});
@@ -1085,10 +1086,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: BrandSpinner())
             : filtered.isEmpty ? const Center(child: BranchEmptyHint('No POs yet.', style: TextStyle(color: AppTheme.textSecondary)))
-            : ListView.separated(
-                itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
+            : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.separated(
+                itemCount: vsRows.length, separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (_, i) {
-                  final r = filtered[i]; final sel = r['id'] == _selectedId;
+                  final r = vsRows[i]; final sel = r['id'] == _selectedId;
                   final status = r['status'] as String? ?? 'draft';
                   final voided = r['voided_at'] != null;
                   return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
@@ -1098,7 +1099,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                     ]),
                     subtitle: Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
                     onTap: () => _loadDetail(r['id'] as String));
-                })),
+                }))),
       ]),
     );
   }

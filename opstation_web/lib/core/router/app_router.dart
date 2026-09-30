@@ -83,6 +83,7 @@ import '../../features/operations/presentation/retailers_admin_screen.dart' defe
 import '../../features/assets/presentation/erp_assets_screen.dart' deferred as _s074;
 import '../../features/facility/presentation/erp_facility_screen.dart' deferred as _s075;
 import '../layout/main_layout.dart';
+import '../widgets/saving_overlay.dart' show BrandSpinner;
 import '../../features/auth/retailer_auth_controller.dart';
 import '../../features/auth/presentation/retailer_login_screen.dart' deferred as _s076;
 import '../../features/retailer/presentation/retailer_portal_screen.dart' deferred as _s077;
@@ -168,6 +169,7 @@ final authNotifierProvider = Provider<AuthNotifier>((ref) {
 
 final webRouterProvider = Provider<GoRouter>((ref) {
   final notifier = ref.watch(authNotifierProvider);
+  _warmStartupChunks();
 
   return GoRouter(
     initialLocation: '/login',
@@ -175,9 +177,14 @@ final webRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final auth = ref.read(authControllerProvider);
       final rAuth = ref.read(retailerAuthControllerProvider);
-      if (auth.isLoading || rAuth.isLoading) return null;
-
       final loc = state.matchedLocation;
+      // While the saved session is being read, show ONE splash instead of
+      // flashing the login screen (and downloading its code) first.
+      if (auth.isLoading || rAuth.isLoading) return loc == '/login' ? '/boot' : null;
+      if (loc == '/boot') {
+        final u = auth.valueOrNull;
+        return u == null ? '/login' : _homeFor(u.role);
+      }
 
       // Balance reports moved from Reports to Sales / Purchase — keep old
       // bookmarks and links working.
@@ -345,6 +352,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/pa/:token',
         builder: (_, state) => _deferred(_s143.loadLibrary(), () => _s143.PaymentAdvicePublicScreen(token: state.pathParameters['token'] ?? '')),
+      ),
+      GoRoute(
+        path: '/boot',
+        builder: (_, __) => const _BootSplash(),
       ),
       GoRoute(
         path: '/act/:token',
@@ -569,6 +580,44 @@ class _NoAccessScreen extends StatelessWidget {
 // like pdf/printing/excel) ships in its own chunk loaded on first navigation,
 // keeping the initial bundle small. This wraps a route builder: it triggers
 // loadLibrary() and shows a light spinner until the chunk is ready.
+/// Landing screen per role (same mapping as the redirect's home()).
+String _homeFor(WebUserRole role) {
+  if (role == WebUserRole.superAdmin) return '/orgs';
+  if (role == WebUserRole.dispatchManager) return '/deliveries';
+  if (role == WebUserRole.accountant) return '/orders';
+  if (role == WebUserRole.erpUser) return '/erp/home';
+  return '/dashboard';
+}
+
+/// Start downloading the code of the screen the user will land on while the
+/// session is still being restored, so the landing screen appears without a
+/// second "loading" step. Picks the chunk from the saved session's role.
+bool _chunksWarmed = false;
+void _warmStartupChunks() {
+  if (_chunksWarmed) return;
+  _chunksWarmed = true;
+  try {
+    final raw = html.window.localStorage['flutter.opstation_web_session'] ?? '';
+    final Future<void> Function() load = raw.isEmpty
+        ? _s038.loadLibrary
+        : raw.contains('erpUser')
+            ? _s111.loadLibrary
+            : _s041.loadLibrary;
+    load().catchError((_) {});
+  } catch (_) {}
+}
+
+/// The one loading look used while the app starts and while a screen's code
+/// downloads: plain background + the brand spinner (no Material spinner flash).
+class _BootSplash extends StatelessWidget {
+  const _BootSplash();
+  @override
+  Widget build(BuildContext context) => const Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(child: BrandSpinner()),
+      );
+}
+
 Widget _deferred(Future<void> load, Widget Function() make) =>
     _DeferredScreen(load: load, make: make);
 
@@ -581,8 +630,7 @@ class _DeferredScreen extends StatelessWidget {
         future: load,
         builder: (_, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const Scaffold(
-                body: Center(child: CircularProgressIndicator()));
+            return const _BootSplash();
           }
           if (snap.hasError) {
             // A deferred code chunk failed to load. Usual cause: this tab (or

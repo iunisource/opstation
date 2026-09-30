@@ -13,6 +13,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 class ErpReceiptVouchersScreen extends ConsumerStatefulWidget {
   const ErpReceiptVouchersScreen({super.key});
@@ -420,14 +421,14 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         InkWell(onTap: () => setState(() => _drawerOpen = !_drawerOpen), child: Container(height: 44, padding: const EdgeInsets.symmetric(horizontal: 8), child: Row(children: [Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18, color: AppTheme.textSecondary), if (_drawerOpen) ...[const SizedBox(width: 6), const Expanded(child: Text('Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))), ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero), onPressed: _newVoucher)]]))),
         if (_drawerOpen) ...[
           Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 4), child: TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 14), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 5, horizontal: 8)), onChanged: (v) => setState(() => _listSearch = v))),
-          Expanded(child: _loadingList ? const Center(child: BrandSpinner()) : filtered.isEmpty ? const Center(child: BranchEmptyHint('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))) : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
-            final v = filtered[i]; final sel = _currentVoucher?['id'] == v['id']; final posted = v['status'] == 'posted';
+          Expanded(child: _loadingList ? const Center(child: BrandSpinner()) : filtered.isEmpty ? const Center(child: BranchEmptyHint('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))) : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(itemCount: vsRows.length, itemBuilder: (_, i) {
+            final v = vsRows[i]; final sel = _currentVoucher?['id'] == v['id']; final posted = v['status'] == 'posted';
             return GestureDetector(onSecondaryTapDown: (d) => _showCtxMenu(d.globalPosition, v), child: InkWell(onTap: () => _loadVoucher(v), child: Container(color: sel ? AppTheme.primary.withOpacity(0.07) : null, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [Expanded(child: Text(v['voucher_number'] as String? ?? 'Draft', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))), Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: (posted ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(3)), child: Text(posted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, color: posted ? Colors.green : Colors.orange, fontWeight: FontWeight.w700)))]),
               Text(v['cash_account_name'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
               Text('Rs. ${money(v['total_amount'] as num?)}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sel ? AppTheme.primary : AppTheme.textPrimary)),
             ]))));
-          })),
+          }))),
         ],
       ])),
       // ── MAIN AREA ───────────────────────────────────────────────

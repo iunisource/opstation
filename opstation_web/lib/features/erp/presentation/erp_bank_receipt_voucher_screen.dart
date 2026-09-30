@@ -12,6 +12,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// Bank Receipt Voucher (BRV) — post-dated cheque (PDC) register.
 ///
@@ -719,10 +720,10 @@ class _ErpBankReceiptVoucherScreenState
                             child: BranchEmptyHint('No vouchers',
                                 style: TextStyle(
                                     fontSize: 12, color: AppTheme.textSecondary)))
-                        : ListView.builder(
-                            itemCount: filtered.length,
+                        : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(
+                            itemCount: vsRows.length,
                             itemBuilder: (_, i) {
-                              final v = filtered[i];
+                              final v = vsRows[i];
                               final sel = _currentVoucher?['id'] == v['id'];
                               final st = v['status'] as String? ?? 'open';
                               return InkWell(
@@ -782,7 +783,7 @@ class _ErpBankReceiptVoucherScreenState
                                 ),
                               );
                             },
-                          ),
+                          )),
               ),
             ],
           ]),

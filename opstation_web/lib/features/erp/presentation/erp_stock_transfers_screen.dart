@@ -11,6 +11,7 @@ import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 String _stStatusLabel(String s) {
   switch (s) {
@@ -362,12 +363,12 @@ class _ErpStockTransfersScreenState
                                         : 'No transfers match this filter.',
                                     style: const TextStyle(
                                         color: AppTheme.textSecondary)))
-                            : ListView.separated(
-                                itemCount: filtered.length,
+                            : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.separated(
+                                itemCount: vsRows.length,
                                 separatorBuilder: (_, __) =>
                                     const Divider(height: 1),
                                 itemBuilder: (_, i) {
-                                  final t = filtered[i];
+                                  final t = vsRows[i];
                                   final status =
                                       t['status'] as String? ?? 'pending';
                                   final date = t['transfer_date'] as String?;
@@ -448,7 +449,7 @@ class _ErpStockTransfersScreenState
                                       ]),
                                     ),
                                   );
-                                }),
+                                })),
                       ),
                     ]),
                   ),

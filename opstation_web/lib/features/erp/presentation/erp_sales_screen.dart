@@ -18,6 +18,7 @@ import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -1205,11 +1206,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                   ? const Center(child: BrandSpinner())
                   : _filteredOrders.isEmpty
                       ? const Center(child: BranchEmptyHint('No orders', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
-                      : ListView.separated(
-                          itemCount: _filteredOrders.length,
+                      : VoucherSortedList(items: _filteredOrders, builder: (vsRows) => ListView.separated(
+                          itemCount: vsRows.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (_, i) {
-                            final o = _filteredOrders[i];
+                            final o = vsRows[i];
                             final isSelected = o['id'] == _selectedId;
                             final status = o['status'] as String? ?? 'draft';
                             return InkWell(
@@ -1238,7 +1239,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                 ]),
                               ),
                             );
-                          }),
+                          })),
             ),
         ]),
         detailChild: _selectedId == null
@@ -2656,11 +2657,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   ? const Center(child: BrandSpinner())
                   : _filteredOrders.isEmpty
                       ? const Center(child: BranchEmptyHint('No DOs', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
-                      : ListView.separated(
-                          itemCount: _filteredOrders.length,
+                      : VoucherSortedList(items: _filteredOrders, builder: (vsRows) => ListView.separated(
+                          itemCount: vsRows.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (_, i) {
-                            final o = _filteredOrders[i];
+                            final o = vsRows[i];
                             final isSelected = o['id'] == _selectedId;
                             final status = o['status'] as String? ?? 'saved';
                             return InkWell(
@@ -2695,7 +2696,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                                 ]),
                               ),
                             );
-                          }),
+                          })),
             ),
           ]),
         detailChild: _selectedId == null
@@ -4059,11 +4060,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   ? const Center(child: BrandSpinner())
                   : _filteredInvoices.isEmpty
                       ? const Center(child: BranchEmptyHint('No invoices', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
-                      : ListView.separated(
-                          itemCount: _filteredInvoices.length,
+                      : VoucherSortedList(items: _filteredInvoices, builder: (vsRows) => ListView.separated(
+                          itemCount: vsRows.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (_, i) {
-                            final inv = _filteredInvoices[i];
+                            final inv = vsRows[i];
                             final isSelected = inv['id'] == _selectedId;
                             return InkWell(
                               onTap: () => _loadDetail(inv['id'] as String),
@@ -4100,7 +4101,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                                 ]),
                               ),
                             );
-                          }),
+                          })),
             ),
           ]),
         detailChild: _selectedId == null

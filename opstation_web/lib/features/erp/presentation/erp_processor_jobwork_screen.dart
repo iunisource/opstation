@@ -10,6 +10,7 @@ import '../../../core/utils/friendly_error.dart';
 import '../../../core/layout/main_layout.dart'; // exposes selectedBranchProvider
 import '../../auth/auth_controller.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// Processor Job-work — a transformed return: input(s) sitting at a processor are
 /// consumed and different output product(s) come back to a home branch. Cost
@@ -712,11 +713,11 @@ class _ErpProcessorJobworkScreenState
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppTheme.border)),
-                child: ListView.separated(
-                  itemCount: _list.length,
+                child: VoucherSortedList(items: _list, builder: (vsRows) => ListView.separated(
+                  itemCount: vsRows.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (_, i) {
-                    final h = _list[i];
+                    final h = vsRows[i];
                     final status = (h['status'] as String?) ?? 'draft';
                     final amt = (h['total_cost'] as num?)?.toDouble() ?? (h['fee_amount'] as num?)?.toDouble() ?? 0;
                     return ListTile(
@@ -733,7 +734,7 @@ class _ErpProcessorJobworkScreenState
                       ]),
                     );
                   },
-                ),
+                )),
               ),
       ),
     ]);

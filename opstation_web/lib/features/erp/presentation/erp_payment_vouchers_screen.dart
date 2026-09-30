@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 class ErpPaymentVouchersScreen extends ConsumerStatefulWidget {
   const ErpPaymentVouchersScreen({super.key});
@@ -212,11 +213,11 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
               Expanded(
                 child: _vouchers.isEmpty
                     ? const Center(child: BranchEmptyHint('No payment vouchers yet.', style: TextStyle(color: AppTheme.textSecondary)))
-                    : ListView.separated(
-                        itemCount: _vouchers.length,
+                    : VoucherSortedList(items: _vouchers, builder: (vsRows) => ListView.separated(
+                        itemCount: vsRows.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (_, i) {
-                          final v = _vouchers[i];
+                          final v = vsRows[i];
                           final amount = (v['amount'] as num?)?.toDouble() ?? 0;
                           final date = v['voucher_date'] != null
                               ? DateFormat('d MMM yyyy').format(DateTime.parse(v['voucher_date'] as String)) : '-';
@@ -233,7 +234,7 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
                                   onPressed: () => _showDialog(context, v))),
                             ]),
                           );
-                        }),
+                        })),
               ),
             ]),
           )),

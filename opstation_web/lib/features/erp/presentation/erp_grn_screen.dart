@@ -18,6 +18,7 @@ import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
 import '../widgets/void_flow.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// GRN — Goods Receipt Note.
 /// Acts like DO but in reverse: receives stock from supplier against a confirmed PO.
@@ -663,9 +664,9 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: BrandSpinner())
           : filtered.isEmpty ? const Center(child: BranchEmptyHint('No GRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
-          : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
+          : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.separated(itemCount: vsRows.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
-                final r = filtered[i]; final sel = r['id'] == _selectedId;
+                final r = vsRows[i]; final sel = r['id'] == _selectedId;
                 final status = r['status'] as String? ?? 'draft';
                 final locked = r['is_locked'] as bool? ?? false;
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
@@ -682,7 +683,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                     if (r['purchase_orders']?['voucher_number'] != null) Text('← ${r['purchase_orders']['voucher_number']}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                   ]),
                   onTap: () => _loadDetail(r['id'] as String));
-              })),
+              }))),
     ]));
   }
 

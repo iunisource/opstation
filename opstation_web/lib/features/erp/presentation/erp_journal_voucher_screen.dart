@@ -15,6 +15,7 @@ import '../../../core/permissions/access_control.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 class _JvLine {
   static int _seq = 0;
@@ -618,8 +619,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             ])),
           Expanded(child: _loadingList ? const Center(child: BrandSpinner())
             : filtered.isEmpty ? const Center(child: BranchEmptyHint('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-            : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
-                final v = filtered[i]; final sel = _current?['id'] == v['id']; final posted = v['status'] == 'posted';
+            : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(itemCount: vsRows.length, itemBuilder: (_, i) {
+                final v = vsRows[i]; final sel = _current?['id'] == v['id']; final posted = v['status'] == 'posted';
                 return GestureDetector(
                   onSecondaryTapDown: (d) => _showCtxMenu(d.globalPosition, v),
                   child: InkWell(onTap: () => _loadVoucher(v), child: Container(
@@ -636,7 +637,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                       Text(v['description'] as String? ?? '', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
                     ]),
                   )));
-              })),
+              }))),
         ])),
 
       Expanded(child: Column(children: [

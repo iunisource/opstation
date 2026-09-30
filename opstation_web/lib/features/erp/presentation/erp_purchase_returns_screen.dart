@@ -13,6 +13,7 @@ import '../services/voucher_meta.dart';
 import '../widgets/void_flow.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// Purchase Return Notes (SRN) — open-ended return documents.
 ///
@@ -621,11 +622,11 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
               ? const Center(child: CircularProgressIndicator())
               : filtered.isEmpty
                   ? const Center(child: BranchEmptyHint('No PRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
-                  : ListView.separated(
-                      itemCount: filtered.length,
+                  : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.separated(
+                      itemCount: vsRows.length,
                       separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (_, i) {
-                        final r = filtered[i];
+                        final r = vsRows[i];
                         final selected = r['id'] == _selectedId;
                         return ListTile(
                           dense: true,
@@ -645,7 +646,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
                           onTap: () => _loadDetail(r['id'] as String),
                         );
                       },
-                    ),
+                    )),
         ),
       ]),
     );

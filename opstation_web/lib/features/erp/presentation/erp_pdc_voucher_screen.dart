@@ -12,6 +12,7 @@ import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// PDC Voucher — post-dated / cheque-in-hand register.
 ///
@@ -798,10 +799,10 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
                             child: BranchEmptyHint('No vouchers',
                                 style: TextStyle(
                                     fontSize: 12, color: AppTheme.textSecondary)))
-                        : ListView.builder(
-                            itemCount: filtered.length,
+                        : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(
+                            itemCount: vsRows.length,
                             itemBuilder: (_, i) {
-                              final v = filtered[i];
+                              final v = vsRows[i];
                               final sel = _currentVoucher?['id'] == v['id'];
                               final st = v['status'] as String? ?? 'open';
                               return InkWell(
@@ -864,7 +865,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
                                 ),
                               );
                             },
-                          ),
+                          )),
               ),
             ],
           ]),

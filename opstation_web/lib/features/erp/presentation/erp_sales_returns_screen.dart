@@ -12,6 +12,7 @@ import '../services/voucher_meta.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// Sales Return Note (SRN) — Intent only, like SO.
 /// Items: Product | UOM | Qty ONLY. No prices, no stock movement.
@@ -427,9 +428,9 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
           : filtered.isEmpty ? const Center(child: BranchEmptyHint('No SRNs yet.', style: TextStyle(color: AppTheme.textSecondary)))
-          : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
+          : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.separated(itemCount: vsRows.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
-                final r = filtered[i]; final sel = r['id'] == _selectedId;
+                final r = vsRows[i]; final sel = r['id'] == _selectedId;
                 final locked = r['is_locked'] as bool? ?? false;
                 final status = r['status'] as String? ?? 'draft';
                 final voided = r['is_voided'] as bool? ?? false;
@@ -440,7 +441,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                   ]),
                   subtitle: Text(r['customers']?['shop_name'] as String? ?? 'Walk-in', style: const TextStyle(fontSize: 11)),
                   onTap: () => _loadDetail(r['id'] as String));
-              })),
+              }))),
     ]));
   }
 

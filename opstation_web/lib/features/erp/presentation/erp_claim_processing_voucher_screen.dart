@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 class _CLine {
   static int _seq = 0;
@@ -508,8 +509,8 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
             : filtered.isEmpty ? const Center(child: BranchEmptyHint('No claims yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-            : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
-                final v = filtered[i]; final sel = _current?['id'] == v['id'];
+            : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(itemCount: vsRows.length, itemBuilder: (_, i) {
+                final v = vsRows[i]; final sel = _current?['id'] == v['id'];
                 final posted = (v['status'] as String? ?? 'draft') == 'posted';
                 return InkWell(onTap: () => _loadVoucher(v), child: Container(
                   color: sel ? AppTheme.primary.withOpacity(0.07) : null,
@@ -526,7 +527,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
                     Text('${v['voucher_date'] ?? ''}  \u00b7  ${(v['line_count'] as num? ?? 0)} item(s)', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                   ]),
                 ));
-              })),
+              }))),
         ])),
 
       Expanded(child: Column(children: [

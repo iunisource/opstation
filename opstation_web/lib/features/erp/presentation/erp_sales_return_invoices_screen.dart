@@ -12,6 +12,7 @@ import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
 /// Sales Return Invoice (SRI) — Stage 2 of sales return flow.
 /// Created from a confirmed SRN. User sets price + discount per item.
@@ -533,9 +534,9 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       const SizedBox(height: 12),
       Expanded(child: _listLoading ? const Center(child: CircularProgressIndicator())
           : filtered.isEmpty ? const Center(child: BranchEmptyHint('No invoices yet.', style: TextStyle(color: AppTheme.textSecondary)))
-          : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
+          : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.separated(itemCount: vsRows.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
-                final r = filtered[i]; final sel = r['id'] == _selectedId;
+                final r = vsRows[i]; final sel = r['id'] == _selectedId;
                 final locked = r['is_locked'] as bool? ?? false;
                 final voided = r['is_voided'] as bool? ?? false;
                 final badgeText = voided ? 'voided' : (locked ? 'issued' : 'draft');
@@ -569,7 +570,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
                   ]),
                   trailing: Text(money(r['grand_total'] as num?), style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary)),
                   onTap: () => _loadDetail(r['id'] as String));
-              })),
+              }))),
     ]));
   }
 
