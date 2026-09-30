@@ -1006,9 +1006,10 @@ class _ErpPaymentAdviceScreenState
               spacing: 12,
               runSpacing: 8,
               children: [
-                const Text('Payment Advice',
-                    style:
-                        TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+                Text('Payment Advice',
+                    style: TextStyle(
+                        fontSize: MediaQuery.of(context).size.width < 700 ? 20 : 26,
+                        fontWeight: FontWeight.w800)),
                 if (_pendingCount > 0)
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -1028,7 +1029,7 @@ class _ErpPaymentAdviceScreenState
           ElevatedButton.icon(
             onPressed: _newAdvice,
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('New Payment Advice'),
+            label: Text(MediaQuery.of(context).size.width < 700 ? 'New' : 'New Payment Advice'),
           ),
         ],
       ),
@@ -1116,6 +1117,64 @@ class _ErpPaymentAdviceScreenState
         ? DateFormat('d MMM yyyy')
             .format(DateTime.tryParse(a['advice_date'] as String) ?? DateTime.now())
         : '-';
+    final narrowCard = MediaQuery.of(context).size.width < 600;
+    final statusPill = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: statusColor.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(statusLabel,
+          style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.w700)),
+    );
+    final archived = (a['is_archived'] as bool?) ?? false;
+    final archiveBtn = _canModerate
+        ? IconButton(
+            onPressed: () => _setArchived(a, !archived),
+            icon: Icon(archived ? Icons.unarchive_outlined : Icons.archive_outlined, size: 20),
+            color: AppTheme.textSecondary,
+            tooltip: archived ? 'Unarchive' : 'Archive',
+          )
+        : null;
+    if (narrowCard) {
+      // Phone: number + status on top, date/creator + amount below, actions right.
+      return InkWell(
+        onTap: () => _openAdvice(a),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Flexible(
+                    child: Text(a['advice_number'] as String? ?? '-',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
+                  ),
+                  const SizedBox(width: 8),
+                  statusPill,
+                ]),
+                const SizedBox(height: 3),
+                Text('$date · by ${a['created_by_name'] ?? '—'}',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                const SizedBox(height: 3),
+                Text('Rs ${_numStr(a['grand_total'])}',
+                    style: const TextStyle(fontWeight: FontWeight.w800)),
+              ]),
+            ),
+            _printMenu(a, size: 20),
+            if (archiveBtn != null) archiveBtn,
+          ]),
+        ),
+      );
+    }
     return InkWell(
       onTap: () => _openAdvice(a),
       borderRadius: BorderRadius.circular(10),
@@ -1194,7 +1253,9 @@ class _ErpPaymentAdviceScreenState
                 ? 'New Payment Advice'
                 : '${_current!['advice_number']}'
                     '${_isVoid ? ' (Voided)' : _isRejected ? ' (Rejected)' : _adminEditing ? ' (Approved — admin edit)' : _isApproved ? ' (Approved)' : _current!['status'] == 'pending' ? ' (Pending)' : ''}',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: narrow ? 16 : 20, fontWeight: FontWeight.w800),
           ),
         ),
         if (_current != null) _printMenu(_current!),
@@ -1557,12 +1618,19 @@ class _ErpPaymentAdviceScreenState
                 ]),
           ),
           const SizedBox(width: 8),
-          Text('Due ${_numStr(due)}',
-              style: const TextStyle(
-                  fontSize: 12, color: AppTheme.textSecondary)),
-          const SizedBox(width: 12),
-          Text('Pay Rs ${_numStr(pay)}',
-              style: const TextStyle(fontWeight: FontWeight.w700)),
+          if (MediaQuery.of(context).size.width < 600)
+            Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+              Text('Pay Rs ${_numStr(pay)}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              Text('Due ${_numStr(due)}', style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+            ])
+          else ...[
+            Text('Due ${_numStr(due)}',
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(width: 12),
+            Text('Pay Rs ${_numStr(pay)}',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+          ],
           if (!readOnly) ...[
             const SizedBox(width: 4),
             IconButton(
@@ -1753,8 +1821,12 @@ class _ErpPaymentAdviceScreenState
         ? DateFormat('d MMM yyyy, HH:mm')
             .format(DateTime.tryParse(a!['approved_at'] as String)!.toLocal())
         : (isApproved ? createdAt : null);
-    Widget foot(String label, String who, String when, [String? sigUrl]) => Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    final vertical = MediaQuery.of(context).size.width < 600;
+    Widget wrapFoot(Widget c) => vertical
+        ? Padding(padding: const EdgeInsets.only(bottom: 10), child: c)
+        : Expanded(child: c);
+    Widget foot(String label, String who, String when, [String? sigUrl]) => wrapFoot(
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label,
                 style: const TextStyle(
                     fontSize: 11,
@@ -1786,7 +1858,10 @@ class _ErpPaymentAdviceScreenState
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: AppTheme.border),
       ),
-      child: Row(children: [
+      child: Flex(
+          direction: vertical ? Axis.vertical : Axis.horizontal,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
         foot('CREATED BY', createdBy, createdAt,
             (a?['created_signature_url'] as String?) ?? _sigOnFile[a?['created_by']]),
         if (status == 'rejected')
@@ -1816,115 +1891,115 @@ class _ErpPaymentAdviceScreenState
 
   Widget _actionBar(bool readOnly) {
     final pending = _current?['status'] == 'pending';
+    final narrow = MediaQuery.of(context).size.width < 700;
+    ButtonStyle big([Color? bg]) => ElevatedButton.styleFrom(
+        backgroundColor: bg, minimumSize: const Size(0, 48));
+    ButtonStyle dangerOutline() => OutlinedButton.styleFrom(
+        foregroundColor: AppTheme.danger,
+        side: const BorderSide(color: AppTheme.danger),
+        minimumSize: const Size(0, 48));
+
+    // Collect the buttons once; lay them out in a row (desktop) or stacked
+    // rows that always fit (phone).
+    final primary = <Widget>[]; // wide buttons
+    final extra = <Widget>[];   // secondary buttons
+    Widget? info;
+    if (readOnly) {
+      info = Text(
+          _isVoid
+              ? 'Voided${_current?['voided_by_name'] != null ? ' by ${_current!['voided_by_name']}' : ''}'
+                  '${(_current?['void_reason'] as String?)?.isNotEmpty == true ? ' — ${_current!['void_reason']}' : ''}'
+              : _isRejected
+                  ? 'This advice was rejected — it can only be archived.'
+                  : 'This advice is approved and locked.',
+          style: const TextStyle(color: AppTheme.textSecondary));
+      if (_canVoid) {
+        extra.add(OutlinedButton.icon(
+            onPressed: _saving ? null : _void,
+            icon: const Icon(Icons.block, size: 18),
+            label: const Text('Void'),
+            style: dangerOutline()));
+      }
+      if (_canAdminEdit) {
+        extra.add(ElevatedButton.icon(
+            onPressed: _saving ? null : () => setState(() => _adminEditing = true),
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('Edit (admin)'),
+            style: big()));
+      }
+    } else {
+      if (_adminEditing) {
+        primary.add(OutlinedButton.icon(
+            onPressed: _saving ? null : () => _openAdvice(_current!),
+            icon: const Icon(Icons.undo, size: 18),
+            label: const Text('Cancel edit'),
+            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48))));
+      }
+      primary.add(ElevatedButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: _saving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.save_outlined, size: 18),
+          label: Text(_adminEditing
+              ? 'Save changes (logged)'
+              : _approvalEnabled && _current == null
+                  ? 'Save & send for approval'
+                  : 'Save'),
+          style: big()));
+      if (pending && _canModerate) {
+        extra.add(OutlinedButton.icon(
+            onPressed: _saving ? null : _reject,
+            icon: const Icon(Icons.close, size: 18),
+            label: const Text('Reject'),
+            style: dangerOutline()));
+      }
+      if (pending && _canVoid) {
+        extra.add(OutlinedButton.icon(
+            onPressed: _saving ? null : _void,
+            icon: const Icon(Icons.block, size: 18),
+            label: const Text('Void'),
+            style: dangerOutline()));
+      }
+      if (pending && _canApprove) {
+        extra.add(ElevatedButton.icon(
+            onPressed: _saving ? null : _approve,
+            icon: const Icon(Icons.verified_outlined, size: 18),
+            label: const Text('Approve'),
+            style: big(AppTheme.success)));
+      }
+    }
+
+    Widget rowOf(List<Widget> ws) => Row(children: [
+          for (var i = 0; i < ws.length; i++) ...[
+            if (i > 0) const SizedBox(width: 10),
+            Expanded(child: ws[i]),
+          ]
+        ]);
+
+    final Widget content;
+    if (narrow) {
+      content = Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (info != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: info),
+        if (primary.isNotEmpty) rowOf(primary),
+        if (primary.isNotEmpty && extra.isNotEmpty) const SizedBox(height: 8),
+        if (extra.isNotEmpty) rowOf(extra),
+      ]);
+    } else {
+      content = Row(children: [
+        if (info != null) Expanded(child: info),
+        for (final w in primary) ...[const SizedBox(width: 12), Expanded(child: w)],
+        for (final w in extra) ...[
+          const SizedBox(width: 12),
+          readOnly ? w : Expanded(child: w),
+        ],
+      ]);
+    }
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Row(children: [
-          if (readOnly) ...[
-            Expanded(
-              child: Text(
-                  _isVoid
-                      ? 'Voided${_current?['voided_by_name'] != null ? ' by ${_current!['voided_by_name']}' : ''}'
-                          '${(_current?['void_reason'] as String?)?.isNotEmpty == true ? ' — ${_current!['void_reason']}' : ''}'
-                      : _isRejected
-                          ? 'This advice was rejected — it can only be archived.'
-                          : 'This advice is approved and locked.',
-                  style: const TextStyle(color: AppTheme.textSecondary)),
-            ),
-            if (_canVoid) ...[
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _void,
-                icon: const Icon(Icons.block, size: 18),
-                label: const Text('Void'),
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.danger,
-                    side: const BorderSide(color: AppTheme.danger),
-                    minimumSize: const Size(0, 48)),
-              ),
-            ],
-            if (_canAdminEdit) ...[
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                onPressed: _saving ? null : () => setState(() => _adminEditing = true),
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                label: const Text('Edit (admin)'),
-                style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
-              ),
-            ],
-          ] else ...[
-            if (_adminEditing) ...[
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _saving ? null : () => _openAdvice(_current!),
-                  icon: const Icon(Icons.undo, size: 18),
-                  label: const Text('Cancel edit'),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-                ),
-              ),
-              const SizedBox(width: 12),
-            ],
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _saving ? null : _save,
-                icon: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.save_outlined, size: 18),
-                label: Text(_adminEditing
-                    ? 'Save changes (logged)'
-                    : _approvalEnabled && _current == null
-                        ? 'Save & send for approval'
-                        : 'Save'),
-                style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
-              ),
-            ),
-            if (pending && _canModerate) ...[
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _saving ? null : _reject,
-                  icon: const Icon(Icons.close, size: 18),
-                  label: const Text('Reject'),
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.danger,
-                      side: const BorderSide(color: AppTheme.danger),
-                      minimumSize: const Size(0, 48)),
-                ),
-              ),
-            ],
-            if (pending && _canVoid) ...[
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _void,
-                icon: const Icon(Icons.block, size: 18),
-                label: const Text('Void'),
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.danger,
-                    side: const BorderSide(color: AppTheme.danger),
-                    minimumSize: const Size(0, 48)),
-              ),
-            ],
-            if (pending && _canApprove) ...[
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _saving ? null : _approve,
-                  icon: const Icon(Icons.verified_outlined, size: 18),
-                  label: const Text('Approve'),
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.success,
-                      minimumSize: const Size(0, 48)),
-                ),
-              ),
-            ],
-          ],
-        ]),
-      ),
+      child: Padding(padding: const EdgeInsets.only(top: 8), child: content),
     );
   }
 }

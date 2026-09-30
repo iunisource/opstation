@@ -163,6 +163,17 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
     }
     _loadList();
     _loadUnread();
+    // On phones the bell can sit anywhere in the top bar, so a panel pinned to
+    // its right edge ran off the screen. There, show it as a full-width sheet
+    // just under the bell instead.
+    final narrow = MediaQuery.of(context).size.width < 600;
+    double top = MediaQuery.of(context).padding.top + 56;
+    try {
+      final box = context.findRenderObject() as RenderBox?;
+      if (box != null && box.hasSize) {
+        top = box.localToGlobal(Offset(0, box.size.height)).dy + 6;
+      }
+    } catch (_) {}
     _overlay = OverlayEntry(
       builder: (ctx) => Stack(children: [
         Positioned.fill(
@@ -171,13 +182,16 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
             onTap: _removeOverlay,
           ),
         ),
-        CompositedTransformFollower(
-          link: _link,
-          targetAnchor: Alignment.bottomRight,
-          followerAnchor: Alignment.topRight,
-          offset: const Offset(0, 8),
-          child: _panel(),
-        ),
+        if (narrow)
+          Positioned(left: 8, right: 8, top: top, child: _panel(fullWidth: true))
+        else
+          CompositedTransformFollower(
+            link: _link,
+            targetAnchor: Alignment.bottomRight,
+            followerAnchor: Alignment.topRight,
+            offset: const Offset(0, 8),
+            child: _panel(),
+          ),
       ]),
     );
     Overlay.of(context).insert(_overlay!);
@@ -190,7 +204,7 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
     if (mounted) setState(() {});
   }
 
-  Widget _panel() {
+  Widget _panel({bool fullWidth = false}) {
     // Cap the panel to the viewport so it doesn't render wider than a phone
     // screen (the fixed 380 ran off the left edge on mobile, making it unusable).
     final sw = MediaQuery.of(context).size.width;
@@ -198,7 +212,7 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
     return Material(
       color: Colors.transparent,
       child: Container(
-        width: panelW.toDouble(),
+        width: fullWidth ? null : panelW.toDouble(),
         constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7 < 460
             ? MediaQuery.of(context).size.height * 0.7 : 460),
         decoration: BoxDecoration(
