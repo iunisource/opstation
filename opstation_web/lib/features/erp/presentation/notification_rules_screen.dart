@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -68,6 +69,18 @@ const kNotifEvents = <NotifEvent>[
       perm: 'customers', branchScoped: false),
   NotifEvent('product_supervise', 'Masters', 'New product needs supervision', 'Product supervise flow on.',
       perm: 'products', branchScoped: false),
+  NotifEvent('hr_leave_pending', 'HR', 'Leave request waiting for approval',
+      'A leave request was saved. Branch = the employee\'s branch.', perm: 'hr_leave'),
+  NotifEvent('hr_leave_approved', 'HR', 'Leave approved', 'A leave request was approved.',
+      perm: 'hr_leave', creator: true),
+  NotifEvent('hr_leave_rejected', 'HR', 'Leave rejected', 'A leave request was rejected.',
+      perm: 'hr_leave', creator: true),
+  NotifEvent('hr_employee_pending', 'HR', 'New employee waiting for approval',
+      'An employee was added by a non-admin and needs approval.', perm: 'hr_employees'),
+  NotifEvent('payroll_finalized', 'HR', 'Payroll finalized — ready for payment',
+      'Someone pressed Finalize on a payroll run.', perm: 'hr_payroll', branchScoped: false),
+  NotifEvent('payroll_paid', 'HR', 'Payroll marked paid', 'A payroll run was marked paid.',
+      perm: 'hr_payroll', branchScoped: false),
 ];
 
 const _creator = '__creator__';
@@ -426,8 +439,48 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
       }
       out.add(_eventCard(ev));
     }
+    out.add(const Padding(
+      padding: EdgeInsets.fromLTRB(4, 18, 4, 6),
+      child: Text('MANAGED ELSEWHERE',
+          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, letterSpacing: 1.2, color: AppTheme.textSecondary)),
+    ));
+    out.add(_infoCard(Icons.summarize_outlined, 'Daily attendance summary (email)',
+        'Scheduled morning / evening summary. On/off and recipients are set on the Attendance screen.',
+        'Open Attendance', '/hr/attendance'));
+    out.add(_infoCard(Icons.badge_outlined, 'Employee punch alerts (email)',
+        'Per-employee alerts to the email saved on each employee\'s profile (Notify on punch).',
+        'Open Employees', '/hr/employees'));
     return out;
   }
+
+  Widget _infoCard(IconData icon, String title, String desc, String action, String route) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF9FAFB),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 20, color: AppTheme.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+              const SizedBox(height: 2),
+              Text(desc, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            ]),
+          ),
+          TextButton(
+            onPressed: () {
+              final router = GoRouter.of(context);
+              Navigator.of(context).pop();
+              router.go(route);
+            },
+            child: Text(action),
+          ),
+        ]),
+      );
 
   Widget _eventCard(NotifEvent ev) {
     final rules = _rulesFor(ev.key);
