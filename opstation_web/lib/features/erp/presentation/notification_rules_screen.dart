@@ -15,8 +15,9 @@ class NotifEvent {
   final String key, group, title, desc;
   final String? perm; // permission-registry key used for the access warning
   final bool branchScoped, creator;
+  final String? module; // shown only when this org module is enabled
   const NotifEvent(this.key, this.group, this.title, this.desc,
-      {this.perm, this.branchScoped = true, this.creator = false});
+      {this.perm, this.branchScoped = true, this.creator = false, this.module});
 }
 
 const kNotifEvents = <NotifEvent>[
@@ -81,6 +82,12 @@ const kNotifEvents = <NotifEvent>[
       'Someone pressed Finalize on a payroll run.', perm: 'hr_payroll', branchScoped: false),
   NotifEvent('payroll_paid', 'HR', 'Payroll marked paid', 'A payroll run was marked paid.',
       perm: 'hr_payroll', branchScoped: false),
+  NotifEvent('route_started', 'Operations', 'Salesperson started a route',
+      'A salesperson started a route in the field app. Tap opens the Live Map.',
+      branchScoped: false, module: 'operations'),
+  NotifEvent('route_ended', 'Operations', 'Salesperson ended a route',
+      'A salesperson ended a route (visits, sales and distance in the message). Tap opens their route history.',
+      branchScoped: false, module: 'operations'),
 ];
 
 const _creator = '__creator__';
@@ -105,6 +112,12 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
   final Map<String, Set<String>> _userPerms = {}; // user -> permission keys
   List<Map<String, dynamic>> _rules = [];
   final Map<String, bool> _enabled = {};
+  Set<String> _modules = {};
+
+  /// Events for this org — module-gated ones (e.g. Operations) are hidden
+  /// unless the org has that module switched on.
+  List<NotifEvent> get _events =>
+      kNotifEvents.where((e) => e.module == null || _modules.contains(e.module)).toList();
 
   @override
   void initState() {
@@ -126,7 +139,9 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
         _db.from('branches').select('id, name').eq('org_id', org).order('name'),
         _db.from('notification_rules').select().eq('org_id', org),
         _db.from('notification_event_state').select().eq('org_id', org),
+        _db.from('org_modules').select('module').eq('org_id', org).eq('is_enabled', true),
       ]);
+      _modules = {for (final r in res[4] as List) '${r['module']}'};
       _users = List<Map<String, dynamic>>.from(res[0] as List)
           .where((u) => u['is_active'] != false && u['role'] != 'retailer')
           .toList();
@@ -372,7 +387,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
   // ── UI ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final empty = kNotifEvents.where((e) => _rulesFor(e.key).isEmpty).length;
+    final empty = _events.where((e) => _rulesFor(e.key).isEmpty).length;
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
@@ -412,7 +427,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
                             child: Text(
                               'Choose who is told about each event. Push = browser notification on their devices '
                               '+ the bell in the app. Email = to their email address. Nobody gets anything unless '
-                              'added here.${empty > 0 ? '\n$empty of ${kNotifEvents.length} events have no recipients.' : ''}',
+                              'added here.${empty > 0 ? '\n$empty of ${_events.length} events have no recipients.' : ''}',
                               style: const TextStyle(fontSize: 12.5, height: 1.45),
                             ),
                           ),
@@ -495,7 +510,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
   List<Widget> _buildByEvent() {
     final out = <Widget>[];
     String? group;
-    for (final ev in kNotifEvents.where(_matchesEvent)) {
+    for (final ev in _events.where(_matchesEvent)) {
       if (ev.group != group) {
         group = ev.group;
         out.add(Padding(
@@ -685,9 +700,9 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
   }
 
   List<Widget> _buildByUser() {
-    final byKey = {for (final e in kNotifEvents) e.key: e};
+    final byKey = {for (final e in _events) e.key: e};
     final entries = <String, List<Map<String, dynamic>>>{};
-    for (final r in _rules) {
+    for (final r in _rules.where((r) => byKey.containsKey(r['event_key']))) {
       final who = (r['user_id'] as String?) ?? 'mail:${r['email']}';
       (entries[who] ??= []).add(r);
     }
@@ -699,7 +714,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
         )
       ];
     }
-    final byKeyTitle = {for (final e in kNotifEvents) e.key: e.title};
+    final byKeyTitle = {for (final e in _events) e.key: e.title};
     if (_q.isNotEmpty) {
       entries.removeWhere((k, rs) {
         final who = k == _creator

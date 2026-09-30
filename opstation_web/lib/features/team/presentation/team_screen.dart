@@ -10,7 +10,10 @@ import '../../../core/widgets/responsive.dart';
 import 'package:opstation_web/core/users/user_status.dart';
 
 class TeamScreen extends ConsumerStatefulWidget {
-  const TeamScreen({super.key});
+  /// Opens this member's route history once the list loads (push-notification
+  /// deep link: /team?history=<user id>).
+  final String? historyId;
+  const TeamScreen({super.key, this.historyId});
   @override
   ConsumerState<TeamScreen> createState() => _TeamScreenState();
 }
@@ -35,10 +38,33 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
     }).toList();
   }
 
+  String? _openedHistory;
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant TeamScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.historyId != old.historyId) {
+      _openedHistory = null;
+      _openFocus();
+    }
+  }
+
+  void _openFocus() {
+    final id = widget.historyId;
+    if (id == null || id.isEmpty || id == _openedHistory || _loading) return;
+    final hits = _users.where((x) => x['id'] == id).toList();
+    if (hits.isEmpty) return;
+    final u = hits.first;
+    _openedHistory = id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _openHistory(context, u);
+    });
   }
 
   Future<void> _load() async {
@@ -52,6 +78,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
           .neq('role', 'retailer')
           .order('name');
       setState(() { _users = List<Map<String, dynamic>>.from(rows); _loading = false; });
+      _openFocus();
     } catch (_) { setState(() => _loading = false); }
   }
 

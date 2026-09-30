@@ -395,7 +395,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
         ),
         routes: [
           GoRoute(path: '/dashboard', builder: (_, __) => _deferred(_s041.loadLibrary(), () => _s041.DashboardScreen())),
-          GoRoute(path: '/team', builder: (_, __) => _deferred(_s042.loadLibrary(), () => _s042.TeamScreen())),
+          GoRoute(path: '/team', builder: (_, state) => _deferred(_s042.loadLibrary(), () => _s042.TeamScreen(historyId: state.uri.queryParameters['history']))),
           GoRoute(path: '/customers', builder: (_, state) => _deferred(_s043.loadLibrary(), () => _s043.CustomersScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/crm/customers', builder: (_, __) => _deferred(_s043.loadLibrary(), () => _s043.CustomersScreen(crmMode: true))),
           GoRoute(path: '/customers/import', builder: (_, __) => _deferred(_s056.loadLibrary(), () => _s056.BulkImportCustomersScreen())),
