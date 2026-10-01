@@ -57,6 +57,12 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   final _salary = TextEditingController();
   final _bankName = TextEditingController();
   final _bankAcct = TextEditingController();
+  // Salary advances: the GL account the employee's advances are booked to, and
+  // an optional fixed monthly recovery (blank = recover the full balance).
+  String? _advAcctId;
+  final _advInst = TextEditingController();
+  double? _advBal; // outstanding balance of that account, today
+  List<Map<String, dynamic>> _assetAccounts = []; // {id, code, name}
   final _notes = TextEditingController();
   final _notifyEmail = TextEditingController();
   final _cardUid = TextEditingController();
@@ -96,7 +102,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   @override
   void dispose() {
-    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid]) c.dispose();
+    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst]) c.dispose();
     super.dispose();
   }
 
@@ -107,7 +113,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (orgId == null) { await Future.delayed(const Duration(milliseconds: 400)); if (mounted) _loadAll(); return; }
     setState(() => _loading = true);
     try {
-      await Future.wait([_loadDepts(), _loadDesignations(), _loadBranches(), _loadShifts()]);
+      await Future.wait([_loadDepts(), _loadDesignations(), _loadBranches(), _loadShifts(), _loadAssetAccounts()]);
       await _loadEmployees();
     } catch (e) { _snack('Load error: $e'); }
     if (mounted) setState(() => _loading = false);
@@ -147,6 +153,114 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (mounted) setState(() { _branches = List<Map<String, dynamic>>.from(rows); _branchName = {for (final b in _branches) b['id'] as String: b['name'] as String}; });
   }
 
+  Future<void> _loadAssetAccounts() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('chart_of_accounts')
+          .select('id, code, name').eq('org_id', orgId).eq('account_type', 'asset').order('code');
+      final list = List<Map<String, dynamic>>.from(rows);
+      // Advance accounts first, then everything else.
+      bool adv(Map a) => '${a['name']}'.toLowerCase().contains('advance');
+      list.sort((a, b) {
+        final c = (adv(a) ? 0 : 1).compareTo(adv(b) ? 0 : 1);
+        return c != 0 ? c : '${a['code']}'.compareTo('${b['code']}');
+      });
+      if (mounted) setState(() => _assetAccounts = list);
+    } catch (_) {}
+  }
+
+  String _acctLabel(String? id) {
+    if (id == null) return '';
+    for (final a in _assetAccounts) {
+      if (a['id'] == id) return '${a['code'] ?? ''} — ${a['name'] ?? ''}';
+    }
+    return '(account not found)';
+  }
+
+  Future<void> _loadAdvBalance() async {
+    final orgId = _orgId; final acct = _advAcctId;
+    if (orgId == null || acct == null) { if (mounted) setState(() => _advBal = null); return; }
+    try {
+      final tomorrow = DateFormat('yyyy-MM-dd').format(DateTime.now().add(const Duration(days: 1)));
+      final b = await Supabase.instance.client.rpc('rpc_account_opening', params: {
+        'p_org_id': orgId, 'p_account_id': acct, 'p_date_from': tomorrow, 'p_branch_id': null,
+      });
+      if (mounted && _advAcctId == acct) setState(() => _advBal = (b as num?)?.toDouble() ?? 0);
+    } catch (_) {
+      if (mounted) setState(() => _advBal = null);
+    }
+  }
+
+  Future<void> _pickAdvAccount() async {
+    final q = TextEditingController();
+    final picked = await showDialog<String>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+      final t = q.text.trim().toLowerCase();
+      final list = _assetAccounts.where((a) =>
+          t.isEmpty || '${a['code']} ${a['name']}'.toLowerCase().contains(t)).take(200).toList();
+      return AlertDialog(
+        title: const Text('Advance account', style: TextStyle(fontSize: 16)),
+        content: SizedBox(width: 420, height: 420, child: Column(children: [
+          TextField(controller: q, autofocus: true, onChanged: (_) => setLocal(() {}),
+              decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.search, size: 18),
+                  hintText: 'Search account code or name', border: OutlineInputBorder())),
+          const SizedBox(height: 8),
+          Expanded(child: list.isEmpty
+              ? const Center(child: Text('No matching asset accounts', style: TextStyle(color: AppTheme.textSecondary)))
+              : ListView.builder(itemCount: list.length, itemBuilder: (_, i) {
+                  final a = list[i];
+                  final sel = a['id'] == _advAcctId;
+                  return ListTile(
+                    dense: true,
+                    selected: sel,
+                    title: Text('${a['name'] ?? ''}', style: const TextStyle(fontSize: 13)),
+                    subtitle: Text('${a['code'] ?? ''}', style: const TextStyle(fontSize: 11)),
+                    trailing: sel ? const Icon(Icons.check, size: 18, color: AppTheme.primary) : null,
+                    onTap: () => Navigator.pop(ctx, a['id'] as String),
+                  );
+                })),
+        ])),
+        actions: [
+          if (_advAcctId != null) TextButton(onPressed: () => Navigator.pop(ctx, ''), child: const Text('Remove link')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ],
+      );
+    }));
+    if (picked == null) return;
+    setState(() { _advAcctId = picked.isEmpty ? null : picked; _advBal = null; });
+    _loadAdvBalance();
+  }
+
+  Widget _advancesCard() {
+    final bal = _advBal;
+    final inst = double.tryParse(_advInst.text.trim());
+    return _card('Salary advances', [
+      _labeled('Advance account', InkWell(
+        onTap: _canWrite ? _pickAdvAccount : null,
+        child: InputDecorator(
+          decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
+              suffixIcon: Icon(Icons.arrow_drop_down)),
+          child: Text(_advAcctId == null ? 'Not linked — tap to choose (e.g. "Advances to Staff - …")' : _acctLabel(_advAcctId),
+              style: TextStyle(fontSize: 13, color: _advAcctId == null ? AppTheme.textSecondary : AppTheme.textPrimary)),
+        ),
+      )),
+      const SizedBox(height: 12),
+      _labeled('Monthly recovery (optional)', _tf(_advInst, hint: 'Blank = recover the full outstanding balance each month', numeric: true)),
+      const SizedBox(height: 8),
+      if (_advAcctId != null)
+        Text(
+          bal == null
+              ? 'Checking balance…'
+              : 'Outstanding today: ${NumberFormat('#,##0').format(bal)}'
+                '${bal > 0 ? ' · next payroll deducts ${NumberFormat('#,##0').format(inst != null && inst > 0 && inst < bal ? inst : bal)}' : ''}',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: (bal ?? 0) > 0 ? Colors.orange.shade800 : AppTheme.textSecondary),
+        ),
+      const SizedBox(height: 4),
+      const Text('Payroll reads this account\'s balance at month end and fills the "Advance / loan" deduction on the payslip (never more than the net pay). '
+          'You can still change it on the payslip. Book the recovery in your salary JV as usual.',
+          style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+    ]);
+  }
+
   Future<void> _loadShifts() async {
     final orgId = _orgId; if (orgId == null) return;
     final rows = await Supabase.instance.client.from('hr_shifts').select().eq('org_id', orgId).order('name');
@@ -174,7 +288,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   void _newEmployee() {
     setState(() {
       _current = null; _status = 'active';
-      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid]) c.clear();
+      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst]) c.clear();
+      _advAcctId = null; _advBal = null;
       _deptId = null; _desigId = null; _gender = null; _empType = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
       _dob = null; _joinDate = null;
@@ -211,8 +326,13 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _notifyPunch = e['notify_punch'] == true;
       _notifyEmail.text = e['notify_email'] as String? ?? '';
       _cardUid.text = e['card_uid'] as String? ?? '';
+      _advAcctId = e['advance_account_id'] as String?;
+      final inst = (e['advance_installment'] as num?)?.toDouble();
+      _advInst.text = inst == null || inst == 0 ? '' : (inst == inst.roundToDouble() ? inst.toInt().toString() : inst.toString());
+      _advBal = null;
     });
     _loadDocs();
+    _loadAdvBalance();
   }
 
   // ---- department / designation management ----
@@ -335,6 +455,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'approval_status': _isAdmin ? 'approved' : 'pending',
         'bank_name': _t(_bankName), 'bank_account': _t(_bankAcct), 'notes': _t(_notes),
         'card_uid': _t(_cardUid),
+        'advance_account_id': _advAcctId,
+        'advance_installment': double.tryParse(_advInst.text.trim()),
         'updated_at': DateTime.now().toIso8601String(),
       };
       if (_isAdmin) { payload['approved_by'] = userId; payload['approved_at'] = DateTime.now().toIso8601String(); }
@@ -881,6 +1003,8 @@ $docsHtml
               const SizedBox(height: 12),
               _labeled('Notes', _tf(_notes, lines: 2)),
             ]),
+            const SizedBox(height: 16),
+            _advancesCard(),
             const SizedBox(height: 16),
             _docsSection(),
             const SizedBox(height: 30),

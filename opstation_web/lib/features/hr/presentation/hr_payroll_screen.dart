@@ -61,7 +61,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
     try {
       final client = Supabase.instance.client;
       final emps = await client.from('hr_employees')
-          .select('id, full_name, employee_code, department_id, designation_id, branch_id, basic_salary, bank_name, bank_account, join_date, photo_url')
+          .select()
           .eq('org_id', orgId);
       _empById = {for (final e in List<Map<String, dynamic>>.from(emps)) e['id'] as String: Map<String, dynamic>.from(e)};
       final depts = await client.from('hr_departments').select('id, name').eq('org_id', orgId);
@@ -183,7 +183,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
 
       // active, approved employees
       final empRows = await client.from('hr_employees')
-          .select('id, full_name, branch_id, basic_salary')
+          .select()
           .eq('org_id', orgId).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false);
       // Employees excluded from this run (kept on the run). A new month starts
       // with the same exclusions as the latest earlier run.
@@ -198,6 +198,26 @@ class _State extends ConsumerState<HrPayrollScreen> {
       }
       final emps = List<Map<String, dynamic>>.from(empRows)
           .where((e) => !excluded.contains(e['id'])).toList();
+
+      // Outstanding advance per employee = balance of their linked advance
+      // account (Employee directory) as of the last day of the month.
+      final advBal = <String, double>{};
+      final advAcct = <String, String>{};
+      final nextDay = _fmt(monthEnd.add(const Duration(days: 1)));
+      await Future.wait([
+        for (final e in emps)
+          if ((e['advance_account_id'] as String?)?.isNotEmpty == true)
+            () async {
+              try {
+                final b = await client.rpc('rpc_account_opening', params: {
+                  'p_org_id': orgId, 'p_account_id': e['advance_account_id'],
+                  'p_date_from': nextDay, 'p_branch_id': null,
+                });
+                advBal[e['id'] as String] = (b as num?)?.toDouble() ?? 0;
+                advAcct[e['id'] as String] = e['advance_account_id'] as String;
+              } catch (_) {}
+            }(),
+      ]);
 
       // attendance for the month
       final attRows = await client.from('hr_attendance')
@@ -255,8 +275,22 @@ class _State extends ConsumerState<HrPayrollScreen> {
         final allowances = (prev?['allowances'] as num?)?.toDouble() ?? 0;
         final bonus = (prev?['bonus'] as num?)?.toDouble() ?? 0;
         final otherDed = (prev?['other_deduction'] as num?)?.toDouble() ?? 0;
-        final advance = (prev?['advance'] as num?)?.toDouble() ?? 0;
+        double advance = (prev?['advance'] as num?)?.toDouble() ?? 0;
         final remarks = prev?['remarks'] as String?;
+        final bal = advBal[empId];
+        // First time this payslip sees the advance account: recover the
+        // outstanding balance (or the employee's monthly recovery amount, if
+        // set), never more than what is left to pay. After that the amount is
+        // whatever was saved on the payslip, so manual edits stick.
+        final firstLook = prev == null || (prev['advance_balance'] == null && advance == 0);
+        if (bal != null && firstLook) {
+          final inst = (e['advance_installment'] as num?)?.toDouble();
+          var want = bal > 0 ? bal : 0.0;
+          if (inst != null && inst > 0 && inst < want) want = inst;
+          final room = (basic + allowances + bonus - absenceDeduction - otherDed).toDouble();
+          if (want > room) want = room > 0 ? room : 0.0;
+          advance = _r2(want);
+        }
 
         final gross = basic + allowances + bonus;
         final totalDed = absenceDeduction + otherDed + advance;
@@ -272,6 +306,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
           'unpaid_days': unpaid, 'paid_days': calendarDays - unpaid,
           'absence_deduction': _r2(absenceDeduction.toDouble()),
           'allowances': allowances, 'bonus': bonus, 'other_deduction': otherDed, 'advance': advance,
+          if (bal != null) 'advance_balance': _r2(bal),
+          if (bal != null) 'advance_account_id': advAcct[empId],
           'gross': _r2(gross), 'total_deduction': _r2(totalDed), 'net': _r2(net),
           'remarks': remarks, 'updated_at': nowIso,
         };
@@ -454,6 +490,20 @@ class _State extends ConsumerState<HrPayrollScreen> {
           const SizedBox(height: 6),
           field('Other deduction (fine/etc.)', otherCtrl),
           field('Advance / loan', advCtrl),
+          if (item['advance_balance'] != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(children: [
+                Expanded(child: Text(
+                  'Outstanding advance: ${_nf2.format((item['advance_balance'] as num).toDouble())}'
+                  ' · left after this: ${_nf2.format((item['advance_balance'] as num).toDouble() - n(advCtrl))}',
+                  style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))),
+                TextButton(
+                  onPressed: () => setLocal(() => advCtrl.text = _plain(item['advance_balance'])),
+                  child: const Text('Recover all', style: TextStyle(fontSize: 12)),
+                ),
+              ]),
+            ),
           TextField(controller: remarksCtrl, decoration: const InputDecoration(labelText: 'Remarks', isDense: true, border: OutlineInputBorder())),
           const Divider(height: 20),
           _kv('Gross', _nf2.format(gross)),
@@ -650,6 +700,9 @@ class _State extends ConsumerState<HrPayrollScreen> {
         child: Row(children: [
           Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            if (item['advance_balance'] != null && ((item['advance_balance'] as num?)?.toDouble() ?? 0) != 0)
+              Text('Advance ${_nf.format((item['advance'] as num?)?.toDouble() ?? 0)} of ${_nf.format((item['advance_balance'] as num).toDouble())} outstanding',
+                  style: TextStyle(fontSize: 11, color: Colors.orange.shade800)),
             Text([if (code.isNotEmpty) code, 'Absent ${_nf2.format(absent + penalty)}${half > 0 ? ' · ½ ${_nf2.format(half)}' : ''}${penalty > 0 ? ' (incl. ${_nf2.format(penalty)} penalty)' : ''}'].join('  ·  '),
                 style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ])),
@@ -730,6 +783,7 @@ td{padding:5px 8px;border-bottom:1px solid #eee}
     ${row('Absence (${_nf2.format(v('unpaid_days'))} days)', v('absence_deduction'), ded: true)}
     ${row('Other deduction', v('other_deduction'), ded: true)}
     ${row('Advance / loan', v('advance'), ded: true)}
+    ${item['advance_balance'] != null ? '<tr><td colspan="2" style="font-size:10px;color:#666">Advance outstanding ${_nf2.format(v('advance_balance'))} · balance after this payslip ${_nf2.format(v('advance_balance') - v('advance'))}</td></tr>' : ''}
     ${row('Total deductions', v('total_deduction'), ded: true, bold: true)}
   </tbody></table></div>
 </div>
