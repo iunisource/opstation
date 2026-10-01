@@ -409,8 +409,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       }
       bool hasGrn = false;
       try {
-        final g = await client.from('purchase_grns').select('id').eq('po_id', id).limit(1);
-        hasGrn = (g as List).isNotEmpty;
+        // Voided GRNs don't count — once every GRN is voided the PO is editable again.
+        final g = await client.from('purchase_grns').select('id, is_voided, voided_at').eq('po_id', id);
+        hasGrn = (g as List).any((r) => !isVoidedRow(r as Map));
       } catch (_) {}
       // Who may acknowledge a rejection (Admin Settings: designated users, or
       // the creator when none are designated). Off when the toggle is off.
@@ -591,7 +592,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   Future<bool> _addItem() async {
-    if (!_canEditLines) { _showSnack('Cannot add: a GRN exists against this PO. Delete the GRN first.'); return false; }
+    if (!_canEditLines) { _showSnack('Cannot add: an active GRN exists against this PO. Void the GRN first.'); return false; }
     if (_addProductId == null || _addUomId == null) { _showSnack('Select product and UOM'); return false; }
     if (_items.any((i) => i['product_id'] == _addProductId)) { _showSnack('Already added'); return false; }
     final qty = double.tryParse(_addQtyCtrl.text.trim()) ?? 0;
@@ -630,7 +631,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   // Open the product picker (keyboard nav), set product + default UOM, then
   // focus Qty. Shared by the "+ Add product" tap and the Enter loop.
   Future<bool> _pickAddProduct() async {
-    if (!_canEditLines) { _showSnack('Cannot add: a GRN exists against this PO. Delete the GRN first.'); return false; }
+    if (!_canEditLines) { _showSnack('Cannot add: an active GRN exists against this PO. Void the GRN first.'); return false; }
     final p = await pickProduct(context, _visibleProducts, title: 'Add product');
     if (p == null || p.isEmpty) return false;
     setState(() {
@@ -655,7 +656,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   Future<void> _deleteItem(String itemId) async {
-    if (!_canEditLines) { _showSnack('Cannot remove: a GRN exists against this PO. Delete the GRN first.'); return; }
+    if (!_canEditLines) { _showSnack('Cannot remove: an active GRN exists against this PO. Void the GRN first.'); return; }
     try {
       await Supabase.instance.client.from('purchase_order_items').delete().eq('id', itemId);
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
@@ -902,7 +903,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   // delete + recreate. Clears approval if the PO was already approved.
   Future<void> _changeSupplier() async {
     if (!_canEditLines) {
-      _showSnack('Cannot change supplier: a GRN exists against this PO. Delete the GRN first.');
+      _showSnack('Cannot change supplier: an active GRN exists against this PO. Void the GRN first.');
       return;
     }
     final picked = await showDialog<Map<String, dynamic>?>(
