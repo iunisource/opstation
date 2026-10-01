@@ -884,6 +884,51 @@ class _State extends ConsumerState<HrPayrollScreen> {
     ]),
   );
 
+  // ── run list (left drawer): year + status filters, search ─────────────────
+  String _runSearch = '';
+  int? _runYear; // null = all years
+  String _runStatus = 'all'; // all | draft | finalized | paid
+  String _empSearch = ''; // search inside the selected run
+
+  List<int> get _runYears {
+    final ys = <int>{for (final r in _runs) int.tryParse('${r['period']}'.split('-').first) ?? 0}..remove(0);
+    return ys.toList()..sort((a, b) => b.compareTo(a));
+  }
+
+  List<Map<String, dynamic>> get _visibleRuns {
+    final q = _runSearch.trim().toLowerCase();
+    return _runs.where((r) {
+      final period = '${r['period']}';
+      if (_runYear != null && !period.startsWith('$_runYear-')) return false;
+      if (_runStatus != 'all' && (r['status'] ?? 'draft') != _runStatus) return false;
+      if (q.isNotEmpty) {
+        final hay = '${_periodLabel(period)} $period ${r['status'] ?? ''} ${r['finalized_by_name'] ?? ''}'.toLowerCase();
+        if (!q.split(RegExp(r'\s+')).every(hay.contains)) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Widget _runFilterChip(String label, String value) {
+    final on = _runStatus == value;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6, bottom: 6),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => setState(() => _runStatus = value),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: on ? AppTheme.primary : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: on ? AppTheme.primary : AppTheme.border),
+          ),
+          child: Text(label, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: on ? Colors.white : AppTheme.textSecondary)),
+        ),
+      ),
+    );
+  }
+
   Widget _runList() {
     if (_runs.isEmpty) {
       return Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -895,24 +940,82 @@ class _State extends ConsumerState<HrPayrollScreen> {
           style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white)),
       ])));
     }
-    return ListView.separated(
-      itemCount: _runs.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (_, i) {
-        final r = _runs[i];
-        final sel = _run != null && _run!['id'] == r['id'];
-        final st = r['status'] as String? ?? 'draft';
-        return Container(
-          color: sel ? AppTheme.primary.withOpacity(0.08) : null,
-          child: ListTile(
-            title: Text(_periodLabel(r['period'] as String), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-            subtitle: Text('${r['employee_count'] ?? 0} staff · net ${_nf.format((r['total_net'] as num?)?.toDouble() ?? 0)}', style: const TextStyle(fontSize: 11)),
-            trailing: _statusChip(st),
-            onTap: () => _selectRun(r),
+    final runs = _visibleRuns;
+    final years = _runYears;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        color: AppTheme.card,
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            const Expanded(child: Text('Payroll runs', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800))),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+              child: DropdownButtonHideUnderline(child: DropdownButton<int?>(
+                value: _runYear, isDense: true,
+                style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+                items: [
+                  const DropdownMenuItem<int?>(value: null, child: Text('All years')),
+                  for (final y in years) DropdownMenuItem<int?>(value: y, child: Text('$y')),
+                ],
+                onChanged: (v) => setState(() => _runYear = v),
+              )),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          TextField(
+            decoration: const InputDecoration(
+              isDense: true, hintText: 'Search month, e.g. "Sep" or "2026"',
+              prefixIcon: Icon(Icons.search, size: 18), border: OutlineInputBorder()),
+            style: const TextStyle(fontSize: 13),
+            onChanged: (v) => setState(() => _runSearch = v),
           ),
-        );
-      },
-    );
+          const SizedBox(height: 8),
+          Wrap(children: [
+            _runFilterChip('All', 'all'),
+            _runFilterChip('Draft', 'draft'),
+            _runFilterChip('Finalized', 'finalized'),
+            _runFilterChip('Paid', 'paid'),
+          ]),
+        ]),
+      ),
+      const Divider(height: 1),
+      Expanded(child: runs.isEmpty
+          ? const Center(child: Padding(padding: EdgeInsets.all(20),
+              child: Text('No runs match these filters', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))))
+          : ListView.separated(
+              itemCount: runs.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final r = runs[i];
+                final sel = _run != null && _run!['id'] == r['id'];
+                final st = r['status'] as String? ?? 'draft';
+                final approver = r['finalized_by_name'] as String?;
+                return InkWell(
+                  onTap: () => _selectRun(r),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: sel ? AppTheme.primary.withOpacity(0.08) : null,
+                      border: Border(left: BorderSide(color: sel ? AppTheme.primary : Colors.transparent, width: 3)),
+                    ),
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                    child: Row(children: [
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(_periodLabel(r['period'] as String), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text('${r['employee_count'] ?? 0} staff · net ${_nf.format((r['total_net'] as num?)?.toDouble() ?? 0)}',
+                            style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                        if (approver != null && st != 'draft')
+                          Text('Approved by $approver', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
+                      ])),
+                      _statusChip(st),
+                    ]),
+                  ),
+                );
+              },
+            )),
+    ]);
   }
 
   Widget _statusChip(String st) {
@@ -954,14 +1057,30 @@ class _State extends ConsumerState<HrPayrollScreen> {
         ]),
       ),
       _excludedBar(),
+      if (_items.length > 6)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: TextField(
+            decoration: const InputDecoration(isDense: true, hintText: 'Search employee or code',
+                prefixIcon: Icon(Icons.person_search_outlined, size: 18), border: OutlineInputBorder()),
+            style: const TextStyle(fontSize: 13),
+            onChanged: (v) => setState(() => _empSearch = v),
+          ),
+        ),
       const Divider(height: 1),
-      Expanded(child: Stack(children: [
+      Expanded(child: Builder(builder: (context) {
+        final q = _empSearch.trim().toLowerCase();
+        final shown = q.isEmpty ? _items : _items.where((it) {
+          final e = _empById[it['employee_id']];
+          return '${e?['full_name'] ?? ''} ${e?['employee_code'] ?? ''}'.toLowerCase().contains(q);
+        }).toList();
+        return Stack(children: [
         _items.isEmpty
             ? const Center(child: Text('No payslips — press Regenerate', style: TextStyle(color: AppTheme.textSecondary)))
             : ListView.separated(
-                itemCount: _items.length + 1,
+                itemCount: shown.length + 1,
                 separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (_, i) => i == _items.length ? _footprints(run) : _itemTile(_items[i]),
+                itemBuilder: (_, i) => i == shown.length ? _footprints(run) : _itemTile(shown[i]),
               ),
         if (st == 'draft')
           Positioned.fill(child: IgnorePointer(child: Center(child: Transform.rotate(
@@ -969,7 +1088,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
             child: Text('DRAFT', style: TextStyle(fontSize: 120, fontWeight: FontWeight.w900,
                 letterSpacing: 14, color: Colors.red.withOpacity(0.07))),
           )))),
-      ])),
+        ]);
+      })),
     ]);
   }
 
