@@ -322,7 +322,9 @@ class _State extends ConsumerState<HrPayrollScreen> {
         }
         final unpaid = absent + penalty + notJoined + 0.5 * half;
 
-        // Paid leave bonus: quota minus what was used, paid at the per-day rate.
+        // Paid leave: the quota is paid every month. It covers leave days
+        // (which are still listed under Absence) and whatever is left over is
+        // the bonus for staying regular. Net effect on pay = quota − used.
         final plOverride = (e['paid_leave_days'] as num?)?.toDouble();
         final plQuota = plOverride ?? orgPl;
         double quota = plQuota;
@@ -331,8 +333,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
           quota = worked < 10 ? 0.0 : (worked / 15).round().toDouble();
           if (quota > plQuota) quota = plQuota;
         }
-        final bonusDays = quota > used ? quota - used : 0.0;
-        final double leaveBonus = (perDay * bonusDays).toDouble();
+        final bonusDays = quota > used ? quota - used : 0.0; // unused → extra pay
+        final double leaveBonus = (perDay * quota).toDouble();  // whole quota is paid
         final absenceDeduction = (perDay * unpaid);
 
         final prev = prevByEmp[empId];
@@ -431,7 +433,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
         const SizedBox(height: 10),
         const Text(
           'Each month, every unpaid day (absent, approved leave, the extra day of an unapproved absence, ½ per half day) '
-          'uses up these days. Whatever is left is paid as "Paid leave bonus" on the payslip. Nothing carries over.\n\n'
+          'is covered by these days, and whatever is left over is paid extra. On the payslip the days are paid as "Paid leave" and the absences stay under deductions. Nothing carries over.\n\n'
           'Joined mid-month: 1 day per 15 days worked, rounded; under 10 days, none.\n\n'
           'A different number for one employee can be set in the Employee directory. Regenerate draft runs to apply.',
           style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
@@ -689,7 +691,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
           _kv('Basic', _nf2.format(basic)),
           _kv('Absence deduction', '- ${_nf2.format(absenceDed)}', color: Colors.red),
           if (leaveBonus > 0)
-            _kv('Paid leave bonus (${_nf2.format((item['leave_bonus_days'] as num?)?.toDouble() ?? 0)} days)', '+ ${_nf2.format(leaveBonus)}', color: Colors.green.shade700),
+            _kv(_plLabel(item), '+ ${_nf2.format(leaveBonus)}', color: Colors.green.shade700),
           const Divider(),
           const Text('Earnings', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
@@ -923,8 +925,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
             if (item['advance_balance'] != null && ((item['advance_balance'] as num?)?.toDouble() ?? 0) != 0)
               Text('Advance ${_nf.format((item['advance'] as num?)?.toDouble() ?? 0)} of ${_nf.format((item['advance_balance'] as num).toDouble())} outstanding',
                   style: TextStyle(fontSize: 11, color: Colors.orange.shade800)),
-            if (((item['leave_bonus_days'] as num?)?.toDouble() ?? 0) > 0)
-              Text('Paid leave bonus ${_nf2.format((item['leave_bonus_days'] as num).toDouble())} days · +${_nf.format((item['leave_bonus'] as num?)?.toDouble() ?? 0)}',
+            if (((item['leave_bonus'] as num?)?.toDouble() ?? 0) > 0)
+              Text('${_plLabel(item)} · +${_nf.format((item['leave_bonus'] as num?)?.toDouble() ?? 0)}',
                   style: TextStyle(fontSize: 11, color: Colors.green.shade700)),
             Text([if (code.isNotEmpty) code, _deductionSummary(item)].join('  ·  '),
                 style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
@@ -943,6 +945,18 @@ class _State extends ConsumerState<HrPayrollScreen> {
         ]),
       ),
     );
+  }
+
+  /// "Paid leave (2 days: covers 1 absent, 1 unused)"
+  String _plLabel(Map<String, dynamic> it) {
+    double v(String k) => (it[k] as num?)?.toDouble() ?? 0;
+    final q = v('paid_leave_quota'), used = v('paid_leave_used'), unused = v('leave_bonus_days');
+    final covers = used < q ? used : q;
+    final parts = <String>[
+      if (covers > 0) 'covers ${_nf2.format(covers)} absent',
+      if (unused > 0) '${_nf2.format(unused)} unused',
+    ];
+    return 'Paid leave (${_nf2.format(q)} days${parts.isEmpty ? '' : ': ${parts.join(', ')}'})';
   }
 
   /// "Leave 1 · Unapproved 2 · +2 extra = 5 days deducted"
@@ -1015,13 +1029,13 @@ ${_printWatermark(run)}
     Absent: ${_nf2.format(v('absent_days'))} · Penalty: ${_nf2.format(v('penalty_days'))} · Holiday/Rest: ${_nf2.format(v('holiday_days') + v('restday_days'))}<br>
     ${v('notjoined_days') > 0 ? 'Before joining: ${_nf2.format(v('notjoined_days'))}<br>' : ''}Unpaid days: <b>${_nf2.format(v('unpaid_days'))}</b> · Per-day: ${_nf2.format(v('per_day'))}<br>
     <span style="color:#b91c1c">${_esc(_deductionSummary(item))}</span><br>
-    Paid leave: ${_nf2.format(v('paid_leave_quota'))} days · used ${_nf2.format(v('paid_leave_used'))} · paid out ${_nf2.format(v('leave_bonus_days'))}
+    Paid leave: ${_nf2.format(v('paid_leave_quota'))} days · covers ${_nf2.format(v('paid_leave_used') < v('paid_leave_quota') ? v('paid_leave_used') : v('paid_leave_quota'))} absent · unused ${_nf2.format(v('leave_bonus_days'))} paid extra
   </div></div>
 </div>
 <div class="two">
   <div style="flex:1"><table><thead><tr><th>Earnings</th><th style="text-align:right">Amount</th></tr></thead><tbody>
     ${row('Basic', v('basic'))}
-    ${v('leave_bonus') > 0 ? row('Paid leave bonus (${_nf2.format(v('leave_bonus_days'))} days)', v('leave_bonus')) : ''}
+    ${v('leave_bonus') > 0 ? row(_plLabel(item), v('leave_bonus')) : ''}
     ${row('Allowances', v('allowances'))}
     ${row('Bonus', v('bonus'))}
     ${row('Gross', v('gross'), bold: true)}
