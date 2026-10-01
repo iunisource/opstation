@@ -454,6 +454,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
 
   double _r2(double v) => (v * 100).roundToDouble() / 100;
 
+  String _days(num n) => '${_nf2.format(n)} day${n == 1 ? '' : 's'}';
+
   /// Deductions are shown in brackets: (3,167). Zero shows as "-".
   String _neg(num v, NumberFormat f) => v == 0 ? '-' : '(${f.format(v.abs())})';
 
@@ -1001,7 +1003,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
       if (covers > 0) 'covers ${_nf2.format(covers)} absent',
       if (unused > 0) '${_nf2.format(unused)} unused',
     ];
-    return 'Paid leave (${_nf2.format(q)} days${parts.isEmpty ? '' : ': ${parts.join(', ')}'})';
+    return 'Paid leave (${_days(q)}${parts.isEmpty ? '' : ': ${parts.join(', ')}'})';
   }
 
   /// "Leave 1 · Unapproved 2 · +2 extra = 5 days deducted"
@@ -1072,11 +1074,11 @@ ${_printWatermark(run)}
   <div class="card"><h3>Employee</h3><div class="meta"><b>$name</b><br>${[if (code.isNotEmpty) code, if (dept.isNotEmpty) dept].join(' · ')}${(bank.isNotEmpty || acct.isNotEmpty) ? '<br>Bank: $bank $acct' : ''}</div></div>
   <div class="card"><h3>Attendance</h3><div class="meta">
     Calendar days: ${v('calendar_days').toInt()}<br>
-    Present: ${_nf2.format(v('present_days'))} · Half: ${_nf2.format(v('half_days'))} · Leave: ${_nf2.format(v('leave_days'))}<br>
-    Absent: ${_nf2.format(v('absent_days'))} · Penalty: ${_nf2.format(v('penalty_days'))} · Holiday/Rest: ${_nf2.format(v('holiday_days') + v('restday_days'))}<br>
+    Present: ${_nf2.format(v('present_days'))} · Half day: ${_nf2.format(v('half_days'))} · Leave (L): ${_nf2.format(v('approved_leave_days'))}<br>
+    Absent: ${_nf2.format(v('absent_days') - v('approved_leave_days'))}${v('penalty_days') > 0 ? ' · Extra for unapproved: ${_nf2.format(v('penalty_days'))}' : ''} · Holiday/Rest: ${_nf2.format(v('holiday_days') + v('restday_days'))}${v('leave_days') > 0 ? ' · Paid leave status: ${_nf2.format(v('leave_days'))}' : ''}<br>
     ${v('notjoined_days') > 0 ? 'Not employed (before joining / after leaving): ${_nf2.format(v('notjoined_days'))}<br>' : ''}${v('rest_unearned_days') > 0 ? 'Rest days not earned: ${_nf2.format(v('rest_unearned_days'))}<br>' : ''}Unpaid days: <b>${_nf2.format(v('unpaid_days'))}</b> · Per-day: ${_nf2.format(v('per_day'))}<br>
     <span style="color:#b91c1c">${_esc(_deductionSummary(item))}</span><br>
-    Paid leave: ${_nf2.format(v('paid_leave_quota'))} days · covers ${_nf2.format(v('paid_leave_used') < v('paid_leave_quota') ? v('paid_leave_used') : v('paid_leave_quota'))} absent · unused ${_nf2.format(v('leave_bonus_days'))} paid extra
+    Paid leave: ${_days(v('paid_leave_quota'))} · covers ${_nf2.format(v('paid_leave_used') < v('paid_leave_quota') ? v('paid_leave_used') : v('paid_leave_quota'))} absent · unused ${_nf2.format(v('leave_bonus_days'))} paid extra
   </div></div>
 </div>
 <div class="two">
@@ -1088,7 +1090,8 @@ ${_printWatermark(run)}
     ${row('Gross', v('gross'), bold: true)}
   </tbody></table></div>
   <div style="flex:1"><table><thead><tr><th>Deductions</th><th style="text-align:right">Amount</th></tr></thead><tbody>
-    ${row('Absence (${_nf2.format(v('unpaid_days'))} days)', v('absence_deduction'), ded: true)}
+    ${row('Absence (${_days(v('unpaid_days') - v('notjoined_days'))})', v('absence_deduction') - v('per_day') * v('notjoined_days'), ded: true)}
+    ${v('notjoined_days') > 0 ? row('Not employed (${_days(v('notjoined_days'))})', v('per_day') * v('notjoined_days'), ded: true) : ''}
     ${row('Other deduction', v('other_deduction'), ded: true)}
     ${row('Advance / loan', v('advance'), ded: true)}
     ${item['advance_balance'] != null ? '<tr><td colspan="2" style="font-size:10px;color:#666">Advance outstanding ${_nf2.format(v('advance_balance'))} · balance after this payslip ${_nf2.format(v('advance_balance') - v('advance'))}</td></tr>' : ''}
@@ -1114,7 +1117,8 @@ ${_printFootprints(run)}
           '<td>${_esc(emp['employee_code'] as String?)}</td>'
           '<td>${_esc(emp['full_name'] as String?)}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'basic'))}</td>'
-          '<td style="text-align:right">${_nf2.format(col(it, 'unpaid_days'))}</td>'
+          '<td style="text-align:right">${_nf2.format(col(it, 'unpaid_days') - col(it, 'notjoined_days'))}</td>'
+          '<td style="text-align:right">${col(it, 'notjoined_days') == 0 ? '-' : _nf2.format(col(it, 'notjoined_days'))}</td>'
           '<td style="text-align:right;color:#b91c1c">${_neg(col(it, 'absence_deduction'), _nf)}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'allowances'))}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'bonus') + col(it, 'leave_bonus'))}</td>'
@@ -1140,10 +1144,10 @@ ${_printWatermark(run)}
 <h1>Payroll Register — ${_esc(_periodLabel(run['period'] as String))}</h1>
 <div class="sub">${_items.length} employees · Status: ${_esc((run['status'] as String? ?? 'draft'))}</div>
 <table>
-<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Absents</th><th style="text-align:right">Absence deduction</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus (incl. paid leave)</th><th style="text-align:right">Other / advance</th><th style="text-align:right">Net</th></tr></thead>
+<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Absents</th><th style="text-align:right">Not employed</th><th style="text-align:right">Absence deduction</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus (incl. paid leave)</th><th style="text-align:right">Other / advance</th><th style="text-align:right">Net</th></tr></thead>
 <tbody>$rows</tbody>
 <tfoot><tr><td colspan="2">Total</td>
-<td style="text-align:right">${_nf.format(_sum('basic'))}</td><td></td>
+<td style="text-align:right">${_nf.format(_sum('basic'))}</td><td></td><td></td>
 <td style="text-align:right;color:#b91c1c">${_neg(_sum('absence_deduction'), _nf)}</td>
 <td style="text-align:right">${_nf.format(_sum('allowances'))}</td>
 <td style="text-align:right">${_nf.format(_sum('bonus') + _sum('leave_bonus'))}</td>
