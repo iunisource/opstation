@@ -10,6 +10,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
+import '../widgets/attendance_deduction.dart';
 
 class HrAttendanceScreen extends ConsumerStatefulWidget {
   const HrAttendanceScreen({super.key});
@@ -122,6 +123,13 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       final rows = await Supabase.instance.client.from('hr_attendance').select().eq('org_id', orgId).eq('att_date', dateStr);
       for (final r in (rows as List)) existing[r['employee_id'] as String] = Map<String, dynamic>.from(r);
     } catch (_) {}
+    // Unapproved absences on this date whose extra day was already placed later.
+    final penaltyPlaced = <String>{};
+    try {
+      final pr = await Supabase.instance.client.from('hr_attendance').select('employee_id')
+          .eq('org_id', orgId).eq('is_penalty', true).eq('penalty_source_date', dateStr);
+      for (final r in (pr as List)) penaltyPlaced.add('${r['employee_id']}');
+    } catch (_) {}
     for (final r in _rows) r.remarks.dispose();
     _rows.clear();
     for (final e in _employees) {
@@ -138,6 +146,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       row.remarks.text = rec?['remarks'] as String? ?? '';
       row.inPhoto = rec?['punch_in_photo'] as String?;
       row.outPhoto = rec?['punch_out_photo'] as String?;
+      row.deduction = attDeduction(rec, hasPenaltyRow: penaltyPlaced.contains(e['id']));
       row.snapshot();
       _rows.add(row);
     }
@@ -464,7 +473,16 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       decoration: BoxDecoration(border: last ? null : Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
       child: Row(children: [
         Expanded(flex: 3, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(r.label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+          Row(children: [
+            Flexible(child: Text(r.label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+            // Shown for the saved record only (status edits not yet saved don't change it).
+            if (r.deduction != null && r.status == r.origStatus && r.deduction!.days >= 1) ...[
+              const SizedBox(width: 6),
+              attDeductionChip(r.deduction!),
+            ],
+          ]),
+          if (r.deduction?.penaltyDay == true)
+            Text(r.deduction!.text, style: TextStyle(fontSize: 10, color: Colors.red.shade700), overflow: TextOverflow.ellipsis),
           Text('${r.code}${r.deptName.isNotEmpty ? '  \u00b7  ${r.deptName}' : ''}${shift != null ? '  \u00b7  ${shift['name']}' : ''}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
         ])),
         SizedBox(width: 132, child: DropdownButtonFormField<String>(
@@ -596,6 +614,16 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       final client = Supabase.instance.client;
       final attRows = List<Map<String, dynamic>>.from(
         await client.from('hr_attendance').select().eq('org_id', orgId).gte('att_date', _fmt(from)).lte('att_date', _fmt(to)).order('att_date'));
+      // "emp|date" of unapproved absences whose extra day was placed as a penalty row.
+      final penaltyPlaced = <String>{};
+      try {
+        final pr = await client.from('hr_attendance').select('employee_id, penalty_source_date')
+            .eq('org_id', orgId).eq('is_penalty', true)
+            .gte('penalty_source_date', _fmt(from)).lte('penalty_source_date', _fmt(to));
+        for (final r in (pr as List)) {
+          penaltyPlaced.add('${r['employee_id']}|${'${r['penalty_source_date']}'.substring(0, 10)}');
+        }
+      } catch (_) {}
 
       // index attendance: empId -> dateStr -> record
       final byEmpDate = <String, Map<String, Map<String, dynamic>>>{};
@@ -638,8 +666,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           final cin = rec?['check_in'] as String?, cout = rec?['check_out'] as String?;
           final wh = _hours(cin, cout);
           final effSt = _effStatus(rec, dsDate, shift);
+          final ded = attDeduction(rec, hasPenaltyRow: penaltyPlaced.contains('${e['id']}|$ds'));
           rows += '<tr><td class="emp">${esc(e['full_name'] as String?)}<span class="code">${esc(e['employee_code'] as String?)}</span></td>'
-              '<td>${effSt.isEmpty ? '-' : effSt}</td><td>${cin ?? '-'}</td><td>${cout ?? '-'}</td>'
+              '<td>${effSt.isEmpty ? '-' : effSt}${ded != null && ded.days >= 1 ? ' <b style="color:#b91c1c">(${esc(ded.short)})</b>' : ''}</td><td>${cin ?? '-'}</td><td>${cout ?? '-'}</td>'
               '<td class="r">${wh?.toStringAsFixed(2) ?? '-'}</td><td class="r">${stdHrs?.toStringAsFixed(2) ?? '-'}</td>'
               '<td class="c">${varText(_min(cin), sStart)}</td><td class="c">${varText(_min(cout), sEnd)}</td>'
               '<td>${esc(rec?['remarks'] as String?)}</td></tr>';
@@ -649,17 +678,25 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       } else {
         String head = '<th class="emp">Employee</th>';
         for (final d in days) head += '<th class="day">${d.day}</th>';
-        head += '<th class="r">Hrs var</th><th class="r">Days</th>';
+        head += '<th class="r">Hrs var</th><th class="r">Days</th><th class="r">Deducted</th>';
         String rows = '';
         for (final e in emps) {
           final shift = _shiftFor(e['shift_id'] as String?);
           final stdHrs = (shift?['work_hours'] as num?)?.toDouble() ?? 0;
-          double worked = 0, expected = 0, daysWorked = 0;
+          double worked = 0, expected = 0, daysWorked = 0, deducted = 0;
           String cells = '';
           for (final d in days) {
             final rec = byEmpDate[e['id']]?[_fmt(d)];
             final st = _effStatus(rec, d, shift);
-            cells += '<td class="day">${code(st)}</td>';
+            final ded = attDeduction(rec, hasPenaltyRow: penaltyPlaced.contains('${e['id']}|${_fmt(d)}'));
+            if (ded != null) deducted += ded.days;
+            // X = penalty day (deducted even if present), A² = unapproved ×2,
+            // L- = approved leave deducted.
+            final cellCode = ded == null ? code(st)
+                : ded.penaltyDay ? 'X'
+                : ded.days >= 2 ? 'A&sup2;'
+                : (rec?['review_status'] == 'excused' ? 'L&minus;' : code(st));
+            cells += '<td class="day"${ded != null && (ded.penaltyDay || ded.days >= 2) ? ' style="color:#b91c1c;font-weight:700"' : ''}>$cellCode</td>';
             if (st == 'present' || st == 'half_day') {
               final wh = _hours(rec?['check_in'] as String?, rec?['check_out'] as String?);
               // Hrs var only compares days where BOTH in & out are recorded — a
@@ -672,11 +709,11 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           final variance = worked - expected;
           final vStr = (worked == 0 && expected == 0) ? '-' : (variance.abs() < 0.05 ? '0' : (variance > 0 ? '+${trimNum(variance)}' : trimNum(variance)));
           rows += '<tr><td class="emp">${esc(e['full_name'] as String?)}<span class="code">${esc(e['employee_code'] as String?)}</span></td>$cells'
-              '<td class="r">$vStr</td><td class="r">${trimNum(daysWorked)}</td></tr>';
+              '<td class="r">$vStr</td><td class="r">${trimNum(daysWorked)}</td><td class="r">${deducted == 0 ? '-' : trimNum(deducted)}</td></tr>';
         }
         body = '<table class="matrix"><thead><tr>$head</tr></thead><tbody>'
             '${rows.isEmpty ? '<tr><td>No employees.</td></tr>' : rows}</tbody></table>'
-            '<div class="legend">P = Present &nbsp; A = Absent &nbsp; L = Leave &nbsp; &frac12; = Half day &nbsp; H = Holiday &nbsp; R = Rest day &nbsp;&nbsp;|&nbsp;&nbsp; Hrs var = worked hours minus expected shift hours, counted only on days with both check-in &amp; check-out (+ surplus / - short)</div>';
+            '<div class="legend">P = Present &nbsp; A = Absent &nbsp; A&sup2; = Unapproved absence (2 days deducted) &nbsp; X = Penalty day (deducted even if present) &nbsp; L&minus; = Approved leave (1 day deducted) &nbsp; L = Leave (paid) &nbsp; &frac12; = Half day &nbsp; H = Holiday &nbsp; R = Rest day &nbsp;&nbsp;|&nbsp;&nbsp; Hrs var = worked hours minus expected shift hours, counted only on days with both check-in &amp; check-out (+ surplus / - short) &nbsp;|&nbsp; Deducted = days deducted in payroll</div>';
       }
 
       // Edit trail is intentionally NOT included in the exported/printed
@@ -726,6 +763,7 @@ class _Row {
   final TextEditingController remarks = TextEditingController();
   String origStatus = 'present'; String? origIn, origOut; String origRemarks = '';
   bool saving = false;
+  AttDeduction? deduction; // how this saved day affects pay (penalty / unapproved ×2 / leave)
   _Row({required this.empId, required this.label, required this.code, required this.deptName, this.branchId, this.shiftId, this.recordId, required this.status, this.checkIn, this.checkOut});
   void snapshot() { origStatus = status; origIn = checkIn; origOut = checkOut; origRemarks = remarks.text; }
 }

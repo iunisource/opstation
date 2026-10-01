@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../widgets/attendance_deduction.dart';
 
 /// Full-screen, filterable, printable attendance report for a single employee.
 /// Opened from the employee profile "Attendance record" button
@@ -168,14 +169,23 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
     if (orgId == null) return;
     final r = await Supabase.instance.client
         .from('hr_attendance')
-        .select('att_date, status, check_in, check_out, work_hours, is_penalty')
+        .select('att_date, status, check_in, check_out, work_hours, is_penalty, review_status, penalty_source_date')
         .eq('org_id', orgId)
         .eq('employee_id', widget.empId)
         .gte('att_date', _fmt(_from))
         .lte('att_date', _fmt(_to))
         .order('att_date', ascending: false);
     _rows = List<Map<String, dynamic>>.from(r);
+    _penaltyPlaced.clear();
+    try {
+      final pr = await Supabase.instance.client.from('hr_attendance').select('penalty_source_date')
+          .eq('org_id', orgId).eq('employee_id', widget.empId).eq('is_penalty', true)
+          .gte('penalty_source_date', _fmt(_from)).lte('penalty_source_date', _fmt(_to));
+      for (final x in (pr as List)) { _penaltyPlaced.add('${x['penalty_source_date']}'.substring(0, 10)); }
+    } catch (_) {}
   }
+  // Unapproved absence dates whose extra day was placed as a separate penalty day.
+  final Set<String> _penaltyPlaced = {};
 
   Future<void> _reload() async {
     setState(() => _loading = true);
@@ -232,6 +242,7 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
         hours: wh,
         late: (eff == 'present' || eff == 'half_day') && _isLate(a),
         penalty: a['is_penalty'] == true,
+        deduction: attDeduction(a, hasPenaltyRow: _penaltyPlaced.contains(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr)),
       ));
     }
     return out;
@@ -396,6 +407,10 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
           _kpi('Half days', half.toString(), Colors.amber.shade700),
           _kpi('Absent', absent.toString(), Colors.red),
           _kpi('Leave', leave.toString(), Colors.orange),
+          _kpi('Days deducted', () {
+            double t = 0; for (final r in recs) { t += r.deduction?.days ?? 0; }
+            return t == t.roundToDouble() ? t.toInt().toString() : t.toString();
+          }(), Colors.red.shade700),
           _kpi('Late', _lateCount(recs).toString(), Colors.deepOrange),
           _kpi('Worked hrs', _totalHours(recs).toString(), Colors.indigo),
           _kpi('Attendance', '${rate.toStringAsFixed(0)}%', rate >= 90 ? Colors.green : (rate >= 75 ? Colors.amber.shade700 : Colors.red)),
@@ -448,7 +463,10 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
               child: Row(children: [
                 Expanded(flex: 3, child: Text(DateFormat('d MMM yyyy').format(r.date), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
                 Expanded(flex: 2, child: Text(DateFormat('EEE').format(r.date), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                Expanded(flex: 2, child: Text(r.penalty ? '${_statusLabel(r.status)} (penalty)' : _statusLabel(r.status), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _statusColor(r.status)))),
+                Expanded(flex: 2, child: Wrap(spacing: 4, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  Text(r.penalty ? '${_statusLabel(r.status)} (penalty)' : _statusLabel(r.status), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _statusColor(r.status))),
+                  if (r.deduction != null && r.deduction!.days >= 1) attDeductionChip(r.deduction!),
+                ])),
                 Expanded(flex: 2, child: Text(r.checkIn ?? '—', style: const TextStyle(fontSize: 12))),
                 Expanded(flex: 2, child: Text(r.checkOut ?? '—', style: const TextStyle(fontSize: 12))),
                 Expanded(flex: 2, child: Text(r.hours != null ? r.hours!.toStringAsFixed(2) : '—', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
@@ -491,7 +509,7 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
       return '<tr>'
           '<td>${esc(DateFormat('d MMM yyyy').format(r.date))}</td>'
           '<td>${esc(DateFormat('EEE').format(r.date))}</td>'
-          '<td>${esc(r.penalty ? _statusLabel(r.status) + ' (penalty)' : _statusLabel(r.status))}</td>'
+          '<td>${esc(r.penalty ? _statusLabel(r.status) + ' (penalty)' : _statusLabel(r.status))}${r.deduction != null && r.deduction!.days >= 1 ? ' <b style="color:#b91c1c">(${esc(r.deduction!.short)})</b>' : ''}</td>'
           '<td>${esc(r.checkIn ?? '—')}</td>'
           '<td>${esc(r.checkOut ?? '—')}</td>'
           '<td style="text-align:right">${r.hours != null ? r.hours!.toStringAsFixed(2) : '—'}</td>'
@@ -562,6 +580,7 @@ class _Rec {
   final double? hours;
   final bool late;
   final bool penalty;
+  final AttDeduction? deduction; // days deducted in payroll for this day
   _Rec({
     required this.date,
     required this.dateStr,
@@ -571,5 +590,6 @@ class _Rec {
     required this.hours,
     required this.late,
     this.penalty = false,
+    this.deduction,
   });
 }
