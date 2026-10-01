@@ -407,6 +407,9 @@ class _State extends ConsumerState<HrPayrollScreen> {
 
   double _r2(double v) => (v * 100).roundToDouble() / 100;
 
+  /// Deductions are shown in brackets: (3,167). Zero shows as "-".
+  String _neg(num v, NumberFormat f) => v == 0 ? '-' : '(${f.format(v.abs())})';
+
   // ── paid leave quota ────────────────────────────────────────────────────────
   static const _plKey = 'hr.paid_leave_days';
 
@@ -689,7 +692,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
         title: Text('Payslip — $name', style: const TextStyle(fontSize: 15)),
         content: SizedBox(width: 380, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           _kv('Basic', _nf2.format(basic)),
-          _kv('Absence deduction', '- ${_nf2.format(absenceDed)}', color: Colors.red),
+          _kv('Absence deduction', _neg(absenceDed, _nf2), color: Colors.red),
           if (leaveBonus > 0)
             _kv(_plLabel(item), '+ ${_nf2.format(leaveBonus)}', color: Colors.green.shade700),
           const Divider(),
@@ -719,7 +722,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
           TextField(controller: remarksCtrl, decoration: const InputDecoration(labelText: 'Remarks', isDense: true, border: OutlineInputBorder())),
           const Divider(height: 20),
           _kv('Gross', _nf2.format(gross)),
-          _kv('Total deductions', '- ${_nf2.format(totalDed)}', color: Colors.red),
+          _kv('Total deductions', _neg(totalDed, _nf2), color: Colors.red),
           _kv('Net pay', _nf2.format(net), bold: true),
         ]))),
         actions: [
@@ -932,7 +935,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
                 style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ])),
           Expanded(flex: 2, child: Text(_nf.format((item['basic'] as num?)?.toDouble() ?? 0), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-          Expanded(flex: 2, child: Text('- ${_nf.format((item['total_deduction'] as num?)?.toDouble() ?? 0)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: Colors.red.shade600))),
+          Expanded(flex: 2, child: Text(_neg((item['total_deduction'] as num?)?.toDouble() ?? 0, _nf), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: Colors.red.shade600))),
           Expanded(flex: 2, child: Text(_nf.format(net), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
           const SizedBox(width: 6),
           IconButton(icon: const Icon(Icons.receipt_long_outlined, size: 18), tooltip: 'Payslip PDF', onPressed: () => _printPayslip(item)),
@@ -996,7 +999,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
     final acct = _esc(emp['bank_account'] as String?);
     double v(String k) => (item[k] as num?)?.toDouble() ?? 0;
     String row(String k, num val, {bool ded = false, bool bold = false}) =>
-        '<tr><td>${_esc(k)}</td><td style="text-align:right${bold ? ';font-weight:700' : ''}">${ded ? '-' : ''}${_nf2.format(val)}</td></tr>';
+        '<tr><td>${_esc(k)}</td><td style="text-align:right${bold ? ';font-weight:700' : ''}">${ded ? _neg(val, _nf2) : _nf2.format(val)}</td></tr>';
 
     final content = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip — $name — ${run['period']}</title>
 <style>@page{margin:16mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0}
@@ -1068,10 +1071,10 @@ ${_printFootprints(run)}
           '<td>${_esc(emp['full_name'] as String?)}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'basic'))}</td>'
           '<td style="text-align:right">${_nf2.format(col(it, 'unpaid_days'))}</td>'
-          '<td style="text-align:right">${_nf.format(col(it, 'absence_deduction'))}</td>'
+          '<td style="text-align:right;color:#b91c1c">${_neg(col(it, 'absence_deduction'), _nf)}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'allowances'))}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'bonus') + col(it, 'leave_bonus'))}</td>'
-          '<td style="text-align:right">${_nf.format(col(it, 'other_deduction') + col(it, 'advance'))}</td>'
+          '<td style="text-align:right;color:#b91c1c">${_neg(col(it, 'other_deduction') + col(it, 'advance'), _nf)}</td>'
           '<td style="text-align:right;font-weight:700">${_nf.format(col(it, 'net'))}</td>'
           '</tr>';
     }).join();
@@ -1093,14 +1096,14 @@ ${_printWatermark(run)}
 <h1>Payroll Register — ${_esc(_periodLabel(run['period'] as String))}</h1>
 <div class="sub">${_items.length} employees · Status: ${_esc((run['status'] as String? ?? 'draft'))}</div>
 <table>
-<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Unpaid d</th><th style="text-align:right">Absence ded</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus (incl. paid leave)</th><th style="text-align:right">Other/Adv</th><th style="text-align:right">Net</th></tr></thead>
+<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Unpaid d</th><th style="text-align:right">Absence deduction</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus (incl. paid leave)</th><th style="text-align:right">Other / advance</th><th style="text-align:right">Net</th></tr></thead>
 <tbody>$rows</tbody>
 <tfoot><tr><td colspan="2">Total</td>
 <td style="text-align:right">${_nf.format(_sum('basic'))}</td><td></td>
-<td style="text-align:right">${_nf.format(_sum('absence_deduction'))}</td>
+<td style="text-align:right;color:#b91c1c">${_neg(_sum('absence_deduction'), _nf)}</td>
 <td style="text-align:right">${_nf.format(_sum('allowances'))}</td>
 <td style="text-align:right">${_nf.format(_sum('bonus') + _sum('leave_bonus'))}</td>
-<td style="text-align:right">${_nf.format(_sum('other_deduction') + _sum('advance'))}</td>
+<td style="text-align:right;color:#b91c1c">${_neg(_sum('other_deduction') + _sum('advance'), _nf)}</td>
 <td style="text-align:right">${_nf.format(_sum('net'))}</td></tr></tfoot>
 </table>
 ${_printFootprints(run)}
