@@ -185,7 +185,19 @@ class _State extends ConsumerState<HrPayrollScreen> {
       final empRows = await client.from('hr_employees')
           .select('id, full_name, branch_id, basic_salary')
           .eq('org_id', orgId).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false);
-      final emps = List<Map<String, dynamic>>.from(empRows);
+      // Employees excluded from this run (kept on the run). A new month starts
+      // with the same exclusions as the latest earlier run.
+      Set<String> excluded = _excludedOf(existing);
+      if (existing == null) {
+        try {
+          final prev = await client.from('hr_payroll_runs')
+              .select('excluded_employee_ids').eq('org_id', orgId).lt('period', period)
+              .order('period', ascending: false).limit(1).maybeSingle();
+          excluded = _excludedOf(prev);
+        } catch (_) {}
+      }
+      final emps = List<Map<String, dynamic>>.from(empRows)
+          .where((e) => !excluded.contains(e['id'])).toList();
 
       // attendance for the month
       final attRows = await client.from('hr_attendance')
@@ -205,6 +217,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
         await client.from('hr_payroll_runs').insert({
           'id': runId, 'org_id': orgId, 'period': period, 'status': 'draft',
           'generated_at': nowIso, 'generated_by': _userId, 'generated_by_name': _userName,
+          if (excluded.isNotEmpty) 'excluded_employee_ids': excluded.toList(),
         });
       } else {
         await client.from('hr_payroll_runs').update({'generated_at': nowIso, 'generated_by': _userId, 'generated_by_name': _userName}).eq('id', runId);
@@ -289,6 +302,97 @@ class _State extends ConsumerState<HrPayrollScreen> {
   }
 
   double _r2(double v) => (v * 100).roundToDouble() / 100;
+
+  // ── exclusions ──────────────────────────────────────────────────────────────
+  static Set<String> _excludedOf(Map? run) =>
+      ((run?['excluded_employee_ids'] as List?) ?? const []).map((e) => '$e').toSet();
+
+  Set<String> get _excluded => _excludedOf(_run);
+
+  Future<void> _saveExcluded(Set<String> ids) async {
+    final run = _run; if (run == null) return;
+    await Supabase.instance.client.from('hr_payroll_runs').update({
+      'excluded_employee_ids': ids.toList(), 'updated_at': DateTime.now().toIso8601String(),
+    }).eq('id', run['id'] as String);
+    run['excluded_employee_ids'] = ids.toList();
+  }
+
+  /// Take an employee out of this payroll run (draft only). Their payslip is
+  /// removed and they stay out when the run is regenerated, until included again.
+  Future<void> _exclude(Map<String, dynamic> item) async {
+    if (!_isDraft) { _snack('Run is ${_run?['status']} — reopen to Draft to change it.'); return; }
+    final empId = item['employee_id'] as String;
+    final name = _empById[empId]?['full_name'] as String? ?? 'this employee';
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Exclude from payroll?', style: TextStyle(fontSize: 16)),
+      content: Text('$name will be removed from ${_periodLabel(_run!['period'] as String)} payroll '
+          '(no payslip, not in totals or the register). Allowances or deductions entered for them in this run are discarded.\n\n'
+          'You can include them again from the "Excluded" list.', style: const TextStyle(fontSize: 13)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade600, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(ctx, true), child: const Text('Exclude')),
+      ],
+    ));
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      final client = Supabase.instance.client;
+      final runId = _run!['id'] as String;
+      await _saveExcluded({..._excluded, empId});
+      await client.from('hr_payroll_items').delete().eq('run_id', runId).eq('employee_id', empId);
+      _items.removeWhere((it) => it['employee_id'] == empId);
+      double totalNet = 0; for (final it in _items) { totalNet += (it['net'] as num?)?.toDouble() ?? 0; }
+      await client.from('hr_payroll_runs').update({
+        'employee_count': _items.length, 'total_net': _r2(totalNet), 'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', runId);
+      _run!['employee_count'] = _items.length; _run!['total_net'] = _r2(totalNet);
+      _snack('$name excluded from this payroll.');
+    } catch (e) {
+      _snack(e.toString().contains('excluded_employee_ids')
+          ? 'Run SQL 303 (payroll exclusions) first.' : 'Exclude failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Put an excluded employee back: clears the exclusion and regenerates the run.
+  Future<void> _include(String empId) async {
+    if (!_isDraft) { _snack('Run is ${_run?['status']} — reopen to Draft to change it.'); return; }
+    setState(() => _busy = true);
+    try {
+      await _saveExcluded(_excluded..remove(empId));
+    } catch (e) {
+      _snack('Include failed: $e');
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
+    if (mounted) setState(() => _busy = false);
+    await _generate(DateTime.parse('${_run!['period']}-01'));
+  }
+
+  Widget _excludedBar() {
+    final ids = _excluded.toList()
+      ..sort((a, b) => (_empById[a]?['full_name'] as String? ?? '').compareTo(_empById[b]?['full_name'] as String? ?? ''));
+    if (ids.isEmpty) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      color: Colors.orange.withOpacity(0.06),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text('Excluded (${ids.length}):', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+        for (final id in ids)
+          InputChip(
+            visualDensity: VisualDensity.compact,
+            label: Text(_empById[id]?['full_name'] as String? ?? '(removed)', style: const TextStyle(fontSize: 12)),
+            deleteIcon: const Icon(Icons.undo, size: 15),
+            deleteButtonTooltipMessage: 'Include again',
+            onDeleted: _isDraft && !_busy ? () => _include(id) : null,
+          ),
+      ]),
+    );
+  }
 
   // ── status transitions ──────────────────────────────────────────────────────
   Future<void> _setStatus(String status) async {
@@ -517,6 +621,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
           ]),
         ]),
       ),
+      _excludedBar(),
       const Divider(height: 1),
       Expanded(child: _items.isEmpty
           ? const Center(child: Text('No payslips — press Regenerate', style: TextStyle(color: AppTheme.textSecondary)))
@@ -553,6 +658,12 @@ class _State extends ConsumerState<HrPayrollScreen> {
           Expanded(flex: 2, child: Text(_nf.format(net), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
           const SizedBox(width: 6),
           IconButton(icon: const Icon(Icons.receipt_long_outlined, size: 18), tooltip: 'Payslip PDF', onPressed: () => _printPayslip(item)),
+          if (_isDraft)
+            IconButton(
+              icon: Icon(Icons.person_remove_outlined, size: 18, color: Colors.red.shade400),
+              tooltip: 'Exclude from this payroll',
+              onPressed: _busy ? null : () => _exclude(item),
+            ),
         ]),
       ),
     );
