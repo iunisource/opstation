@@ -46,6 +46,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
   void initState() {
     super.initState();
     _load().then((_) => _openFocus());
+    _loadNotes();
   }
 
   String _fmt(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
@@ -277,7 +278,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
 
       // run row (create or reuse)
       final runId = existing?['id'] as String? ?? 'pr_${DateTime.now().microsecondsSinceEpoch}';
-      final nowIso = DateTime.now().toIso8601String();
+      final nowIso = DateTime.now().toUtc().toIso8601String();
       if (existing == null) {
         await client.from('hr_payroll_runs').insert({
           'id': runId, 'org_id': orgId, 'period': period, 'status': 'draft',
@@ -628,6 +629,23 @@ class _State extends ConsumerState<HrPayrollScreen> {
   }
 
   bool get _isDraft => (_run?['status'] as String? ?? 'draft') == 'draft';
+
+  // ── footer notes (Admin Settings → Payroll footer notes) ─────────────────────
+  String? _slipNote, _regNote;
+  Future<void> _loadNotes() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('app_config').select('key, value').eq('org_id', orgId)
+          .inFilter('key', ['hr.payslip_note_enabled', 'hr.payslip_note_text', 'hr.payroll_register_note_enabled', 'hr.payroll_register_note_text']);
+      final cfg = <String, String>{for (final r in rows as List) '${r['key']}': '${r['value'] ?? ''}'};
+      String? pick(String on, String text) => cfg[on] == 'true' && (cfg[text] ?? '').trim().isNotEmpty ? cfg[text]!.trim() : null;
+      _slipNote = pick('hr.payslip_note_enabled', 'hr.payslip_note_text');
+      _regNote = pick('hr.payroll_register_note_enabled', 'hr.payroll_register_note_text');
+    } catch (_) {}
+  }
+
+  String _noteHtml(String? note) => note == null ? ''
+      : '<div style="margin-top:16px;padding-top:8px;border-top:1px solid #ddd;font-size:11px;color:#333;white-space:pre-wrap">${_esc(note)}</div>';
 
   // ── footprints (generated / approved / paid) ──────────────────────────────────
   final Map<String, String?> _sigCache = {};
@@ -1102,7 +1120,7 @@ ${_printWatermark(run)}
 ${(item['remarks'] != null && (item['remarks'] as String).isNotEmpty) ? '<div style="margin-top:10px;font-size:11px"><b>Remarks:</b> ${_esc(item['remarks'] as String?)}</div>' : ''}
 ${_printFootprints(run)}
 <div class="sign"><div>Employee signature</div><div>Authorised signature</div></div>
-<div class="foot">Generated ${_esc(DateFormat('d MMM yyyy HH:mm').format(DateTime.now()))} · ${_esc(_orgName)}</div>
+${_noteHtml(_slipNote)}
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
     _open(content);
@@ -1155,7 +1173,7 @@ ${_printWatermark(run)}
 <td style="text-align:right">${_nf.format(_sum('net'))}</td></tr></tfoot>
 </table>
 ${_printFootprints(run)}
-<div class="foot">Generated ${_esc(DateFormat('d MMM yyyy HH:mm').format(DateTime.now()))} · ${_esc(_orgName)}</div>
+${_noteHtml(_regNote)}
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
     _open(content);

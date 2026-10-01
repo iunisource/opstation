@@ -1759,6 +1759,9 @@ class _ErpAdminSettingsScreenState
                   const SizedBox(height: 16),
                   _LedgerMessagesPanel(
                       orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                  const SizedBox(height: 16),
+                  _PayrollNotesPanel(
+                      orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   if (_values['org.hide_main_groups_by_branch'] ?? false) ...[
                     const SizedBox(height: 16),
                     _HiddenGroupsPanel(
@@ -2942,6 +2945,103 @@ class _NotificationsEntry extends StatelessWidget {
           onPressed: () => Navigator.of(context, rootNavigator: true).push(MaterialPageRoute(
               builder: (_) => NotificationRulesScreen(orgId: orgId))),
         ),
+      ]),
+    );
+  }
+}
+
+
+/// Footer notes printed on HR payroll documents, each with its own on/off:
+///   Payslip          → hr.payslip_note_enabled / hr.payslip_note_text
+///   Payroll register → hr.payroll_register_note_enabled / hr.payroll_register_note_text
+class _PayrollNotesPanel extends StatefulWidget {
+  final String orgId;
+  const _PayrollNotesPanel({required this.orgId});
+  @override
+  State<_PayrollNotesPanel> createState() => _PayrollNotesPanelState();
+}
+
+class _PayrollNotesPanelState extends State<_PayrollNotesPanel> {
+  final _slipCtrl = TextEditingController();
+  final _regCtrl = TextEditingController();
+  bool _slipOn = false, _regOn = false, _loading = true;
+
+  @override
+  void initState() { super.initState(); _load(); }
+  @override
+  void dispose() { _slipCtrl.dispose(); _regCtrl.dispose(); super.dispose(); }
+
+  Future<void> _load() async {
+    if (widget.orgId.isEmpty) { setState(() => _loading = false); return; }
+    try {
+      final rows = await Supabase.instance.client.from('app_config').select('key, value').eq('org_id', widget.orgId)
+          .inFilter('key', ['hr.payslip_note_enabled', 'hr.payslip_note_text', 'hr.payroll_register_note_enabled', 'hr.payroll_register_note_text']);
+      final cfg = <String, String>{};
+      for (final r in rows as List) { cfg[r['key'] as String] = r['value'] as String? ?? ''; }
+      if (!mounted) return;
+      setState(() {
+        _slipOn = cfg['hr.payslip_note_enabled'] == 'true';
+        _regOn = cfg['hr.payroll_register_note_enabled'] == 'true';
+        _slipCtrl.text = cfg['hr.payslip_note_text'] ?? '';
+        _regCtrl.text = cfg['hr.payroll_register_note_text'] ?? '';
+        _loading = false;
+      });
+    } catch (_) { if (mounted) setState(() => _loading = false); }
+  }
+
+  Future<void> _set(String key, String value) async {
+    if (widget.orgId.isEmpty) return;
+    try {
+      await Supabase.instance.client.from('app_config').upsert(
+        {'key': key, 'value': value, 'org_id': widget.orgId}, onConflict: 'key,org_id,branch_id');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+    }
+  }
+
+  Widget _row(String title, String hint, bool on, ValueChanged<bool> onToggle, TextEditingController ctrl, VoidCallback onSave) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(title, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppTheme.textSecondary))),
+          Switch(value: on, onChanged: onToggle),
+        ]),
+        if (on) ...[
+          const SizedBox(height: 4),
+          TextField(
+            controller: ctrl, maxLines: 3, style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(isDense: true, hintText: hint,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: const OutlineInputBorder()),
+            onSubmitted: (_) => onSave(),
+            onTapOutside: (_) { FocusManager.instance.primaryFocus?.unfocus(); onSave(); },
+          ),
+        ],
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Payroll footer notes', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        const Text('A note printed at the bottom of every payslip and of the payroll register. Toggle each on and type its note.',
+          style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35)),
+        const SizedBox(height: 14),
+        if (_loading) const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Center(child: CircularProgressIndicator()))
+        else ...[
+          _row('Payslip footer note', 'e.g. Any query about this payslip must be raised within 3 days.', _slipOn,
+            (v) { setState(() => _slipOn = v); _set('hr.payslip_note_enabled', v ? 'true' : 'false'); },
+            _slipCtrl, () => _set('hr.payslip_note_text', _slipCtrl.text.trim())),
+          _row('Payroll register footer note', 'e.g. Salaries are paid by the 7th of the following month.', _regOn,
+            (v) { setState(() => _regOn = v); _set('hr.payroll_register_note_enabled', v ? 'true' : 'false'); },
+            _regCtrl, () => _set('hr.payroll_register_note_text', _regCtrl.text.trim())),
+        ],
       ]),
     );
   }
