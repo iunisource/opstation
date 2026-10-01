@@ -1096,7 +1096,7 @@ ${_printWatermark(run)}
 <h1>Payroll Register — ${_esc(_periodLabel(run['period'] as String))}</h1>
 <div class="sub">${_items.length} employees · Status: ${_esc((run['status'] as String? ?? 'draft'))}</div>
 <table>
-<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Unpaid d</th><th style="text-align:right">Absence deduction</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus (incl. paid leave)</th><th style="text-align:right">Other / advance</th><th style="text-align:right">Net</th></tr></thead>
+<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Absents</th><th style="text-align:right">Absence deduction</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus (incl. paid leave)</th><th style="text-align:right">Other / advance</th><th style="text-align:right">Net</th></tr></thead>
 <tbody>$rows</tbody>
 <tfoot><tr><td colspan="2">Total</td>
 <td style="text-align:right">${_nf.format(_sum('basic'))}</td><td></td>
