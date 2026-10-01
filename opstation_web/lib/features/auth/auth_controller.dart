@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth/org_header.dart';
+import '../../core/auth/session_diagnostics.dart';
 
 const _kSessionKey = 'opstation_web_session';
 
@@ -78,6 +79,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
         case AuthChangeEvent.signedOut:
         case AuthChangeEvent.userDeleted:
           // Session ended (expired refresh token, revoked, etc.) — kick to login
+          if (state.value != null) SessionDiagnostics.recordUnexpectedSignOut();
           final p = await SharedPreferences.getInstance();
           await p.remove(_kSessionKey);
           if (state.value != null) state = const AsyncData(null);
@@ -467,9 +469,11 @@ class AuthController extends AsyncNotifier<WebUser?> {
 
   Future<void> signOut() async {
     applyOrgHeader(null);
+    SessionDiagnostics.intentionalSignOut = true;
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (_) {}
+    SessionDiagnostics.intentionalSignOut = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kSessionKey);
     state = const AsyncData(null);

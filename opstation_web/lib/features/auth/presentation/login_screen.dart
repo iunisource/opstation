@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../auth_controller.dart';
+import '../../../core/auth/session_diagnostics.dart';
 import '../../../core/theme/app_theme.dart';
 import 'signup_wizard_screen.dart';
 
@@ -34,10 +35,54 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   int _rotIndex = 0;
   Timer? _rotTimer;
 
+  // Shown above the form: the computer clock is wrong, and/or the last session
+  // ended on its own (not by pressing Log out).
+  Duration? _skew;
+  DateTime? _droppedAt;
+
+  Future<void> _diagnose() async {
+    final dropped = SessionDiagnostics.takeUnexpectedSignOut();
+    final skew = await SessionDiagnostics.clockSkew();
+    if (!mounted) return;
+    setState(() {
+      _droppedAt = dropped;
+      _skew = (skew != null && skew.abs() > const Duration(minutes: 2)) ? skew : null;
+    });
+  }
+
+  Widget _diagnosticBanner() {
+    if (_skew == null && _droppedAt == null) return const SizedBox.shrink();
+    final clock = _skew != null;
+    final now = DateTime.now();
+    final text = clock
+        ? 'This computer\'s clock is ${SessionDiagnostics.describe(_skew!)} (it shows '
+          '${now.day}/${now.month}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}). '
+          'Sign-in will drop after a few seconds until it is fixed. In Windows: Settings → Time & language → '
+          'Date & time → turn on "Set time automatically" and "Set time zone automatically", then press "Sync now".'
+        : 'You were signed out because your session ended unexpectedly (not by pressing Log out). '
+          'If this keeps happening, check this computer\'s date, time and time zone, then sign in again.';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: (clock ? AppTheme.danger : Colors.orange).withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: (clock ? AppTheme.danger : Colors.orange).withOpacity(0.4)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(clock ? Icons.schedule : Icons.info_outline, size: 18, color: clock ? AppTheme.danger : Colors.orange.shade800),
+        const SizedBox(width: 10),
+        Expanded(child: Text(text, style: const TextStyle(fontSize: 12.5, height: 1.4, color: _ink))),
+      ]),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _loadRemember();
+    _diagnose();
     _rotTimer = Timer.periodic(const Duration(milliseconds: 2600), (_) {
       if (mounted) setState(() => _rotIndex = (_rotIndex + 1) % _rotWords.length);
     });
@@ -558,6 +603,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ]),
                 const SizedBox(height: 36),
               ],
+              _diagnosticBanner(),
               const Text('Welcome back',
                   style: TextStyle(
                       fontSize: 28,
