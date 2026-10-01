@@ -87,6 +87,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin; }
   bool get _pending => _current != null && (_current!['approval_status'] as String? ?? 'approved') == 'pending';
   bool get _voided => _current != null && _current!['is_voided'] == true;
+  bool get _left => _current != null && _current!['status'] == 'left';
+  bool _showLeft = false; // directory list: show employees who have left
   int? _min(String? hhmm) { if (hhmm == null || hhmm.isEmpty) return null; final p = hhmm.split(':'); if (p.length != 2) return null; final h = int.tryParse(p[0]), m = int.tryParse(p[1]); if (h == null || m == null) return null; return h * 60 + m; }
 
   static const _genders = [
@@ -540,6 +542,94 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     } catch (e) { _snack('Approve failed: $e'); }
   }
 
+  // ── Leaving ───────────────────────────────────────────────────────────────
+  /// Employee leaves (resigned / terminated / retired …). Kept in the directory
+  /// as a record; gone from attendance, the kiosk, leave, boards and payroll
+  /// (payroll still pays the final month up to the last working day).
+  Future<void> _markLeft() async {
+    if (!_canWrite) return;
+    final e = _current; if (e == null) return;
+    DateTime day = DateTime.now();
+    String reason = 'Resigned';
+    final note = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
+      title: Text('Mark ${e['full_name'] ?? 'employee'} as left'),
+      content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Last working day', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        const SizedBox(height: 4),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.calendar_today_outlined, size: 14),
+          label: Text(DateFormat('d MMM yyyy').format(day)),
+          onPressed: () async {
+            final d = await showDatePicker(context: ctx, initialDate: day, firstDate: DateTime(2015), lastDate: DateTime(2100));
+            if (d != null) setLocal(() => day = d);
+          }),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: reason, isDense: true,
+          decoration: const InputDecoration(labelText: 'Reason', isDense: true, border: OutlineInputBorder()),
+          items: const ['Resigned', 'Terminated', 'Retired', 'Contract ended', 'Absconded', 'Other']
+              .map((r) => DropdownMenuItem(value: r, child: Text(r, style: TextStyle(fontSize: 13)))).toList(),
+          onChanged: (v) => setLocal(() => reason = v ?? reason)),
+        const SizedBox(height: 10),
+        TextField(controller: note, maxLines: 2, decoration: const InputDecoration(labelText: 'Note (optional)', isDense: true, border: OutlineInputBorder())),
+        const SizedBox(height: 10),
+        const Text('After this date the employee no longer appears in attendance, the kiosk, leave, boards, reviews or payroll. '
+            'The last month is still paid up to this day. The profile stays in the directory as a record (prints carry a LEFT watermark). '
+            'Their attendance card is released so it can be given to someone else.',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700, foregroundColor: Colors.white),
+          child: const Text('Mark as left')),
+      ],
+    )));
+    if (ok != true) return;
+    try {
+      final client = Supabase.instance.client;
+      final now = DateTime.now().toIso8601String();
+      await client.from('hr_employees').update({
+        'status': 'left',
+        'left_on': DateFormat('yyyy-MM-dd').format(day),
+        'left_reason': reason,
+        'left_note': note.text.trim().isEmpty ? null : note.text.trim(),
+        'left_marked_by': _userId, 'left_marked_at': now,
+        'left_card_uid': e['card_uid'], 'card_uid': null,
+        'notify_punch': false,
+        'updated_at': now,
+      }).eq('id', e['id'] as String);
+      final updated = await client.from('hr_employees').select().eq('id', e['id'] as String).single();
+      if (mounted) _loadEmployee(updated);
+      await _loadEmployees();
+      _snack('${e['full_name']} marked as left on ${DateFormat('d MMM yyyy').format(day)}.');
+    } catch (err) { _snack('Could not mark as left: $err'); }
+  }
+
+  Future<void> _rejoin() async {
+    final e = _current; if (e == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Rejoin employee?'),
+      content: Text('${e['full_name']} becomes active again and reappears in attendance and payroll. '
+          'Set a new join date on the profile if they are rejoining after a gap.'),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Rejoin'))],
+    ));
+    if (ok != true) return;
+    try {
+      final client = Supabase.instance.client;
+      await client.from('hr_employees').update({
+        'status': 'active', 'left_on': null, 'left_reason': null, 'left_note': null,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', e['id'] as String);
+      final updated = await client.from('hr_employees').select().eq('id', e['id'] as String).single();
+      if (mounted) _loadEmployee(updated);
+      await _loadEmployees();
+      _snack('${e['full_name']} is active again.');
+    } catch (err) { _snack('Could not rejoin: $err'); }
+  }
+
   Future<void> _void() async {
     if (!_canWrite) return;
     final id = _current?['id'] as String?; if (id == null) return;
@@ -699,8 +789,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final cardH = 54.0 * PdfPageFormat.mm;
     doc.addPage(pw.Page(
       pageFormat: PdfPageFormat(cardW, cardH, marginAll: 0),
-      build: (ctx) {
-        return pw.Container(
+      build: (ctx) => pw.Stack(children: [
+        pw.Container(
           decoration: pw.BoxDecoration(
             border: pw.Border.all(color: brand, width: 0.8),
             borderRadius: pw.BorderRadius.circular(6),
@@ -761,8 +851,15 @@ class _State extends ConsumerState<HrEmployeesScreen> {
               )),
             ],
           ),
-        );
-      },
+        ),
+        // Employee has left: the card is no longer valid.
+        if (e['status'] == 'left')
+          pw.Positioned.fill(child: pw.Center(child: pw.Transform.rotate(
+            angle: 0.35,
+            child: pw.Text('LEFT', style: pw.TextStyle(fontSize: 44, fontWeight: pw.FontWeight.bold,
+                color: PdfColor.fromInt(0x55C62828), letterSpacing: 6)),
+          ))),
+      ]),
     ));
     await outputPdf(await doc.save(), 'Employee Card - ' + code);
   }
@@ -777,7 +874,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final shift = _shiftName[e['shift_id']] ?? '';
     final sal = (e['basic_salary'] as num?);
     final photo = (e['photo_url'] as String?);
-    final status = (e['is_voided'] == true) ? 'Voided' : (((e['approval_status'] ?? 'approved') == 'pending') ? 'Review Pending' : 'Approved');
+    final status = (e['is_voided'] == true) ? 'Voided' : (e['status'] == 'left' ? 'Left' : (((e['approval_status'] ?? 'approved') == 'pending') ? 'Review Pending' : 'Approved'));
     final notes = e['notes'] as String?;
     final docsHtml = _docs.isEmpty ? '' : '<h3>Documents</h3><ul>' + _docs.map((d) => '<li>${esc(d['name'] as String?)}</li>').join('') + '</ul>';
     final bankHtml = (e['bank_name'] != null || e['bank_account'] != null)
@@ -798,7 +895,9 @@ td{padding:4px 6px;border-bottom:1px solid #f0f0f0;vertical-align:top}
 td.k{color:#666;width:170px}
 ul{font-size:12px;margin:4px 0 0 18px}
 @media print{body{padding:8px}}
+.wm{position:fixed;top:38%;left:0;right:0;text-align:center;font-size:130px;font-weight:900;color:rgba(198,40,40,.12);transform:rotate(-28deg);letter-spacing:14px;pointer-events:none}
 </style></head><body>
+${e['status'] == 'left' ? '<div class="wm">LEFT</div>' : ''}
 <div class="head">
 ${photo != null && photo.isNotEmpty ? '<img class="photo" src="${esc(photo)}"/>' : '<div class="ph">&#128100;</div>'}
 <div><h1>${esc(e['full_name'] as String?)}</h1>
@@ -806,7 +905,7 @@ ${photo != null && photo.isNotEmpty ? '<img class="photo" src="${esc(photo)}"/>'
 <div class="tag">$status</div></div>
 </div>
 <h3>Employment</h3><table>
-${row('Branch', branch)}${row('Designation', desig)}${row('Department', dept)}${row('Employment type', e['employment_type'] as String?)}${row('Shift', shift)}${row('Join date', e['join_date'] as String?)}${row('Status', e['status'] as String?)}${(sal != null && sal > 0) ? row('Basic salary', sal.toString()) : ''}
+${row('Branch', branch)}${row('Designation', desig)}${row('Department', dept)}${row('Employment type', e['employment_type'] as String?)}${row('Shift', shift)}${row('Join date', e['join_date'] as String?)}${row('Status', e['status'] as String?)}${row('Left on', e['left_on'] as String?)}${row('Reason for leaving', e['left_reason'] as String?)}${row('Leaving note', e['left_note'] as String?)}${(sal != null && sal > 0) ? row('Basic salary', sal.toString()) : ''}
 </table>
 <h3>Personal</h3><table>
 ${row('Father name', e['father_name'] as String?)}${row('CNIC', e['cnic'] as String?)}${row('Gender', e['gender'] as String?)}${row('Date of birth', e['date_of_birth'] as String?)}${row('Phone', e['phone'] as String?)}${row('Email', e['email'] as String?)}${row('Emergency contact', e['emergency_contact'] as String?)}${row('Address', e['address'] as String?)}
@@ -825,12 +924,12 @@ $docsHtml
   Widget _statusChip() {
     final voided = _voided;
     final pending = _pending;
-    final label = voided ? 'Voided' : (pending ? 'Review Pending' : 'Approved');
-    final MaterialColor c = voided ? Colors.grey : (pending ? Colors.orange : Colors.green);
+    final label = voided ? 'Voided' : (_left ? 'Left' : (pending ? 'Review Pending' : 'Approved'));
+    final MaterialColor c = voided ? Colors.grey : (_left ? Colors.red : (pending ? Colors.orange : Colors.green));
     return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(12), border: Border.all(color: c.withOpacity(0.4))),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(voided ? Icons.block : (pending ? Icons.hourglass_top : Icons.verified), size: 13, color: c.shade700),
+        Icon(voided ? Icons.block : (_left ? Icons.logout : (pending ? Icons.hourglass_top : Icons.verified)), size: 13, color: c.shade700),
         const SizedBox(width: 4),
         Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c.shade700)),
       ]));
@@ -882,7 +981,10 @@ $docsHtml
     final canAdd = access?.canAddDoc('hr_employees') ?? false;
     final canEdit = access?.canEditDoc('hr_employees') ?? false;
     _canWrite = _current == null ? canAdd : canEdit;
-    final filtered = _listSearch.isEmpty ? _employees : _employees.where((e) {
+    final leftCount = _employees.where((e) => e['status'] == 'left').length;
+    final filtered = _employees.where((e) {
+      if (!_showLeft && e['status'] == 'left' && _current?['id'] != e['id']) return false;
+      if (_listSearch.isEmpty) return true;
       return matchesQuery(
         '${e['full_name'] ?? ''} ${e['employee_code'] ?? ''} ${e['phone'] ?? ''} ${e['cnic'] ?? ''}',
         _listSearch);
@@ -903,6 +1005,15 @@ $docsHtml
               ]),
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search name, code, phone, CNIC...', prefixIcon: Icon(Icons.search, size: 15), isDense: true, border: OutlineInputBorder()), onChanged: (v) => setState(() => _listSearch = v)),
+              if (leftCount > 0)
+                InkWell(
+                  onTap: () => setState(() => _showLeft = !_showLeft),
+                  child: Padding(padding: const EdgeInsets.only(top: 6), child: Row(children: [
+                    Icon(_showLeft ? Icons.check_box : Icons.check_box_outline_blank, size: 16, color: AppTheme.textSecondary),
+                    const SizedBox(width: 6),
+                    Text('Show employees who left ($leftCount)', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ])),
+                ),
             ])),
           Expanded(child: _loading ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
             : filtered.isEmpty ? const Center(child: Text('No employees', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
@@ -911,8 +1022,9 @@ $docsHtml
                 final active = (e['status'] as String? ?? 'active') == 'active';
                 final voided = e['is_voided'] == true;
                 final pending = (e['approval_status'] as String? ?? 'approved') == 'pending';
-                final String tag = voided ? 'Voided' : (pending ? 'Review Pending' : (active ? 'Active' : 'Inactive'));
-                final MaterialColor tagColor = voided ? Colors.grey : (pending ? Colors.orange : (active ? Colors.green : Colors.grey));
+                final left = e['status'] == 'left';
+                final String tag = voided ? 'Voided' : (pending ? 'Review Pending' : (left ? 'Left' : (active ? 'Active' : 'Inactive')));
+                final MaterialColor tagColor = voided ? Colors.grey : (pending ? Colors.orange : (left ? Colors.red : (active ? Colors.green : Colors.grey)));
                 return InkWell(onTap: () => _loadEmployee(e), child: Container(
                   color: sel ? AppTheme.primary.withOpacity(0.07) : null,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1093,6 +1205,10 @@ $docsHtml
           icon: const Icon(Icons.verified_outlined, size: 15), label: const Text('Approve', style: TextStyle(fontSize: 12)),
           style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9), minimumSize: Size.zero),
           onPressed: _approve)),
+      if (_current != null && !_voided && !_left && !_pending && _canWrite)
+        TextButton.icon(icon: Icon(Icons.logout, size: 16, color: Colors.red.shade700), label: Text('Mark as left', style: TextStyle(fontSize: 12, color: Colors.red.shade700)), onPressed: _markLeft),
+      if (_current != null && _left && _isAdmin)
+        TextButton.icon(icon: const Icon(Icons.undo, size: 16), label: const Text('Rejoin', style: TextStyle(fontSize: 12)), onPressed: _rejoin),
       if (_current != null && !_voided && _canWrite)
         TextButton.icon(icon: Icon(Icons.block, size: 16, color: Colors.orange.shade800), label: Text('Void', style: TextStyle(fontSize: 12, color: Colors.orange.shade800)), onPressed: _void),
       if (_isAdmin && _voided)
@@ -1137,7 +1253,13 @@ $docsHtml
       border: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
     style: const TextStyle(fontSize: 12));
 
-  Widget _statusToggle() => IgnorePointer(ignoring: !_canWrite, child: Container(
+  Widget _statusToggle() => _status == 'left'
+      ? Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(color: Colors.red.withOpacity(0.07), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.red.withOpacity(0.3))),
+          child: Text('Left${_current?['left_on'] != null ? ' on ${_current!['left_on']}' : ''}${(_current?['left_reason'] as String?)?.isNotEmpty == true ? ' · ${_current!['left_reason']}' : ''}',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.red.shade700)))
+      : IgnorePointer(ignoring: !_canWrite, child: Container(
     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
     decoration: BoxDecoration(borderRadius: BorderRadius.circular(4), border: Border.all(color: const Color(0xFFE0E0E0))),
     child: Row(children: [

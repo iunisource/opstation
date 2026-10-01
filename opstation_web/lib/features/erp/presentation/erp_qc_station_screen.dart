@@ -288,12 +288,12 @@ window.__qcbt = window.__qcbt || {
     if (org == null) return;
     try {
       var emp = await Supabase.instance.client.from('hr_employees')
-          .select('id, full_name, card_uid, employee_code, is_voided')
+          .select('id, full_name, card_uid, employee_code, is_voided, status')
           .eq('org_id', org).eq('card_uid', code).maybeSingle();
       emp ??= await Supabase.instance.client.from('hr_employees')
-          .select('id, full_name, card_uid, employee_code, is_voided')
+          .select('id, full_name, card_uid, employee_code, is_voided, status')
           .eq('org_id', org).eq('employee_code', code).maybeSingle();
-      if (emp == null || emp['is_voided'] == true) {
+      if (emp == null || emp['is_voided'] == true || emp['status'] == 'left') {
         _snack('Card not recognised: "$code"');
         _refocus();
         return;
