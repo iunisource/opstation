@@ -71,7 +71,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   bool _notifyPunch = false;
   // form state
   String? _deptId, _desigId, _branchId, _gender, _empType;
-  DateTime? _dob, _joinDate;
+  DateTime? _dob, _joinDate, _leftOn;
   String _status = 'active';
   String? _shiftId;
   String? _photoUrl;
@@ -294,7 +294,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _advAcctId = null; _advBal = null;
       _deptId = null; _desigId = null; _gender = null; _empType = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
-      _dob = null; _joinDate = null;
+      _dob = null; _joinDate = null; _leftOn = null;
       _shiftId = null; _photoUrl = null; _notifyPunch = false;
       _docs = [];
     });
@@ -323,6 +323,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _status = e['status'] as String? ?? 'active';
       _dob = e['date_of_birth'] != null ? DateTime.tryParse(e['date_of_birth'] as String) : null;
       _joinDate = e['join_date'] != null ? DateTime.tryParse(e['join_date'] as String) : null;
+      _leftOn = e['left_on'] != null ? DateTime.tryParse(e['left_on'] as String) : null;
       _shiftId = e['shift_id'] as String?;
       _photoUrl = e['photo_url'] as String?;
       _notifyPunch = e['notify_punch'] == true;
@@ -453,6 +454,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'department_id': _deptId, 'designation_id': _desigId, 'branch_id': _branchId,
         'employment_type': _empType,
         'join_date': _joinDate != null ? DateFormat('yyyy-MM-dd').format(_joinDate!) : null,
+        'left_on': _leftOn != null ? DateFormat('yyyy-MM-dd').format(_leftOn!) : null,
         'status': _status, 'basic_salary': double.tryParse(_salary.text) ?? 0,
         'shift_id': _shiftId, 'photo_url': _photoUrl,
         'notify_punch': _notifyPunch, 'notify_email': _t(_notifyEmail),
@@ -973,9 +975,14 @@ $docsHtml
               ]),
               const SizedBox(height: 12),
               _fieldRow([
-                _labeled('Paid leave days / month', _tf(_plDays, hint: 'Blank = company default', numeric: true)),
+                _labeled('Paid leave days / month', _tf(_plDays, hint: 'Blank = shift / company default', numeric: true)),
+                _labeled('Left on (last working day)', Row(children: [
+                  Expanded(child: _dateField(_leftOn, (d) => setState(() => _leftOn = d))),
+                  if (_leftOn != null && _canWrite)
+                    IconButton(icon: const Icon(Icons.close, size: 16), tooltip: 'Clear', onPressed: () => setState(() => _leftOn = null)),
+                ])),
                 const SizedBox.shrink(),
-              ], flex: const [1, 3]),
+              ], flex: const [1, 1, 2]),
             ]),
             const SizedBox(height: 16),
             _card('Personal', [
@@ -1282,10 +1289,38 @@ $docsHtml
       final graceCtrl = TextEditingController(text: '0');
       final halfCtrl = TextEditingController();
       final penaltyDaysCtrl = TextEditingController(text: '1');
+      final plCtrl = TextEditingController();       // paid leave days / month (blank = company default)
+      final restMinCtrl = TextEditingController();  // days worked in the week to earn the rest day
       bool penalize = false;
+      // Company defaults (employees with no shift, and shifts left blank).
+      final defPlCtrl = TextEditingController();
+      final defRestCtrl = TextEditingController();
+      bool defLoaded = false;
+      Future<void> loadDefaults(void Function(void Function()) setLocal) async {
+        final orgId = _orgId; if (orgId == null) return;
+        try {
+          final rows = await Supabase.instance.client.from('app_config').select('key, value').eq('org_id', orgId)
+              .inFilter('key', ['hr.paid_leave_days', 'hr.rest_day_min_days']);
+          for (final r in (rows as List)) {
+            if (r['key'] == 'hr.paid_leave_days') defPlCtrl.text = '${r['value'] ?? ''}';
+            if (r['key'] == 'hr.rest_day_min_days') defRestCtrl.text = '${r['value'] ?? ''}';
+          }
+        } catch (_) {}
+        if (defRestCtrl.text.isEmpty) defRestCtrl.text = '3';
+        setLocal(() {});
+      }
+      Future<void> saveDefault(String key, String value) async {
+        final orgId = _orgId; if (orgId == null) return;
+        try {
+          await Supabase.instance.client.from('app_config').delete().eq('org_id', orgId).eq('key', key);
+          await Supabase.instance.client.from('app_config').insert({'org_id': orgId, 'key': key, 'value': value.trim()});
+          _snack('Saved. Regenerate draft payroll runs to apply.');
+        } catch (e) { _snack('Could not save: $e'); }
+      }
       String? editId; String? sStart; String? sEnd;
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       return StatefulBuilder(builder: (ctx, setLocal) {
+        if (!defLoaded) { defLoaded = true; loadDefaults(setLocal); }
         Future<void> refresh() async { await _loadShifts(); setLocal(() {}); }
         double? calc() { final a = _min(sStart), b = _min(sEnd); if (a == null || b == null) return null; var d = b - a; if (d <= 0) d += 1440; return (d / 60 * 100).round() / 100; }
         Future<void> pick(bool isStart) async {
@@ -1297,17 +1332,18 @@ $docsHtml
           if (nameCtrl.text.trim().isEmpty) { _snack('Shift name required'); return; }
           final half = double.tryParse(halfCtrl.text.trim());
           final penaltyDays = int.tryParse(penaltyDaysCtrl.text.trim()) ?? 1;
-          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'half_day_hours': (half != null && half > 0) ? half : null, 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'penalize_unapproved_absence': penalize, 'absence_penalty_days': penalize ? (penaltyDays < 0 ? 0 : penaltyDays) : 1, 'is_active': true};
+          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'half_day_hours': (half != null && half > 0) ? half : null, 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'penalize_unapproved_absence': penalize, 'absence_penalty_days': penalize ? (penaltyDays < 0 ? 0 : penaltyDays) : 1, 'is_active': true,
+            'paid_leave_days': double.tryParse(plCtrl.text.trim()), 'rest_day_min_days': double.tryParse(restMinCtrl.text.trim())};
           try {
             if (editId == null) { payload['id'] = 'shift_' + DateTime.now().millisecondsSinceEpoch.toString(); await Supabase.instance.client.from('hr_shifts').insert(payload); }
             else { await Supabase.instance.client.from('hr_shifts').update(payload).eq('id', editId!); }
-            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; penalize = false; sStart = null; sEnd = null; editId = null; });
+            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; plCtrl.clear(); restMinCtrl.clear(); penalize = false; sStart = null; sEnd = null; editId = null; });
             await refresh();
           } catch (e) { _snack('Save failed: $e'); }
         }
         return AlertDialog(
           title: Text(editId == null ? 'Shifts' : 'Edit shift'),
-          content: SizedBox(width: isNarrow(context) ? double.maxFinite : 470, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          content: SizedBox(width: isNarrow(context) ? double.maxFinite : 470, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
             // Org-wide weekly rest day (auto-marked in the attendance register).
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1326,6 +1362,33 @@ $docsHtml
                   ],
                   onChanged: !_canWrite ? null : (v) async { await _saveOrgRestDay(v); setLocal(() {}); },
                 ),
+              ]),
+            ),
+            const SizedBox(height: 8),
+            // Company payroll defaults (used when a shift leaves them blank, and for employees with no shift).
+            Container(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE0E0E0))),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Company defaults (no shift, or shift left blank)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(child: TextField(controller: defPlCtrl, enabled: _canWrite, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Paid leave days / month', isDense: true, border: OutlineInputBorder()))),
+                  const SizedBox(width: 8),
+                  Expanded(child: TextField(controller: defRestCtrl, enabled: _canWrite, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Days worked to earn rest day', isDense: true, border: OutlineInputBorder()))),
+                  const SizedBox(width: 4),
+                  IconButton(icon: const Icon(Icons.save_outlined, size: 18), tooltip: 'Save defaults',
+                    onPressed: !_canWrite ? null : () async {
+                      await saveDefault('hr.paid_leave_days', defPlCtrl.text);
+                      await saveDefault('hr.rest_day_min_days', defRestCtrl.text);
+                      setLocal(() {});
+                    }),
+                ]),
+                const SizedBox(height: 4),
+                const Text('Rest day is paid only if the employee worked at least this many days (½ day counts ½) in the 6 days before it; otherwise it counts as an absent. 0 = always paid. Leave (L) is not a worked day.',
+                    style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
               ]),
             ),
             const SizedBox(height: 10),
@@ -1368,8 +1431,17 @@ $docsHtml
               ]),
             ),
             const SizedBox(height: 8),
+            // Payroll policy for this shift (blank = company default).
             Row(children: [
-              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; penalize = false; sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
+              Expanded(child: TextField(controller: plCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: 'Paid leave days / month', hintText: 'default ${defPlCtrl.text.isEmpty ? '0' : defPlCtrl.text}', isDense: true, border: const OutlineInputBorder()))),
+              const SizedBox(width: 8),
+              Expanded(child: TextField(controller: restMinCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: 'Days to earn rest day', hintText: 'default ${defRestCtrl.text.isEmpty ? '3' : defRestCtrl.text}', isDense: true, border: const OutlineInputBorder()))),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; plCtrl.clear(); restMinCtrl.clear(); penalize = false; sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
               const Spacer(),
               ElevatedButton(onPressed: saveShift, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: Text(editId == null ? 'Add shift' : 'Update')),
             ]),
@@ -1380,13 +1452,13 @@ $docsHtml
                   final s = _shifts[i]; final active = s['is_active'] != false;
                   return ListTile(dense: true,
                     title: Text(s['name'] as String? ?? '', style: TextStyle(fontSize: 13, decoration: active ? null : TextDecoration.lineThrough)),
-                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  \u00bd @ ${s['half_day_hours'] ?? ((s['work_hours'] as num?) != null ? ((s['work_hours'] as num) / 2).toStringAsFixed(2) : '\u2014')}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m${s['penalize_unapproved_absence'] == true ? '  \u00b7  penalty +${s['absence_penalty_days'] ?? 1}' : ''}', style: const TextStyle(fontSize: 11)),
+                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  \u00bd @ ${s['half_day_hours'] ?? ((s['work_hours'] as num?) != null ? ((s['work_hours'] as num) / 2).toStringAsFixed(2) : '\u2014')}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m${s['penalize_unapproved_absence'] == true ? '  \u00b7  penalty +${s['absence_penalty_days'] ?? 1}' : ''}${s['paid_leave_days'] != null ? '  \u00b7  paid leave ${s['paid_leave_days']}' : ''}${s['rest_day_min_days'] != null ? '  \u00b7  rest day \u2265${s['rest_day_min_days']}d' : ''}', style: const TextStyle(fontSize: 11)),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); halfCtrl.text = s['half_day_hours']?.toString() ?? ''; penalize = s['penalize_unapproved_absence'] == true; penaltyDaysCtrl.text = (s['absence_penalty_days'] ?? 1).toString(); })),
+                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); halfCtrl.text = s['half_day_hours']?.toString() ?? ''; penalize = s['penalize_unapproved_absence'] == true; penaltyDaysCtrl.text = (s['absence_penalty_days'] ?? 1).toString(); plCtrl.text = s['paid_leave_days']?.toString() ?? ''; restMinCtrl.text = s['rest_day_min_days']?.toString() ?? ''; })),
                       Switch(value: active, onChanged: (v) async { try { await Supabase.instance.client.from('hr_shifts').update({'is_active': v}).eq('id', s['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); } }),
                     ]));
                 })),
-          ])),
+          ]))),
           actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
         );
       });

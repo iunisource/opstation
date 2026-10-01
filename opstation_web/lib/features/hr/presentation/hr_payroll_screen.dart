@@ -182,9 +182,18 @@ class _State extends ConsumerState<HrPayrollScreen> {
       final lastCount = monthEnd.isBefore(yesterday) ? monthEnd : yesterday;
 
       // active, approved employees
-      final empRows = await client.from('hr_employees')
+      // Active employees, plus anyone who left during this month (Left on date),
+      // even if already set inactive. Not those who left before or join after it.
+      final empRows = (await client.from('hr_employees')
           .select()
-          .eq('org_id', orgId).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false);
+          .eq('org_id', orgId).eq('approval_status', 'approved').eq('is_voided', false) as List)
+          .where((e) {
+            final left = DateTime.tryParse('${e['left_on'] ?? ''}');
+            final join = DateTime.tryParse('${e['join_date'] ?? ''}');
+            if (join != null && join.isAfter(monthEnd)) return false;
+            if (left != null) return !left.isBefore(monthStart);
+            return e['status'] == 'active';
+          }).toList();
       // Employees excluded from this run (kept on the run). A new month starts
       // with the same exclusions as the latest earlier run.
       Set<String> excluded = _excludedOf(existing);
@@ -222,7 +231,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
       // attendance for the month
       final attRows = await client.from('hr_attendance')
           .select('employee_id, att_date, status, check_in, is_penalty, review_status')
-          .eq('org_id', orgId).gte('att_date', _fmt(monthStart)).lte('att_date', _fmt(monthEnd));
+          // 6 days before the month too: the first rest day is earned in that week.
+          .eq('org_id', orgId).gte('att_date', _fmt(monthStart.subtract(const Duration(days: 6)))).lte('att_date', _fmt(monthEnd));
       final att = <String, Map<String, Map<String, dynamic>>>{};
       for (final r in List<Map<String, dynamic>>.from(attRows)) {
         final e = r['employee_id'] as String?; final d = r['att_date'] as String?;
@@ -230,8 +240,19 @@ class _State extends ConsumerState<HrPayrollScreen> {
         (att[e] ??= {})[d] = r;
       }
 
-      // Paid leave quota (company default; per-employee override in the directory).
+      // Policies: employee override → shift → company default (Shifts dialog).
       final orgPl = await _orgPaidLeaveDays();
+      double orgRestMin = 3;
+      try {
+        final c = await client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'hr.rest_day_min_days').maybeSingle();
+        final v = double.tryParse('${c?['value'] ?? ''}');
+        if (v != null) orgRestMin = v;
+      } catch (_) {}
+      final shiftById = <String, Map<String, dynamic>>{};
+      try {
+        final sh = await client.from('hr_shifts').select().eq('org_id', orgId);
+        for (final x in List<Map<String, dynamic>>.from(sh)) { shiftById['${x['id']}'] = x; }
+      } catch (_) {}
       // Unapproved absences whose extra (penalty) day was never placed — e.g.
       // entered from an attendance sheet — count the extra day here instead.
       final penaltyFor = <String>{}; // "emp|yyyy-MM-dd" of source dates that HAVE a penalty row
@@ -293,15 +314,40 @@ class _State extends ConsumerState<HrPayrollScreen> {
           }
         }
 
-        double present = 0, absent = 0, penalty = 0, leave = 0, half = 0, holiday = 0, rest = 0, notJoined = 0;
+        // Last day employed (Left on), if within this month.
+        DateTime end = monthEnd;
+        final lo = DateTime.tryParse('${e['left_on'] ?? ''}');
+        if (lo != null && lo.isBefore(monthEnd)) end = DateTime(lo.year, lo.month, lo.day);
+        final shift = shiftById['${e['shift_id'] ?? ''}'];
+        final restMin = (shift?['rest_day_min_days'] as num?)?.toDouble() ?? orgRestMin;
+        final extraPerUnapproved = shift?['penalize_unapproved_absence'] == true
+            ? ((shift?['absence_penalty_days'] as num?)?.toDouble() ?? 1) : 1.0;
+        // Days worked (½ for half day) in the 6 days before [d].
+        double workedBefore(DateTime d) {
+          double w = 0;
+          for (var k = 1; k <= 6; k++) {
+            final st = att[empId]?[_fmt(d.subtract(Duration(days: k)))]?['status'];
+            if (st == 'present') w += 1; else if (st == 'half_day') w += 0.5;
+          }
+          return w;
+        }
+
+        double present = 0, absent = 0, penalty = 0, leave = 0, half = 0, holiday = 0, rest = 0, notJoined = 0, restUnearned = 0;
         double used = 0; // unpaid days that use up the paid-leave quota
         double apprLeave = 0, unappr = 0; // breakdown of `absent` for the payslip label
         for (var d = monthStart; !d.isAfter(lastCount); d = d.add(const Duration(days: 1))) {
           final ds = _fmt(d);
           final row = att[empId]?[ds];
           final st = row?['status'] as String?;
-          if (d.isBefore(start) && row == null) { notJoined++; continue; } // not employed yet — unpaid (rest days too)
-          if (_isRest(d)) { rest++; continue; }
+          if ((d.isBefore(start) || d.isAfter(end)) && row == null) { notJoined++; continue; } // not employed — unpaid (rest days too)
+          if (_isRest(d)) {
+            // Rest day is paid only if earned: worked ≥ restMin days in the 6 days
+            // before it (worked on the rest day itself also counts as paid).
+            final workedToday = st == 'present' || st == 'half_day';
+            if (workedToday || restMin <= 0 || workedBefore(d) >= restMin) { rest++; }
+            else { absent++; used++; restUnearned++; }
+            continue;
+          }
           if (st == 'present') { present++; }
           else if (st == 'half_day') { half++; used += 0.5; }
           else if (st == 'leave') { leave++; }
@@ -315,7 +361,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
               if (row?['review_status'] == 'unapproved') unappr++;
               // Unapproved absence = 1 + 1. Add the extra day when no penalty
               // row was placed for it.
-              if (row?['review_status'] == 'unapproved' && !penaltyFor.contains('$empId|$ds')) { penalty++; used++; }
+              if (row?['review_status'] == 'unapproved' && !penaltyFor.contains('$empId|$ds')) { penalty += extraPerUnapproved; used += extraPerUnapproved; }
             }
           }
           else { absent++; used++; } // no record on a past working day = absent
@@ -326,10 +372,10 @@ class _State extends ConsumerState<HrPayrollScreen> {
         // (which are still listed under Absence) and whatever is left over is
         // the bonus for staying regular. Net effect on pay = quota − used.
         final plOverride = (e['paid_leave_days'] as num?)?.toDouble();
-        final plQuota = plOverride ?? orgPl;
+        final plQuota = plOverride ?? (shift?['paid_leave_days'] as num?)?.toDouble() ?? orgPl;
         double quota = plQuota;
-        if (start.isAfter(monthStart)) {
-          final worked = monthEnd.difference(start).inDays + 1;
+        if (start.isAfter(monthStart) || end.isBefore(monthEnd)) {
+          final worked = end.difference(start).inDays + 1;
           quota = worked < 10 ? 0.0 : (worked / 15).round().toDouble();
           if (quota > plQuota) quota = plQuota;
         }
@@ -372,7 +418,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
           'unpaid_days': unpaid, 'paid_days': calendarDays - unpaid,
           'absence_deduction': _r2(absenceDeduction.toDouble()),
           'allowances': allowances, 'bonus': bonus, 'other_deduction': otherDed, 'advance': advance,
-          'notjoined_days': notJoined, 'approved_leave_days': apprLeave, 'unapproved_days': unappr, 'paid_leave_quota': quota, 'paid_leave_used': used,
+          'notjoined_days': notJoined, 'approved_leave_days': apprLeave, 'unapproved_days': unappr,
+          'rest_unearned_days': restUnearned, 'paid_leave_quota': quota, 'paid_leave_used': used,
           'leave_bonus_days': bonusDays, 'leave_bonus': _r2(leaveBonus.toDouble()),
           if (bal != null) 'advance_balance': _r2(bal),
           if (bal != null) 'advance_account_id': advAcct[empId],
@@ -780,11 +827,6 @@ class _State extends ConsumerState<HrPayrollScreen> {
       appBar: AppBar(
         title: const Text('Payroll', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.beach_access_outlined, size: 20),
-            tooltip: 'Paid leave days (monthly bonus)',
-            onPressed: _busy ? null : _paidLeaveSettings,
-          ),
           Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Center(child: ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
             icon: const Icon(Icons.add, size: 18),
@@ -967,14 +1009,16 @@ class _State extends ConsumerState<HrPayrollScreen> {
     double v(String k) => (it[k] as num?)?.toDouble() ?? 0;
     final appr = v('approved_leave_days'), unappr = v('unapproved_days');
     final absent = v('absent_days'), penalty = v('penalty_days'), half = v('half_days'), nj = v('notjoined_days');
-    final plain = absent - appr - unappr;
+    final restU = v('rest_unearned_days');
+    final plain = absent - appr - unappr - restU;
     final parts = <String>[
       if (appr > 0) 'Leave ${_nf2.format(appr)}',
       if (unappr > 0) 'Unapproved ${_nf2.format(unappr)}',
       if (penalty > 0) '+${_nf2.format(penalty)} extra',
       if (plain > 0) 'Absent ${_nf2.format(plain)}',
+      if (restU > 0) 'Rest day not earned ${_nf2.format(restU)}',
       if (half > 0) '½ day ${_nf2.format(half)}',
-      if (nj > 0) 'Before joining ${_nf2.format(nj)}',
+      if (nj > 0) 'Not employed ${_nf2.format(nj)}',
     ];
     final total = v('unpaid_days');
     if (parts.isEmpty) return 'No days deducted';
@@ -1030,7 +1074,7 @@ ${_printWatermark(run)}
     Calendar days: ${v('calendar_days').toInt()}<br>
     Present: ${_nf2.format(v('present_days'))} · Half: ${_nf2.format(v('half_days'))} · Leave: ${_nf2.format(v('leave_days'))}<br>
     Absent: ${_nf2.format(v('absent_days'))} · Penalty: ${_nf2.format(v('penalty_days'))} · Holiday/Rest: ${_nf2.format(v('holiday_days') + v('restday_days'))}<br>
-    ${v('notjoined_days') > 0 ? 'Before joining: ${_nf2.format(v('notjoined_days'))}<br>' : ''}Unpaid days: <b>${_nf2.format(v('unpaid_days'))}</b> · Per-day: ${_nf2.format(v('per_day'))}<br>
+    ${v('notjoined_days') > 0 ? 'Not employed (before joining / after leaving): ${_nf2.format(v('notjoined_days'))}<br>' : ''}${v('rest_unearned_days') > 0 ? 'Rest days not earned: ${_nf2.format(v('rest_unearned_days'))}<br>' : ''}Unpaid days: <b>${_nf2.format(v('unpaid_days'))}</b> · Per-day: ${_nf2.format(v('per_day'))}<br>
     <span style="color:#b91c1c">${_esc(_deductionSummary(item))}</span><br>
     Paid leave: ${_nf2.format(v('paid_leave_quota'))} days · covers ${_nf2.format(v('paid_leave_used') < v('paid_leave_quota') ? v('paid_leave_used') : v('paid_leave_quota'))} absent · unused ${_nf2.format(v('leave_bonus_days'))} paid extra
   </div></div>
