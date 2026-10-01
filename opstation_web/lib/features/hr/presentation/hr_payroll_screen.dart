@@ -517,7 +517,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
   Future<void> _saveExcluded(Set<String> ids) async {
     final run = _run; if (run == null) return;
     await Supabase.instance.client.from('hr_payroll_runs').update({
-      'excluded_employee_ids': ids.toList(), 'updated_at': DateTime.now().toIso8601String(),
+      'excluded_employee_ids': ids.toList(), 'updated_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', run['id'] as String);
     run['excluded_employee_ids'] = ids.toList();
   }
@@ -550,7 +550,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
       _items.removeWhere((it) => it['employee_id'] == empId);
       double totalNet = 0; for (final it in _items) { totalNet += (it['net'] as num?)?.toDouble() ?? 0; }
       await client.from('hr_payroll_runs').update({
-        'employee_count': _items.length, 'total_net': _r2(totalNet), 'updated_at': DateTime.now().toIso8601String(),
+        'employee_count': _items.length, 'total_net': _r2(totalNet), 'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', runId);
       _run!['employee_count'] = _items.length; _run!['total_net'] = _r2(totalNet);
       _snack('$name excluded from this payroll.');
@@ -605,7 +605,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
     if (run == null || orgId == null) return;
     setState(() => _busy = true);
     try {
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       final upd = <String, dynamic>{'status': status, 'updated_at': now};
       if (status == 'finalized') {
         upd.addAll({'finalized_at': now, 'finalized_by': _userId, 'finalized_by_name': _userName,
@@ -824,13 +824,13 @@ class _State extends ConsumerState<HrPayrollScreen> {
       await Supabase.instance.client.from('hr_payroll_items').update({
         'allowances': allow, 'bonus': bonus, 'other_deduction': other, 'advance': adv,
         'remarks': remarks, 'gross': _r2(gross), 'total_deduction': _r2(totalDed), 'net': _r2(net),
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', item['id'] as String);
       // update local + run total
       item['allowances'] = allow; item['bonus'] = bonus; item['other_deduction'] = other; item['advance'] = adv;
       item['remarks'] = remarks; item['gross'] = _r2(gross); item['total_deduction'] = _r2(totalDed); item['net'] = _r2(net);
       double totalNet = 0; for (final it in _items) { totalNet += (it['net'] as num?)?.toDouble() ?? 0; }
-      await Supabase.instance.client.from('hr_payroll_runs').update({'total_net': _r2(totalNet), 'updated_at': DateTime.now().toIso8601String()}).eq('id', _run!['id'] as String);
+      await Supabase.instance.client.from('hr_payroll_runs').update({'total_net': _r2(totalNet), 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _run!['id'] as String);
       _run!['total_net'] = _r2(totalNet);
       if (mounted) setState(() {});
     } catch (e) { _snack('Save failed: $e'); }

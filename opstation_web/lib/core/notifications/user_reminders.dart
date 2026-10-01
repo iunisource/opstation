@@ -139,7 +139,7 @@ class _DueRemindersDialogState extends State<_DueRemindersDialog> {
       if (snoozeMinutes != null) {
         await c.from('user_reminders').update({
           'remind_at': now.add(Duration(minutes: snoozeMinutes)).toIso8601String(),
-          'updated_at': now.toIso8601String(),
+          'updated_at': now.toUtc().toIso8601String(),
         }).eq('id', r['id']);
       } else {
         final interval = r['interval_minutes'] as int?;
@@ -147,7 +147,7 @@ class _DueRemindersDialogState extends State<_DueRemindersDialog> {
           if (interval != null)
             'remind_at': now.add(Duration(minutes: interval)).toIso8601String(),
           if (interval == null) 'is_active': false,
-          'updated_at': now.toIso8601String(),
+          'updated_at': now.toUtc().toIso8601String(),
         }).eq('id', r['id']);
       }
     } catch (_) {}

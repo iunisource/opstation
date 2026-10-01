@@ -262,15 +262,15 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           'id': bomId, 'org_id': orgId, 'code': code,
           'name': _nameCtrl.text.trim().isEmpty ? (_prodLabel[_fgId] ?? code) : _nameCtrl.text.trim(),
           'product_id': _fgId, 'output_qty': outQty, 'status': _status,
-          'created_by': userId, 'created_at': DateTime.now().toIso8601String(),
-          'updated_at': DateTime.now().toIso8601String(),
+          'created_by': userId, 'created_at': DateTime.now().toUtc().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
         bomId = _current!['id'] as String; code = _current!['code'] as String? ?? '';
         await client.from('bom_headers').update({
           'name': _nameCtrl.text.trim().isEmpty ? (_prodLabel[_fgId] ?? code) : _nameCtrl.text.trim(),
           'product_id': _fgId, 'output_qty': outQty, 'status': _status,
-          'updated_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', bomId);
       }
       await client.from('bom_components').delete().eq('bom_id', bomId);
@@ -828,7 +828,7 @@ class _ManageRatesDialogState extends State<_ManageRatesDialog> {
             // update fires the DB propagate trigger -> all BOMs refresh
             await c.from(table).update({
               'name': name, 'rate': rate, 'is_active': r.active,
-              'updated_at': DateTime.now().toIso8601String(),
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
             }).eq('id', r.id as String);
           }
         }

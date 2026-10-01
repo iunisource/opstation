@@ -363,7 +363,7 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
         'action': action,
         'performed_by': userId,
         'performed_by_name': userName,
-        'performed_at': DateTime.now().toIso8601String(),
+        'performed_at': DateTime.now().toUtc().toIso8601String(),
         'notes': notes,
       });
       await _loadAudit(_current!['id'] as String);

@@ -16,10 +16,10 @@ class OrderService {
   }) async {
     var q = _client.from('orders').select().eq('org_id', orgId);
     if (fromInclusive != null) {
-      q = q.gte('created_at', fromInclusive.toIso8601String());
+      q = q.gte('created_at', fromInclusive.toUtc().toIso8601String());
     }
     if (toExclusive != null) {
-      q = q.lt('created_at', toExclusive.toIso8601String());
+      q = q.lt('created_at', toExclusive.toUtc().toIso8601String());
     }
     if (status != null) {
       q = q.eq('status', status.key);

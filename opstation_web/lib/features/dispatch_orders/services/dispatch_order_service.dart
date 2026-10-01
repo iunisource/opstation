@@ -19,8 +19,8 @@ class DispatchOrderService {
       query = query.inFilter('status', ['approved', 'dispatched', 'on_hold']);
     }
     if (driverId != null) query = query.eq('driver_id', driverId);
-    if (from != null) query = query.gte('created_at', from.toIso8601String());
-    if (to != null) query = query.lte('created_at', to.toIso8601String());
+    if (from != null) query = query.gte('created_at', from.toUtc().toIso8601String());
+    if (to != null) query = query.lte('created_at', to.toUtc().toIso8601String());
     final rows = await query.order('created_at', ascending: false);
     return (rows as List)
         .map((r) => Order.fromRow(Map<String, dynamic>.from(r as Map)))
@@ -65,7 +65,7 @@ class DispatchOrderService {
       'created_by': currentUserId,
       'created_by_name': currentUserName,
       'created_by_role': 'dispatchManager',
-      'created_at': now.toIso8601String(),
+      'created_at': now.toUtc().toIso8601String(),
       'status': 'assigned',
       'org_id': orgId,
       'order_id': orders.length == 1 ? orders.first.id : null,
@@ -107,12 +107,12 @@ class DispatchOrderService {
     for (final o in orders) {
       final payload = <String, dynamic>{
         'status': 'dispatched',
-        'dispatched_at': now.toIso8601String(),
+        'dispatched_at': now.toUtc().toIso8601String(),
         'dispatched_by': currentUserId,
         'driver_id': driverId,
         'driver_name': driverName,
         'delivery_id': deliveryId,
-        'updated_at': now.toIso8601String(),
+        'updated_at': now.toUtc().toIso8601String(),
       };
       if (driverNoteOverrides != null &&
           driverNoteOverrides.containsKey(o.id)) {
@@ -163,7 +163,7 @@ class DispatchOrderService {
     await _client.from('orders').update({
       'status': newStatus,
       'status_note': note,
-      'updated_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', orderId);
   }
 
@@ -191,7 +191,7 @@ class DispatchOrderService {
     Map<String, String?>? driverNoteOverrides,
     Map<String, String?>? soInvoiceOverrides,
   }) async {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     final driverChanged = newDriverId != null && newDriverName != null;
 
     if (driverChanged) {
@@ -291,7 +291,7 @@ class DispatchOrderService {
   Future<void> markDeliveryAsDelivered({
     required String deliveryId,
   }) async {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
 
     await _client
         .from('delivery_stops')
@@ -336,8 +336,8 @@ class DispatchOrderService {
         .inFilter('status',
             const ['saved', 'invoiced', 'partially_delivered']);
     if (branchId != null) q = q.eq('branch_id', branchId);
-    if (from != null) q = q.gte('created_at', from.toIso8601String());
-    if (to != null) q = q.lte('created_at', to.toIso8601String());
+    if (from != null) q = q.gte('created_at', from.toUtc().toIso8601String());
+    if (to != null) q = q.lte('created_at', to.toUtc().toIso8601String());
     final dos = await q.order('created_at', ascending: false);
 
     // 2) Assignment map: do_id -> {delivery, driver, stop status}.
@@ -469,7 +469,7 @@ class DispatchOrderService {
       'created_by': currentUserId,
       'created_by_name': currentUserName,
       'created_by_role': 'dispatchManager',
-      'created_at': now.toIso8601String(),
+      'created_at': now.toUtc().toIso8601String(),
       'status': 'assigned',
       'org_id': orgId,
       'order_id': null,

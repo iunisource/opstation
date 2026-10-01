@@ -283,7 +283,7 @@ class _BulkImportCustomersScreenState
         'group_name': (r['group_name'] ?? '').isEmpty ? null : r['group_name'],
         'org_id': orgId,
         'is_active': true,
-        'updated_at': now.toIso8601String(),
+        'updated_at': now.toUtc().toIso8601String(),
       };
       final key = _dupeKey(r['code'] ?? '', r['shop_name'] ?? '', r['phone'] ?? '');
       final existingId = existingIdByKey[key];

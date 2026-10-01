@@ -371,7 +371,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       final nar     = _narCtrl.text.trim();
       final wasNew  = _current == null;
       final userName = ref.read(currentUserProvider)?.name;
-      final nowIso = DateTime.now().toIso8601String();
+      final nowIso = DateTime.now().toUtc().toIso8601String();
       // Approval bookkeeping (only meaningful when org.jv_approve_flow is on):
       // posting stamps approved; submitting stamps pending; a plain draft clears it.
       final Map<String, dynamic> approvalFields = !_jvApproveFlow ? {} : {
@@ -492,7 +492,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         'action': action,
         'performed_by': userId,
         'performed_by_name': userName,
-        'performed_at': DateTime.now().toIso8601String(),
+        'performed_at': DateTime.now().toUtc().toIso8601String(),
         'notes': notes,
       });
       await _loadAudit(_current!['id'] as String);

@@ -361,7 +361,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _working = true);
     try {
-      await _excuseWrite(Supabase.instance.client, p, DateTime.now().toIso8601String());
+      await _excuseWrite(Supabase.instance.client, p, DateTime.now().toUtc().toIso8601String());
       await _afterWrites();
       _snack('${p.emp['full_name']} — ${DateFormat('d MMM').format(p.date)} excused as approved leave.');
     } catch (e) {
@@ -375,7 +375,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _working = true);
     try {
-      final placed = await _unapprovedWrite(Supabase.instance.client, p, DateTime.now().toIso8601String());
+      final placed = await _unapprovedWrite(Supabase.instance.client, p, DateTime.now().toUtc().toIso8601String());
       await _afterWrites();
       final msg = placed.isEmpty
           ? '${p.emp['full_name']} — absence on ${DateFormat('d MMM').format(p.date)} marked unapproved.'
@@ -397,7 +397,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     if (targets.isEmpty) return;
     setState(() => _working = true);
     final client = Supabase.instance.client;
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     int ok = 0; String? firstErr;
     for (final p in targets) {
       try { await _excuseWrite(client, p, now); ok++; }
@@ -440,7 +440,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     if (ok != true) return;
     setState(() => _working = true);
     final client = Supabase.instance.client;
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     int done = 0; int penalties = 0; String? firstErr;
     for (final p in targets) {
       try { final placed = await _unapprovedWrite(client, p, now); done++; penalties += placed.length; }

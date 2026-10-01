@@ -178,7 +178,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       final payload = {
         'org_id': orgId, 'employee_id': _empId, 'leave_type_id': _typeId,
         'from_date': _fmt(_from!), 'to_date': _fmt(_to!), 'half_day': _halfDay,
@@ -220,7 +220,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
         await client.from('hr_attendance').upsert({
           'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': branchId, 'att_date': ds,
           'status': 'leave', 'check_in': null, 'check_out': null, 'work_hours': 0,
-          'remarks': 'Leave: $typeName', 'updated_at': DateTime.now().toIso8601String(),
+          'remarks': 'Leave: $typeName', 'updated_at': DateTime.now().toUtc().toIso8601String(),
         }, onConflict: 'org_id,employee_id,att_date');
         await client.from('hr_attendance_audit').insert({
           'id': 'aud_${DateTime.now().microsecondsSinceEpoch}_$empId', 'org_id': orgId, 'attendance_id': id,
@@ -243,7 +243,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       await client.from('hr_leave_requests').update({'status': 'approved', 'decided_by': _userId, 'decided_at': now, 'updated_at': now}).eq('id', r['id'] as String);
       final updated = await client.from('hr_leave_requests').select().eq('id', r['id'] as String).single();
       await _writeAttendanceForLeave(updated, add: true);
@@ -259,7 +259,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
     setState(() => _saving = true);
     try {
       final client = Supabase.instance.client;
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       if (r['status'] == 'approved') await _writeAttendanceForLeave(r, add: false);
       await client.from('hr_leave_requests').update({'status': 'rejected', 'decided_by': _userId, 'decided_at': now, 'updated_at': now}).eq('id', r['id'] as String);
       final updated = await client.from('hr_leave_requests').select().eq('id', r['id'] as String).single();

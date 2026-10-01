@@ -226,14 +226,14 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         for (final r in (ex as List)) { final n = int.tryParse((r['voucher_number'] as String? ?? '').split('-').last) ?? 0; if (n > mx) mx = n; }
         final vNum = 'CRV-$yr-${(mx + 1).toString().padLeft(4, '0')}';
         final vid = 'crv_${DateTime.now().millisecondsSinceEpoch}';
-        await client.from('crv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null});
+        await client.from('crv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'created_by': userId, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toUtc().toIso8601String() : null, 'posted_by_name': post ? userName : null});
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('crv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         final created = await client.from('crv_vouchers').select().eq('id', vid).single();
         setState(() { _currentVoucher = created; _status = newStatus; }); _logAudit('created', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines  •  \$_cashAccountName');
         if (!post) _snack('Voucher $vNum saved');
       } else {
         final vid = _currentVoucher!['id'] as String;
-        await client.from('crv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toIso8601String() : null, 'posted_by_name': post ? userName : null}).eq('id', vid);
+        await client.from('crv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': newStatus, 'total_amount': total, 'posted_by': post ? userId : null, 'posted_at': post ? DateTime.now().toUtc().toIso8601String() : null, 'posted_by_name': post ? userName : null}).eq('id', vid);
         await client.from('crv_voucher_lines').delete().eq('voucher_id', vid);
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('crv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
@@ -313,7 +313,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         'action': action,
         'performed_by': userId,
         'performed_by_name': userName,
-        'performed_at': DateTime.now().toIso8601String(),
+        'performed_at': DateTime.now().toUtc().toIso8601String(),
         'notes': notes,
       });
       await _loadAudit(_currentVoucher!['id'] as String);

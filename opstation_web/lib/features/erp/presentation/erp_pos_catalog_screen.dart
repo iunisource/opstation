@@ -55,7 +55,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
     try {
       await Supabase.instance.client.from('pos_settings').upsert({
         'org_id': orgId, 'allow_sell_without_stock': v,
-        'updated_at': DateTime.now().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
+        'updated_at': DateTime.now().toUtc().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
       }, onConflict: 'org_id');
       _showSnack(v ? 'Selling without stock is now ALLOWED' : 'Selling without stock is now LOCKED');
     } catch (e) { _showSnack('Failed to save setting: $e'); if (mounted) setState(() => _allowNoStock = !v); }
@@ -68,7 +68,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
     try {
       await Supabase.instance.client.from('pos_settings').upsert({
         'org_id': orgId, 'allow_price_edit': v,
-        'updated_at': DateTime.now().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
+        'updated_at': DateTime.now().toUtc().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
       }, onConflict: 'org_id');
       _showSnack(v ? 'Price editing is now ALLOWED at POS' : 'Price editing is now LOCKED (system price)');
     } catch (e) { _showSnack('Failed to save setting: $e'); if (mounted) setState(() => _allowPriceEdit = !v); }

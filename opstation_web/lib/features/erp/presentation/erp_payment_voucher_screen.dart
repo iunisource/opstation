@@ -266,7 +266,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         // impossible. If it raises, we revert the voucher to draft so we never
         // leave a posted-but-no-GL (or posted-but-unbalanced) voucher — the
         // exact failure the old client-side line-by-line poster could produce.
-        await client.from('cpv_vouchers').update({'status': 'posted', 'posted_by': userId, 'posted_at': DateTime.now().toIso8601String(), 'posted_by_name': userName}).eq('id', vid);
+        await client.from('cpv_vouchers').update({'status': 'posted', 'posted_by': userId, 'posted_at': DateTime.now().toUtc().toIso8601String(), 'posted_by_name': userName}).eq('id', vid);
         try {
           await client.rpc('post_cpv', params: {'p_voucher_id': vid});
         } catch (glErr) {
@@ -338,7 +338,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         'action': action,
         'performed_by': userId,
         'performed_by_name': userName,
-        'performed_at': DateTime.now().toIso8601String(),
+        'performed_at': DateTime.now().toUtc().toIso8601String(),
         'notes': notes,
       });
       await _loadAudit(_currentVoucher!['id'] as String);

@@ -257,7 +257,7 @@ class _BulkImportRoutesScreenState extends ConsumerState<BulkImportRoutesScreen>
           'kind': 'recurring',
           'is_active': true,
           'org_id': orgId,
-          'created_at': now.toIso8601String(),
+          'created_at': now.toUtc().toIso8601String(),
         });
 
         // Insert all stops in one batch

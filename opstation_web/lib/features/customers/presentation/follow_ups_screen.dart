@@ -134,8 +134,8 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
       await Supabase.instance.client.from('customer_activities').update({
         'status': status,
         'completed_at':
-            status == 'done' ? DateTime.now().toIso8601String() : null,
-        'updated_at': DateTime.now().toIso8601String(),
+            status == 'done' ? DateTime.now().toUtc().toIso8601String() : null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', a['id']);
       _load();
     } catch (_) {/* ignore */}
@@ -570,8 +570,8 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
                 'due_date': due != null ? DateFormat('yyyy-MM-dd').format(due!) : null,
                 'assigned_to': assignee,
                 'status': status,
-                'completed_at': status == 'done' ? DateTime.now().toIso8601String() : null,
-                'updated_at': DateTime.now().toIso8601String(),
+                'completed_at': status == 'done' ? DateTime.now().toUtc().toIso8601String() : null,
+                'updated_at': DateTime.now().toUtc().toIso8601String(),
               }).eq('id', a['id']);
               if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
               _load();

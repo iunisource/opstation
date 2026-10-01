@@ -175,15 +175,15 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
           'id': vId, 'org_id': orgId, 'branch_id': _branchId, 'voucher_number': num,
           'voucher_date': dateStr, 'status': 'draft', 'is_locked': false,
           'reason': _reasonCtrl.text.trim(), 'notes': _notesCtrl.text.trim(),
-          'created_by': userId, 'created_at': DateTime.now().toIso8601String(),
-          'updated_at': DateTime.now().toIso8601String(),
+          'created_by': userId, 'created_at': DateTime.now().toUtc().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
         vId = _current!['id'] as String; num = _current!['voucher_number'] as String? ?? '';
         await client.from('damage_vouchers').update({
           'branch_id': _branchId, 'voucher_date': dateStr,
           'reason': _reasonCtrl.text.trim(), 'notes': _notesCtrl.text.trim(),
-          'updated_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', vId);
       }
       await client.from('damage_voucher_lines').delete().eq('voucher_id', vId);

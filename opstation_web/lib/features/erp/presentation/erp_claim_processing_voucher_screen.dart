@@ -310,14 +310,14 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
           'voucher_number': num, 'voucher_date': dateStr, 'status': 'draft', 'is_locked': false,
           'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           'total_qty': totalQty, 'line_count': lines.length, 'created_by': userId,
-          'created_at': DateTime.now().toIso8601String(), 'updated_at': DateTime.now().toIso8601String(),
+          'created_at': DateTime.now().toUtc().toIso8601String(), 'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
         vId = _current!['id'] as String; num = _current!['voucher_number'] as String? ?? '';
         await client.from('claim_vouchers').update({
           'branch_id': _branchId, 'customer_id': _customerId, 'voucher_date': dateStr,
           'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-          'total_qty': totalQty, 'line_count': lines.length, 'updated_at': DateTime.now().toIso8601String(),
+          'total_qty': totalQty, 'line_count': lines.length, 'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', vId);
       }
       await client.from('claim_voucher_lines').delete().eq('voucher_id', vId);
@@ -356,8 +356,8 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
     try {
       final client = Supabase.instance.client;
       await client.from('claim_vouchers').update({
-        'status': 'posted', 'is_locked': true, 'posted_at': DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
+        'status': 'posted', 'is_locked': true, 'posted_at': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', id);
       final updated = await client.from('claim_vouchers').select().eq('id', id).single();
       if (mounted) { await _loadVoucher(updated); }

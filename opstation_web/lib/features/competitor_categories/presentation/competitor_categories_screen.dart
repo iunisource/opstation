@@ -74,7 +74,7 @@ class _CompetitorCategoriesScreenState extends ConsumerState<CompetitorCategorie
     try {
       await Supabase.instance.client.from('competitor_categories').update({
         'is_active': newVal,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', c['id']);
       _showSnack(newVal ? 'Category activated' : 'Category deactivated');
       _load();
@@ -132,7 +132,7 @@ class _CompetitorCategoriesScreenState extends ConsumerState<CompetitorCategorie
                 'position': position,
                 'org_id': orgId,
                 'is_active': true,
-                'updated_at': DateTime.now().toIso8601String(),
+                'updated_at': DateTime.now().toUtc().toIso8601String(),
               };
               final isNew = category == null;
               try {

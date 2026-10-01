@@ -247,7 +247,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
         'name': orgName,
         'max_users': maxUsers,
         'expires_at': expiresAt?.toUtc().toIso8601String(),
-        'updated_at': now.toIso8601String(),
+        'updated_at': now.toUtc().toIso8601String(),
       }).eq('id', orgId);
       // Note: costing_method is intentionally NOT updated here — it is fixed at creation.
 
@@ -291,7 +291,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
         final updates = <String, dynamic>{
           'name': maName,
           'email': newEmail,
-          'updated_at': now.toIso8601String(),
+          'updated_at': now.toUtc().toIso8601String(),
         };
         await client.from('users').update(updates).eq('id', existingMaster['id']);
       } else {

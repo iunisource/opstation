@@ -227,7 +227,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       final payload = {
         'id': id, 'org_id': orgId, 'employee_id': r.empId, 'branch_id': r.branchId, 'att_date': dateStr,
         'status': r.status, 'check_in': r.checkIn, 'check_out': r.checkOut, 'work_hours': _hours(r.checkIn, r.checkOut),
-        'remarks': r.remarks.text.trim().isEmpty ? null : r.remarks.text.trim(), 'updated_at': DateTime.now().toIso8601String(),
+        'remarks': r.remarks.text.trim().isEmpty ? null : r.remarks.text.trim(), 'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
       await client.from('hr_attendance').upsert(payload, onConflict: 'org_id,employee_id,att_date');
       await client.from('hr_attendance_audit').insert({

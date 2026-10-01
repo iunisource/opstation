@@ -754,7 +754,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                         'kind': kind,
                         'is_active': true,
                         'org_id': orgId,
-                        'created_at': now.toIso8601String(),
+                        'created_at': now.toUtc().toIso8601String(),
                       });
                     } else {
                       // Update
@@ -762,7 +762,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                       await client.from('sales_routes').update({
                         'name': nameCtrl.text.trim(),
                         'kind': kind,
-                        'updated_at': now.toIso8601String(),
+                        'updated_at': now.toUtc().toIso8601String(),
                       }).eq('id', routeId);
                       // Replace stops wholesale
                       await client

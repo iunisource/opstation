@@ -848,7 +848,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                           .eq('route_id', routeId);
                     }
                     if (toAdd.isNotEmpty) {
-                      final now = DateTime.now().toIso8601String();
+                      final now = DateTime.now().toUtc().toIso8601String();
                       final newRows = [
                         for (final routeId in toAdd)
                           {

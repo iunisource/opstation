@@ -717,7 +717,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
               ],
             ));
     if (confirm == true) {
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       try {
         // Flip undelivered stops -> delivered. The trg_mark_do_delivered
         // trigger cascades this to each linked DO's delivered_at.
@@ -764,7 +764,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
       try {
         await Supabase.instance.client.from('deliveries').update({
           'status': 'cancelled',
-          'completed_at': DateTime.now().toIso8601String(),
+          'completed_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', id);
         _showSnack('Delivery cancelled');
         _load();
@@ -1161,7 +1161,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           'org_id': orgId,
           // Informational summary only — behaviour is driven per stop.
           'job_type': _jobSummary(stops),
-          'created_at': now.toIso8601String(),
+          'created_at': now.toUtc().toIso8601String(),
         });
       }
 

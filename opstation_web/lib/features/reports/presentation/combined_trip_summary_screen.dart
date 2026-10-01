@@ -80,16 +80,16 @@ class _CombinedTripSummaryScreenState
             .select()
             .eq('org_id', orgId)
             .eq('user_id', _selectedUserId!)
-            .gte('started_at', start.toIso8601String())
-            .lte('started_at', end.toIso8601String())
+            .gte('started_at', start.toUtc().toIso8601String())
+            .lte('started_at', end.toUtc().toIso8601String())
             .order('started_at', ascending: true);
       } else {
         trips = await client
             .from('trips')
             .select()
             .eq('org_id', orgId)
-            .gte('started_at', start.toIso8601String())
-            .lte('started_at', end.toIso8601String())
+            .gte('started_at', start.toUtc().toIso8601String())
+            .lte('started_at', end.toUtc().toIso8601String())
             .order('started_at', ascending: true);
       }
 

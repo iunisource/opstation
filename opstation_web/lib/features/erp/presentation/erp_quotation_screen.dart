@@ -384,7 +384,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
         'global_discount': double.tryParse(_globalDiscCtrl.text.trim()) ?? 0,
         'global_discount_type': _globalDiscType,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
       if (isNew) {
         header['created_by'] = ref.read(currentUserProvider)?.id;
@@ -469,7 +469,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     final id = _doc?['id'] as String?;
     if (id == null) return;
     try {
-      await _client.from('quotations').update({'status': 'exported', 'updated_at': DateTime.now().toIso8601String()}).eq('id', id);
+      await _client.from('quotations').update({'status': 'exported', 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', id);
       _doc!['status'] = 'exported';
       await _loadList();
     } catch (_) {}
@@ -479,7 +479,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     final id = _doc?['id'] as String?;
     if (id == null) { _toast('Save the quotation first'); return; }
     try {
-      await _client.from('quotations').update({'status': status, 'updated_at': DateTime.now().toIso8601String()}).eq('id', id);
+      await _client.from('quotations').update({'status': status, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', id);
       setState(() => _doc!['status'] = status);
       await _loadList();
       _toast('Marked as ${status[0].toUpperCase()}${status.substring(1)}');
@@ -660,7 +660,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           return '$base | Global discount: $label (apply at invoice)';
         })(),
         'created_by': ref.read(currentUserProvider)?.id,
-        'ordered_at': DateTime.now().toIso8601String(),
+        'ordered_at': DateTime.now().toUtc().toIso8601String(),
       });
 
       final soItems = _lines.map((l) => {
@@ -739,7 +739,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'payment_method': 'cash',
         'total': _docTotal,
         'held_by': ref.read(currentUserProvider)?.id,
-        'held_at': DateTime.now().toIso8601String(),
+        'held_at': DateTime.now().toUtc().toIso8601String(),
         'status': 'held',
       });
 

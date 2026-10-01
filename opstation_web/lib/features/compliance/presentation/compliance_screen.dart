@@ -80,7 +80,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
 
       final client = Supabase.instance.client;
       final cutoff = DateTime.now().subtract(const Duration(days: 90));
-      final cutoffIso = cutoff.toIso8601String();
+      final cutoffIso = cutoff.toUtc().toIso8601String();
 
       // Stage 1: tables that have org_id (customers, users, trips) —
       // fetched in parallel. visits and route_stops have no org_id

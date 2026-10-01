@@ -229,14 +229,14 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
           'voucher_date': dateStr, 'status': 'draft', 'is_locked': false, 'is_voided': false,
           'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           'total_value': total, 'created_by': userId,
-          'created_at': DateTime.now().toIso8601String(), 'updated_at': DateTime.now().toIso8601String(),
+          'created_at': DateTime.now().toUtc().toIso8601String(), 'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
         vId = _current!['id'] as String; num = _current!['voucher_number'] as String? ?? '';
         await client.from('opening_stock_vouchers').update({
           'branch_id': _branchId, 'voucher_date': dateStr,
           'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-          'total_value': total, 'updated_at': DateTime.now().toIso8601String(),
+          'total_value': total, 'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', vId);
       }
       // replace lines

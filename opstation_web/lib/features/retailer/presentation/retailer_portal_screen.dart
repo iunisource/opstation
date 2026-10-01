@@ -445,7 +445,7 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
       await Supabase.instance.client.rpc('retailer_mark_notification_read',
           params: {'p_notification_id': n['id']});
       if (!mounted) return;
-      setState(() => n['read_at'] = DateTime.now().toIso8601String());
+      setState(() => n['read_at'] = DateTime.now().toUtc().toIso8601String());
       _syncBadge();
     } catch (_) {}
   }

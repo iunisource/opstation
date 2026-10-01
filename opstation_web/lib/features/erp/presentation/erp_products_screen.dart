@@ -852,7 +852,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           'voucher_date': dateStr, 'status': 'draft', 'is_locked': false, 'is_voided': false,
           'notes': 'Imported with products bulk import',
           'total_value': total, 'created_by': userId,
-          'created_at': now.toIso8601String(), 'updated_at': now.toIso8601String(),
+          'created_at': now.toUtc().toIso8601String(), 'updated_at': now.toUtc().toIso8601String(),
         });
         for (var i = 0; i < openingLines.length; i++) {
           final l = openingLines[i];

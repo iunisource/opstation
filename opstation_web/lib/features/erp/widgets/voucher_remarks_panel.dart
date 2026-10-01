@@ -117,7 +117,7 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
       await Supabase.instance.client.from('voucher_remarks').update({
         'is_read': true,
         'read_by': widget.userId,
-        'read_at': DateTime.now().toIso8601String(),
+        'read_at': DateTime.now().toUtc().toIso8601String(),
       }).inFilter('id', ids);
       await _load();
       widget.onRead?.call(); // clear the badge

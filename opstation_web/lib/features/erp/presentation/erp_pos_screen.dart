@@ -1682,7 +1682,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         'cnic': cnicCtrl.text.trim().isEmpty ? null : cnicCtrl.text.trim(),
         'is_active': true, 'location_capture_allowed': false,
         'monthly_sale_target': 0, 'source': 'pos',
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
       final newCust = {'id': id, 'shop_name': name, 'code': code, 'phone': phoneCtrl.text.trim(), 'cnic': cnicCtrl.text.trim(), 'source': 'pos'};
       setState(() { _customers.add(newCust); _selectedCustomer = newCust; _selectedPosCustomer = null; _customerSearchCtrl.clear(); });
@@ -2808,7 +2808,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         'cash_account_id': cashAccId, 'cash_account_name': 'Cash in Hand',
         'status': 'posted', 'total_amount': total,
         'created_by': userId, 'posted_by': userId, 'posted_by_name': userName,
-        'posted_at': DateTime.now().toIso8601String(), 'session_id': _session['id'],
+        'posted_at': DateTime.now().toUtc().toIso8601String(), 'session_id': _session['id'],
       });
       for (var i = 0; i < validLines.length; i++) {
         final l = validLines[i];
@@ -2943,7 +2943,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
         'cash_account_id': cashAccId, 'cash_account_name': 'Cash in Hand',
         'status': 'posted', 'total_amount': total,
         'created_by': userId, 'posted_by': userId, 'posted_by_name': userName,
-        'posted_at': DateTime.now().toIso8601String(), 'session_id': _session['id'],
+        'posted_at': DateTime.now().toUtc().toIso8601String(), 'session_id': _session['id'],
       });
       for (var i = 0; i < validLines.length; i++) {
         final l = validLines[i];

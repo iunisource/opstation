@@ -886,7 +886,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
               }
               await client.from('crm_complaints').update({
                 'status': 'resolved',
-                'resolved_at': DateTime.now().toIso8601String(),
+                'resolved_at': DateTime.now().toUtc().toIso8601String(),
                 'resolution_note': noteCtrl.text.trim().isEmpty
                     ? null
                     : noteCtrl.text.trim(),
@@ -2338,8 +2338,8 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     try {
       await Supabase.instance.client.from('customer_activities').update({
         'status': done ? 'open' : 'done',
-        'completed_at': done ? null : DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
+        'completed_at': done ? null : DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', a['id']);
       _loadActivities();
     } catch (_) {/* ignore */}
@@ -2460,7 +2460,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                         ? DateFormat('yyyy-MM-dd').format(due!)
                         : null,
                     'assigned_to': assignee,
-                    'updated_at': DateTime.now().toIso8601String(),
+                    'updated_at': DateTime.now().toUtc().toIso8601String(),
                   }).eq('id', a['id']);
                   if (ctx.mounted) {
                     Navigator.of(ctx, rootNavigator: true).pop();

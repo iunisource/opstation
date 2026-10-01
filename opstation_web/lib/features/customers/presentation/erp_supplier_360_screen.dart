@@ -351,8 +351,8 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     try {
       await Supabase.instance.client.from('customer_activities').update({
         'status': done ? 'open' : 'done',
-        'completed_at': done ? null : DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
+        'completed_at': done ? null : DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', a['id']);
       _loadActivities();
     } catch (_) {}
@@ -424,7 +424,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
               ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Title is required')));
               return;
             }
-            final nowIso = DateTime.now().toIso8601String();
+            final nowIso = DateTime.now().toUtc().toIso8601String();
             final body = <String, dynamic>{
               'org_id': orgId,
               'supplier_id': sid,
@@ -524,7 +524,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
               'description': descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
               'status': 'open',
               'created_by': ref.read(currentUserProvider)?.id,
-              'created_at': DateTime.now().toIso8601String(),
+              'created_at': DateTime.now().toUtc().toIso8601String(),
             });
             if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
             _loadComplaints();
@@ -540,7 +540,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
     try {
       await Supabase.instance.client.from('crm_complaints').update({
         'status': 'resolved',
-        'resolved_at': DateTime.now().toIso8601String(),
+        'resolved_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', c['id']);
       _loadComplaints();
     } catch (_) {}

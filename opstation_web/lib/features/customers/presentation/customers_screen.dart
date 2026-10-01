@@ -1078,7 +1078,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                       final id = 'cust_${DateTime.now().millisecondsSinceEpoch}';
                       try {
                         await Supabase.instance.client.from('customers')
-                            .insert({...data, 'id': id, 'updated_at': DateTime.now().toIso8601String()});
+                            .insert({...data, 'id': id, 'updated_at': DateTime.now().toUtc().toIso8601String()});
                         break;
                       } catch (e) {
                         final msg = e.toString().toLowerCase();

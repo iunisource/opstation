@@ -57,7 +57,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       final client = Supabase.instance.client;
       // Salespeople and trips load in parallel.
       var tripsQ = client.from('trips').select().eq('org_id', orgId)
-          .gte('started_at', _range!.start.toIso8601String())
+          .gte('started_at', _range!.start.toUtc().toIso8601String())
           .lte('started_at', _range!.end.add(const Duration(days: 1)).toIso8601String());
       if (_selectedUserId != null) tripsQ = tripsQ.eq('user_id', _selectedUserId!);
       final first = await Future.wait<List<Map<String, dynamic>>>([

@@ -379,15 +379,15 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
           'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId, 'input_qty': _inQty,
           'source_voucher_id': _sourceMode == 'voucher' ? _srcVoucherId : null,
           'status': 'draft', 'is_locked': false, 'notes': _notesCtrl.text.trim(),
-          'created_by': userId, 'created_at': DateTime.now().toIso8601String(),
-          'updated_at': DateTime.now().toIso8601String(),
+          'created_by': userId, 'created_at': DateTime.now().toUtc().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
         vId = _current!['id'] as String; num = _current!['voucher_number'] as String? ?? '';
         await client.from('production_inverse_vouchers').update({
           'branch_id': _branchId, 'voucher_date': dateStr, 'bom_id': _bomId, 'product_id': _fgId,
           'source_voucher_id': _sourceMode == 'voucher' ? _srcVoucherId : null,
-          'input_qty': _inQty, 'notes': _notesCtrl.text.trim(), 'updated_at': DateTime.now().toIso8601String(),
+          'input_qty': _inQty, 'notes': _notesCtrl.text.trim(), 'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', vId);
       }
       await client.from('production_inverse_components').delete().eq('voucher_id', vId);

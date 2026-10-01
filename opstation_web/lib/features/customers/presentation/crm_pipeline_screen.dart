@@ -163,7 +163,7 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
     final won = stage?['is_won'] == true;
     final lost = stage?['is_lost'] == true;
     final status = won ? 'won' : (lost ? 'lost' : 'open');
-    final nowIso = DateTime.now().toIso8601String();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
 
     // Optimistic local update for snappy drag.
     setState(() {
@@ -344,13 +344,13 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
         'code': code,
         'phone': opp['prospect_phone'],
         'is_active': true,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
       await Supabase.instance.client.from('crm_opportunities').update({
         'customer_id': id,
         'prospect_name': null,
         'prospect_phone': null,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', opp['id']);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -592,7 +592,7 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
                 final status = st?['is_won'] == true
                     ? 'won'
                     : (st?['is_lost'] == true ? 'lost' : 'open');
-                final nowIso = DateTime.now().toIso8601String();
+                final nowIso = DateTime.now().toUtc().toIso8601String();
                 final data = {
                   'org_id': orgId,
                   'title': titleCtrl.text.trim(),

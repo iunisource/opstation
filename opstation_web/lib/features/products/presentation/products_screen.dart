@@ -76,7 +76,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
     try {
       await Supabase.instance.client.from('intelligence_products').update({
         'is_active': newVal,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', p['id']);
       _showSnack(newVal ? 'Product activated' : 'Product deactivated');
       _load();
@@ -142,7 +142,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
                 'position': position,
                 'org_id': orgId,
                 'is_active': true,
-                'updated_at': DateTime.now().toIso8601String(),
+                'updated_at': DateTime.now().toUtc().toIso8601String(),
               };
               final isNew = product == null;
               try {

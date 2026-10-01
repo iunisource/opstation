@@ -294,7 +294,7 @@ class _ErpBankReceiptVoucherScreenState
           'voucher_date': dateStr,
           'remarks': _remarksCtrl.text.trim(),
           'total_amount': total,
-          'updated_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', vid);
         _snack('Saved');
       }
@@ -478,7 +478,7 @@ class _ErpBankReceiptVoucherScreenState
         'total_amount': amt,
         'created_by': userId,
         'posted_by': userId,
-        'posted_at': DateTime.now().toIso8601String(),
+        'posted_at': DateTime.now().toUtc().toIso8601String(),
         'posted_by_name': userName,
       });
       await client.from('crv_voucher_lines').insert({
@@ -510,7 +510,7 @@ class _ErpBankReceiptVoucherScreenState
         'bank_account_id': bankId,
         'bank_account_name': bankName,
         'cleared_crv_id': crvId,
-        'cleared_at': DateTime.now().toIso8601String(),
+        'cleared_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', line.id);
 
       // 4) Roll up header status.
@@ -525,7 +525,7 @@ class _ErpBankReceiptVoucherScreenState
           _lines.every((l) => l.status == 'cleared' || l.status == 'bounced');
       await client.from('bank_receipt_vouchers').update({
         'status': allCleared ? 'cleared' : 'open',
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _currentVoucher!['id'] as String);
 
       _snack('Cheque cleared • $vNum posted ✓');

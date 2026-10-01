@@ -128,9 +128,9 @@ class _ErpTasksScreenState extends ConsumerState<ErpTasksScreen> {
     try {
       final patch = <String, dynamic>{
         'status': status,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
         'completed_at':
-            status == 'done' ? DateTime.now().toIso8601String() : null,
+            status == 'done' ? DateTime.now().toUtc().toIso8601String() : null,
       };
       await Supabase.instance.client
           .from('customer_activities')
@@ -731,7 +731,7 @@ class _TaskDialogState extends State<_TaskDialog> {
       _saving = true;
       _error = null;
     });
-    final nowIso = DateTime.now().toIso8601String();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
     final dueStr = _due == null
         ? null
         : '${_due!.year.toString().padLeft(4, '0')}-${_due!.month.toString().padLeft(2, '0')}-${_due!.day.toString().padLeft(2, '0')}';

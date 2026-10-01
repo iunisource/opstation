@@ -466,12 +466,12 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'advance_account_id': _advAcctId,
         'advance_installment': double.tryParse(_advInst.text.trim()),
         'paid_leave_days': double.tryParse(_plDays.text.trim()),
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
-      if (_isAdmin) { payload['approved_by'] = userId; payload['approved_at'] = DateTime.now().toIso8601String(); }
+      if (_isAdmin) { payload['approved_by'] = userId; payload['approved_at'] = DateTime.now().toUtc().toIso8601String(); }
       else { payload['approved_by'] = null; payload['approved_at'] = null; }
       if (_current == null) {
-        payload['id'] = id; payload['created_by'] = userId; payload['created_at'] = DateTime.now().toIso8601String();
+        payload['id'] = id; payload['created_by'] = userId; payload['created_at'] = DateTime.now().toUtc().toIso8601String();
         await client.from('hr_employees').insert(payload);
       } else {
         await client.from('hr_employees').update(payload).eq('id', id);
@@ -533,7 +533,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final id = _current?['id'] as String?; if (id == null) return;
     try {
       final client = Supabase.instance.client;
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       await client.from('hr_employees').update({'approval_status': 'approved', 'approved_by': _userId, 'approved_at': now, 'updated_at': now}).eq('id', id);
       final updated = await client.from('hr_employees').select().eq('id', id).single();
       if (mounted) setState(() => _current = updated);
@@ -589,7 +589,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (ok != true) return;
     try {
       final client = Supabase.instance.client;
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       await client.from('hr_employees').update({
         'status': 'left',
         'left_on': DateFormat('yyyy-MM-dd').format(day),
@@ -621,7 +621,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       final client = Supabase.instance.client;
       await client.from('hr_employees').update({
         'status': 'active', 'left_on': null, 'left_reason': null, 'left_note': null,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', e['id'] as String);
       final updated = await client.from('hr_employees').select().eq('id', e['id'] as String).single();
       if (mounted) _loadEmployee(updated);
@@ -642,7 +642,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (ok != true) return;
     try {
       final client = Supabase.instance.client;
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now().toUtc().toIso8601String();
       await client.from('hr_employees').update({'is_voided': true, 'voided_by': _userId, 'voided_at': now, 'updated_at': now}).eq('id', id);
       final updated = await client.from('hr_employees').select().eq('id', id).single();
       if (mounted) setState(() => _current = updated);
@@ -655,7 +655,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final id = _current?['id'] as String?; if (id == null) return;
     try {
       final client = Supabase.instance.client;
-      await client.from('hr_employees').update({'is_voided': false, 'voided_by': null, 'voided_at': null, 'updated_at': DateTime.now().toIso8601String()}).eq('id', id);
+      await client.from('hr_employees').update({'is_voided': false, 'voided_by': null, 'voided_at': null, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', id);
       final updated = await client.from('hr_employees').select().eq('id', id).single();
       if (mounted) setState(() => _current = updated);
       await _loadEmployees();
