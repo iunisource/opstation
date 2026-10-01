@@ -135,7 +135,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
             )),
           ]),
           const SizedBox(height: 10),
-          const Text('Basic ÷ calendar days. Absent + penalty days (½ for half-days) are deducted; leave, holidays and rest days are paid. Existing allowances/deductions you entered are preserved.',
+          const Text('Basic ÷ calendar days. Absent, penalty and not-yet-joined days (½ for half-days) are deducted; holidays and rest days are paid. Unused paid-leave days are paid as a bonus. Existing allowances/deductions you entered are preserved.',
               style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ])),
         actions: [
@@ -221,7 +221,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
 
       // attendance for the month
       final attRows = await client.from('hr_attendance')
-          .select('employee_id, att_date, status, check_in, is_penalty')
+          .select('employee_id, att_date, status, check_in, is_penalty, review_status')
           .eq('org_id', orgId).gte('att_date', _fmt(monthStart)).lte('att_date', _fmt(monthEnd));
       final att = <String, Map<String, Map<String, dynamic>>>{};
       for (final r in List<Map<String, dynamic>>.from(attRows)) {
@@ -229,6 +229,30 @@ class _State extends ConsumerState<HrPayrollScreen> {
         if (e == null || d == null) continue;
         (att[e] ??= {})[d] = r;
       }
+
+      // Paid leave quota (company default; per-employee override in the directory).
+      final orgPl = await _orgPaidLeaveDays();
+      // Unapproved absences whose extra (penalty) day was never placed — e.g.
+      // entered from an attendance sheet — count the extra day here instead.
+      final penaltyFor = <String>{}; // "emp|yyyy-MM-dd" of source dates that HAVE a penalty row
+      try {
+        final pr = await client.from('hr_attendance')
+            .select('employee_id, penalty_source_date')
+            .eq('org_id', orgId).eq('is_penalty', true)
+            .gte('penalty_source_date', _fmt(monthStart)).lte('penalty_source_date', _fmt(monthEnd));
+        for (final r in List<Map<String, dynamic>>.from(pr)) {
+          penaltyFor.add('${r['employee_id']}|${'${r['penalty_source_date']}'.substring(0, 10)}');
+        }
+      } catch (_) {}
+      // Who already had attendance before this month (to spot mid-month joiners
+      // that have no join date set).
+      final hadEarlier = <String>{};
+      try {
+        final er = await client.from('hr_attendance').select('employee_id')
+            .eq('org_id', orgId).lt('att_date', _fmt(monthStart))
+            .gte('att_date', _fmt(monthStart.subtract(const Duration(days: 62))));
+        for (final r in List<Map<String, dynamic>>.from(er)) { hadEarlier.add('${r['employee_id']}'); }
+      } catch (_) {}
 
       // run row (create or reuse)
       final runId = existing?['id'] as String? ?? 'pr_${DateTime.now().microsecondsSinceEpoch}';
@@ -255,20 +279,57 @@ class _State extends ConsumerState<HrPayrollScreen> {
         final basic = (e['basic_salary'] as num?)?.toDouble() ?? 0;
         final perDay = calendarDays > 0 ? basic / calendarDays : 0;
 
-        double present = 0, absent = 0, penalty = 0, leave = 0, half = 0, holiday = 0, rest = 0;
+        // First day of employment in this month: join date, or — for someone
+        // with no join date and no earlier attendance — their first attendance day.
+        DateTime start = monthStart;
+        final jd = DateTime.tryParse('${e['join_date'] ?? ''}');
+        if (jd != null) {
+          if (jd.isAfter(monthStart)) start = DateTime(jd.year, jd.month, jd.day);
+        } else if (!hadEarlier.contains(empId)) {
+          final days = (att[empId]?.keys.toList() ?? <String>[])..sort();
+          if (days.isNotEmpty) {
+            final f = DateTime.parse(days.first);
+            if (f.isAfter(monthStart)) start = f;
+          }
+        }
+
+        double present = 0, absent = 0, penalty = 0, leave = 0, half = 0, holiday = 0, rest = 0, notJoined = 0;
+        double used = 0; // unpaid days that use up the paid-leave quota
         for (var d = monthStart; !d.isAfter(lastCount); d = d.add(const Duration(days: 1))) {
-          if (_isRest(d)) { rest++; continue; }
-          final row = att[empId]?[_fmt(d)];
+          final ds = _fmt(d);
+          final row = att[empId]?[ds];
           final st = row?['status'] as String?;
+          if (d.isBefore(start) && row == null) { notJoined++; continue; } // not employed yet — unpaid (rest days too)
+          if (_isRest(d)) { rest++; continue; }
           if (st == 'present') { present++; }
-          else if (st == 'half_day') { half++; }
+          else if (st == 'half_day') { half++; used += 0.5; }
           else if (st == 'leave') { leave++; }
           else if (st == 'holiday') { holiday++; }
           else if (st == 'rest_day') { rest++; }
-          else if (st == 'absent') { if (row?['is_penalty'] == true) { penalty++; } else { absent++; } }
-          else { absent++; } // no record on a past working day = absent
+          else if (st == 'absent') {
+            if (row?['is_penalty'] == true) { penalty++; used++; }
+            else {
+              absent++; used++;
+              // Unapproved absence = 1 + 1. Add the extra day when no penalty
+              // row was placed for it.
+              if (row?['review_status'] == 'unapproved' && !penaltyFor.contains('$empId|$ds')) { penalty++; used++; }
+            }
+          }
+          else { absent++; used++; } // no record on a past working day = absent
         }
-        final unpaid = absent + penalty + 0.5 * half;
+        final unpaid = absent + penalty + notJoined + 0.5 * half;
+
+        // Paid leave bonus: quota minus what was used, paid at the per-day rate.
+        final plOverride = (e['paid_leave_days'] as num?)?.toDouble();
+        final plQuota = plOverride ?? orgPl;
+        double quota = plQuota;
+        if (start.isAfter(monthStart)) {
+          final worked = monthEnd.difference(start).inDays + 1;
+          quota = worked < 10 ? 0.0 : (worked / 15).round().toDouble();
+          if (quota > plQuota) quota = plQuota;
+        }
+        final bonusDays = quota > used ? quota - used : 0.0;
+        final double leaveBonus = (perDay * bonusDays).toDouble();
         final absenceDeduction = (perDay * unpaid);
 
         final prev = prevByEmp[empId];
@@ -287,12 +348,12 @@ class _State extends ConsumerState<HrPayrollScreen> {
           final inst = (e['advance_installment'] as num?)?.toDouble();
           var want = bal > 0 ? bal : 0.0;
           if (inst != null && inst > 0 && inst < want) want = inst;
-          final room = (basic + allowances + bonus - absenceDeduction - otherDed).toDouble();
+          final room = (basic + allowances + bonus + leaveBonus - absenceDeduction - otherDed).toDouble();
           if (want > room) want = room > 0 ? room : 0.0;
           advance = _r2(want);
         }
 
-        final gross = basic + allowances + bonus;
+        final gross = basic + allowances + bonus + leaveBonus;
         final totalDed = absenceDeduction + otherDed + advance;
         final net = gross - totalDed;
         totalNet += net;
@@ -306,6 +367,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
           'unpaid_days': unpaid, 'paid_days': calendarDays - unpaid,
           'absence_deduction': _r2(absenceDeduction.toDouble()),
           'allowances': allowances, 'bonus': bonus, 'other_deduction': otherDed, 'advance': advance,
+          'notjoined_days': notJoined, 'paid_leave_quota': quota, 'paid_leave_used': used,
+          'leave_bonus_days': bonusDays, 'leave_bonus': _r2(leaveBonus.toDouble()),
           if (bal != null) 'advance_balance': _r2(bal),
           if (bal != null) 'advance_account_id': advAcct[empId],
           'gross': _r2(gross), 'total_deduction': _r2(totalDed), 'net': _r2(net),
@@ -338,6 +401,54 @@ class _State extends ConsumerState<HrPayrollScreen> {
   }
 
   double _r2(double v) => (v * 100).roundToDouble() / 100;
+
+  // ── paid leave quota ────────────────────────────────────────────────────────
+  static const _plKey = 'hr.paid_leave_days';
+
+  Future<double> _orgPaidLeaveDays() async {
+    final orgId = _orgId; if (orgId == null) return 0;
+    try {
+      final c = await Supabase.instance.client.from('app_config').select('value')
+          .eq('org_id', orgId).eq('key', _plKey).maybeSingle();
+      return double.tryParse('${c?['value'] ?? ''}') ?? 0;
+    } catch (_) { return 0; }
+  }
+
+  Future<void> _paidLeaveSettings() async {
+    final orgId = _orgId; if (orgId == null) return;
+    final cur = await _orgPaidLeaveDays();
+    if (!mounted) return;
+    final ctrl = TextEditingController(text: cur == 0 ? '' : _plain(cur));
+    final v = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Paid leave days per month', style: TextStyle(fontSize: 16)),
+      content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        TextField(controller: ctrl, autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Company default (days)', hintText: 'e.g. 2', isDense: true, border: OutlineInputBorder())),
+        const SizedBox(height: 10),
+        const Text(
+          'Each month, every unpaid day (absent, approved leave, the extra day of an unapproved absence, ½ per half day) '
+          'uses up these days. Whatever is left is paid as "Paid leave bonus" on the payslip. Nothing carries over.\n\n'
+          'Joined mid-month: 1 day per 15 days worked, rounded; under 10 days, none.\n\n'
+          'A different number for one employee can be set in the Employee directory. Regenerate draft runs to apply.',
+          style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Save')),
+      ],
+    ));
+    if (v == null) return;
+    final d = double.tryParse(v) ?? 0;
+    try {
+      await Supabase.instance.client.from('app_config').upsert({
+        'org_id': orgId, 'key': _plKey, 'value': d == 0 ? '' : _plain(d),
+      }, onConflict: 'key,org_id,branch_id');
+      _snack(d == 0 ? 'Paid leave bonus switched off.' : 'Paid leave: ${_plain(d)} days a month. Regenerate draft runs to apply.');
+    } catch (e) { _snack('Could not save: $e'); }
+  }
 
   // ── exclusions ──────────────────────────────────────────────────────────────
   static Set<String> _excludedOf(Map? run) =>
@@ -463,10 +574,11 @@ class _State extends ConsumerState<HrPayrollScreen> {
     final remarksCtrl = TextEditingController(text: item['remarks'] as String? ?? '');
     final basic = (item['basic'] as num?)?.toDouble() ?? 0;
     final absenceDed = (item['absence_deduction'] as num?)?.toDouble() ?? 0;
+    final leaveBonus = (item['leave_bonus'] as num?)?.toDouble() ?? 0;
 
     await showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
       double n(TextEditingController c) => double.tryParse(c.text.trim()) ?? 0;
-      final gross = basic + n(allowCtrl) + n(bonusCtrl);
+      final gross = basic + leaveBonus + n(allowCtrl) + n(bonusCtrl);
       final totalDed = absenceDed + n(otherCtrl) + n(advCtrl);
       final net = gross - totalDed;
       Widget field(String label, TextEditingController c) => Padding(
@@ -480,6 +592,8 @@ class _State extends ConsumerState<HrPayrollScreen> {
         content: SizedBox(width: 380, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           _kv('Basic', _nf2.format(basic)),
           _kv('Absence deduction', '- ${_nf2.format(absenceDed)}', color: Colors.red),
+          if (leaveBonus > 0)
+            _kv('Paid leave bonus (${_nf2.format((item['leave_bonus_days'] as num?)?.toDouble() ?? 0)} days)', '+ ${_nf2.format(leaveBonus)}', color: Colors.green.shade700),
           const Divider(),
           const Text('Earnings', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
@@ -536,7 +650,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
     try {
       final basic = (item['basic'] as num?)?.toDouble() ?? 0;
       final absenceDed = (item['absence_deduction'] as num?)?.toDouble() ?? 0;
-      final gross = basic + allow + bonus;
+      final gross = basic + ((item['leave_bonus'] as num?)?.toDouble() ?? 0) + allow + bonus;
       final totalDed = absenceDed + other + adv;
       final net = gross - totalDed;
       await Supabase.instance.client.from('hr_payroll_items').update({
@@ -565,6 +679,11 @@ class _State extends ConsumerState<HrPayrollScreen> {
       appBar: AppBar(
         title: const Text('Payroll', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.beach_access_outlined, size: 20),
+            tooltip: 'Paid leave days (monthly bonus)',
+            onPressed: _busy ? null : _paidLeaveSettings,
+          ),
           Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Center(child: ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
             icon: const Icon(Icons.add, size: 18),
@@ -703,6 +822,9 @@ class _State extends ConsumerState<HrPayrollScreen> {
             if (item['advance_balance'] != null && ((item['advance_balance'] as num?)?.toDouble() ?? 0) != 0)
               Text('Advance ${_nf.format((item['advance'] as num?)?.toDouble() ?? 0)} of ${_nf.format((item['advance_balance'] as num).toDouble())} outstanding',
                   style: TextStyle(fontSize: 11, color: Colors.orange.shade800)),
+            if (((item['leave_bonus_days'] as num?)?.toDouble() ?? 0) > 0)
+              Text('Paid leave bonus ${_nf2.format((item['leave_bonus_days'] as num).toDouble())} days · +${_nf.format((item['leave_bonus'] as num?)?.toDouble() ?? 0)}',
+                  style: TextStyle(fontSize: 11, color: Colors.green.shade700)),
             Text([if (code.isNotEmpty) code, 'Absent ${_nf2.format(absent + penalty)}${half > 0 ? ' · ½ ${_nf2.format(half)}' : ''}${penalty > 0 ? ' (incl. ${_nf2.format(penalty)} penalty)' : ''}'].join('  ·  '),
                 style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ])),
@@ -769,12 +891,14 @@ td{padding:5px 8px;border-bottom:1px solid #eee}
     Calendar days: ${v('calendar_days').toInt()}<br>
     Present: ${_nf2.format(v('present_days'))} · Half: ${_nf2.format(v('half_days'))} · Leave: ${_nf2.format(v('leave_days'))}<br>
     Absent: ${_nf2.format(v('absent_days'))} · Penalty: ${_nf2.format(v('penalty_days'))} · Holiday/Rest: ${_nf2.format(v('holiday_days') + v('restday_days'))}<br>
-    Unpaid days: <b>${_nf2.format(v('unpaid_days'))}</b> · Per-day: ${_nf2.format(v('per_day'))}
+    ${v('notjoined_days') > 0 ? 'Before joining: ${_nf2.format(v('notjoined_days'))}<br>' : ''}Unpaid days: <b>${_nf2.format(v('unpaid_days'))}</b> · Per-day: ${_nf2.format(v('per_day'))}<br>
+    Paid leave: ${_nf2.format(v('paid_leave_quota'))} days · used ${_nf2.format(v('paid_leave_used'))} · paid out ${_nf2.format(v('leave_bonus_days'))}
   </div></div>
 </div>
 <div class="two">
   <div style="flex:1"><table><thead><tr><th>Earnings</th><th style="text-align:right">Amount</th></tr></thead><tbody>
     ${row('Basic', v('basic'))}
+    ${v('leave_bonus') > 0 ? row('Paid leave bonus (${_nf2.format(v('leave_bonus_days'))} days)', v('leave_bonus')) : ''}
     ${row('Allowances', v('allowances'))}
     ${row('Bonus', v('bonus'))}
     ${row('Gross', v('gross'), bold: true)}
@@ -808,7 +932,7 @@ ${(item['remarks'] != null && (item['remarks'] as String).isNotEmpty) ? '<div st
           '<td style="text-align:right">${_nf2.format(col(it, 'unpaid_days'))}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'absence_deduction'))}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'allowances'))}</td>'
-          '<td style="text-align:right">${_nf.format(col(it, 'bonus'))}</td>'
+          '<td style="text-align:right">${_nf.format(col(it, 'bonus') + col(it, 'leave_bonus'))}</td>'
           '<td style="text-align:right">${_nf.format(col(it, 'other_deduction') + col(it, 'advance'))}</td>'
           '<td style="text-align:right;font-weight:700">${_nf.format(col(it, 'net'))}</td>'
           '</tr>';
@@ -829,13 +953,13 @@ tfoot td{font-weight:800;border-top:2px solid #244C97;background:#fff}
 <h1>Payroll Register — ${_esc(_periodLabel(run['period'] as String))}</h1>
 <div class="sub">${_items.length} employees · Status: ${_esc((run['status'] as String? ?? 'draft'))}</div>
 <table>
-<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Unpaid d</th><th style="text-align:right">Absence ded</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus</th><th style="text-align:right">Other/Adv</th><th style="text-align:right">Net</th></tr></thead>
+<thead><tr><th>Code</th><th>Employee</th><th style="text-align:right">Basic</th><th style="text-align:right">Unpaid d</th><th style="text-align:right">Absence ded</th><th style="text-align:right">Allow.</th><th style="text-align:right">Bonus (incl. paid leave)</th><th style="text-align:right">Other/Adv</th><th style="text-align:right">Net</th></tr></thead>
 <tbody>$rows</tbody>
 <tfoot><tr><td colspan="2">Total</td>
 <td style="text-align:right">${_nf.format(_sum('basic'))}</td><td></td>
 <td style="text-align:right">${_nf.format(_sum('absence_deduction'))}</td>
 <td style="text-align:right">${_nf.format(_sum('allowances'))}</td>
-<td style="text-align:right">${_nf.format(_sum('bonus'))}</td>
+<td style="text-align:right">${_nf.format(_sum('bonus') + _sum('leave_bonus'))}</td>
 <td style="text-align:right">${_nf.format(_sum('other_deduction') + _sum('advance'))}</td>
 <td style="text-align:right">${_nf.format(_sum('net'))}</td></tr></tfoot>
 </table>

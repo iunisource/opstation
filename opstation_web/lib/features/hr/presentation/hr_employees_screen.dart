@@ -61,6 +61,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   // an optional fixed monthly recovery (blank = recover the full balance).
   String? _advAcctId;
   final _advInst = TextEditingController();
+  // Paid leave days per month for this employee (blank = company default).
+  final _plDays = TextEditingController();
   double? _advBal; // outstanding balance of that account, today
   List<Map<String, dynamic>> _assetAccounts = []; // {id, code, name}
   final _notes = TextEditingController();
@@ -102,7 +104,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   @override
   void dispose() {
-    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst]) c.dispose();
+    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays]) c.dispose();
     super.dispose();
   }
 
@@ -288,7 +290,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   void _newEmployee() {
     setState(() {
       _current = null; _status = 'active';
-      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst]) c.clear();
+      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays]) c.clear();
       _advAcctId = null; _advBal = null;
       _deptId = null; _desigId = null; _gender = null; _empType = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
@@ -330,6 +332,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       final inst = (e['advance_installment'] as num?)?.toDouble();
       _advInst.text = inst == null || inst == 0 ? '' : (inst == inst.roundToDouble() ? inst.toInt().toString() : inst.toString());
       _advBal = null;
+      final pl = (e['paid_leave_days'] as num?)?.toDouble();
+      _plDays.text = pl == null ? '' : (pl == pl.roundToDouble() ? pl.toInt().toString() : pl.toString());
     });
     _loadDocs();
     _loadAdvBalance();
@@ -457,6 +461,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'card_uid': _t(_cardUid),
         'advance_account_id': _advAcctId,
         'advance_installment': double.tryParse(_advInst.text.trim()),
+        'paid_leave_days': double.tryParse(_plDays.text.trim()),
         'updated_at': DateTime.now().toIso8601String(),
       };
       if (_isAdmin) { payload['approved_by'] = userId; payload['approved_at'] = DateTime.now().toIso8601String(); }
@@ -966,6 +971,11 @@ $docsHtml
                 _labeled('Basic salary', _tf(_salary, numeric: true)),
                 _labeled('Shift', _shiftDropdown()),
               ]),
+              const SizedBox(height: 12),
+              _fieldRow([
+                _labeled('Paid leave days / month', _tf(_plDays, hint: 'Blank = company default', numeric: true)),
+                const SizedBox.shrink(),
+              ], flex: const [1, 3]),
             ]),
             const SizedBox(height: 16),
             _card('Personal', [
